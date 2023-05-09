@@ -40,11 +40,6 @@ class sMsGAMMBase:
         self.cpus=cpus
 
         # Build NAN index
-        # Every series is assumed to be padded with NANs to match the
-        # length of the longest series. Furthermore, time-points present in
-        # a series but for which no value was observed/is available should be
-        # set to NAN as well.
-        # On the contrary, state sequences should be padded with -1
         self.is_NA_fl = np.isnan(self.series_fl)
 
         # Temperature schedule
@@ -131,6 +126,8 @@ class sMsGAMMBase:
     ##################################### SEM - Estimation #####################################
 
     def __advance_chain(self,chain,pool,temp,c_pi,c_TR,c_p_pars,c_coef,c_sigma,c_state_durs_est,c_state_est):
+        # Performs One Stochastic Expectation maiximization iteration (or something quite like it if is_DC=True).
+        # See utils.py for details but also Nielsen (2002).
 
         # Propose new candidates
 
@@ -144,7 +141,7 @@ class sMsGAMMBase:
 
         ## First calculate design matrix for every series and combine.
         n_mat = self.__build_all_mod_mat(pool,n_state_est)
-        #print(n_mat.shape,self.series_fl.shape)
+
         ## Now actually update coefficients based on proposal
         if self.sep_per_j is not None and not self.is_DC:
             ### If we have truely separate models per latent state, we update the coefs and sigmas separately
@@ -152,27 +149,24 @@ class sMsGAMMBase:
             
             n_state_est_fl = np.array([st for s in n_state_est for st in s],dtype=int)
             y_split, x_split = self.sep_per_j(self.n_j,n_state_est_fl,self.series_fl, n_mat)
-            #[print(split.shape) for split in y_split]
+            
             n_coef, self.__penalties[chain][0], n_sigma, j_embS = utils.solve_am(x_split[0],y_split[0],self.__penalties[chain][0],0,maxiter=10)
             n_sigma = [n_sigma]
-            #print(n_coef.shape)
+            
 
             ### Get probabilities of observing series under new model for this state
             n_logprobs[n_state_est_fl == 0] = self.e_bs(self.n_j,y_split[0], x_split[0], n_coef, n_sigma[0], False, **self.__e_bs_kwargs)
 
             tot_penalty = n_coef.T @ j_embS @ n_coef
-
+            
+            #### Repeat for remaining states
             for j in range(1,self.n_j):
                 nj_coef, self.__penalties[chain][j], nj_sigma, j_embS = utils.solve_am(x_split[j],y_split[j],self.__penalties[chain][j],0,maxiter=10)
                 n_coef = np.concatenate((n_coef,nj_coef))
-                #print(n_coef.shape)
+                
                 n_sigma.append(nj_sigma)
                 tot_penalty += nj_coef.T @ j_embS @ nj_coef
-                # e_bs should set any probability for a t at which the y is missing to NAN.
-                # That way any t that do not exist in a series (because they series was shorter) will simply have
-                # NA probability.
-                # The likelihood functions can then implement how and if they want to handle missing
-                # values within a trial. Thus likelihood functions should receive end_points as well.
+                
                 n_logprobs[n_state_est_fl == j] = self.e_bs(self.n_j,y_split[j], x_split[j], nj_coef, nj_sigma, False, **self.__e_bs_kwargs)
 
             n_sigma = np.array(n_sigma)
@@ -182,14 +176,14 @@ class sMsGAMMBase:
             n_coef, self.__penalties[chain], n_sigma, embS = utils.solve_am(n_mat,self.series_fl,self.__penalties[chain],0,maxiter=10)
             tot_penalty = n_coef.T @ embS @ n_coef
 
-            ### Get probabilities of observing series under new model
+            ### Get probabilities of observing series under new model for all states at once.
             n_logprobs = self.e_bs(self.n_j,self.series_fl,n_mat, n_coef,n_sigma, False, mask_by_j=None)
 
 
-        ## M-step sojourn distributions
+        ## M-step sojourn distributions (see utils)
         n_p_pars = self.m_ps(self.n_j,c_p_pars,n_state_dur_est,n_state_est,self.covariates)
 
-        ## M-steps for initial and transition distributions can be completed optionally
+        ## M-steps for initial and transition distributions can be completed optionally (see utils)
         if self.estimate_pi:
             n_pi = self.m_pi(self.n_j,c_pi,n_state_dur_est,self.covariates)
         else:
@@ -205,7 +199,7 @@ class sMsGAMMBase:
         ## Parameterize the sojourn distributions using current parameters
         ps = self.par_ps(n_p_pars)
 
-        ## Then calculate log likelihood of every series
+        ## Then calculate log likelihood of new model
         llks_new = self.__calc_llk_all_events(pool,n_pi,n_TR,n_state_dur_est,n_state_est,ps,n_logprobs)
 
         return np.sum(llks_new) - tot_penalty, n_state_dur_est, n_state_est, n_coef, n_p_pars,n_pi, n_TR,n_sigma
@@ -232,8 +226,6 @@ class sMsGAMMBase:
         self.__llk_hist = np.zeros((n_chains,iter+1))
         self.__llk_hist[:,0] = - np.Inf
 
-        #print(self.__coef_hist[0][0])
-
         with mp.Pool(processes=self.cpus) as pool:
             for i in tqdm(range(iter)):
 
@@ -245,7 +237,7 @@ class sMsGAMMBase:
                                                                                                                self.__scale_hist[ic][i],
                                                                                                                self.__coef_hist[ic][i],
                                                                                                                self.__sigma_hist[ic][i],
-                                                                                                               self.__state_dur_hist[ic][i], # Not sure whether this works???
+                                                                                                               self.__state_dur_hist[ic][i],
                                                                                                                self.__state_hist[ic][i])
                     
                     # Store new parameters
@@ -261,7 +253,7 @@ class sMsGAMMBase:
                     self.__TR_hist[ic].append(deepcopy(n_TR))
                     self.__llk_hist[ic,i+1] = llk
                     
-
+        # Plot log-likelihood for all chains
         for ic in range(n_chains):
             plt.plot(self.__llk_hist[ic,:])
         plt.show()

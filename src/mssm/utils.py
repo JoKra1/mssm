@@ -188,47 +188,6 @@ def create_event_matrix_time2(time,cov,state_est, identifiable = False, drop_out
 
   return np.concatenate((inter,event_matrix,rand_int_s),axis=1)
 
-def create_event_matrix_cov(time,cov,state_est,**kwargs):
-   # Create model matrix for a mssm. Assumes a shared sigma
-   # parameter for all states, allowing us to estimate the state
-   # dependent relationships between the covariate and the observed
-   # signal via a shared model!
-   
-   B = B_spline_basis(None,cov,state_est,**kwargs)
-   
-   n_j = len(set(state_est))
-   B_by = np.zeros((B.shape[0],B.shape[1]*n_j))
-
-   # If a single sigma parameter is assumed, then the different relationships
-   # between the cov and the signal for every state can be estimated via
-   # a "by-factor smooth" setup as utilized in mgcv (Wood, 2016).
-   start = 0
-   for state in range(n_j):
-        B_by[state_est==state,start:(start+B.shape[1])] = B[state_est==state,:]
-        start += B.shape[1]
-   return B_by
-
-def create_event_matrix_cov2(time,cov,state_est, identifiable = True, drop_outer_k=False, convolve=True, min_c=0, max_c=1500, nk=5, deg=2):
-   # Create model matrix for a mssm. Here we do not assume the same
-   # sigma parameter for all states - so we return the whole matrix
-   # and then split it later into separate ones for every state (
-   # based on the current state_est) together with the y-vector.
-   
-   B = B_spline_basis(None,cov,state_est, identifiable, drop_outer_k, convolve, min_c, max_c, nk, deg)
-   return B
-
-def create_event_matrix_cov3(time,cov,state_est, identifiable = True, drop_outer_k=False, convolve=True, min_c=0, max_c=1500, nk=5, deg=2):
-   # Create model matrix for a mssm. Here we do not assume the same
-   # sigma parameter for all states - so we return the whole matrix
-   # and then split it later into separate ones for every state (
-   # based on the current state_est) together with the y-vector.
-
-   # This one also has an intercept
-   
-   B = B_spline_basis(None,cov,state_est, identifiable, drop_outer_k, convolve, min_c, max_c, nk, deg)
-   inter = constant_basis(None,cov,state_est,convolve=False,max_c=None)
-   return np.concatenate((inter,B),axis=1)
-
 def create_event_matrix_cov4(time,cov,state_est, identifiable = True, drop_outer_k=False, convolve=True, min_c=0, max_c=1500, nk=5, deg=2, n_s=10):
    # Create model matrix for a mssm. Here we do not assume the same
    # sigma parameter for all states - so we return the whole matrix
@@ -625,12 +584,12 @@ def se_step_sms_dc_gamm(n_j,temp,series,end_point,time,cov,pi,TR,
     # still explore less with time which is more like annealing again... So the decision is a mixture of both.
     #
     # Some not yet organized thoughts:
-    # This proposal is actually not a sample from P(State | obs, current_par) as required for stochastic expectation maximization (Nielsen, 2000).
+    # This proposal is actually not a sample from P(State | obs, current_par) as suggested in the classical stochastic expectation step (Nielsen, 2000).
     # In principle if we increase n_prop state_dist should however become a close representation of this distribution. However, in
-    # practice there is not benefit to performance since the MH acceptance step makes sure that in the long-run we are likely to improve
-    # our estimates. The algorithm then behaves closer to Stochastic Approximate expectation maximization or
-    # Stochastic Simulated Annealing Expectation Maximization. However, both usually build an interative approximation of Q: Q_{t+1} = Q_{t-1} + lambda * Q_{t},
-    # where Q_{t} is based on the stochastic/approximate E step, and then maximize Q_{t+1} (see Celeux, Chauveau & Diebolt, 1995).
+    # practice there is no benefit to performance since the MH acceptance step makes sure that in the long-run we are likely to improve
+    # our estimates. Not sampling directly from P(State | obs, current_par) also seems to be a feature of Stochastic approximate Expectation Maximization or
+    # Stochastic Simulated Annealing Expectation Maximization. However, these approaches seem to form an iterative approximation of Q: Q_{t+1} = Q_{t-1} + lambda * Q_{t},
+    # where Q_{t} is based on the stochastic/approximate E step, and then maximize Q_{t+1} (see Celeux, Chauveau & Diebolt, 1995; Delyon, 1999).
     # We simply maximize the CDL based on our candidate - which IS again closer to traditional SEM.. So it's again a combination of a couple things that work well in practice.
     # The sampler for the most general case (se_step_sms_gamm) behaves more like traditional SEM and the acceptance step should in principle not be necessary.
 
@@ -675,7 +634,7 @@ def se_step_sms_dc_gamm(n_j,temp,series,end_point,time,cov,pi,TR,
       state_dist[i,:] = np.copy(c_state_est)
       states_durs_dist.append(np.copy(c_state_durs_est))
     
-    #print(acc/n_prop)
+
     # Sample new onset according to ~ P(onset | series, current parameters). The latter only
     # holds with n_prop = LARGE.
     sample = np.random.randint(n_prop,size=n_cand)[0]
