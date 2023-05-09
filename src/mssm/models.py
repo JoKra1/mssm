@@ -124,7 +124,7 @@ class sMsGAMMBase:
         return list(state_durs_new),list(states_new)
     
     def __calc_llk_all_events(self,pool,pi,TR,state_dur_est,state_est,ps,logprobs):
-        args = zip(repeat(self.n_j),repeat(pi),repeat(TR),state_dur_est,state_est,repeat(ps),logprobs)
+        args = zip(repeat(self.n_j),repeat(pi),repeat(TR),state_dur_est,state_est,repeat(ps),logprobs,self.covariates)
         llks = pool.starmap(self.llk_fun,args)
         return llks
     

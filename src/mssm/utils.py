@@ -459,7 +459,7 @@ def solve_am(X_r,y_r,lTerms,cIndex,maxiter=10):
 
 ##################################### Log-likelihood and Pre-likelihood functions #####################################
 
-def ll_sms_dc_gamm(n_j,pi,TR,state_dur_est, state_est,ps,logprobs):
+def ll_sms_dc_gamm(n_j,pi,TR,state_dur_est, state_est,ps,logprobs,cov):
     # Complete data likelihood function for left-right de-convolving sMs GAMM.
     # Yu (2011): alpha_t(j) = Probability of state j terminating at time t
     # AND observing values o[1:t] given current parameters.
@@ -496,7 +496,7 @@ def ll_sms_dc_gamm(n_j,pi,TR,state_dur_est, state_est,ps,logprobs):
     # Complete data likelihood.
     return alpha
 
-def ll_sms_gamm(n_j,pi,TR,state_dur_est,state_est,ps,logprobs):
+def ll_sms_gamm(n_j,pi,TR,state_dur_est,state_est,ps,logprobs,cov):
    # Complete data likelihood function for sMs GAMM WITH state re-entries, so not left-right.
    # Again, based on equation 15 in Yu (2011) but adapted for the complete likelihood
    # case, since we have a state_est available. We are again interested
@@ -641,7 +641,7 @@ def se_step_sms_dc_gamm(n_j,temp,series,end_point,time,cov,pi,TR,
     c_mat = create_matrix_fn(time,cov,c_state_est,**build_mat_kwargs)
     c_logprobs = e_bs_fun(n_j,series,c_mat,coef,sigma,repeat_by_j,**e_bs_kwargs)
     c_state_durs_est = np.copy(state_durs_est)
-    c_llk = ll_fn(n_j,pi,TR,c_state_durs_est,state_est,ps,c_logprobs)
+    c_llk = ll_fn(n_j,pi,TR,c_state_durs_est,state_est,ps,c_logprobs,cov)
 
     cutoffs = scp.stats.uniform.rvs(size=n_prop)
 
@@ -661,7 +661,7 @@ def se_step_sms_dc_gamm(n_j,temp,series,end_point,time,cov,pi,TR,
         # Calculate likelihood of proposal given observations and current parameters
         n_mat = create_matrix_fn(time,cov,n_state_est,**build_mat_kwargs)
         n_logprobs = e_bs_fun(n_j,series,n_mat,coef,sigma,repeat_by_j,**e_bs_kwargs)
-        n_llk = ll_fn(n_j,pi,TR,n_state_durs_est,n_state_est,ps,n_logprobs)
+        n_llk = ll_fn(n_j,pi,TR,n_state_durs_est,n_state_est,ps,n_logprobs,cov)
 
         # Simulated Annealing/Metropolis acceptance
         if np.exp((n_llk - c_llk)/temp) >= cutoffs[i]:
@@ -727,7 +727,7 @@ def se_step_sms_gamm(n_j,temp,series,end_point,time,cov,pi,TR,
     for j in range(1,n_j):
       aligned_logprobs[c_state_est==j] = c_logprobs[j,c_state_est==j]
     
-    c_llk = ll_fn(n_j,pi,TR,c_state_durs_est,c_state_est,ps,aligned_logprobs)
+    c_llk = ll_fn(n_j,pi,TR,c_state_durs_est,c_state_est,ps,aligned_logprobs,cov)
     
     cutoffs = scp.stats.uniform.rvs(size=n_prop)
 
@@ -736,7 +736,7 @@ def se_step_sms_gamm(n_j,temp,series,end_point,time,cov,pi,TR,
     acc = 0
 
     # ... we also need the probability of every possible duration for every state.
-    log_dur_mat = get_log_dur_prob_mat(n_j,max_dur,ps)
+    log_dur_mat = get_log_dur_prob_mat(n_j,max_dur,ps,cov)
     
     # Now we can perform the regular forward and backward pass + some additional calculations...
     llk_fwd, etas_c, u = forward_eta(n_j,series.shape[0],pi,TR,log_dur_mat,c_logprobs)
@@ -769,7 +769,7 @@ def se_step_sms_gamm(n_j,temp,series,end_point,time,cov,pi,TR,
         for j in range(1,n_j):
             aligned_logprobs[n_state_est==j] = n_logprobs[j,n_state_est==j]
 
-        n_llk = ll_fn(n_j,pi,TR,n_state_durs_est,n_state_est,ps,aligned_logprobs)
+        n_llk = ll_fn(n_j,pi,TR,n_state_durs_est,n_state_est,ps,aligned_logprobs,cov)
 
         # Simulated Annealing/Metropolis acceptance
         if np.exp((n_llk - c_llk)/temp) >= cutoffs[i]:
@@ -1061,7 +1061,7 @@ def get_log_o_prob_mat(n_j,series,X,coef,sigma,repeat_by_j,mask_by_j=None):
 
    return log_probs
 
-def get_log_dur_prob_mat(n_j,max_dur,ps):
+def get_log_dur_prob_mat(n_j,max_dur,ps,cov):
     # Build a n_j*max_dur matrix, containing in every cell (j,d)
     # the probability of state j lasting for duration d according to
     # state j's sojourn time distribution.
