@@ -620,20 +620,19 @@ def se_step_sms_dc_gamm(n_j,temp,series,end_point,time,cov,pi,TR,
     # never let the temparature drop to zero since our complete data likelihood around candidates drops rapidly
     # so if we would drop the temperature to zero (and thus fall back to steepest ascent on the likelihood surface)
     # we would immediately get stuck on whatever maximum we currently are. By ensuring that temp >= 1 we keep exploring
-    # new candidates. This is actually closer to simulated tempering than annealing... but we use a continuously decreasing
-    # temperature function to make sure that we still explore less with time which is more like annealing again... So the decision
-    # is a mixture of both.
+    # new candidates. This is actually closer to simulated tempering than annealing (Marinari & Parisi 1992;
+    # Allassonnière & Chevallier, 2021). But we use a continuously decreasing temperature function to make sure that we
+    # still explore less with time which is more like annealing again... So the decision is a mixture of both.
     #
     # Some not yet organized thoughts:
-    # This proposal is actually not a sample from P(State | obs, current_par) as required for stochastic expectation maximization.
+    # This proposal is actually not a sample from P(State | obs, current_par) as required for stochastic expectation maximization (Nielsen, 2000).
     # In principle if we increase n_prop state_dist should however become a close representation of this distribution. However, in
     # practice there is not benefit to performance since the MH acceptance step makes sure that in the long-run we are likely to improve
-    # our estimates. I am just saying this because this is what sets this algorithm apart from traditional SEM. This is closer to
-    # Stochastic Approximate expectation maximization or Stochastic Simulated Annealing Expectation Maximization. However, both usually
-    # build an interative approximation of Q: Q_{t+1} = Q_{t-1} + Q_{t}, where Q is collected in the stochastic/approximate E step.
-    # We simply maximize the CDL based on our candidate - which IS again closer to traditional SEM.. So it's again a combination of
-    # a couple things that work well in practice... The sampler for the most general case (se_step_sms_gamm) behaves more like traditional
-    # SEM and the acceptance step should in principle not be necessary..
+    # our estimates. The algorithm then behaves closer to Stochastic Approximate expectation maximization or
+    # Stochastic Simulated Annealing Expectation Maximization. However, both usually build an interative approximation of Q: Q_{t+1} = Q_{t-1} + lambda * Q_{t},
+    # where Q_{t} is based on the stochastic/approximate E step, and then maximize Q_{t+1} (see Celeux, Chauveau & Diebolt, 1995).
+    # We simply maximize the CDL based on our candidate - which IS again closer to traditional SEM.. So it's again a combination of a couple things that work well in practice.
+    # The sampler for the most general case (se_step_sms_gamm) behaves more like traditional SEM and the acceptance step should in principle not be necessary.
 
     n_prop = 1 # Depending on the proposal function it can be useful to sample a lot of candidates and then select from all those at random
     n_cand = 1 # I considered allowing to return multiple samples, which might help with performance but I haven't implemented that yet.
