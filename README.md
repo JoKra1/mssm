@@ -1,7 +1,7 @@
 # mssm: Markov-switching Spline Models
 
 ## Description
-Is a toolbox to estimate semi Markov-switching Generalized additive mixed models (sMs-GAMMs) and semi Markov-switching de-convolving GAMMs.
+``mssm`` is a toolbox to estimate semi Markov-switching Generalized additive mixed models (sMs-GAMMs) and semi Markov-switching de-convolving GAMMs.
 
 ## To get started
  - Take a look at tutorial 1, up to the point where it says development only.
