@@ -1030,6 +1030,6 @@ def get_log_dur_prob_mat(n_j,max_dur,ps,cov):
     dur_log_probs = np.zeros((n_j,durs.shape[0]))
 
     for j in js:
-        dur_log_probs[j,:] = ps[j].logpdf(durs)
+        dur_log_probs[j,:] = ps[j].logpdf(durs + 1)
     
     return dur_log_probs
