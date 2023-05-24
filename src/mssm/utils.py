@@ -394,7 +394,7 @@ def solve_am(X_r,y_r,lTerms,cIndex,maxiter=10):
     resDot = res.dot(res)
 
     # Generalized inverse of S
-    gInv = scp.linalg.pinv(embS)
+    gInv = np.linalg.pinv(embS)
 
     # Sigma estimate from Wood & Fasiolo (2016)
     
