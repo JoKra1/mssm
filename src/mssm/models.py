@@ -66,7 +66,7 @@ class sMsGAMMBase:
         self.e_bs = None
         self.__e_bs_kwargs = None
 
-    ##################################### Function initializers #####################################
+    ##################################### Setters #####################################
 
     def set_sample_fun(self,fun,**kwargs):
         self.__sample_fun = fun
@@ -94,6 +94,42 @@ class sMsGAMMBase:
 
     def set_temp(self,fun,iter=500,**kwargs):
         self.__temp = fun(iter,**kwargs)
+
+    def set_penalties(self,penalties):
+        self.__penalties = penalties
+    
+    ##################################### Getters #####################################
+
+    def get_last_pars_chain(self,chain=0):
+        return self.__state_hist[chain][-1], \
+               self.__coef_hist[chain][-1], \
+               self.__sigma_hist[chain][-1], \
+               self.__scale_hist[chain][-1], \
+               self.__pi_hist[chain][-1], \
+               self.__TR_hist[chain][-1]
+    
+    def get_last_pars_max(self):
+        chain_last_llks = self.__llk_hist[:,-1]
+        idx = np.array(list(range(len(chain_last_llks))))
+        idx = idx[chain_last_llks == max(chain_last_llks)][0]
+        return idx,self.__state_hist[idx][-1], \
+               self.__coef_hist[idx][-1], \
+               self.__sigma_hist[idx][-1], \
+               self.__scale_hist[idx][-1], \
+               self.__pi_hist[idx][-1], \
+               self.__TR_hist[idx][-1] \
+    
+    def get_penalties(self):
+        return self.__penalties
+    
+    def get_coef_hist(self):
+        return self.__coef_hist
+    
+    def get_state_hist(self):
+        return self.__state_hist
+    
+    def get_scale_hist(self):
+        return self.__scale_hist
     
     ##################################### MP handlers #####################################
     
@@ -217,9 +253,6 @@ class sMsGAMMBase:
         llks_new = self.__calc_llk_all_events(pool,n_pi,n_TR,n_state_dur_est,n_state_est,ps,n_logprobs)
 
         return np.sum(llks_new) - tot_penalty, n_state_dur_est, n_state_est, n_coef, n_p_pars,n_pi, n_TR,n_sigma
-    
-    def set_penalties(self,penalties):
-        self.__penalties = penalties
 
     def fit(self,i_pi,i_TR,i_coef,i_sigma,i_p_pars,i_state_durs,i_states,n_chains=10):
 
@@ -274,26 +307,6 @@ class sMsGAMMBase:
         for ic in range(n_chains):
             plt.plot(self.__llk_hist[ic,:])
         plt.show()
-
-
-    def get_last_pars_chain(self,chain=0):
-        return self.__state_hist[chain][-1], \
-               self.__coef_hist[chain][-1], \
-               self.__sigma_hist[chain][-1], \
-               self.__scale_hist[chain][-1], \
-               self.__pi_hist[chain][-1], \
-               self.__TR_hist[chain][-1]
-    
-    def get_last_pars_max(self):
-        chain_last_llks = self.__llk_hist[:,-1]
-        idx = np.array(list(range(len(chain_last_llks))))
-        idx = idx[chain_last_llks == max(chain_last_llks)][0]
-        return idx,self.__state_hist[idx][-1], \
-               self.__coef_hist[idx][-1], \
-               self.__sigma_hist[idx][-1], \
-               self.__scale_hist[idx][-1], \
-               self.__pi_hist[idx][-1], \
-               self.__TR_hist[idx][-1] \
 
 class sMsGAMM(sMsGAMMBase):
 
