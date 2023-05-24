@@ -195,7 +195,7 @@ class sMsGAMMBase:
 
 
         ## M-step sojourn distributions (see utils)
-        n_p_pars = self.m_ps(self.n_j,c_p_pars,n_state_dur_est,n_state_est,self.covariates)
+        n_p_pars = self.m_ps(self.n_j,self.end_points,c_p_pars,n_state_dur_est,n_state_est,self.covariates)
 
         ## M-steps for initial and transition distributions can be completed optionally (see utils)
         if self.estimate_pi:
@@ -248,7 +248,8 @@ class sMsGAMMBase:
                     # Perform SEM step for current chain.
                     llk, n_states_dur, n_states, \
                     n_coef, n_p_pars, n_pi, \
-                    n_TR, n_sigma  = self.__advance_chain(ic,pool,self.__temp[i],self.__pi_hist[ic][i],
+                    n_TR, n_sigma  = self.__advance_chain(ic,pool,self.__temp[i],
+                                                          self.__pi_hist[ic][i],
                                                           self.__TR_hist[ic][i],
                                                           self.__scale_hist[ic][i],
                                                           self.__coef_hist[ic][i],

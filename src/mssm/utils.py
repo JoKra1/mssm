@@ -416,7 +416,7 @@ def solve_am(X_r,y_r,lTerms,cIndex,maxiter=10):
   
   return cCoef, lTerms, sigma, embS
 
-##################################### Log-likelihood and Pre-likelihood functions #####################################
+##################################### Complete data log-likelihood and Pre-likelihood functions #####################################
 
 def ll_sms_dc_gamm(n_j,pi,TR,state_dur_est, state_est,ps,logprobs,cov):
     # Complete data likelihood function for left-right de-convolving sMs GAMM.
@@ -442,12 +442,15 @@ def ll_sms_dc_gamm(n_j,pi,TR,state_dur_est, state_est,ps,logprobs,cov):
     c_logprobs = logprobs[np.isnan(logprobs) == False]
 
 
-    js = np.arange(n_j-1)
+    js = np.arange(n_j+1) # This has been changed for varying first and last events
     alpha = 0
 
     # Duration probability for every state
     for j in js:
-        alpha += ps[j].logpdf(state_dur_est[j,1])
+        
+        p_dur = ps[j].logpdf(state_dur_est[j,1])
+        if not np.isnan(p_dur):
+           alpha += p_dur
     
     # observation probabilities
     alpha += np.sum(c_logprobs)
@@ -524,19 +527,29 @@ def pre_ll_sms_gamm(n_j, end_point, state_dur_est, state_est):
 
 ##################################### Stochastic E-step proposal algorithms #####################################
 
-def prop_norm(end_point,c_state_est,sd):
+def prop_norm(end_point,c_state_est,sd,fix):
     # Standard proposal for random walk MH sampler, acts as proposal for
     # left-right (de-convolving) sMs GAMM: We simply propose a neighbor
     # for every state onset according to an onset centered Gaussian.
-    n_state_est = np.round(scp.stats.norm.rvs(loc=c_state_est[1:-1],scale=sd))
 
-    # Left-right sms GAMM assumes first state begins at t0 and last state
-    # ends at last time-point.
-    n_state_est = np.array([0,*n_state_est,end_point],dtype=int)
+    # This has been changed to allow for varying first and last event
+    n_state_est = np.round(scp.stats.norm.rvs(loc=c_state_est,scale=sd)).astype(int)
+
+    if fix is not None:
+       for event in fix:
+          # event[0] holds event location that should be fixed
+          # event[1] holds the sample at which it should be fixed.
+          if event[1] == "last":
+            n_state_est[event[0]] = end_point
+          else:
+            n_state_est[event[0]] = event[1]
 
     n_state_dur_est = []
-    for j in range(1,len(n_state_est)):
-       n_state_dur_est.append([j-1, n_state_est[j] - n_state_est[j-1]])
+    last_state_est = 0
+    for j in range(len(n_state_est)):
+       n_state_dur_est.append([j, n_state_est[j] - last_state_est])
+       last_state_est = n_state_est[j]
+    n_state_dur_est.append([len(n_state_est), end_point - n_state_est[-1]])
     
     return np.array(n_state_dur_est), n_state_est
 
@@ -571,7 +584,7 @@ def prop_smoothed(n_j,c_state_est,smoothed):
 def se_step_sms_dc_gamm(n_j,temp,series,end_point,time,cov,pi,TR,
                         state_durs_est,state_est,ps,coef,sigma,
                         create_matrix_fn, pre_lln_fn, ll_fn,e_bs_fun,
-                        repeat_by_j,build_mat_kwargs,e_bs_kwargs,sd=2):
+                        repeat_by_j,build_mat_kwargs,e_bs_kwargs,sd=2,fix=None):
     
     # Proposes a new candidate solution for a left-right DC Gamm via a random walk step. The proposed
     # state is accepted according to a modified Metropolis Hastings acceptance ratio. In fact, the decision
@@ -611,7 +624,8 @@ def se_step_sms_dc_gamm(n_j,temp,series,end_point,time,cov,pi,TR,
     for i in range(n_prop):
       
       # Propose new onset
-      n_state_durs_est,n_state_est = prop_norm(end_point,c_state_est,sd)
+      # This has been changed to handle varying first and last events
+      n_state_durs_est,n_state_est = prop_norm(end_point,c_state_est,sd,fix)
 
       # Pre-check new proposal
       rejection = pre_lln_fn(n_j, end_point, n_state_durs_est, n_state_est)
@@ -902,18 +916,29 @@ def backward_eta(n_j,n_t,TR,log_dur_mat,etas,u):
 
 ##################################### Other M-steps #####################################
 
-def m_gamma2s_sms_dc_gamm(n_j,p_pars,state_dur_est,state_est,cov):
+def m_gamma2s_sms_dc_gamm(n_j,end_points,p_pars,state_dur_est,state_est,cov):
    # For the deconvolving left-right case, we know every series has the same
    # number of states and transitions - so we can cast to numpy array to make
    # indexing easier.
    # Optimal estimate for scales is then simply the mean duration per state divided by
    # our fixed shape, i.e., 2. See Anderson et al., 2016
+
+   # This has been changed to support varying first and last events
+   # Assuming end at 30:
+   # Example fixed at begin and end: [0,3,12,30]
+   # Expand: [0,0,3,12,30,30]
+   # Durs: [0-0==0,3-0==3,12-3==9,30-12==18,30-30==0]
+   # Example varying at begin and end: [1,3,12,28]
+   # Expand: [0,1,3,12,28,30]
+   # Durs: [1-0==1,3-1==2,12-3==9,28-12==16,30-28==2]
    np_state_est = np.array(state_est)
-   durs = np.array([np_state_est[:,j] - np_state_est[:,j-1] for j in range(1,n_j)])
-   scales = [dur/2 for dur in np.mean(durs,axis=0)]
+   np_state_est = np.insert(np_state_est,0,0,axis=1)
+   np_state_est = np.insert(np_state_est,np_state_est.shape[1],end_points,axis=1)
+   durs = np.array([np_state_est[:,j] - np_state_est[:,j-1] for j in range(1,np_state_est.shape[1])])
+   scales = [dur/2 for dur in np.mean(durs,axis=1)]
    return scales
 
-def m_gamma2s_sms_gamm(n_j,p_pars,state_dur_est,state_est,cov):
+def m_gamma2s_sms_gamm(n_j,end_points,p_pars,state_dur_est,state_est,cov):
    # M step for gammas for sMs Gamm with state re-entries. A bit messy
    # but all it does is to again calculate per state the average duration
    # over all time points and also series.
