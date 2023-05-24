@@ -135,7 +135,10 @@ class sMsGAMMBase:
         ps = self.par_ps(c_p_pars)
         
         ## Sample next latent state estimate (Stochastic E-step)
-        n_state_dur_est, n_state_est = self.__propose_all_states(pool,temp,c_pi,c_TR,c_state_durs_est,c_state_est,ps,c_coef,c_sigma)
+        n_state_dur_est, n_state_est = self.__propose_all_states(pool,temp,c_pi,c_TR,
+                                                                 c_state_durs_est,
+                                                                 c_state_est,ps,
+                                                                 c_coef,c_sigma)
 
         # Calculate M-steps based on new latent state estimate
 
@@ -150,30 +153,41 @@ class sMsGAMMBase:
             n_state_est_fl = np.array([st for s in n_state_est for st in s],dtype=int)
             y_split, x_split = self.sep_per_j(self.n_j,n_state_est_fl,self.series_fl, n_mat)
             
-            n_coef, self.__penalties[chain][0], n_sigma, j_embS = utils.solve_am(x_split[0],y_split[0],self.__penalties[chain][0],0,maxiter=10)
+            n_coef, self.__penalties[chain][0], n_sigma, j_embS = utils.solve_am(x_split[0],
+                                                                                 y_split[0],
+                                                                                 self.__penalties[chain][0],
+                                                                                 0,maxiter=10)
             n_sigma = [n_sigma]
             
 
             ### Get probabilities of observing series under new model for this state
-            n_logprobs[n_state_est_fl == 0] = self.e_bs(self.n_j,y_split[0], x_split[0], n_coef, n_sigma[0], False, **self.__e_bs_kwargs)
+            n_logprobs[n_state_est_fl == 0] = self.e_bs(self.n_j,y_split[0], x_split[0], n_coef,
+                                                        n_sigma[0], False, **self.__e_bs_kwargs)
 
             tot_penalty = n_coef.T @ j_embS @ n_coef
             
             #### Repeat for remaining states
             for j in range(1,self.n_j):
-                nj_coef, self.__penalties[chain][j], nj_sigma, j_embS = utils.solve_am(x_split[j],y_split[j],self.__penalties[chain][j],0,maxiter=10)
+                nj_coef, self.__penalties[chain][j], nj_sigma, j_embS = utils.solve_am(x_split[j],
+                                                                                       y_split[j],
+                                                                                       self.__penalties[chain][j],
+                                                                                       0,maxiter=10)
                 n_coef = np.concatenate((n_coef,nj_coef))
                 
                 n_sigma.append(nj_sigma)
                 tot_penalty += nj_coef.T @ j_embS @ nj_coef
                 
-                n_logprobs[n_state_est_fl == j] = self.e_bs(self.n_j,y_split[j], x_split[j], nj_coef, nj_sigma, False, **self.__e_bs_kwargs)
+                n_logprobs[n_state_est_fl == j] = self.e_bs(self.n_j,y_split[j], x_split[j],
+                                                            nj_coef, nj_sigma, False,
+                                                            **self.__e_bs_kwargs)
 
             n_sigma = np.array(n_sigma)
 
         else:
             ### Otherwise we can fit a shared model.
-            n_coef, self.__penalties[chain], n_sigma, embS = utils.solve_am(n_mat,self.series_fl,self.__penalties[chain],0,maxiter=10)
+            n_coef, self.__penalties[chain], n_sigma, embS = utils.solve_am(n_mat,self.series_fl,
+                                                                            self.__penalties[chain],
+                                                                            0,maxiter=10)
             tot_penalty = n_coef.T @ embS @ n_coef
 
             ### Get probabilities of observing series under new model for all states at once.
@@ -232,13 +246,15 @@ class sMsGAMMBase:
                 for ic in range(n_chains):
 
                     # Perform SEM step for current chain.
-                    llk, n_states_dur, n_states, n_coef, n_p_pars, n_pi, n_TR, n_sigma  = self.__advance_chain(ic,pool,self.__temp[i],self.__pi_hist[ic][i],
-                                                                                                               self.__TR_hist[ic][i],
-                                                                                                               self.__scale_hist[ic][i],
-                                                                                                               self.__coef_hist[ic][i],
-                                                                                                               self.__sigma_hist[ic][i],
-                                                                                                               self.__state_dur_hist[ic][i],
-                                                                                                               self.__state_hist[ic][i])
+                    llk, n_states_dur, n_states, \
+                    n_coef, n_p_pars, n_pi, \
+                    n_TR, n_sigma  = self.__advance_chain(ic,pool,self.__temp[i],self.__pi_hist[ic][i],
+                                                          self.__TR_hist[ic][i],
+                                                          self.__scale_hist[ic][i],
+                                                          self.__coef_hist[ic][i],
+                                                          self.__sigma_hist[ic][i],
+                                                          self.__state_dur_hist[ic][i],
+                                                          self.__state_hist[ic][i])
                     
                     # Store new parameters
                     self.__state_dur_hist[ic].append(deepcopy(n_states_dur))
@@ -260,18 +276,36 @@ class sMsGAMMBase:
 
 
     def get_last_pars_chain(self,chain=0):
-        return self.__state_hist[chain][-1], self.__coef_hist[chain][-1], self.__sigma_hist[chain][-1], self.__scale_hist[chain][-1], self.__pi_hist[chain][-1], self.__TR_hist[chain][-1]
+        return self.__state_hist[chain][-1], \
+               self.__coef_hist[chain][-1], \
+               self.__sigma_hist[chain][-1], \
+               self.__scale_hist[chain][-1], \
+               self.__pi_hist[chain][-1], \
+               self.__TR_hist[chain][-1]
     
     def get_last_pars_max(self):
         chain_last_llks = self.__llk_hist[:,-1]
         idx = np.array(list(range(len(chain_last_llks))))
         idx = idx[chain_last_llks == max(chain_last_llks)][0]
-        return idx,self.__state_hist[idx][-1],self.__coef_hist[idx][-1], self.__sigma_hist[idx][-1], self.__scale_hist[idx][-1], self.__pi_hist[idx][-1], self.__TR_hist[idx][-1]
+        return idx,self.__state_hist[idx][-1], \
+               self.__coef_hist[idx][-1], \
+               self.__sigma_hist[idx][-1], \
+               self.__scale_hist[idx][-1], \
+               self.__pi_hist[idx][-1], \
+               self.__TR_hist[idx][-1] \
 
 class sMsGAMM(sMsGAMMBase):
 
-    def __init__(self, n_j, series, time, end_points, llk_fun, pre_llk_fun, covariates=None, is_DC=True, sep_per_j=utils.j_split, estimate_pi=True, estimate_TR=True, cpus=1):
-        super().__init__(n_j, series, time, end_points, llk_fun, pre_llk_fun, covariates, is_DC, sep_per_j, estimate_pi, estimate_TR, cpus)
+    def __init__(self, n_j, series, time,
+                 end_points, llk_fun, pre_llk_fun,
+                 covariates=None, is_DC=True,
+                 sep_per_j=utils.j_split,
+                 estimate_pi=True,
+                 estimate_TR=True, cpus=1):
+        super().__init__(n_j, series, time,
+                         end_points, llk_fun, pre_llk_fun,
+                         covariates, is_DC, sep_per_j,
+                         estimate_pi, estimate_TR, cpus)
 
         if sep_per_j is not None:
             self.set_e_bs(utils.get_log_o_prob_mat)
@@ -286,8 +320,15 @@ class sMsGAMM(sMsGAMMBase):
 
 class sMsDCGAMM(sMsGAMMBase):
 
-    def __init__(self, n_j, series, time, end_points, llk_fun, pre_llk_fun, covariates=None, is_DC=True, sep_per_j=None, estimate_pi=False, estimate_TR=False, cpus=1):
-        super().__init__(n_j, series, time, end_points, llk_fun, pre_llk_fun, covariates, is_DC, sep_per_j, estimate_pi, estimate_TR, cpus)
+    def __init__(self, n_j, series, time,
+                 end_points, llk_fun, pre_llk_fun,
+                 covariates=None, is_DC=True,
+                 sep_per_j=None, estimate_pi=False,
+                 estimate_TR=False, cpus=1):
+        super().__init__(n_j, series, time,
+                         end_points, llk_fun, pre_llk_fun,
+                         covariates, is_DC, sep_per_j,
+                         estimate_pi, estimate_TR, cpus)
 
         self.set_e_bs(utils.get_log_o_prob_mat)
         self.set_m_ps(utils.m_gamma2s_sms_dc_gamm)
