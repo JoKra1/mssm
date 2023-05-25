@@ -448,10 +448,10 @@ def ll_sms_dc_gamm(n_j,pi,TR,state_dur_est, state_est,ps,logprobs,cov):
     # Duration probability for every state
     for j in js:
         
-        p_dur = ps[j].logpdf(state_dur_est[j,1])
-        if not np.isnan(p_dur):
-           alpha += p_dur
-    
+        # Check for zero scale Gammas belonging to fixed events.
+        if not np.isnan(ps[j].mean()):
+         alpha +=  ps[j].logpdf(state_dur_est[j,1])
+
     # observation probabilities
     alpha += np.sum(c_logprobs)
 
@@ -494,18 +494,62 @@ def ll_sms_gamm(n_j,pi,TR,state_dur_est,state_est,ps,logprobs,cov):
    alpha += np.sum(c_logprobs)
    return alpha
 
-def pre_ll_sms_dc_gamm(n_j, end_point, state_dur_est, state_est):
+def pre_ll_sms_dc_gamm_fixed_full(n_j, end_point, state_dur_est, state_est):
     # Prior likelihood check for left-right de-convolving sMs GAMM.
     # Checks whether likelihood should be set to - inf based
     # on any knowledge about the support of the likelihood function.
 
-    # Cannot have state onset before
+    # Assumes a fixed event at to and ent_point!
+
+    # Cannot have state onset before zero
     if np.any(state_est < 0):
        return True
     
     # Cannot have state onset after trial is over
     if np.any(state_est > end_point):
       return True
+    
+    # Cannot violate left-right ordering
+    if np.any(state_est[1:len(state_est)] - state_est[0:-1] < 1):
+       return True
+    
+    return False
+
+def pre_ll_sms_dc_gamm_fixed_first(n_j, end_point, state_dur_est, state_est):
+    # Prior likelihood check for left-right de-convolving sMs GAMM.
+    # Checks whether likelihood should be set to - inf based
+    # on any knowledge about the support of the likelihood function.
+
+    # Assumes a fixed event at t0!
+
+    # Cannot have state onset before zero
+    if np.any(state_est < 0):
+       return True
+    
+    # Cannot have state onset after end_point - 1
+    if np.any(state_est >= end_point):
+      return True
+    
+    # Cannot violate left-right ordering
+    if np.any(state_est[1:len(state_est)] - state_est[0:-1] < 1):
+       return True
+    
+    return False
+
+def pre_ll_sms_dc_gamm(n_j, end_point, state_dur_est, state_est):
+    # Prior likelihood check for left-right de-convolving sMs GAMM.
+    # Checks whether likelihood should be set to - inf based
+    # on any knowledge about the support of the likelihood function.
+
+    # Assumes no fixed event at all!
+
+    # Cannot have state onset before 1
+    if np.any(state_est <= 0):
+       return True
+    
+    # Cannot have state onset after end_point - 1
+    if np.any(state_est >= end_point):
+       return True
     
     # Cannot violate left-right ordering
     if np.any(state_est[1:len(state_est)] - state_est[0:-1] < 1):
