@@ -153,38 +153,7 @@ def create_event_matrix_time(time,cov,state_est, identifiable = False, drop_oute
     event_matrix[:,cIndex:cIndex+colsMat] = B_spline_basis(ci,time,state_est, identifiable, drop_outer_k, convolve, min_c, max_c, nk, deg)
     cIndex += colsMat
 
-  #return np.concatenate((inter,event_matrix),axis=1)
-  return event_matrix
-
-def create_event_matrix_cov_pupil(time,cov,state_est, identifiable = True, drop_outer_k=False, convolve=True, min_c=0, max_c=1500, nk=5, deg=2, n_s=10):
-   
-   B = B_spline_basis(None,cov[:,2],state_est, identifiable, drop_outer_k, convolve, min_c, max_c, nk, deg)
-   inter = constant_basis(None,cov[:,2],state_est,convolve=False,max_c=None)
-
-   #s = list(set(cov[:,0]))[0]
-   #rand_int_s = np.zeros((B.shape[0],n_s))
-   #rand_int_s[:,s] = 1
-
-   return np.concatenate((inter,B),axis=1)
-
-def create_event_matrix_cov_pupil_NI(time,cov,state_est, identifiable = False, drop_outer_k=False, convolve=True, min_c=0, max_c=1500, nk=5, deg=2, n_s=10):
-   
-   B = B_spline_basis(None,cov[:,2],state_est, identifiable, drop_outer_k, convolve, min_c, max_c, nk, deg)
-
-
-   #s = list(set(cov[:,0]))[0]
-   #rand_int_s = np.zeros((B.shape[0],n_s))
-   #rand_int_s[:,s] = 1
-
-   return B
-
-def create_event_matrix_cov_pupil_FS(time,cov,state_est, identifiable = False, drop_outer_k=False, convolve=True, min_c=0, max_c=1500, nk=5, deg=2, n_s=10):
-   B = np.zeros((len(time), len(state_est)))
-
-   for ci in range(B.shape[1]):
-      B[:,ci] = h_basis(ci,time,state_est)
-   
-   return B
+  return np.concatenate((inter,event_matrix),axis=1)
 
 def create_event_matrix_time2(time,cov,state_est, identifiable = False, drop_outer_k=False, convolve=True, min_c=0, max_c=2500, nk=10, deg=2, n_s=10):
   # Setup a model matrix for a left-right mssm, where every
@@ -480,8 +449,7 @@ def ll_sms_dc_gamm(n_j,pi,TR,state_dur_est, state_est,ps,logprobs,cov):
     for j in js:
         
         p_dur = ps[j].logpdf(state_dur_est[j,1])
-
-        if not np.isnan(p_dur) and not np.isinf(p_dur):
+        if not np.isnan(p_dur):
            alpha += p_dur
     
     # observation probabilities
