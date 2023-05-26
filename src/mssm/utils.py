@@ -153,7 +153,17 @@ def create_event_matrix_time(time,cov,state_est, identifiable = False, drop_oute
     event_matrix[:,cIndex:cIndex+colsMat] = B_spline_basis(ci,time,state_est, identifiable, drop_outer_k, convolve, min_c, max_c, nk, deg)
     cIndex += colsMat
 
-  return np.concatenate((inter,event_matrix),axis=1)
+  #return np.concatenate((inter,event_matrix),axis=1)
+  return event_matrix
+
+def create_event_matrix_cov_pupil_FS(time,cov,state_est, identifiable = False, drop_outer_k=False, convolve=True, min_c=0, max_c=1500, nk=5, deg=2, n_s=10):
+   # Create event matrix based on pupil response assumed by Hoeks & Levelt
+   B = np.zeros((len(time), len(state_est)))
+
+   for ci in range(B.shape[1]):
+      B[:,ci] = h_basis(ci,time,state_est)
+   
+   return B
 
 def create_event_matrix_time2(time,cov,state_est, identifiable = False, drop_outer_k=False, convolve=True, min_c=0, max_c=2500, nk=10, deg=2, n_s=10):
   # Setup a model matrix for a left-right mssm, where every
@@ -814,6 +824,13 @@ def anneal_temps(iter,b=0.005):
    ts = np.array(list(range(iter)))
 
    temp = np.array([1 + 1/(b*math.sqrt(t+1)) for t in ts])
+   return temp
+
+def anneal_temps_zero(iter,b=0.005):
+   # Annealing schedule as proposed by Kirkpatrick, Gelatt and Vecchi (1983).
+   ts = np.array(list(range(iter)))
+
+   temp = np.array([1/(b*math.sqrt(t+1)) for t in ts])
    return temp
 
 def const_temp(iter,a=1.0):
