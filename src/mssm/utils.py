@@ -660,7 +660,7 @@ def se_step_sms_dc_gamm(n_j,temp,series,end_point,time,cov,pi,TR,
     # We simply maximize the CDL based on our candidate - which IS again closer to traditional SEM.. So it's again a combination of a couple things that work well in practice.
     # The sampler for the most general case (se_step_sms_gamm) behaves more like traditional SEM and the acceptance step should in principle not be necessary.
 
-    n_prop = 1 # Depending on the proposal function it can be useful to sample a lot of candidates and then select from all those at random
+    n_prop = 10 # Depending on the proposal function it can be useful to sample a lot of candidates and then select from all those at random
     n_cand = 1 # I considered allowing to return multiple samples, which might help with performance but I haven't implemented that yet.
 
     c_state_est = np.copy(state_est)
@@ -691,7 +691,7 @@ def se_step_sms_dc_gamm(n_j,temp,series,end_point,time,cov,pi,TR,
         n_llk = ll_fn(n_j,pi,TR,n_state_durs_est,n_state_est,ps,n_logprobs,cov)
 
         # Simulated Annealing/Metropolis acceptance
-        if np.exp((n_llk - c_llk)/temp) >= cutoffs[i]:
+        if (n_llk > c_llk) or (np.exp((n_llk - c_llk)/temp) >= cutoffs[i]):
           c_state_est = np.copy(n_state_est)
           c_state_durs_est = np.copy(n_state_durs_est)
           c_mat = np.copy(n_mat)
