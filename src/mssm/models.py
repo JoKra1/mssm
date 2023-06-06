@@ -119,6 +119,32 @@ class sMsGAMMBase:
                self.__pi_hist[idx][-1], \
                self.__TR_hist[idx][-1] \
     
+    def get_last_llk_max(self):
+        chain_last_llks = self.__llk_hist[:,-1]
+        idx = np.array(list(range(len(chain_last_llks))))
+        idx = idx[chain_last_llks == max(chain_last_llks)][0]
+        return idx, chain_last_llks[idx]
+
+    def get_gcv_max(self):
+        if self.sep_per_j is not None and not self.is_DC:
+            warnings.warn("GCV currently only supported for DC GAMM")
+            return None
+
+        chain_last_llks = self.__llk_hist[:,-1]
+        idx = np.array(list(range(len(chain_last_llks))))
+        idx = idx[chain_last_llks == max(chain_last_llks)][0]
+
+        best_states = self.__state_hist[idx][-1]
+        best_coef = self.__coef_hist[idx][-1]
+        best_penalties = self.__penalties[idx]
+        with mp.Pool(processes=self.cpus) as pool:
+            n_mat = self.__build_all_mod_mat(pool,best_states)
+        n_mat = n_mat[np.isnan(self.series_fl) == False,:]
+        y = self.series_fl[np.isnan(self.series_fl) == False]
+        gcv = utils.compute_gcv(y,n_mat,best_coef,best_penalties)
+        
+        return gcv
+
     def get_penalties(self):
         return self.__penalties
     

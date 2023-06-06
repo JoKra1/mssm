@@ -426,6 +426,39 @@ def solve_am(X_r,y_r,lTerms,cIndex,maxiter=10):
   
   return cCoef, lTerms, sigma, embS
 
+def compute_gcv(y,X,coef,lTerms):
+   # Follows Wood (2017), computes the generalized
+   # cross-validation error for a GAMM.
+   pred = X @ coef
+   res = y - pred
+   resDot = res.dot(res)
+   n,m = X.shape
+
+   embS = np.zeros((m,m))
+
+   cIndex = 0
+   for lTerm in lTerms:
+      if lTerm.start_index is not None:
+         cIndex = lTerm.start_index
+      for pen in lTerm.penalties:
+         embS, cIndex = embed_in_S(pen,embS,cIndex,lam=lTerm.lam)
+      
+   Inv = scp.linalg.solve(X.T @ X + embS, np.identity(m))
+
+   A = X @ Inv @ X.T
+   gcv = (n * resDot) / ((n - np.trace(A))**2)
+   return gcv
+
+@dataclass
+class GAMMResults:
+   lambdaTerms: list = None
+   sigma: list = None
+   mat: np.ndarray = None
+   S: np.ndarray = None
+   Inv: np.ndarray = None
+   coef: np.ndarray = None
+
+
 ##################################### Complete data log-likelihood and Pre-likelihood functions #####################################
 
 def ll_sms_dc_gamm(n_j,pi,TR,state_dur_est, state_est,ps,logprobs,cov):
@@ -638,7 +671,7 @@ def prop_smoothed(n_j,c_state_est,smoothed):
 def se_step_sms_dc_gamm(n_j,temp,series,end_point,time,cov,pi,TR,
                         state_durs_est,state_est,ps,coef,sigma,
                         create_matrix_fn, pre_lln_fn, ll_fn,e_bs_fun,
-                        repeat_by_j,build_mat_kwargs,e_bs_kwargs,sd=2,fix=None):
+                        repeat_by_j,build_mat_kwargs,e_bs_kwargs,sd=2,fix=None,n_prop = 50):
     
     # Proposes a new candidate solution for a left-right DC Gamm via a random walk step. The proposed
     # state is accepted according to a modified Metropolis Hastings acceptance ratio. In fact, the decision
@@ -660,7 +693,7 @@ def se_step_sms_dc_gamm(n_j,temp,series,end_point,time,cov,pi,TR,
     # We simply maximize the CDL based on our candidate - which IS again closer to traditional SEM.. So it's again a combination of a couple things that work well in practice.
     # The sampler for the most general case (se_step_sms_gamm) behaves more like traditional SEM and the acceptance step should in principle not be necessary.
 
-    n_prop = 50 # Depending on the proposal function it can be useful to sample a lot of candidates and then select from all those at random
+    #n_prop = 50 # Depending on the proposal function it can be useful to sample a lot of candidates and then select from all those at random
     n_cand = 1 # I considered allowing to return multiple samples, which might help with performance but I haven't implemented that yet.
 
     c_state_est = np.copy(state_est)
