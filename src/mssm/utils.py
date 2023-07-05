@@ -156,6 +156,42 @@ def create_event_matrix_time(time,cov,state_est, identifiable = False, drop_oute
   #return np.concatenate((inter,event_matrix),axis=1)
   return event_matrix
 
+def create_event_matrix_time_split(time,cov,state_est, identifiable = False, drop_outer_k=False, convolve=True, min_c=0, max_c=2500, nk=10, deg=2):
+  # Setup a model matrix for a left-right mssm, where every
+  # state entry elicits an impluse response that affects the
+  # observed signal in some way: the effect might differ between
+  # states. Also estimates random intercepts for every level of cov.
+
+  # Create intercept for series
+  inter = constant_basis(None,time,state_est,convolve=False,max_c=None)
+
+  # Create matrix for first onset because depending on the
+  # basis there might be different dimensions!
+  matrix_first = B_spline_basis(0,time,state_est, identifiable, drop_outer_k, convolve, min_c, max_c, nk, deg)
+
+  rowsMat, colsMat = matrix_first.shape
+
+  # Now that dimensions are known expand for number of
+  # event locations.
+  event_matrix = np.zeros((rowsMat,colsMat * len(state_est) + (2 * colsMat)))
+  event_matrix[:,0:colsMat] = matrix_first
+
+  # And fill with the remaining design matrix blocks.
+  cIndex = colsMat
+  for ci in range(1,len(state_est)):
+    if ci == 2:
+       cov_s = cov[0,2]
+       for covi in range(3):
+          if covi == cov_s:
+           event_matrix[:,cIndex:cIndex+colsMat] = B_spline_basis(ci,time,state_est, identifiable, drop_outer_k, convolve, min_c, max_c, nk, deg)
+          cIndex += colsMat
+    else:
+      event_matrix[:,cIndex:cIndex+colsMat] = B_spline_basis(ci,time,state_est, identifiable, drop_outer_k, convolve, min_c, max_c, nk, deg)
+      cIndex += colsMat
+
+  #return np.concatenate((inter,event_matrix),axis=1)
+  return event_matrix
+
 def create_event_matrix_cov_pupil_FS(time,cov,state_est, identifiable = False, drop_outer_k=False, convolve=True, min_c=0, max_c=1500, nk=5, deg=2, n_s=10):
    # Create event matrix based on pupil response assumed by Hoeks & Levelt
    B = np.zeros((len(time), len(state_est)))
@@ -461,7 +497,7 @@ class GAMMResults:
 
 ##################################### Complete data log-likelihood and Pre-likelihood functions #####################################
 
-def ll_sms_dc_gamm(n_j,pi,TR,state_dur_est, state_est,ps,logprobs,cov):
+def ll_sms_dc_gamm(n_j,pi,TR,state_dur_est, state_est,ps,logprobs,cov,split_p_by_cov):
     # Complete data likelihood function for left-right de-convolving sMs GAMM.
     # Yu (2011): alpha_t(j) = Probability of state j terminating at time t
     # AND observing values o[1:t] given current parameters.
@@ -492,8 +528,15 @@ def ll_sms_dc_gamm(n_j,pi,TR,state_dur_est, state_est,ps,logprobs,cov):
     for j in js:
         
         # Check for zero scale Gammas belonging to fixed events.
-        if not np.isnan(ps[j].mean()):
-         alpha +=  ps[j].logpdf(state_dur_est[j,1])
+        if split_p_by_cov is None:
+           j_s = j
+        elif j not in split_p_by_cov["split"]:
+           j_s = j
+        else:
+           j_s = j + cov[0,split_p_by_cov["cov"]]
+
+        if not np.isnan(ps[j_s].mean()):
+         alpha +=  ps[j_s].logpdf(state_dur_est[j,1])
 
     # observation probabilities
     alpha += np.sum(c_logprobs)
@@ -501,7 +544,7 @@ def ll_sms_dc_gamm(n_j,pi,TR,state_dur_est, state_est,ps,logprobs,cov):
     # Complete data likelihood.
     return alpha
 
-def ll_sms_gamm(n_j,pi,TR,state_dur_est,state_est,ps,logprobs,cov):
+def ll_sms_gamm(n_j,pi,TR,state_dur_est,state_est,ps,logprobs,cov,split_p_by_cov):
    # Complete data likelihood function for sMs GAMM WITH state re-entries, so not left-right.
    # Again, based on equation 15 in Yu (2011) but adapted for the complete likelihood
    # case, since we have a state_est available. We are again interested
@@ -671,7 +714,8 @@ def prop_smoothed(n_j,c_state_est,smoothed):
 def se_step_sms_dc_gamm(n_j,temp,series,end_point,time,cov,pi,TR,
                         state_durs_est,state_est,ps,coef,sigma,
                         create_matrix_fn, pre_lln_fn, ll_fn,e_bs_fun,
-                        repeat_by_j,build_mat_kwargs,e_bs_kwargs,sd=2,fix=None,n_prop = 50):
+                        repeat_by_j,split_p_by_cov,build_mat_kwargs,e_bs_kwargs,
+                        sd=2,fix=None,n_prop = 50):
     
     # Proposes a new candidate solution for a left-right DC Gamm via a random walk step. The proposed
     # state is accepted according to a modified Metropolis Hastings acceptance ratio. In fact, the decision
@@ -700,7 +744,7 @@ def se_step_sms_dc_gamm(n_j,temp,series,end_point,time,cov,pi,TR,
     c_mat = create_matrix_fn(time,cov,c_state_est,**build_mat_kwargs)
     c_logprobs = e_bs_fun(n_j,series,c_mat,coef,sigma,repeat_by_j,**e_bs_kwargs)
     c_state_durs_est = np.copy(state_durs_est)
-    c_llk = ll_fn(n_j,pi,TR,c_state_durs_est,state_est,ps,c_logprobs,cov)
+    c_llk = ll_fn(n_j,pi,TR,c_state_durs_est,state_est,ps,c_logprobs,cov,split_p_by_cov)
 
     cutoffs = scp.stats.uniform.rvs(size=n_prop)
 
@@ -721,7 +765,7 @@ def se_step_sms_dc_gamm(n_j,temp,series,end_point,time,cov,pi,TR,
         # Calculate likelihood of proposal given observations and current parameters
         n_mat = create_matrix_fn(time,cov,n_state_est,**build_mat_kwargs)
         n_logprobs = e_bs_fun(n_j,series,n_mat,coef,sigma,repeat_by_j,**e_bs_kwargs)
-        n_llk = ll_fn(n_j,pi,TR,n_state_durs_est,n_state_est,ps,n_logprobs,cov)
+        n_llk = ll_fn(n_j,pi,TR,n_state_durs_est,n_state_est,ps,n_logprobs,cov,split_p_by_cov)
 
         # Simulated Annealing/Metropolis acceptance
         if (n_llk > c_llk) or (np.exp((n_llk - c_llk)/temp) >= cutoffs[i]):
@@ -745,8 +789,8 @@ def se_step_sms_dc_gamm(n_j,temp,series,end_point,time,cov,pi,TR,
 def se_step_sms_gamm(n_j,temp,series,end_point,time,cov,pi,TR,
                      state_durs_est,state_est,ps,coef,sigma,
                      create_matrix_fn, pre_lln_fn, ll_fn,e_bs_fun,
-                     repeat_by_j,build_mat_kwargs,e_bs_kwargs,
-                     merge_mat_fun=None):
+                     repeat_by_j,split_p_by_cov,build_mat_kwargs,
+                     e_bs_kwargs,merge_mat_fun=None):
 
     n_prop = 1 
     n_cand = 1 
@@ -787,7 +831,7 @@ def se_step_sms_gamm(n_j,temp,series,end_point,time,cov,pi,TR,
     for j in range(1,n_j):
       aligned_logprobs[c_state_est==j] = c_logprobs[j,c_state_est==j]
     
-    c_llk = ll_fn(n_j,pi,TR,c_state_durs_est,c_state_est,ps,aligned_logprobs,cov)
+    c_llk = ll_fn(n_j,pi,TR,c_state_durs_est,c_state_est,ps,aligned_logprobs,cov,split_p_by_cov)
     
     cutoffs = scp.stats.uniform.rvs(size=n_prop)
 
@@ -829,7 +873,7 @@ def se_step_sms_gamm(n_j,temp,series,end_point,time,cov,pi,TR,
         for j in range(1,n_j):
             aligned_logprobs[n_state_est==j] = n_logprobs[j,n_state_est==j]
 
-        n_llk = ll_fn(n_j,pi,TR,n_state_durs_est,n_state_est,ps,aligned_logprobs,cov)
+        n_llk = ll_fn(n_j,pi,TR,n_state_durs_est,n_state_est,ps,aligned_logprobs,cov,split_p_by_cov)
 
         # Simulated Annealing/Metropolis acceptance
         if np.exp((n_llk - c_llk)/temp) >= cutoffs[i]:
@@ -1010,7 +1054,7 @@ def backward_eta(n_j,n_t,TR,log_dur_mat,etas,u):
 
 ##################################### Other M-steps #####################################
 
-def m_gamma2s_sms_dc_gamm(n_j,end_points,p_pars,state_dur_est,state_est,cov):
+def m_gamma2s_sms_dc_gamm(n_j,end_points,p_pars,state_dur_est,state_est,cov,split_p_by_cov):
    # For the deconvolving left-right case, we know every series has the same
    # number of states and transitions - so we can cast to numpy array to make
    # indexing easier.
@@ -1029,10 +1073,22 @@ def m_gamma2s_sms_dc_gamm(n_j,end_points,p_pars,state_dur_est,state_est,cov):
    np_state_est = np.insert(np_state_est,0,0,axis=1)
    np_state_est = np.insert(np_state_est,np_state_est.shape[1],end_points,axis=1)
    durs = np.array([np_state_est[:,j] - np_state_est[:,j-1] for j in range(1,np_state_est.shape[1])])
-   scales = [dur/2 for dur in np.mean(durs,axis=1)]
+
+   if split_p_by_cov is None:
+      scales = [dur/2 for dur in np.mean(durs,axis=1)]
+   else:
+      cov_split = np.array([c[0,split_p_by_cov["cov"]] for c in cov]) # cov[:,split_p_by_cov["cov"]] should be categorical so identical over dim 0
+      scales = []
+      for j in range(durs.shape[0]):
+         if j not in split_p_by_cov["split"]:
+            scales.append(np.mean(durs[j,:])/2)
+         else:
+            for c in range(max(cov_split)+1):
+               scales.append(np.mean(durs[j,cov_split == c])/2)
+   
    return scales
 
-def m_gamma2s_sms_gamm(n_j,end_points,p_pars,state_dur_est,state_est,cov):
+def m_gamma2s_sms_gamm(n_j,end_points,p_pars,state_dur_est,state_est,cov,split_p_by_cov):
    # M step for gammas for sMs Gamm with state re-entries. A bit messy
    # but all it does is to again calculate per state the average duration
    # over all time points and also series.

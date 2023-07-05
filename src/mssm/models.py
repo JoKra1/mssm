@@ -15,6 +15,7 @@ class sMsGAMMBase:
                  end_points,llk_fun,pre_llk_fun,
                  covariates=None,is_DC=True,
                  sep_per_j=None,
+                 split_p_by_cov = None,
                  estimate_pi=False,
                  estimate_TR=False,
                  cpus=1):
@@ -34,6 +35,7 @@ class sMsGAMMBase:
         
         self.is_DC = is_DC
         self.sep_per_j = sep_per_j
+        self.split_p_by_cov = split_p_by_cov
         self.estimate_pi = estimate_pi
         self.estimate_TR = estimate_TR
 
@@ -173,7 +175,8 @@ class sMsGAMMBase:
                    self.covariates,repeat(pi),repeat(TR),state_durs_est,state_est,repeat(ps),
                    repeat(coef),repeat(sigma),repeat(self.__build_mat_fun), repeat(self.pre_llk_fun),
                    repeat(self.llk_fun),repeat(self.e_bs),repeat(self.sep_per_j is not None),
-                   repeat(self.__build_mat_kwargs),repeat(self.__e_bs_kwargs))
+                   repeat(self.split_p_by_cov),repeat(self.__build_mat_kwargs),
+                   repeat(self.__e_bs_kwargs))
         
         mapping = zip(repeat(self.__sample_fun),args,repeat(self.__sample_fun_kwargs))
 
@@ -181,7 +184,7 @@ class sMsGAMMBase:
         return list(state_durs_new),list(states_new)
     
     def __calc_llk_all_events(self,pool,pi,TR,state_dur_est,state_est,ps,logprobs):
-        args = zip(repeat(self.n_j),repeat(pi),repeat(TR),state_dur_est,state_est,repeat(ps),logprobs,self.covariates)
+        args = zip(repeat(self.n_j),repeat(pi),repeat(TR),state_dur_est,state_est,repeat(ps),logprobs,self.covariates,repeat(self.split_p_by_cov))
         llks = pool.starmap(self.llk_fun,args)
         return llks
     
@@ -257,7 +260,7 @@ class sMsGAMMBase:
 
 
         ## M-step sojourn distributions (see utils)
-        n_p_pars = self.m_ps(self.n_j,self.end_points,c_p_pars,n_state_dur_est,n_state_est,self.covariates)
+        n_p_pars = self.m_ps(self.n_j,self.end_points,c_p_pars,n_state_dur_est,n_state_est,self.covariates,self.split_p_by_cov)
 
         ## M-steps for initial and transition distributions can be completed optionally (see utils)
         if self.estimate_pi:
@@ -340,12 +343,14 @@ class sMsGAMM(sMsGAMMBase):
                  end_points, llk_fun, pre_llk_fun,
                  covariates=None, is_DC=True,
                  sep_per_j=utils.j_split,
+                 split_p_by_cov = None,
                  estimate_pi=True,
                  estimate_TR=True, cpus=1):
         super().__init__(n_j, series, time,
                          end_points, llk_fun, pre_llk_fun,
                          covariates, is_DC, sep_per_j,
-                         estimate_pi, estimate_TR, cpus)
+                         split_p_by_cov,estimate_pi,
+                         estimate_TR, cpus)
 
         if sep_per_j is not None:
             self.set_e_bs(utils.get_log_o_prob_mat)
@@ -363,12 +368,14 @@ class sMsDCGAMM(sMsGAMMBase):
     def __init__(self, n_j, series, time,
                  end_points, llk_fun, pre_llk_fun,
                  covariates=None, is_DC=True,
-                 sep_per_j=None, estimate_pi=False,
+                 sep_per_j=None, split_p_by_cov = None,
+                 estimate_pi=False,
                  estimate_TR=False, cpus=1):
         super().__init__(n_j, series, time,
                          end_points, llk_fun, pre_llk_fun,
                          covariates, is_DC, sep_per_j,
-                         estimate_pi, estimate_TR, cpus)
+                         split_p_by_cov,estimate_pi,
+                         estimate_TR, cpus)
 
         self.set_e_bs(utils.get_log_o_prob_mat)
         self.set_m_ps(utils.m_gamma2s_sms_dc_gamm)
