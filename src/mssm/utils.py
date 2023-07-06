@@ -156,13 +156,13 @@ def create_event_matrix_time(time,cov,state_est, identifiable = False, drop_oute
   #return np.concatenate((inter,event_matrix),axis=1)
   return event_matrix
 
-def create_event_matrix_time_split(time,cov,state_est, identifiable = False, drop_outer_k=False, convolve=True, min_c=0, max_c=2500, nk=10, deg=2):
+def create_event_matrix_time_split(time,cov,state_est,split_k=None,identifiable = False, drop_outer_k=False, convolve=True, min_c=0, max_c=2500, nk=10, deg=2):
   # Setup a model matrix for a left-right mssm, where every
   # state entry elicits an impluse response that affects the
   # observed signal in some way: the effect might differ between
   # states. Also estimates random intercepts for every level of cov.
 
-  # Create intercept for series
+  # Create intercept for series (Not in use)
   inter = constant_basis(None,time,state_est,convolve=False,max_c=None)
 
   # Create matrix for first onset because depending on the
@@ -173,20 +173,19 @@ def create_event_matrix_time_split(time,cov,state_est, identifiable = False, dro
 
   # Now that dimensions are known expand for number of
   # event locations.
-  event_matrix = np.zeros((rowsMat,colsMat * len(state_est) + (2 * colsMat)))
-  event_matrix[:,0:colsMat] = matrix_first
+  event_matrix = np.zeros((rowsMat,colsMat * len(state_est) + (len(split_k["split"]) * (split_k["n_levels"] - 1) * colsMat)))
 
-  # And fill with the remaining design matrix blocks.
-  cIndex = colsMat
-  for ci in range(1,len(state_est)):
-    if ci == 2:
-       cov_s = cov[0,2]
-       for covi in range(3):
-          if covi == cov_s:
-           event_matrix[:,cIndex:cIndex+colsMat] = B_spline_basis(ci,time,state_est, identifiable, drop_outer_k, convolve, min_c, max_c, nk, deg)
+  # And fill with the design matrix blocks.
+  cIndex = 0
+  cov_s = cov[0,split_k["cov"]]
+  for j in range(len(state_est)):
+    if j in split_k["split"]:
+       for ci in range(split_k["n_levels"]):
+          if ci == cov_s:
+            event_matrix[:,cIndex:cIndex+colsMat] = B_spline_basis(j,time,state_est, identifiable, drop_outer_k, convolve, min_c, max_c, nk, deg)
           cIndex += colsMat
     else:
-      event_matrix[:,cIndex:cIndex+colsMat] = B_spline_basis(ci,time,state_est, identifiable, drop_outer_k, convolve, min_c, max_c, nk, deg)
+      event_matrix[:,cIndex:cIndex+colsMat] = B_spline_basis(j,time,state_est, identifiable, drop_outer_k, convolve, min_c, max_c, nk, deg)
       cIndex += colsMat
 
   #return np.concatenate((inter,event_matrix),axis=1)
