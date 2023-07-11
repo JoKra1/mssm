@@ -47,7 +47,7 @@ class sMsGAMMBase:
         # Temperature schedule
         self.__temp = None
 
-        # Containers
+        # History containers
         self.__coef_hist = None
         self.__state_dur_hist = None
         self.__state_hist = None
@@ -55,6 +55,15 @@ class sMsGAMMBase:
         self.__sigma_hist = None
         self.__TR_hist = None
         self.__pi_hist = None
+
+        # Current estimates
+        self.__coef = None
+        self.__state_dur = None
+        self.__state = None
+        self.__scale = None
+        self.__sigma = None
+        self.__TR = None
+        self.__pi = None
 
         # Function storage
         self.__sample_fun = None
@@ -103,23 +112,23 @@ class sMsGAMMBase:
     ##################################### Getters #####################################
 
     def get_last_pars_chain(self,chain=0):
-        return self.__state_hist[chain][-1], \
-               self.__coef_hist[chain][-1], \
-               self.__sigma_hist[chain][-1], \
-               self.__scale_hist[chain][-1], \
-               self.__pi_hist[chain][-1], \
-               self.__TR_hist[chain][-1]
+        return self.__state[chain], \
+               self.__coef[chain], \
+               self.__sigma[chain], \
+               self.__scale[chain], \
+               self.__pi[chain], \
+               self.__TR[chain]
     
     def get_last_pars_max(self):
         chain_last_llks = self.__llk_hist[:,-1]
         idx = np.array(list(range(len(chain_last_llks))))
         idx = idx[chain_last_llks == max(chain_last_llks)][0]
-        return idx,self.__state_hist[idx][-1], \
-               self.__coef_hist[idx][-1], \
-               self.__sigma_hist[idx][-1], \
-               self.__scale_hist[idx][-1], \
-               self.__pi_hist[idx][-1], \
-               self.__TR_hist[idx][-1] \
+        return idx,self.__state[idx], \
+               self.__coef[idx], \
+               self.__sigma[idx], \
+               self.__scale[idx], \
+               self.__pi[idx], \
+               self.__TR[idx] \
     
     def get_last_llk_max(self):
         chain_last_llks = self.__llk_hist[:,-1]
@@ -136,8 +145,8 @@ class sMsGAMMBase:
         idx = np.array(list(range(len(chain_last_llks))))
         idx = idx[chain_last_llks == max(chain_last_llks)][0]
 
-        best_states = self.__state_hist[idx][-1]
-        best_coef = self.__coef_hist[idx][-1]
+        best_states = self.__state[idx]
+        best_coef = self.__coef[idx]
         best_penalties = self.__penalties[idx]
         with mp.Pool(processes=self.cpus) as pool:
             n_mat = self.__build_all_mod_mat(pool,best_states)
@@ -283,22 +292,35 @@ class sMsGAMMBase:
 
         return np.sum(llks_new) - tot_penalty, n_state_dur_est, n_state_est, n_coef, n_p_pars,n_pi, n_TR,n_sigma
 
-    def fit(self,i_pi,i_TR,i_coef,i_sigma,i_p_pars,i_state_durs,i_states,n_chains=10):
+    def fit(self,i_pi,i_TR,i_coef,i_sigma,i_p_pars,i_state_durs,i_states,n_chains=10,collect_hist=False):
+        
+        ### Initialize
+        iter = len(self.__temp)
+        self.__state_dur = deepcopy(i_state_durs)
+        self.__state = deepcopy(i_states)
 
+        self.__scale = deepcopy(i_p_pars)
+        self.__coef = deepcopy(i_coef)
+        self.__sigma = deepcopy(i_sigma)
+        
+        self.__pi = deepcopy(i_pi)
+        self.__TR = deepcopy(i_TR)
+        
         # Deepcopy penalties to multiple chains
         self.__penalties = [deepcopy(self.__penalties) for _ in range(n_chains)]
 
-        iter = len(self.__temp)
-        self.__state_dur_hist = deepcopy(i_state_durs)
-        self.__state_hist = deepcopy(i_states)
+        if collect_hist:
+            self.__state_dur_hist = [[deepcopy(i_state_dur)] for i_state_dur in i_state_durs]
+            self.__state_hist = [[deepcopy(i_st)] for i_st in i_states]
 
-        self.__scale_hist = deepcopy(i_p_pars)
-        self.__coef_hist = deepcopy(i_coef)
-        self.__sigma_hist = deepcopy(i_sigma)
+            self.__scale_hist = [[deepcopy(i_pp)] for i_pp in i_p_pars]
+            self.__coef_hist = [[deepcopy(i_cf)] for i_cf in i_coef]
+            self.__sigma_hist = [[deepcopy(i_sig)] for i_sig in i_sigma]
+            
+            self.__pi_hist = [[deepcopy(i_pii)] for i_pii in i_pi] 
+            self.__TR_hist = [[deepcopy(i_tr)] for i_tr in i_TR] 
         
-        self.__pi_hist = deepcopy(i_pi)
-        self.__TR_hist = deepcopy(i_TR)
-
+        # Always collect llk changes
         self.__llk_hist = np.zeros((n_chains,iter+1))
         self.__llk_hist[:,0] = - np.Inf
 
@@ -310,26 +332,36 @@ class sMsGAMMBase:
                     # Perform SEM step for current chain.
                     llk, n_states_dur, n_states, \
                     n_coef, n_p_pars, n_pi, \
-                    n_TR, n_sigma  = self.__advance_chain(ic,pool,self.__temp[i],
-                                                          self.__pi_hist[ic][i],
-                                                          self.__TR_hist[ic][i],
-                                                          self.__scale_hist[ic][i],
-                                                          self.__coef_hist[ic][i],
-                                                          self.__sigma_hist[ic][i],
-                                                          self.__state_dur_hist[ic][i],
-                                                          self.__state_hist[ic][i])
+                    n_TR, n_sigma  = self.__advance_chain(ic,pool,
+                                                          self.__temp[i],
+                                                          self.__pi[ic],
+                                                          self.__TR[ic],
+                                                          self.__scale[ic],
+                                                          self.__coef[ic],
+                                                          self.__sigma[ic],
+                                                          self.__state_dur[ic],
+                                                          self.__state[ic])
+                    
+                    self.__pi[ic] = n_pi
+                    self.__TR[ic] = n_TR
+                    self.__scale[ic] = n_p_pars
+                    self.__coef[ic] = n_coef
+                    self.__sigma[ic] = n_sigma
+                    self.__state_dur[ic] = n_states_dur
+                    self.__state[ic] = n_states
                     
                     # Store new parameters
-                    self.__state_dur_hist[ic].append(deepcopy(n_states_dur))
-                    self.__state_hist[ic].append(deepcopy(n_states))
+                    if collect_hist:
+                        self.__state_dur_hist[ic].append(deepcopy(n_states_dur))
+                        self.__state_hist[ic].append(deepcopy(n_states))
 
-                    self.__coef_hist[ic].append(deepcopy(n_coef))
-                    self.__sigma_hist[ic].append(deepcopy(n_sigma))
+                        self.__coef_hist[ic].append(deepcopy(n_coef))
+                        self.__sigma_hist[ic].append(deepcopy(n_sigma))
 
-                    self.__scale_hist[ic].append(deepcopy(n_p_pars))
+                        self.__scale_hist[ic].append(deepcopy(n_p_pars))
 
-                    self.__pi_hist[ic].append(deepcopy(n_pi))
-                    self.__TR_hist[ic].append(deepcopy(n_TR))
+                        self.__pi_hist[ic].append(deepcopy(n_pi))
+                        self.__TR_hist[ic].append(deepcopy(n_TR))
                     self.__llk_hist[ic,i+1] = llk
                     
         # Plot log-likelihood for all chains
