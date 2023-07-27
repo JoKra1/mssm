@@ -413,3 +413,37 @@ class sMsDCGAMM(sMsGAMMBase):
         self.set_m_ps(utils.m_gamma2s_sms_dc_gamm)
         self.set_par_ps(utils.par_gamma2s)
         self.set_sample_fun(utils.se_step_sms_dc_gamm)
+
+    def parse_formula(self,formula,data):
+        """
+        Parse a formula to build model from data.
+        """
+        LHS,RHS = formula.split("~")
+        LHS = LHS.strip(" ")
+
+        if LHS not in data.columns:
+            raise IndexError(f"Column '{LHS}' does not exist in Dataframe.")
+
+        DV = data[LHS]
+
+        RHS = RHS.split("+")
+        terms = [t.strip(" ") for t in RHS]
+        term_type = []
+        print(terms)
+
+        for term in terms:
+            rec_smooth = re.fullmatch(r"f\(l[0-9]*[,=_a-zA-Z0-9]*\)",term)
+            if rec_smooth is None:
+                rec_randint = re.fullmatch(r"ri\([_a-zA-Z0-9]+\)",term)
+                if rec_randint is None:
+                    rec_randslope = re.fullmatch(r"rs\([_a-zA-Z0-9]+,[_a-zA-Z0-9]+\)",term)
+                    if rec_randslope is None:
+                        raise KeyError(f"Term '{term}' cannot be recognized.")
+                    else:
+                        term_type.append("rand_slope")
+                else:
+                    term_type.append("rand_int")
+            else:
+                term_type.append("smooth")
+            
+        print(term_type)
