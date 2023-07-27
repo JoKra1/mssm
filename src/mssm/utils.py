@@ -156,7 +156,7 @@ def create_event_matrix_time(time,cov,state_est, identifiable = False, drop_oute
   #return np.concatenate((inter,event_matrix),axis=1)
   return event_matrix
 
-def create_event_matrix_time_split(time,cov,state_est,split_k=None,rand_int=None,identifiable = False, drop_outer_k=False, convolve=True, min_c=0, max_c=2500, nk=10, deg=2):
+def create_event_matrix_time_split(time,cov,state_est,split_k=None,rand_int=None,identifiable = False, drop_outer_k=False, convolve=True, min_c=0, max_c=2500, nk=10, deg=2,predict_all_fact = False):
   # Setup a model matrix for a left-right mssm, where every
   # state entry elicits an impluse response that affects the
   # observed signal in some way: the effect might differ between
@@ -181,7 +181,7 @@ def create_event_matrix_time_split(time,cov,state_est,split_k=None,rand_int=None
   for j in range(len(state_est)):
     if j in split_k["split"]:
        for ci in range(split_k["n_levels"]):
-          if ci == cov_s:
+          if ci == cov_s or predict_all_fact:
             event_matrix[:,cIndex:cIndex+colsMat] = B_spline_basis(j,time,state_est, identifiable, drop_outer_k, convolve, min_c, max_c, nk, deg)
           cIndex += colsMat
     else:
@@ -192,6 +192,8 @@ def create_event_matrix_time_split(time,cov,state_est,split_k=None,rand_int=None
      cov_r = cov[0,rand_int["cov"]]
      rand_matrix = np.zeros((rowsMat,rand_int["n_levels"]))
      rand_matrix[:,cov_r] = 1
+     if predict_all_fact:
+        rand_matrix[:,:] = 1
      event_matrix = np.concatenate((event_matrix,rand_matrix),axis=1)
      
   #return np.concatenate((inter,event_matrix),axis=1)
