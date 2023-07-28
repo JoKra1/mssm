@@ -6,6 +6,7 @@ import warnings
 import multiprocessing as mp
 from itertools import repeat
 from matplotlib import pyplot as plt
+import re
 from copy import deepcopy
 
 
@@ -418,8 +419,9 @@ class sMsDCGAMM(sMsGAMMBase):
         """
         Parse a formula to build model from data.
         """
+
         LHS,RHS = formula.split("~")
-        LHS = LHS.strip(" ")
+        LHS = LHS.replace(" ","")
 
         if LHS not in data.columns:
             raise IndexError(f"Column '{LHS}' does not exist in Dataframe.")
@@ -427,23 +429,47 @@ class sMsDCGAMM(sMsGAMMBase):
         DV = data[LHS]
 
         RHS = RHS.split("+")
-        terms = [t.strip(" ") for t in RHS]
-        term_type = []
-        print(terms)
+        term_strings = [t.replace(" ","") for t in RHS]
+        terms = []
+        print(term_strings)
 
-        for term in terms:
-            rec_smooth = re.fullmatch(r"f\(l[0-9]*[,=_a-zA-Z0-9]*\)",term)
-            if rec_smooth is None:
-                rec_randint = re.fullmatch(r"ri\([_a-zA-Z0-9]+\)",term)
-                if rec_randint is None:
-                    rec_randslope = re.fullmatch(r"rs\([_a-zA-Z0-9]+,[_a-zA-Z0-9]+\)",term)
-                    if rec_randslope is None:
-                        raise KeyError(f"Term '{term}' cannot be recognized.")
+        for term_string in term_strings:
+            rec_lat_smooth = re.fullmatch(r"f\(L[0-9]+__[_a-zA-Z0-9]+[,=_a-zA-Z0-9]*\)",term_string)
+            if rec_lat_smooth is None:
+                rec_smooth = re.fullmatch(r"f\([_a-zA-Z0-9]+[,=_a-zA-Z0-9]*\)",term_string)
+                if rec_smooth is None:
+                    rec_linear = re.fullmatch(r"[_a-zA-Z0-9]+",term_string)
+                    if rec_linear is None:
+                        rec_randint = re.fullmatch(r"ri\([_a-zA-Z0-9]+\)",term_string)
+                        if rec_randint is None:
+                            rec_randslope = re.fullmatch(r"rs\([_a-zA-Z0-9]+,by=[_a-zA-Z0-9]+\)",term_string)
+                            if rec_randslope is None:
+                                raise KeyError(f"Term '{term_string}' cannot be recognized.")
+                            else:
+                                new_term = utils.GammTerm(formula=term_string,type=utils.TermType.RANDSLOPE)
+                                utils.parse_arguments(new_term)
+                                utils.parse_variables(new_term,data)
+                                terms.append(new_term)
+
+                        else:
+                            new_term = utils.GammTerm(formula=term_string,type=utils.TermType.RANDINT)
+                            utils.parse_arguments(new_term)
+                            utils.parse_variables(new_term,data)
+                            terms.append(new_term)
                     else:
-                        term_type.append("rand_slope")
+                        new_term = utils.GammTerm(formula=term_string,type=utils.TermType.LINEAR)
+                        utils.parse_arguments(new_term)
+                        utils.parse_variables(new_term,data)
+                        terms.append(new_term)
                 else:
-                    term_type.append("rand_int")
+                    new_term = utils.GammTerm(formula=term_string,type=utils.TermType.SMOOTH)
+                    utils.parse_arguments(new_term)
+                    utils.parse_variables(new_term,data)
+                    terms.append(new_term)
             else:
-                term_type.append("smooth")
+                new_term = utils.GammTerm(formula=term_string,type=utils.TermType.LSMOOTH)
+                utils.parse_arguments(new_term)
+                utils.parse_variables(new_term,data)
+                terms.append(new_term)
             
-        print(term_type)
+        print(terms)

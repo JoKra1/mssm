@@ -2,6 +2,8 @@ import numpy as np
 import scipy as scp
 from dataclasses import dataclass
 import math
+from enum import Enum
+import re
 import warnings
 
 ##################################### Conventional Pupil basis  #####################################
@@ -1215,3 +1217,130 @@ def get_log_dur_prob_mat(n_j,max_dur,ps,cov):
         dur_log_probs[j,:] = ps[j].logpdf(durs + 1)
     
     return dur_log_probs
+
+class TermType(Enum):
+    LSMOOTH = 1
+    SMOOTH = 2
+    LINEAR = 3
+    RANDINT = 4
+    RANDSLOPE = 5
+
+class VarType(Enum):
+    NUMERIC = 1
+    FACTOR = 2
+
+@dataclass
+class GammTerm:
+   formula: str = None
+   type: TermType = None
+   by: str = None
+   nk: int = 10
+   id: int = None
+   variables: list = None
+   var_types: list = None
+   var_mins: list = None
+   var_maxs: list = None
+
+def parse_arguments(term):
+    args = []
+    rec_args = re.findall(r"[,]+",term.formula)
+    if not rec_args:
+        # No splits so terms of one variate
+        if term.type == TermType.LINEAR:
+            term.variables = [term.formula]
+        else:
+            # Drop term function and closing parenthesis
+            term.variables = [term.formula.split("(")[1].strip(")")]
+
+    else:
+        # Formula has splits so potentially multiple variables and arguments
+        args = term.formula.split(",")
+        args[-1] = args[-1].strip(")") # Remove closing parenthesis
+        
+        if term.type != TermType.LINEAR:
+            args[0] = args[0].split("(")[1]
+        #print(args)
+
+        for arg in args:
+            rec_var = re.fullmatch(r"[_a-zA-Z0-9]+",arg)
+            if not rec_var:
+                rec_by_arg = re.fullmatch(r"by=[_a-zA-Z0-9]+",arg)
+                if rec_by_arg is None:
+                    rec_nk_arg = re.fullmatch(r"nk=[0-9]+",arg)
+                    if rec_nk_arg is None:
+                        rec_id_arg = re.fullmatch(r"id=[0-9]+",arg)
+                        if rec_id_arg is None:
+                            raise KeyError(f"Argument '{arg}' could not be interpreted for term '{term.formula}'")
+                        else:
+                            term.id = int(arg.split("=")[1])
+                    else:
+                        term.nk = int(arg.split("=")[1])
+                else:
+                    term.by = arg.split("=")[1]
+            else:
+                #print(arg,term.variables)
+                if term.variables == None:
+                    term.variables = [arg]
+                else:
+                    term.variables.append(arg)
+
+
+def parse_variables(term,data):
+
+    if not term.by is None:
+        if not term.by in data.columns:
+            raise KeyError(f"By-variable '{term.by}' attributed to term '{term.formula}' does not exist in dataframe.")
+        
+        if data[term.by].dtype in ['float64','int64']:
+            raise KeyError(f"Data-type of By-variable '{term.by}' attributed to term '{term.formula}' must not be numeric but is. Make sure the pandas dtype is 'object'.")
+
+    if term.type == TermType.LINEAR and '1' in term.variables:
+        return
+    
+    elif term.type == TermType.LSMOOTH:
+        
+        var = term.variables[0].split("__")[1]
+
+        if not var in data.columns:
+            raise KeyError(f"Variable '{var}' attributed to latent smooth term '{term.formula}' does not exist in dataframe.")
+        if not data[var].dtype in ['float64','int64']:
+            raise TypeError(f"Variable '{var}' attributed to latent smooth term '{term.formula}' must be numeric and is not.")
+        term.var_types = [VarType.NUMERIC]
+        term.var_mins = [np.min(data[var])]
+        term.var_maxs = [np.max(data[var])]
+
+    else:
+        for var in term.variables:
+            if not var in data.columns:
+                raise KeyError(f"Variable '{var}' attributed to term '{term.formula}' does not exist in dataframe.")
+            
+            var_type = VarType.NUMERIC
+            if not data[var].dtype in ['float64','int64']:
+                var_type = VarType.FACTOR
+                
+            if var_type == VarType.FACTOR and term.type == TermType.SMOOTH:
+                raise TypeError(f"Variable '{var}' attributed to smooth term '{term.formula}' must be numeric but is not.")
+            
+            var_min = None
+            var_max = None
+
+            if var_type == VarType.NUMERIC:
+                var_min = np.min(data[var])
+                var_max = np.max(data[var])
+
+            if term.var_types == None:
+                term.var_types = [var_type]
+            else:
+                term.var_types.append(var_type)
+            
+            if term.var_mins == None:
+                term.var_mins = [var_min]
+            else:
+                term.var_mins.append(var_min)
+
+            if term.var_maxs == None:
+                term.var_maxs = [var_max]
+            else:
+                term.var_maxs.append(var_max)
+
+            
