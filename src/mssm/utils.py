@@ -1330,6 +1330,7 @@ class Formula():
         self.terms = terms
         self.data = data
         self.__factor_codings = {}
+        self.__coding_factors = {}
         self.__factor_levels = {}
         self.__var_to_cov = {}
         self.__var_types = {}
@@ -1372,10 +1373,12 @@ class Formula():
                         levels = np.unique(data[var])
 
                         self.__factor_codings[var] = {}
+                        self.__coding_factors[var] = {}
                         self.__factor_levels[var] = levels
                         
                         for ci,c in enumerate(levels):
                            self.__factor_codings[var][c] = ci
+                           self.__coding_factors[var][ci] = c
 
                     cvi += 1
                 
@@ -1401,7 +1404,10 @@ class Formula():
     def get_factor_codings(self) -> dict:
         return copy.deepcopy(self.__factor_codings)
     
-    def get_cov_map(self) -> dict:
+    def get_coding_factors(self) -> dict:
+        return copy.deepcopy(self.__coding_factors)
+    
+    def get_var_map(self) -> dict:
         return copy.deepcopy(self.__var_to_cov)
     
     def get_factor_levels(self) -> dict:
@@ -1415,10 +1421,12 @@ class Formula():
 
 def build_mat_for_series(formula,data,series_id:str):
    id_col = np.array(data[series_id])
-   cov_map = formula.get_cov_map()
-   n_cov = len(cov_map)
-   cov_keys = cov_map.keys()
-
+   var_map = formula.get_var_map()
+   n_var = len(var_map)
+   var_keys = var_map.keys()
+   var_types = formula.get_var_types()
+   factor_coding = formula.get_factor_codings()
+   
    cov = []
    y = []
    
@@ -1434,9 +1442,23 @@ def build_mat_for_series(formula,data,series_id:str):
       ys = np.array(series_dat[formula.lhs.variable]).reshape(-1,1)
       ns = ys.shape[0]
 
-      covs = np.zeros((ns,n_cov),dtype=float) # Treating all covariates as floats has important implications for factors and requires special care!
-      for c in cov_keys:
-         covs[cov_map[c],:] = np.array(series_dat[cov]).reshape(-1,1)
+      covs = np.zeros((ns,n_var),dtype=float) # Treating all covariates as floats has important implications for factors and requires special care!
+      for c in var_keys:
+
+         c_raw = np.array(series_dat[c])
+
+         if var_types[c] == VarType.FACTOR:
+            c_code = np.zeros(ns,dtype=float)
+
+            if len(np.unique(c_raw)) > 1:
+               raise ValueError(f"Categorical predictor variables should not take on different values acros the time course of an individual series.")
+
+            for code_key in factor_coding[c].keys():
+               c_code[c_raw == code_key] = factor_coding[c][code_key]
+
+            covs[:,var_map[c]] = c_code
+         else:
+            covs[:,var_map[c]] = c_raw
 
       y.append(ys)
       cov.append(covs)
