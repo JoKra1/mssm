@@ -1336,6 +1336,10 @@ class Formula():
         self.__var_types = {}
         self.__var_mins = {}
         self.__var_maxs = {}
+        self.__linear_terms = []
+        self.__smooth_terms = []
+        self.__random_terms = []
+        self.__has_intercept = False
         cvi = 0
 
         # Perform input checks
@@ -1343,11 +1347,14 @@ class Formula():
             raise IndexError(f"Column '{self.lhs.variable}' does not exist in Dataframe.")
 
         for ti, term in enumerate(self.terms):
+            
             if isinstance(term,i):
+                self.__has_intercept = True
+                self.__linear_terms.append(ti)
                 continue
             
             # All variables must exist in data
-            for vi,var in enumerate(term.variables):
+            for var in term.variables:
 
                 if not var in data.columns:
                     raise KeyError(f"Variable '{var}' of term {ti} does not exist in dataframe.")
@@ -1400,6 +1407,13 @@ class Formula():
                     
                     if data[term.by].dtype in ['float64','int64']:
                         raise KeyError(f"Data-type of By-variable '{term.by}' attributed to term {ti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'.")
+            
+            # Remaining term allocation.
+            if isinstance(term, f) or isinstance(term, fl):
+               self.__smooth_terms.append(ti)
+
+            if isinstance(term, ri) or isinstance(term,rs):
+               self.__random_terms.append(ti)
 
     def get_factor_codings(self) -> dict:
         return copy.deepcopy(self.__factor_codings)
@@ -1418,6 +1432,32 @@ class Formula():
     
     def get_var_mins_maxs(self) -> (dict,dict):
        return (copy.deepcopy(self.__var_mins),copy.deepcopy(self.__var_maxs))
+    
+    def get_linear_term_idx(self) -> list[int]:
+       return(copy.deepcopy(self.__linear_terms))
+    
+    def get_smooth_term_idx(self) -> list[int]:
+       return(copy.deepcopy(self.__smooth_terms))
+    
+    def get_random_term_idx(self) -> list[int]:
+       return(copy.deepcopy(self.__random_terms))
+    
+    def compute_n_coef(self) -> None:
+       n_coef = 0
+       if self.__has_intercept:
+          n_coef += 1
+
+       for lti in self.__linear_terms:
+          ti = self.terms[lti]
+
+          if isinstance(ti,i):
+             continue
+          
+          t_coef = []
+          for var in ti.variables:
+             # Assuming dummy coding: ...
+             # Assuming no dummy coding: ...
+             continue
 
 def build_mat_for_series(formula,data,series_id:str):
    id_col = np.array(data[series_id])
@@ -1451,7 +1491,7 @@ def build_mat_for_series(formula,data,series_id:str):
             c_code = np.zeros(ns,dtype=float)
 
             if len(np.unique(c_raw)) > 1:
-               raise ValueError(f"Categorical predictor variables should not take on different values acros the time course of an individual series.")
+               raise ValueError(f"Categorical predictor variables should not take on different values across the time course of an individual series.")
 
             for code_key in factor_coding[c].keys():
                c_code[c_raw == code_key] = factor_coding[c][code_key]
