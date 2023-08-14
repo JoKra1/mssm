@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import scipy as scp
 from dataclasses import dataclass
 import math
@@ -129,6 +130,13 @@ def B_spline_basis(i, cov, state_est, identifiable, drop_outer_k, convolve, min_
      B -= np.mean(B,axis=0,keepdims=True)
   
   return B
+
+def split_term_cov(term,cov_val,cov,cov_coding):
+   rowsMat, colsMat = term.shape
+   exp_term = np.zeros((rowsMat,colsMat * len(cov_coding[cov])))
+   exp_term[:,cov_val*colsMat:(cov_val+1)*colsMat] = term
+
+   return exp_term
 
 ##################################### Model-matrix setup functions #####################################
 def create_event_matrix_time(time,cov,state_est, identifiable = False, drop_outer_k=False, convolve=True, min_c=0, max_c=2500, nk=10, deg=2):
@@ -1266,9 +1274,6 @@ class f(GammTerm):
         super().__init__(variables, TermType.SMOOTH, is_penalized, penalty, pen_args)
         self.by = by
         self.nk = nk
-        self.var_types:list[VarType] = None
-        self.var_mins: list = None
-        self.var_maxs: list = None
 
 class fl(GammTerm):
     def __init__(self,variable:str,
@@ -1284,9 +1289,6 @@ class fl(GammTerm):
         self.stage = stage
         self.by = by
         self.nk = nk
-        self.var_types:list[VarType] = None
-        self.var_mins: list = None
-        self.var_maxs: list = None
 
 class l(GammTerm):
     def __init__(self,variables:list,
@@ -1296,9 +1298,6 @@ class l(GammTerm):
         
         # Initialization
         super().__init__(variables, TermType.LINEAR, is_penalized, penalty, pen_args)
-        self.var_types:list[VarType] = None
-        self.var_mins: list = None
-        self.var_maxs: list = None
 
 class ri(GammTerm):
     def __init__(self,variable:str,
@@ -1308,7 +1307,6 @@ class ri(GammTerm):
         
         # Initialization
         super().__init__([variable], TermType.RANDINT, is_penalized, penalty, pen_args)
-        self.var_types:list[VarType] = [VarType.FACTOR]
 
 class rs(GammTerm):
     def __init__(self,variable:str,
@@ -1320,9 +1318,6 @@ class rs(GammTerm):
         # Initialization
         super().__init__([variable], TermType.RANDSLOPE, is_penalized, penalty, pen_args)
         self.by = by
-        self.var_types:list[VarType] = None
-        self.var_mins: list = None
-        self.var_maxs: list = None
 
 class lhs():
     def __init__(self,variable:str,f:Callable=None) -> None:
@@ -1335,7 +1330,11 @@ class Formula():
         self.terms = terms
         self.data = data
         self.__factor_codings = {}
+        self.__factor_levels = {}
         self.__var_to_cov = {}
+        self.__var_types = {}
+        self.__var_mins = {}
+        self.__var_maxs = {}
         cvi = 0
 
         # Perform input checks
@@ -1351,13 +1350,35 @@ class Formula():
 
                 if not var in data.columns:
                     raise KeyError(f"Variable '{var}' of term {ti} does not exist in dataframe.")
-
-                if not var in self.__var_to_cov:
-                    self.__var_to_cov[var] = cvi
-                    cvi += 1
                 
                 vartype = data[var].dtype
 
+                # Store information for all variables once.
+                if not var in self.__var_to_cov:
+                    self.__var_to_cov[var] = cvi
+
+                    # Assign vartype enum and calculate mins/maxs for continuous variables
+                    if vartype in ['float64','int64']:
+                        # ToDo: these can be properties of the formula.
+                        self.__var_types[var] = VarType.NUMERIC
+                        self.__var_mins[var] = np.min(data[var])
+                        self.__var_maxs[var] = np.max(data[var])
+                    else:
+                        self.__var_types[var] = VarType.FACTOR
+                        self.__var_mins[var] = None
+                        self.__var_maxs[var] = None
+
+                        # Code factor variables into integers for example for easy dummy coding
+                        levels = np.unique(data[var])
+
+                        self.__factor_codings[var] = {}
+                        self.__factor_levels[var] = levels
+                        
+                        for ci,c in enumerate(levels):
+                           self.__factor_codings[var][c] = ci
+
+                    cvi += 1
+                
                 # Smooth-term variables must all be continuous
                 if isinstance(term, f) or isinstance(term, fl):
                     if not vartype in ['float64','int64']:
@@ -1368,34 +1389,6 @@ class Formula():
                     if vartype in ['float64','int64']:
                         raise TypeError(f"Variable '{var}' attributed to random intercept term {ti} must not be numeric but is.")
                 
-                # Assign vartype enum and calculate mins/maxs for continuous variables
-                if vi < 1:
-                    if vartype in ['float64','int64']:
-                        term.var_types = [VarType.NUMERIC]
-                        term.var_mins = [np.min(data[var])]
-                        term.var_maxs = [np.max(data[var])]
-                    else:
-                        term.var_types = [VarType.FACTOR]
-                        term.var_mins = [None]
-                        term.var_maxs = [None]
-
-                        # Code factor variables into integers
-                        # for example for easy dummy coding
-                        if var not in self.__factor_codings:
-                            self.__factor_codings[var] = {}
-                            for ci,c in enumerate(np.sort(np.unique(data[var]))):
-                                self.__factor_codings[var][c] = ci
-
-                else:
-                    if vartype in ['float64','int64']:
-                        term.var_types.append(VarType.NUMERIC)
-                        term.var_mins.append(np.min(data[var]))
-                        term.var_maxs.append(np.max(data[var]))
-                    else:
-                        term.var_types.append(VarType.FACTOR)
-                        term.var_mins.append(None)
-                        term.var_maxs.append(None)
-
             # by-variables must be categorical
             if isinstance(term, f) or isinstance(term, fl) or isinstance(term, rs):
                 if not term.by is None:
@@ -1403,11 +1396,53 @@ class Formula():
                         raise KeyError(f"By-variable '{term.by}' attributed to term {ti} does not exist in dataframe.")
                     
                     if data[term.by].dtype in ['float64','int64']:
-                        raise KeyError(f"Data-type of By-variable '{term.by}' attributed to term {ti} must not be numeric but is. Make sure the pandas dtype is 'object'.")
+                        raise KeyError(f"Data-type of By-variable '{term.by}' attributed to term {ti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'.")
 
-    def get_codings(self) -> dict:
+    def get_factor_codings(self) -> dict:
         return copy.deepcopy(self.__factor_codings)
     
     def get_cov_map(self) -> dict:
         return copy.deepcopy(self.__var_to_cov)
-            
+    
+    def get_factor_levels(self) -> dict:
+       return copy.deepycopy(self.__factor_levels)
+    
+    def get_var_types(self) -> dict:
+       return copy.deepcopy(self.__var_types)
+    
+    def get_var_mins_maxs(self) -> (dict,dict):
+       return (copy.deepcopy(self.__var_mins),copy.deepcopy(self.__var_maxs))
+
+def build_mat_for_series(formula,data,series_id:str):
+   id_col = np.array(data[series_id])
+   cov_map = formula.get_cov_map()
+   n_cov = len(cov_map)
+   cov_keys = cov_map.keys()
+
+   cov = []
+   y = []
+   
+   # Collect every series from data frame, make sure to maintain the
+   # order of the data frame.
+   # Based on: https://stackoverflow.com/questions/12926898
+   _, id = np.unique(id_col,return_index=True)
+   unq = id_col[np.sort(id)]
+
+   for si in unq:
+      series_dat = data[id_col == si]
+
+      ys = np.array(series_dat[formula.lhs.variable]).reshape(-1,1)
+      ns = ys.shape[0]
+
+      covs = np.zeros((ns,n_cov),dtype=float) # Treating all covariates as floats has important implications for factors and requires special care!
+      for c in cov_keys:
+         covs[cov_map[c],:] = np.array(series_dat[cov]).reshape(-1,1)
+
+      y.append(ys)
+      cov.append(covs)
+   
+   return y,cov
+
+
+def build_series_matrix_from_formula(formula,cov,state_est):
+   pass
