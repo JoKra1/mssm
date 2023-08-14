@@ -3,8 +3,10 @@ import scipy as scp
 from dataclasses import dataclass
 import math
 from enum import Enum
+from collections.abc import Callable
 import re
 import warnings
+import copy
 
 ##################################### Conventional Pupil basis  #####################################
 
@@ -323,7 +325,7 @@ def create_event_matrix_cov4_split(time,cov,state_est, identifiable = True, drop
 
 ##################################### Penalty functions #####################################
 
-def diff_pen(n,m,identifiable=True):
+def diff_pen(n,m=2,identifiable=True):
   # Creates difference (order=m) n*n penalty matrix
   # Based on code in Eilers & Marx (1996) and Wood (2017)
   if identifiable:
@@ -334,7 +336,7 @@ def diff_pen(n,m,identifiable=True):
   S = D @ D.T
   return S,D
 
-def id_dist_pen(n,f):
+def id_dist_pen(n,f=lambda x: 1):
   # Creates identity matrix penalty in case f(i) = 1
   # Can be used to create event-distance weighted penalty matrices for deconvolving sms GAMMs
   S = np.identity(n)
@@ -1229,118 +1231,183 @@ class VarType(Enum):
     NUMERIC = 1
     FACTOR = 2
 
-@dataclass
-class GammTerm:
-   formula: str = None
-   type: TermType = None
-   by: str = None
-   nk: int = 10
-   id: int = None
-   variables: list = None
-   var_types: list = None
-   var_mins: list = None
-   var_maxs: list = None
+class PenType(Enum):
+    IDENTITY = 1
+    DIFFERENCE = 2
+    DISTANCE = 3
 
-def parse_arguments(term):
-    args = []
-    rec_args = re.findall(r"[,]+",term.formula)
-    if not rec_args:
-        # No splits so terms of one variate
-        if term.type == TermType.LINEAR:
-            term.variables = [term.formula]
-        else:
-            # Drop term function and closing parenthesis
-            term.variables = [term.formula.split("(")[1].strip(")")]
-
-    else:
-        # Formula has splits so potentially multiple variables and arguments
-        args = term.formula.split(",")
-        args[-1] = args[-1].strip(")") # Remove closing parenthesis
+class GammTerm():
+   
+   def __init__(self,variables:list[str],
+                type:TermType,
+                is_penalized:bool,
+                penalty:list,
+                pen_args:list) -> None:
         
-        if term.type != TermType.LINEAR:
-            args[0] = args[0].split("(")[1]
-        #print(args)
+        self.variables = variables
+        self.type = type
+        self.penalized = is_penalized
+        self.penalty = penalty
+        self.pen_args = pen_args
 
-        for arg in args:
-            rec_var = re.fullmatch(r"[_a-zA-Z0-9]+",arg)
-            if not rec_var:
-                rec_by_arg = re.fullmatch(r"by=[_a-zA-Z0-9]+",arg)
-                if rec_by_arg is None:
-                    rec_nk_arg = re.fullmatch(r"nk=[0-9]+",arg)
-                    if rec_nk_arg is None:
-                        rec_id_arg = re.fullmatch(r"id=[0-9]+",arg)
-                        if rec_id_arg is None:
-                            raise KeyError(f"Argument '{arg}' could not be interpreted for term '{term.formula}'")
-                        else:
-                            term.id = int(arg.split("=")[1])
-                    else:
-                        term.nk = int(arg.split("=")[1])
-                else:
-                    term.by = arg.split("=")[1]
-            else:
-                #print(arg,term.variables)
-                if term.variables == None:
-                    term.variables = [arg]
-                else:
-                    term.variables.append(arg)
+class i(GammTerm):
+    def __init__(self) -> None:
+        super().__init__(["1"], TermType.LINEAR, False, [], [])
 
-
-def parse_variables(term,data):
-
-    if not term.by is None:
-        if not term.by in data.columns:
-            raise KeyError(f"By-variable '{term.by}' attributed to term '{term.formula}' does not exist in dataframe.")
+class f(GammTerm):
+    def __init__(self,variables:list,
+                by:str=None,
+                nk:int=10,
+                is_penalized:bool = True,
+                penalty:list = [PenType.DIFFERENCE],
+                pen_args:list = [{"m":2}]) -> None:
         
-        if data[term.by].dtype in ['float64','int64']:
-            raise KeyError(f"Data-type of By-variable '{term.by}' attributed to term '{term.formula}' must not be numeric but is. Make sure the pandas dtype is 'object'.")
+        # Initialization
+        super().__init__(variables, TermType.SMOOTH, is_penalized, penalty, pen_args)
+        self.by = by
+        self.nk = nk
+        self.var_types:list[VarType] = None
+        self.var_mins: list = None
+        self.var_maxs: list = None
 
-    if term.type == TermType.LINEAR and '1' in term.variables:
-        return
-    
-    elif term.type == TermType.LSMOOTH:
+class fl(GammTerm):
+    def __init__(self,variable:str,
+                stage:str,
+                by:str=None,
+                nk:int=10,
+                is_penalized:bool = True,
+                penalty:list = [PenType.DIFFERENCE],
+                pen_args:list = [{"m":2}]) -> None:
         
-        var = term.variables[0].split("__")[1]
+        # Initialization
+        super().__init__([variable], TermType.LSMOOTH, is_penalized, penalty, pen_args)
+        self.stage = stage
+        self.by = by
+        self.nk = nk
+        self.var_types:list[VarType] = None
+        self.var_mins: list = None
+        self.var_maxs: list = None
 
-        if not var in data.columns:
-            raise KeyError(f"Variable '{var}' attributed to latent smooth term '{term.formula}' does not exist in dataframe.")
-        if not data[var].dtype in ['float64','int64']:
-            raise TypeError(f"Variable '{var}' attributed to latent smooth term '{term.formula}' must be numeric and is not.")
-        term.var_types = [VarType.NUMERIC]
-        term.var_mins = [np.min(data[var])]
-        term.var_maxs = [np.max(data[var])]
+class l(GammTerm):
+    def __init__(self,variables:list,
+                is_penalized:bool = False,
+                penalty:list = [],
+                pen_args:list = []) -> None:
+        
+        # Initialization
+        super().__init__(variables, TermType.LINEAR, is_penalized, penalty, pen_args)
+        self.var_types:list[VarType] = None
+        self.var_mins: list = None
+        self.var_maxs: list = None
 
-    else:
-        for var in term.variables:
-            if not var in data.columns:
-                raise KeyError(f"Variable '{var}' attributed to term '{term.formula}' does not exist in dataframe.")
+class ri(GammTerm):
+    def __init__(self,variable:str,
+                is_penalized:bool = True,
+                penalty:list = [PenType.IDENTITY],
+                pen_args:list = [None]) -> None:
+        
+        # Initialization
+        super().__init__([variable], TermType.RANDINT, is_penalized, penalty, pen_args)
+        self.var_types:list[VarType] = [VarType.FACTOR]
+
+class rs(GammTerm):
+    def __init__(self,variable:str,
+                by:str,
+                is_penalized:bool = True,
+                penalty:list = [PenType.IDENTITY],
+                pen_args:list = [None]) -> None:
+        
+        # Initialization
+        super().__init__([variable], TermType.RANDSLOPE, is_penalized, penalty, pen_args)
+        self.by = by
+        self.var_types:list[VarType] = None
+        self.var_mins: list = None
+        self.var_maxs: list = None
+
+class lhs():
+    def __init__(self,variable:str,f:Callable=None) -> None:
+        self.variable = variable
+        self.f=f
+
+class Formula():
+    def __init__(self,lhs:lhs,terms:list[GammTerm],data:pd.DataFrame) -> None:
+        self.lhs = lhs
+        self.terms = terms
+        self.data = data
+        self.__factor_codings = {}
+        self.__var_to_cov = {}
+        cvi = 0
+
+        # Perform input checks
+        if self.lhs.variable not in self.data.columns:
+            raise IndexError(f"Column '{self.lhs.variable}' does not exist in Dataframe.")
+
+        for ti, term in enumerate(self.terms):
+            if isinstance(term,i):
+                continue
             
-            var_type = VarType.NUMERIC
-            if not data[var].dtype in ['float64','int64']:
-                var_type = VarType.FACTOR
+            # All variables must exist in data
+            for vi,var in enumerate(term.variables):
+
+                if not var in data.columns:
+                    raise KeyError(f"Variable '{var}' of term {ti} does not exist in dataframe.")
+
+                if not var in self.__var_to_cov:
+                    self.__var_to_cov[var] = cvi
+                    cvi += 1
                 
-            if var_type == VarType.FACTOR and term.type == TermType.SMOOTH:
-                raise TypeError(f"Variable '{var}' attributed to smooth term '{term.formula}' must be numeric but is not.")
-            
-            var_min = None
-            var_max = None
+                vartype = data[var].dtype
 
-            if var_type == VarType.NUMERIC:
-                var_min = np.min(data[var])
-                var_max = np.max(data[var])
+                # Smooth-term variables must all be continuous
+                if isinstance(term, f) or isinstance(term, fl):
+                    if not vartype in ['float64','int64']:
+                        raise TypeError(f"Variable '{var}' attributed to smooth/latent smooth term {ti} must be numeric and is not.")
+                    
+                # Random intercept variable must be categorical
+                if isinstance(term, ri):
+                    if vartype in ['float64','int64']:
+                        raise TypeError(f"Variable '{var}' attributed to random intercept term {ti} must not be numeric but is.")
+                
+                # Assign vartype enum and calculate mins/maxs for continuous variables
+                if vi < 1:
+                    if vartype in ['float64','int64']:
+                        term.var_types = [VarType.NUMERIC]
+                        term.var_mins = [np.min(data[var])]
+                        term.var_maxs = [np.max(data[var])]
+                    else:
+                        term.var_types = [VarType.FACTOR]
+                        term.var_mins = [None]
+                        term.var_maxs = [None]
 
-            if term.var_types == None:
-                term.var_types = [var_type]
-            else:
-                term.var_types.append(var_type)
-            
-            if term.var_mins == None:
-                term.var_mins = [var_min]
-            else:
-                term.var_mins.append(var_min)
+                        # Code factor variables into integers
+                        # for example for easy dummy coding
+                        if var not in self.__factor_codings:
+                            self.__factor_codings[var] = {}
+                            for ci,c in enumerate(np.sort(np.unique(data[var]))):
+                                self.__factor_codings[var][c] = ci
 
-            if term.var_maxs == None:
-                term.var_maxs = [var_max]
-            else:
-                term.var_maxs.append(var_max)
+                else:
+                    if vartype in ['float64','int64']:
+                        term.var_types.append(VarType.NUMERIC)
+                        term.var_mins.append(np.min(data[var]))
+                        term.var_maxs.append(np.max(data[var]))
+                    else:
+                        term.var_types.append(VarType.FACTOR)
+                        term.var_mins.append(None)
+                        term.var_maxs.append(None)
 
+            # by-variables must be categorical
+            if isinstance(term, f) or isinstance(term, fl) or isinstance(term, rs):
+                if not term.by is None:
+                    if not term.by in data.columns:
+                        raise KeyError(f"By-variable '{term.by}' attributed to term {ti} does not exist in dataframe.")
+                    
+                    if data[term.by].dtype in ['float64','int64']:
+                        raise KeyError(f"Data-type of By-variable '{term.by}' attributed to term {ti} must not be numeric but is. Make sure the pandas dtype is 'object'.")
+
+    def get_codings(self) -> dict:
+        return copy.deepcopy(self.__factor_codings)
+    
+    def get_cov_map(self) -> dict:
+        return copy.deepcopy(self.__var_to_cov)
             
