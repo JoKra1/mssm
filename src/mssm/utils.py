@@ -1467,44 +1467,40 @@ def build_mat_for_series(formula,data,series_id:str):
    var_types = formula.get_var_types()
    factor_coding = formula.get_factor_codings()
    
-   cov = []
-   y = []
-   
    # Collect every series from data frame, make sure to maintain the
    # order of the data frame.
    # Based on: https://stackoverflow.com/questions/12926898
    _, id = np.unique(id_col,return_index=True)
-   unq = id_col[np.sort(id)]
+   sid = np.sort(id)
 
-   for si in unq:
-      series_dat = data[id_col == si]
+   # Collect entire y column
+   y_flat = np.array(data[formula.lhs.variable]).reshape(-1,1)
+   n_y = y_flat.shape[0]
 
-      ys = np.array(series_dat[formula.lhs.variable]).reshape(-1,1)
-      ns = ys.shape[0]
+   # Then split by seried id
+   y = np.split(y_flat,sid[1:])
 
-      covs = np.zeros((ns,n_var),dtype=float) # Treating all covariates as floats has important implications for factors and requires special care!
-      for c in var_keys:
+   # Now all predictor variables
+   cov_flat = np.zeros((n_y,n_var),dtype=float) # Treating all covariates as floats has important implications for factors and requires special care!
 
-         c_raw = np.array(series_dat[c])
+   for c in var_keys:
+      c_raw = np.array(data[c])
 
-         if var_types[c] == VarType.FACTOR:
-            c_code = np.zeros(ns,dtype=float)
+      if var_types[c] == VarType.FACTOR:
+         c_code = np.zeros(n_y,dtype=float)
 
-            if len(np.unique(c_raw)) > 1:
-               raise ValueError(f"Categorical predictor variables should not take on different values across the time course of an individual series.")
+         for code_key in factor_coding[c].keys():
+            c_code[c_raw == code_key] = factor_coding[c][code_key]
 
-            for code_key in factor_coding[c].keys():
-               c_code[c_raw == code_key] = factor_coding[c][code_key]
+         cov_flat[:,var_map[c]] = c_code
 
-            covs[:,var_map[c]] = c_code
-         else:
-            covs[:,var_map[c]] = c_raw
-
-      y.append(ys)
-      cov.append(covs)
+      else:
+         cov_flat[:,var_map[c]] = c_raw
    
-   return y,cov
+   # Now split cov by series id as well
+   cov = np.split(cov_flat,sid[1:],axis=0)
 
+   return y_flat,cov_flat,y,cov
 
 def build_series_matrix_from_formula(formula,cov,state_est):
    pass
