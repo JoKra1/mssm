@@ -1411,6 +1411,9 @@ class Formula():
             # Remaining term allocation.
             if isinstance(term, f) or isinstance(term, fl):
                self.__smooth_terms.append(ti)
+            
+            if isinstance(term,l):
+               self.__linear_terms.append(ti)
 
             if isinstance(term, ri) or isinstance(term,rs):
                self.__random_terms.append(ti)
@@ -1434,7 +1437,7 @@ class Formula():
         return copy.deepcopy(self.__var_to_cov)
     
     def get_factor_levels(self) -> dict:
-       return copy.deepycopy(self.__factor_levels)
+       return copy.deepcopy(self.__factor_levels)
     
     def get_var_types(self) -> dict:
        return copy.deepcopy(self.__var_types)
@@ -1529,44 +1532,86 @@ def build_sparse_matrix_from_formula(formula,cov_flat,state_est,tol=1e-4):
       
       else:
          
-         # Remaining linear terms
-         var = lterm.variables[0]
+         # Main effects
+         if len(lterm.variables) == 1:
+            var = lterm.variables[0]
+            if var_types[var] == VarType.FACTOR:
+               offset = np.ones(n_y)
+               
+               fl_start = 0
 
-         if var_types[var] == VarType.FACTOR:
-            offset = np.ones(n_y)
-            
-            fl_start = 0
+               if formula.has_intercept(): # Dummy coding when intercept is added.
+                  fl_start = 1
 
-            if formula.has_intercept(): # Dummy coding when intercept is added.
-               fl_start = 1
-
-            for fl in range(fl_start,factor_levels[var]):
-               fridx = ridx[cov_flat[:,var_map[var]] == fl]
-
-               # Categorical main effects
-               if len(lterm.variables) ==1:
-                  coef_names = np.append(coef_names,[f"{var}_{coding_factors[fl]}"])
+               for fl in range(fl_start,len(factor_levels[var])):
+                  fridx = ridx[cov_flat[:,var_map[var]] == fl]
+                  coef_names = np.append(coef_names,[f"{var}_{coding_factors[var][fl]}"])
                   elements = np.append(elements,offset[fridx])
                   rows = np.append(rows,fridx)
                   cols = np.append(cols, [ci for _ in range(len(fridx))])
                   ci += 1
 
-               else: # Interaction
-                  pass
-
-
-         else: # Continuous predictor
-            slope = cov_flat[:,var_map[var]]
-
-            # Continuous main effects
-            if len(lterm.variables) ==1:
+            else: # Continuous predictor
+               slope = cov_flat[:,var_map[var]]
                coef_names = np.append(coef_names,[f"{var}"])
                elements = np.append(elements,slope)
                rows = np.append(rows,ridx)
                cols = np.append(cols, [ci for _ in range(n_y)])
                ci += 1
 
-            else: # Interaction
-               pass
+         else: # Interactions
+            interactions = []
+            inter_idx = []
+            inter_coef_names = []
 
+            for var in lterm.variables:
+               new_interactions = []
+               new_inter_idx = []
+               new_inter_coef_names = []
+
+               # Interaction with categorical predictor as start
+               if var_types[var] == VarType.FACTOR:
+                  fl_start = 0
+
+                  if formula.has_intercept(): # Dummy coding when intercept is added.
+                        fl_start = 1
+
+                  if len(interactions) == 0:
+                        for fl in range(fl_start,len(factor_levels[var])):
+                           new_interactions.append(np.ones(n_y))
+                           new_inter_idx.append(cov_flat[:,var_map[var]] == fl)
+                           new_inter_coef_names.append(f"{var}_{coding_factors[var][fl]}")
+                  else:
+                        for old_inter,old_idx,old_name in zip(interactions,inter_idx,inter_coef_names):
+                           for fl in range(fl_start,len(factor_levels[var])):
+                              new_interactions.append(old_inter)
+                              new_idx = cov_flat[:,var_map[var]] == fl
+                              new_inter_idx.append(old_idx == new_idx)
+                              new_inter_coef_names.append(old_name + f"_{var}_{coding_factors[var][fl]}")
+
+               else: # Interaction with continuous predictor as start
+                  if len(interactions) == 0:
+                        new_interactions.append(cov_flat[:,var_map[var]])
+                        new_inter_idx.append(np.array([True for _ in range(n_y)]))
+                        new_inter_coef_names.append(var)
+                  else:
+                        for _,old_idx,old_name in zip(interactions,inter_idx,inter_coef_names):
+                           new_interactions.append(cov_flat[:,var_map[var]])
+                           new_inter_idx.append(old_idx)
+                           new_inter_coef_names.append(old_name[0] + f"_{var}")
+               
+               interactions = copy.deepcopy(new_interactions)
+               inter_idx = copy.deepcopy(new_inter_idx)
+               inter_coef_names = copy.deepcopy(new_inter_coef_names)
+
+            # Now write interaction terms into model matrix
+            for inter,inter_idx,name in zip(interactions,inter_idx,inter_coef_names):
+               coef_names = np.append(coef_names,[name])
+               elements = np.append(elements,inter[ridx[inter_idx]])
+               rows = np.append(rows,ridx[inter_idx])
+               cols = np.append(cols, [ci for _ in range(len(ridx[inter_idx]))])
+               ci += 1
+   
+   mat = scp.sparse.csc_array((elements,(rows,cols)),shape=(n_y,ci))
+   return mat,coef_names
 
