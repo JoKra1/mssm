@@ -1326,9 +1326,9 @@ class lhs():
 
 class Formula():
     def __init__(self,lhs:lhs,terms:list[GammTerm],data:pd.DataFrame) -> None:
-        self.lhs = lhs
-        self.terms = terms
-        self.data = data
+        self.__lhs = lhs
+        self.__terms = terms
+        self.__data = data
         self.__factor_codings = {}
         self.__coding_factors = {}
         self.__factor_levels = {}
@@ -1343,10 +1343,10 @@ class Formula():
         cvi = 0
 
         # Perform input checks
-        if self.lhs.variable not in self.data.columns:
-            raise IndexError(f"Column '{self.lhs.variable}' does not exist in Dataframe.")
+        if self.__lhs.variable not in self.__data.columns:
+            raise IndexError(f"Column '{self.__lhs.variable}' does not exist in Dataframe.")
 
-        for ti, term in enumerate(self.terms):
+        for ti, term in enumerate(self.__terms):
             
             if isinstance(term,i):
                 self.__has_intercept = True
@@ -1356,7 +1356,7 @@ class Formula():
             # All variables must exist in data
             for var in term.variables:
 
-                if not var in data.columns:
+                if not var in self.__data.columns:
                     raise KeyError(f"Variable '{var}' of term {ti} does not exist in dataframe.")
                 
                 vartype = data[var].dtype
@@ -1369,15 +1369,15 @@ class Formula():
                     if vartype in ['float64','int64']:
                         # ToDo: these can be properties of the formula.
                         self.__var_types[var] = VarType.NUMERIC
-                        self.__var_mins[var] = np.min(data[var])
-                        self.__var_maxs[var] = np.max(data[var])
+                        self.__var_mins[var] = np.min(self.__data[var])
+                        self.__var_maxs[var] = np.max(self.__data[var])
                     else:
                         self.__var_types[var] = VarType.FACTOR
                         self.__var_mins[var] = None
                         self.__var_maxs[var] = None
 
                         # Code factor variables into integers for example for easy dummy coding
-                        levels = np.unique(data[var])
+                        levels = np.unique(self.__data[var])
 
                         self.__factor_codings[var] = {}
                         self.__coding_factors[var] = {}
@@ -1402,7 +1402,7 @@ class Formula():
             # by-variables must be categorical
             if isinstance(term, f) or isinstance(term, fl) or isinstance(term, rs):
                 if not term.by is None:
-                    if not term.by in data.columns:
+                    if not term.by in self.__data.columns:
                         raise KeyError(f"By-variable '{term.by}' attributed to term {ti} does not exist in dataframe.")
                     
                     if data[term.by].dtype in ['float64','int64']:
@@ -1414,6 +1414,15 @@ class Formula():
 
             if isinstance(term, ri) or isinstance(term,rs):
                self.__random_terms.append(ti)
+
+    def get_lhs(self) -> lhs:
+       return copy.deepcopy(self.__lhs)
+    
+    def get_terms(self) -> list[GammTerm]:
+       return copy.deepcopy(self.__terms)
+    
+    def get_data(self) -> pd.DataFrame:
+       return copy.deepcopy(self.__data)
 
     def get_factor_codings(self) -> dict:
         return copy.deepcopy(self.__factor_codings)
@@ -1442,24 +1451,11 @@ class Formula():
     def get_random_term_idx(self) -> list[int]:
        return(copy.deepcopy(self.__random_terms))
     
-    def compute_n_coef(self) -> None:
-       n_coef = 0
-       if self.__has_intercept:
-          n_coef += 1
+    def has_intercept(self) -> bool:
+       return self.__has_intercept
 
-       for lti in self.__linear_terms:
-          ti = self.terms[lti]
-
-          if isinstance(ti,i):
-             continue
-          
-          t_coef = []
-          for var in ti.variables:
-             # Assuming dummy coding: ...
-             # Assuming no dummy coding: ...
-             continue
-
-def build_mat_for_series(formula,data,series_id:str):
+def build_mat_for_series(formula,series_id:str):
+   data = formula.get_data()
    id_col = np.array(data[series_id])
    var_map = formula.get_var_map()
    n_var = len(var_map)
@@ -1474,7 +1470,7 @@ def build_mat_for_series(formula,data,series_id:str):
    sid = np.sort(id)
 
    # Collect entire y column
-   y_flat = np.array(data[formula.lhs.variable]).reshape(-1,1)
+   y_flat = np.array(data[formula.get_lhs().variable]).reshape(-1,1)
    n_y = y_flat.shape[0]
 
    # Then split by seried id
@@ -1500,7 +1496,77 @@ def build_mat_for_series(formula,data,series_id:str):
    # Now split cov by series id as well
    cov = np.split(cov_flat,sid[1:],axis=0)
 
-   return y_flat,cov_flat,y,cov
+   return y_flat,cov_flat,y,cov,sid
 
-def build_series_matrix_from_formula(formula,cov,state_est):
-   pass
+def build_sparse_matrix_from_formula(formula,cov_flat,state_est,tol=1e-4):
+
+   var_types = formula.get_var_types()
+   var_map = formula.get_var_map()
+   factor_levels = formula.get_factor_levels()
+   coding_factors = formula.get_coding_factors()
+
+   terms = formula.get_terms()
+   n_y = cov_flat.shape[0]
+
+   elements = np.array([])
+   rows = np.array([])
+   cols = np.array([])
+   coef_names = np.array([])
+   ridx = np.array([ri for ri in range(n_y)])
+   
+
+   ci = 0
+   for lti in formula.get_linear_term_idx():
+      lterm = terms[lti]
+
+      if isinstance(lterm,i):
+         offset = np.ones(n_y)
+         coef_names = np.append(coef_names,["Intercept"])
+         elements = np.append(elements,offset)
+         rows = np.append(rows,ridx)
+         cols = np.append(cols, [ci for _ in range(n_y)])
+         ci += 1
+      
+      else:
+         
+         # Remaining linear terms
+         var = lterm.variables[0]
+
+         if var_types[var] == VarType.FACTOR:
+            offset = np.ones(n_y)
+            
+            fl_start = 0
+
+            if formula.has_intercept(): # Dummy coding when intercept is added.
+               fl_start = 1
+
+            for fl in range(fl_start,factor_levels[var]):
+               fridx = ridx[cov_flat[:,var_map[var]] == fl]
+
+               # Categorical main effects
+               if len(lterm.variables) ==1:
+                  coef_names = np.append(coef_names,[f"{var}_{coding_factors[fl]}"])
+                  elements = np.append(elements,offset[fridx])
+                  rows = np.append(rows,fridx)
+                  cols = np.append(cols, [ci for _ in range(len(fridx))])
+                  ci += 1
+
+               else: # Interaction
+                  pass
+
+
+         else: # Continuous predictor
+            slope = cov_flat[:,var_map[var]]
+
+            # Continuous main effects
+            if len(lterm.variables) ==1:
+               coef_names = np.append(coef_names,[f"{var}"])
+               elements = np.append(elements,slope)
+               rows = np.append(rows,ridx)
+               cols = np.append(cols, [ci for _ in range(n_y)])
+               ci += 1
+
+            else: # Interaction
+               pass
+
+
