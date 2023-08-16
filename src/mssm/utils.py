@@ -79,7 +79,7 @@ def slope_basis(i,cov,state_est,convolve,max_c):
       slope[cov > max_c] = 0
    return slope.reshape(-1,1)
 
-def B_spline_basis(i, cov, state_est, identifiable, drop_outer_k, convolve, min_c, max_c, nk, deg):
+def B_spline_basis(i, cov, state_est, nk, identifiable=False, drop_outer_k=False, convolve=False, min_c=None, max_c=None, deg=2):
   # Setup basis with even knot locations.
   # Code based on "Splines, Knots, and Penalties" by Eilers & Marx (2010)
 
@@ -91,6 +91,7 @@ def B_spline_basis(i, cov, state_est, identifiable, drop_outer_k, convolve, min_
 
   xl = min(cov)
   xr = max(cov)
+  print(xl,xr)
   if not max_c is None:
      xr = max_c
 
@@ -1421,27 +1422,27 @@ class Formula():
                     if data[term.by].dtype in ['float64','int64']:
                         raise KeyError(f"Data-type of By-variable '{term.by}' attributed to term {ti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'.")
                     
-                # Store information for by variables as well.
-                if not term.by in self.__var_to_cov:
-                    self.__var_to_cov[term.by] = cvi
+                     # Store information for by variables as well.
+                    if not term.by in self.__var_to_cov:
+                        self.__var_to_cov[term.by] = cvi
 
-                    # Assign vartype enum
-                    self.__var_types[term.by] = VarType.FACTOR
-                    self.__var_mins[term.by] = None
-                    self.__var_maxs[term.by] = None
+                        # Assign vartype enum
+                        self.__var_types[term.by] = VarType.FACTOR
+                        self.__var_mins[term.by] = None
+                        self.__var_maxs[term.by] = None
 
-                    # Code factor variables into integers for example for easy dummy coding
-                    levels = np.unique(self.__data[term.by])
+                        # Code factor variables into integers for example for easy dummy coding
+                        levels = np.unique(self.__data[term.by])
 
-                    self.__factor_codings[term.by] = {}
-                    self.__coding_factors[term.by] = {}
-                    self.__factor_levels[term.by] = levels
-                     
-                    for ci,c in enumerate(levels):
-                        self.__factor_codings[term.by][c] = ci
-                        self.__coding_factors[term.by][ci] = c
+                        self.__factor_codings[term.by] = {}
+                        self.__coding_factors[term.by] = {}
+                        self.__factor_levels[term.by] = levels
+                           
+                        for ci,c in enumerate(levels):
+                              self.__factor_codings[term.by][c] = ci
+                              self.__coding_factors[term.by][ci] = c
 
-                    cvi += 1
+                        cvi += 1
             
             # Remaining term allocation.
             if isinstance(term, f):
@@ -1556,7 +1557,7 @@ def build_mat_for_series(formula,series_id:str):
    # Now split cov by series id as well
    cov = np.split(cov_flat,sid[1:],axis=0)
 
-   return y_flat,cov_flat,y,sid
+   return y_flat,cov_flat,y,cov,sid
 
 def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,state_est,sid,pool=None,tol=1e-4):
 
@@ -1693,7 +1694,7 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
          for s_cov,s_state in zip(cov,state_est):
             
             # Create matrix for state corresponding to term.
-            matrix_term = irsterm.basis(irsterm.state,s_cov[:,var_map[var]],s_state, irsterm.nk, **irsterm.kwargs_basis)
+            matrix_term = irsterm.basis(irsterm.state,s_cov[:,var_map[var]],s_state, irsterm.nk, **irsterm.basis_kwargs)
             m_rows,m_cols = matrix_term.shape
 
             # Handle optional by keyword
@@ -1708,7 +1709,7 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
                
                # Fill the by matrix blocks.
                cByIndex = 0
-               for by_level in by_levels:
+               for by_level in range(len(by_levels)):
                   if by_level == by_cov[0]:
                      by_matrix_term[:,cByIndex:cByIndex+m_cols] = matrix_term
                      cByIndex += m_cols
@@ -1747,7 +1748,7 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
    for sti in formula.get_smooth_term_idx():
 
       sterm = terms[sti]
-      vars = sterm.vaiables
+      vars = sterm.variables
 
       if len(vars) > 1:
          raise NotImplementedError("Multivariate smooth terms are not yet supported.")
@@ -1763,7 +1764,7 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
             by_levels = factor_levels[sterm.by]
             n_coef *= len(by_levels)
 
-            if sterm.by_latent is not None and formula.has_sigma_split() is False:
+            if sterm.by_latent is not False and formula.has_sigma_split() is False:
                   n_coef *= n_j
                   for by_state in range(n_j):
                      for by_level in by_levels:
@@ -1773,18 +1774,18 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
                   coef_names = np.append(coef_names,[f"f_{vars[0]},{ink}_{by_level}" for ink in range(sterm.nk)])
          
          else:
-            if sterm.by_latent is not None and formula.has_sigma_split() is False:
+            if sterm.by_latent is not False and formula.has_sigma_split() is False:
                for by_state in range(n_j):
-                  coef_names = np.append(coef_names,[f"irf_{vars[0]},{ink}_{by_state}" for ink in range(sterm.nk)])
+                  coef_names = np.append(coef_names,[f"f_{vars[0]},{ink}_{by_state}" for ink in range(sterm.nk)])
             else:
-               coef_names = np.append(coef_names,[f"irf_{vars[0]},{ink}" for ink in range(sterm.nk)])
+               coef_names = np.append(coef_names,[f"f_{vars[0]},{ink}" for ink in range(sterm.nk)])
             
          # Calculate smooth term for corresponding covariate
-         matrix_term = sterm.basis(None,cov_flat[:,var_map[vars[0]]], None, sterm.nk, **sterm.kwargs_basis)
+         matrix_term = sterm.basis(None,cov_flat[:,var_map[vars[0]]], None, sterm.nk, **sterm.basis_kwargs)
          m_rows, m_cols = matrix_term.shape
 
          for m_coli in range(m_cols):
-            term_elements.append(matrix_term[m_coli])
+            term_elements.append(matrix_term[:,m_coli])
             term_ridx.append(ridx[:])
 
          # Handle optional by keyword
@@ -1795,7 +1796,7 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
             by_cov = cov_flat[:,var_map[sterm.by]]
             
             # Split by cov and update rows with elements in columns
-            for by_level in by_levels:
+            for by_level in range(len(by_levels)):
                for m_coli in range(m_cols):
                   new_term_elements.append(term_elements[m_coli][by_cov == by_level,])
                   new_term_ridx.append(term_ridx[m_coli][by_cov == by_level,])
@@ -1804,7 +1805,7 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
             term_ridx = new_term_ridx
          
          # Handle split by latent variable if a shared sigma term across latent stages is assumed.
-         if sterm.by_latent is not None and formula.has_sigma_split() is False:
+         if sterm.by_latent is not False and formula.has_sigma_split() is False:
             new_term_elements = []
             new_term_ridx = []
 
@@ -1825,6 +1826,7 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
             raise KeyError("Not all model matrix columns were created.")
 
          # Find basis elements > 0 and collect correspondings elements and row indices
+
          for m_coli in range(m_cols):
             final_col = term_elements[m_coli]
             final_ridx = term_ridx[m_coli]
@@ -1854,7 +1856,7 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
 
          
       elif isinstance(rterm,rs):
-         pass
+         raise NotImplementedError("Random slope terms are not yet supported.")
 
    mat = scp.sparse.csc_array((elements,(rows,cols)),shape=(n_y,ci))
    return mat,coef_names
