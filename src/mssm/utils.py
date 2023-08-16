@@ -1337,6 +1337,8 @@ class Formula():
         self.__terms = terms
         self.__data = data
         self.__split_sigma = split_sigma # Separate sigma parameters per state, if true then formula counts for individual state.
+        if self.__split_sigma:
+           warnings.warn("split_sigma==True! All terms will be estimted per latent stage, independent of by_latent status.")
         self.__factor_codings = {}
         self.__coding_factors = {}
         self.__factor_levels = {}
@@ -1508,6 +1510,9 @@ class Formula():
     
     def has_ir_terms(self) -> bool:
        return self.__has_irf
+    
+    def has_sigma_split(self) -> bool:
+       return self.__split_sigma
 
 def build_mat_for_series(formula,series_id:str):
    data = formula.get_data()
@@ -1568,7 +1573,6 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
    cols = np.array([])
    coef_names = np.array([])
    ridx = np.array([ri for ri in range(n_y)])
-   
 
    ci = 0
    for lti in formula.get_linear_term_idx():
@@ -1673,16 +1677,17 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
       term_idx = []
 
       # Calculate Coef names
+      n_coef = irsterm.nk
+
       if irsterm.by is not None:
          by_levels = factor_levels[irsterm.by]
+         n_coef *= len(by_levels)
 
          for by_level in by_levels:
             coef_names = np.append(coef_names,[f"irf_{irsterm.state},{ink}_{by_level}" for ink in range(irsterm.nk)])
       
       else:
          coef_names = np.append(coef_names,[f"irf_{irsterm.state},{ink}" for ink in range(irsterm.nk)])
-
-      n_term_coef = len(coef_names)
 
       if pool is None:
          for s_cov,s_state in zip(cov,state_est):
@@ -1725,23 +1730,108 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
                   final_col = final_term[:,m_coli]
                   term_elements[m_coli] = np.append(term_elements[m_coli],final_col[final_col > tol])
                   term_idx[m_coli] = np.append(term_idx[m_coli], final_col > tol)
+
+         if n_coef != len(term_elements):
+            raise KeyError("Not all model matrix columns were created.")
          
          # Now collect actual row indices
-         for m_coli in range(n_term_coef):
+         for m_coli in range(len(term_elements)):
             elements = np.append(elements,term_elements[:,m_coli])
             rows = np.append(rows,ridx[term_idx[m_coli]])
-            cols = np.append(cols, [m_coli for _ in range(len(term_elements[:,m_coli]))])
+            cols = np.append(cols, [ci for _ in range(len(term_elements[:,m_coli]))])
             ci += 1
 
       else:
          raise NotImplementedError("Multiprocessing code for impulse response terms is not yet implemented in new formula api.")
 
+   for sti in formula.get_smooth_terms():
 
+      sterm = terms[sti]
+      vars = sterm.vaiables
 
+      if len(vars) > 1:
+         raise NotImplementedError("Multivariate smooth terms are not yet supported.")
 
+      else: # Univariate smooth term
+
+         # Calculate Coef names
+         n_coef = sterm.nk
+
+         if sterm.by is not None:
+            by_levels = factor_levels[sterm.by]
+            n_coef *= len(by_levels)
+
+            if sterm.by_latent is not None and formula.has_sigma_split() is False:
+                  n_coef *= n_j
+                  for by_state in range(n_j):
+                     for by_level in by_levels:
+                        coef_names = np.append(coef_names,[f"f_{vars[0]},{ink}_{by_level}_{by_state}" for ink in range(sterm.nk)])
+            else:
+               for by_level in by_levels:
+                  coef_names = np.append(coef_names,[f"f_{vars[0]},{ink}_{by_level}" for ink in range(sterm.nk)])
          
+         else:
+            if sterm.by_latent is not None and formula.has_sigma_split() is False:
+               for by_state in range(n_j):
+                  coef_names = np.append(coef_names,[f"irf_{vars[0]},{ink}_{by_state}" for ink in range(sterm.nk)])
+            else:
+               coef_names = np.append(coef_names,[f"irf_{vars[0]},{ink}" for ink in range(sterm.nk)])
+            
+         # Calculate smooth term for corresponding covariate
+         matrix_term = sterm.basis(None,cov_flat[:,var_map[vars[0]]], None, sterm.nk, **sterm.kwargs_basis)
+         m_rows, m_cols = matrix_term.shape
 
+         # Handle optional by keyword
+         if sterm.by is not None:
+            
+            by_matrix_term = np.zeros((m_rows,m_cols*len(by_levels)),dtype=float)
 
+            by_cov = cov_flat[:,var_map[sterm.by]]
+            
+            # Fill the by matrix blocks.
+            cByIndex = 0
+            for by_level in by_levels:
+               by_matrix_term[by_cov == by_level,cByIndex:cByIndex+m_cols] = matrix_term[by_cov == by_level,:]
+               cByIndex += m_cols
+         
+         # Handle split by latent variable if a shared sigma term across latent stages is assumed.
+         if sterm.by_latent is not None and formula.has_sigma_split() is False:
+            if sterm.by is not None:
+               by_latent_matrix_term = np.zeros((by_matrix_term.shape[0],by_matrix_term.shape[1]*n_j),dtype=float)
+
+               cByIndex = 0
+               for by_state in range(n_j):
+                  by_latent_matrix_term[by_cov == by_level,cByIndex:cByIndex+by_matrix_term.shape[1]] = by_matrix_term[state_est_flat == by_state,:]
+                  cByIndex += by_matrix_term.shape[1]
+
+            else:
+               by_latent_matrix_term = np.zeros((matrix_term.shape[0],matrix_term.shape[1]*n_j),dtype=float)
+
+               cByIndex = 0
+               for by_state in range(n_j):
+                  by_latent_matrix_term[by_cov == by_level,cByIndex:cByIndex+matrix_term.shape[1]] = matrix_term[state_est_flat == by_state,:]
+                  cByIndex += matrix_term.shape[1]
+
+            final_term = by_latent_matrix_term
+         else:
+            if sterm.by is not None:
+               final_term = by_matrix_term
+            else:
+               final_term = matrix_term
+
+         m_rows,m_cols = final_term.shape
+
+         if n_coef != m_cols:
+            raise KeyError("Not all model matrix columns were created.")
+
+         # Find basis elements > 0 and collect correspondings elements and row indices
+         for m_coli in range(m_cols):
+            final_col = final_term[:,m_coli]
+            cidx = final_col > tol
+            elements = np.append(elements,final_col[cidx])
+            rows = np.append(rows,ridx[cidx])
+            cols = np.append(cols, [ci for _ in range(len(ridx[cidx]))])
+            ci += 1
 
    mat = scp.sparse.csc_array((elements,(rows,cols)),shape=(n_y,ci))
    return mat,coef_names
