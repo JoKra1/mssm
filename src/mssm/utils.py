@@ -1668,7 +1668,7 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
                cols = np.append(cols, [ci for _ in range(len(ridx[inter_idx]))])
                ci += 1
    
-   for irsti in formula.get_ir_smooth_terms():
+   for irsti in formula.get_ir_smooth_term_idx():
       # Impulse response terms need to be calculate for every series individually - costly
       irsterm = terms[irsti]
       var = irsterm.variables[0]
@@ -1744,7 +1744,7 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
       else:
          raise NotImplementedError("Multiprocessing code for impulse response terms is not yet implemented in new formula api.")
 
-   for sti in formula.get_smooth_terms():
+   for sti in formula.get_smooth_term_idx():
 
       sterm = terms[sti]
       vars = sterm.vaiables
@@ -1784,6 +1784,8 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
          # Handle optional by keyword
          if sterm.by is not None:
             
+            # ToDo: These matrix creations interfere with my sparse optimization plan since they
+            # will grow incredibly large incase of many by_levels
             by_matrix_term = np.zeros((m_rows,m_cols*len(by_levels)),dtype=float)
 
             by_cov = cov_flat[:,var_map[sterm.by]]
@@ -1832,6 +1834,26 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
             rows = np.append(rows,ridx[cidx])
             cols = np.append(cols, [ci for _ in range(len(ridx[cidx]))])
             ci += 1
+
+   for rti in formula.get_random_term_idx():
+      rterm = terms[rti]
+      vars = rterm.variables
+
+      if isinstance(rterm,ri):
+         offset = np.ones(n_y)
+
+         by_cov = cov_flat[:,var_map[vars[0]]]
+
+         for fl in range(len(factor_levels[vars[0]])):
+            coef_names = np.append(coef_names,[f"ri_{vars[0]}_{fl}"])
+            elements = np.append(elements,offset[by_cov == fl])
+            rows = np.append(rows,ridx[by_cov == fl])
+            cols = np.append(cols, [ci for _ in range(len(offset[by_cov == fl]))])
+            ci += 1
+
+         
+      elif isinstance(rterm,rs):
+         pass
 
    mat = scp.sparse.csc_array((elements,(rows,cols)),shape=(n_y,ci))
    return mat,coef_names
