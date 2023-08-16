@@ -1753,6 +1753,8 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
          raise NotImplementedError("Multivariate smooth terms are not yet supported.")
 
       else: # Univariate smooth term
+         term_elements = []
+         term_ridx = []
 
          # Calculate Coef names
          n_coef = sterm.nk
@@ -1781,58 +1783,57 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
          matrix_term = sterm.basis(None,cov_flat[:,var_map[vars[0]]], None, sterm.nk, **sterm.kwargs_basis)
          m_rows, m_cols = matrix_term.shape
 
+         for m_coli in range(m_cols):
+            term_elements.append(matrix_term[m_coli])
+            term_ridx.append(ridx[:])
+
          # Handle optional by keyword
          if sterm.by is not None:
-            
-            # ToDo: These matrix creations interfere with my sparse optimization plan since they
-            # will grow incredibly large incase of many by_levels
-            by_matrix_term = np.zeros((m_rows,m_cols*len(by_levels)),dtype=float)
+            new_term_elements = []
+            new_term_ridx = []
 
             by_cov = cov_flat[:,var_map[sterm.by]]
             
-            # Fill the by matrix blocks.
-            cByIndex = 0
+            # Split by cov and update rows with elements in columns
             for by_level in by_levels:
-               by_matrix_term[by_cov == by_level,cByIndex:cByIndex+m_cols] = matrix_term[by_cov == by_level,:]
-               cByIndex += m_cols
+               for m_coli in range(m_cols):
+                  new_term_elements.append(term_elements[m_coli][by_cov == by_level,])
+                  new_term_ridx.append(term_ridx[m_coli][by_cov == by_level,])
+
+            term_elements = new_term_elements
+            term_ridx = new_term_ridx
          
          # Handle split by latent variable if a shared sigma term across latent stages is assumed.
          if sterm.by_latent is not None and formula.has_sigma_split() is False:
-            if sterm.by is not None:
-               by_latent_matrix_term = np.zeros((by_matrix_term.shape[0],by_matrix_term.shape[1]*n_j),dtype=float)
+            new_term_elements = []
+            new_term_ridx = []
 
-               cByIndex = 0
-               for by_state in range(n_j):
-                  by_latent_matrix_term[by_cov == by_level,cByIndex:cByIndex+by_matrix_term.shape[1]] = by_matrix_term[state_est_flat == by_state,:]
-                  cByIndex += by_matrix_term.shape[1]
+            # Split by state and update rows with elements in columns
+            for by_state in range(n_j):
+               for m_coli in range(len(term_elements)):
+                  # Adjust state estimate for potential by split earlier.
+                  col_cor_state_est = state_est_flat[term_ridx[m_coli]]
+                  new_term_elements.append(term_elements[m_coli][col_cor_state_est == by_state,])
+                  new_term_ridx.append(term_ridx[m_coli][col_cor_state_est == by_state,])
 
-            else:
-               by_latent_matrix_term = np.zeros((matrix_term.shape[0],matrix_term.shape[1]*n_j),dtype=float)
+            term_elements = new_term_elements
+            term_ridx = new_term_ridx
 
-               cByIndex = 0
-               for by_state in range(n_j):
-                  by_latent_matrix_term[by_cov == by_level,cByIndex:cByIndex+matrix_term.shape[1]] = matrix_term[state_est_flat == by_state,:]
-                  cByIndex += matrix_term.shape[1]
-
-            final_term = by_latent_matrix_term
-         else:
-            if sterm.by is not None:
-               final_term = by_matrix_term
-            else:
-               final_term = matrix_term
-
-         m_rows,m_cols = final_term.shape
+         m_cols = len(term_elements)
 
          if n_coef != m_cols:
             raise KeyError("Not all model matrix columns were created.")
 
          # Find basis elements > 0 and collect correspondings elements and row indices
          for m_coli in range(m_cols):
-            final_col = final_term[:,m_coli]
+            final_col = term_elements[m_coli]
+            final_ridx = term_ridx[m_coli]
+
+            # Tolerance row index for this columns
             cidx = final_col > tol
             elements = np.append(elements,final_col[cidx])
-            rows = np.append(rows,ridx[cidx])
-            cols = np.append(cols, [ci for _ in range(len(ridx[cidx]))])
+            rows = np.append(rows,final_ridx[cidx])
+            cols = np.append(cols, [ci for _ in range(len(final_ridx[cidx]))])
             ci += 1
 
    for rti in formula.get_random_term_idx():
