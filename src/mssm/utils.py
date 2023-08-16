@@ -1250,13 +1250,13 @@ class GammTerm():
                 type:TermType,
                 is_penalized:bool,
                 penalty:list,
-                pen_args:list) -> None:
+                pen_kwargs:list) -> None:
         
         self.variables = variables
         self.type = type
         self.penalized = is_penalized
         self.penalty = penalty
-        self.pen_args = pen_args
+        self.pen_kwargs = pen_kwargs
 
 class i(GammTerm):
     def __init__(self) -> None:
@@ -1266,57 +1266,64 @@ class f(GammTerm):
     def __init__(self,variables:list,
                 by:str=None,
                 nk:int=10,
+                basis:Callable=B_spline_basis,
+                basis_kwargs:dict={"convolve":False},
+                by_latent:bool=False,
                 is_penalized:bool = True,
                 penalty:list = [PenType.DIFFERENCE],
-                pen_args:list = [{"m":2}]) -> None:
+                pen_kwargs:list = [{"m":2}]) -> None:
         
         # Initialization
-        super().__init__(variables, TermType.SMOOTH, is_penalized, penalty, pen_args)
+        super().__init__(variables, TermType.SMOOTH, is_penalized, penalty, pen_kwargs)
+        self.basis = basis
+        self.basis_kwargs = basis_kwargs
         self.by = by
         self.nk = nk
+        self.by_latent = by_latent
 
-class fl(GammTerm):
+class irf(GammTerm):
     def __init__(self,variable:str,
-                stage:str,
+                state:int,
                 by:str=None,
                 nk:int=10,
+                basis:Callable=B_spline_basis,
+                basis_kwargs:dict={"convolve":True},
                 is_penalized:bool = True,
-                penalty:list = [PenType.DIFFERENCE],
-                pen_args:list = [{"m":2}]) -> None:
+                penalty:list[PenType] = [PenType.DIFFERENCE],
+                pen_kwargs:list[dict] = [{"m":2}]) -> None:
         
         # Initialization
-        super().__init__([variable], TermType.LSMOOTH, is_penalized, penalty, pen_args)
-        self.stage = stage
+        super().__init__([variable], TermType.LSMOOTH, is_penalized, penalty, pen_kwargs)
+        self.basis = basis
+        self.basis_kwargs = basis_kwargs
+        self.state = state
         self.by = by
         self.nk = nk
 
 class l(GammTerm):
-    def __init__(self,variables:list,
-                is_penalized:bool = False,
-                penalty:list = [],
-                pen_args:list = []) -> None:
+    def __init__(self,variables:list) -> None:
         
         # Initialization
-        super().__init__(variables, TermType.LINEAR, is_penalized, penalty, pen_args)
+        super().__init__(variables, TermType.LINEAR, False, [], [])
 
 class ri(GammTerm):
     def __init__(self,variable:str,
                 is_penalized:bool = True,
                 penalty:list = [PenType.IDENTITY],
-                pen_args:list = [None]) -> None:
+                pen_kwargs:list = [None]) -> None:
         
         # Initialization
-        super().__init__([variable], TermType.RANDINT, is_penalized, penalty, pen_args)
+        super().__init__([variable], TermType.RANDINT, is_penalized, penalty, pen_kwargs)
 
 class rs(GammTerm):
     def __init__(self,variable:str,
                 by:str,
                 is_penalized:bool = True,
                 penalty:list = [PenType.IDENTITY],
-                pen_args:list = [None]) -> None:
+                pen_kwargs:list = [None]) -> None:
         
         # Initialization
-        super().__init__([variable], TermType.RANDSLOPE, is_penalized, penalty, pen_args)
+        super().__init__([variable], TermType.RANDSLOPE, is_penalized, penalty, pen_kwargs)
         self.by = by
 
 class lhs():
@@ -1325,10 +1332,11 @@ class lhs():
         self.f=f
 
 class Formula():
-    def __init__(self,lhs:lhs,terms:list[GammTerm],data:pd.DataFrame) -> None:
+    def __init__(self,lhs:lhs,terms:list[GammTerm],data:pd.DataFrame,split_sigma:bool=False) -> None:
         self.__lhs = lhs
         self.__terms = terms
         self.__data = data
+        self.__split_sigma = split_sigma # Separate sigma parameters per state, if true then formula counts for individual state.
         self.__factor_codings = {}
         self.__coding_factors = {}
         self.__factor_levels = {}
@@ -1338,8 +1346,11 @@ class Formula():
         self.__var_maxs = {}
         self.__linear_terms = []
         self.__smooth_terms = []
+        self.__ir_smooth_terms = []
         self.__random_terms = []
         self.__has_intercept = False
+        self.__has_irf = False
+        self.__n_irf = 0
         cvi = 0
 
         # Perform input checks
@@ -1390,9 +1401,9 @@ class Formula():
                     cvi += 1
                 
                 # Smooth-term variables must all be continuous
-                if isinstance(term, f) or isinstance(term, fl):
+                if isinstance(term, f) or isinstance(term, irf):
                     if not vartype in ['float64','int64']:
-                        raise TypeError(f"Variable '{var}' attributed to smooth/latent smooth term {ti} must be numeric and is not.")
+                        raise TypeError(f"Variable '{var}' attributed to smooth/impulse response smooth term {ti} must be numeric and is not.")
                     
                 # Random intercept variable must be categorical
                 if isinstance(term, ri):
@@ -1400,23 +1411,58 @@ class Formula():
                         raise TypeError(f"Variable '{var}' attributed to random intercept term {ti} must not be numeric but is.")
                 
             # by-variables must be categorical
-            if isinstance(term, f) or isinstance(term, fl) or isinstance(term, rs):
+            if isinstance(term, f) or isinstance(term, irf) or isinstance(term, rs):
                 if not term.by is None:
                     if not term.by in self.__data.columns:
                         raise KeyError(f"By-variable '{term.by}' attributed to term {ti} does not exist in dataframe.")
                     
                     if data[term.by].dtype in ['float64','int64']:
                         raise KeyError(f"Data-type of By-variable '{term.by}' attributed to term {ti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'.")
+                    
+                # Store information for by variables as well.
+                if not term.by in self.__var_to_cov:
+                    self.__var_to_cov[term.by] = cvi
+
+                    # Assign vartype enum
+                    self.__var_types[term.by] = VarType.FACTOR
+                    self.__var_mins[term.by] = None
+                    self.__var_maxs[term.by] = None
+
+                    # Code factor variables into integers for example for easy dummy coding
+                    levels = np.unique(self.__data[term.by])
+
+                    self.__factor_codings[term.by] = {}
+                    self.__coding_factors[term.by] = {}
+                    self.__factor_levels[term.by] = levels
+                     
+                    for ci,c in enumerate(levels):
+                        self.__factor_codings[term.by][c] = ci
+                        self.__coding_factors[term.by][ci] = c
+
+                    cvi += 1
             
             # Remaining term allocation.
-            if isinstance(term, f) or isinstance(term, fl):
+            if isinstance(term, f):
                self.__smooth_terms.append(ti)
+
+            if isinstance(term,irf):
+               if len(term.variables > 1):
+                  raise NotImplementedError("Multiple variables for impulse response terms have not been implemented yet.")
+               
+               self.__ir_smooth_terms.append(ti)
+               self.__n_irf += 1
             
             if isinstance(term,l):
                self.__linear_terms.append(ti)
 
             if isinstance(term, ri) or isinstance(term,rs):
                self.__random_terms.append(ti)
+        
+        if self.__n_irf > 0:
+           self.__has_irf = True
+
+        if self.__has_irf and self.__split_sigma:
+           raise ValueError("Formula includes an impulse response term. split_sigma must be set to False!")
 
     def get_lhs(self) -> lhs:
        return copy.deepcopy(self.__lhs)
@@ -1451,11 +1497,17 @@ class Formula():
     def get_smooth_term_idx(self) -> list[int]:
        return(copy.deepcopy(self.__smooth_terms))
     
+    def get_ir_smooth_term_idx(self) -> list[int]:
+       return(copy.deepcopy(self.__ir_smooth_terms))
+    
     def get_random_term_idx(self) -> list[int]:
        return(copy.deepcopy(self.__random_terms))
     
     def has_intercept(self) -> bool:
        return self.__has_intercept
+    
+    def has_ir_terms(self) -> bool:
+       return self.__has_irf
 
 def build_mat_for_series(formula,series_id:str):
    data = formula.get_data()
@@ -1499,9 +1551,9 @@ def build_mat_for_series(formula,series_id:str):
    # Now split cov by series id as well
    cov = np.split(cov_flat,sid[1:],axis=0)
 
-   return y_flat,cov_flat,y,cov,sid
+   return y_flat,cov_flat,y,sid
 
-def build_sparse_matrix_from_formula(formula,cov_flat,state_est,tol=1e-4):
+def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,state_est,sid,pool=None,tol=1e-4):
 
    var_types = formula.get_var_types()
    var_map = formula.get_var_map()
@@ -1598,7 +1650,7 @@ def build_sparse_matrix_from_formula(formula,cov_flat,state_est,tol=1e-4):
                         for _,old_idx,old_name in zip(interactions,inter_idx,inter_coef_names):
                            new_interactions.append(cov_flat[:,var_map[var]])
                            new_inter_idx.append(old_idx)
-                           new_inter_coef_names.append(old_name[0] + f"_{var}")
+                           new_inter_coef_names.append(old_name + f"_{var}")
                
                interactions = copy.deepcopy(new_interactions)
                inter_idx = copy.deepcopy(new_inter_idx)
@@ -1612,6 +1664,85 @@ def build_sparse_matrix_from_formula(formula,cov_flat,state_est,tol=1e-4):
                cols = np.append(cols, [ci for _ in range(len(ridx[inter_idx]))])
                ci += 1
    
+   for irsti in formula.get_ir_smooth_terms():
+      # Impulse response terms need to be calculate for every series individually - costly
+      irsterm = terms[irsti]
+      var = irsterm.variables[0]
+
+      term_elements = []
+      term_idx = []
+
+      # Calculate Coef names
+      if irsterm.by is not None:
+         by_levels = factor_levels[irsterm.by]
+
+         for by_level in by_levels:
+            coef_names = np.append(coef_names,[f"irf_{irsterm.state},{ink}_{by_level}" for ink in range(irsterm.nk)])
+      
+      else:
+         coef_names = np.append(coef_names,[f"irf_{irsterm.state},{ink}" for ink in range(irsterm.nk)])
+
+      n_term_coef = len(coef_names)
+
+      if pool is None:
+         for s_cov,s_state in zip(cov,state_est):
+            
+            # Create matrix for state corresponding to term.
+            matrix_term = irsterm.basis(irsterm.state,s_cov[:,var_map[var]],s_state, irsterm.nk, **irsterm.kwargs_basis)
+            m_rows,m_cols = matrix_term.shape
+
+            # Handle optional by keyword
+            if irsterm.by is not None:
+               
+               by_matrix_term = np.zeros((m_rows,m_cols*len(by_levels)),dtype=float)
+
+               by_cov = s_cov[:,var_map[irsterm.by]]
+
+               if len(np.unique(by_cov)) > 1:
+                  raise ValueError(f"By-variable {irsterm.by} has varying levels on series level. This should not be the case.")
+               
+               # Fill the by matrix blocks.
+               cByIndex = 0
+               for by_level in by_levels:
+                  if by_level == by_cov[0]:
+                     by_matrix_term[:,cByIndex:cByIndex+m_cols] = matrix_term
+                     cByIndex += m_cols
+               
+               final_term = by_matrix_term
+            else:
+               final_term = matrix_term
+
+            m_rows,m_cols = final_term.shape
+
+            # Find basis elements > 0
+            if len(term_idx) < 1:
+               for m_coli in range(m_cols):
+                  final_col = final_term[:,m_coli]
+                  term_elements.append(final_col[final_col > tol])
+                  term_idx.append(final_col > tol)
+            else:
+               for m_coli in range(m_cols):
+                  final_col = final_term[:,m_coli]
+                  term_elements[m_coli] = np.append(term_elements[m_coli],final_col[final_col > tol])
+                  term_idx[m_coli] = np.append(term_idx[m_coli], final_col > tol)
+         
+         # Now collect actual row indices
+         for m_coli in range(n_term_coef):
+            elements = np.append(elements,term_elements[:,m_coli])
+            rows = np.append(rows,ridx[term_idx[m_coli]])
+            cols = np.append(cols, [m_coli for _ in range(len(term_elements[:,m_coli]))])
+            ci += 1
+
+      else:
+         raise NotImplementedError("Multiprocessing code for impulse response terms is not yet implemented in new formula api.")
+
+
+
+
+         
+
+
+
    mat = scp.sparse.csc_array((elements,(rows,cols)),shape=(n_y,ci))
    return mat,coef_names
 
