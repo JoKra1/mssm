@@ -1580,10 +1580,10 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
 
       if isinstance(lterm,i):
          offset = np.ones(n_y)
-         coef_names = np.append(coef_names,["Intercept"])
-         elements = np.append(elements,offset)
-         rows = np.append(rows,ridx)
-         cols = np.append(cols, [ci for _ in range(n_y)])
+         coef_names.append("Intercept")
+         elements.extend(offset)
+         rows.extend(ridx)
+         cols.extend([ci for _ in range(n_y)])
          ci += 1
       
       else:
@@ -1601,18 +1601,18 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
 
                for fl in range(fl_start,len(factor_levels[var])):
                   fridx = ridx[cov_flat[:,var_map[var]] == fl]
-                  coef_names = np.append(coef_names,[f"{var}_{coding_factors[var][fl]}"])
-                  elements = np.append(elements,offset[fridx])
-                  rows = np.append(rows,fridx)
-                  cols = np.append(cols, [ci for _ in range(len(fridx))])
+                  coef_names.append(f"{var}_{coding_factors[var][fl]}")
+                  elements.extend(offset[fridx])
+                  rows.extend(fridx)
+                  cols.extend([ci for _ in range(len(fridx))])
                   ci += 1
 
             else: # Continuous predictor
                slope = cov_flat[:,var_map[var]]
-               coef_names = np.append(coef_names,[f"{var}"])
-               elements = np.append(elements,slope)
-               rows = np.append(rows,ridx)
-               cols = np.append(cols, [ci for _ in range(n_y)])
+               coef_names.append(f"{var}")
+               elements.extend(slope)
+               rows.extend(ridx)
+               cols.extend([ci for _ in range(n_y)])
                ci += 1
 
          else: # Interactions
@@ -1662,10 +1662,10 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
 
             # Now write interaction terms into model matrix
             for inter,inter_idx,name in zip(interactions,inter_idx,inter_coef_names):
-               coef_names = np.append(coef_names,[name])
-               elements = np.append(elements,inter[ridx[inter_idx]])
-               rows = np.append(rows,ridx[inter_idx])
-               cols = np.append(cols, [ci for _ in range(len(ridx[inter_idx]))])
+               coef_names.append(name)
+               elements.extend(inter[ridx[inter_idx]])
+               rows.extend(ridx[inter_idx])
+               cols.extend([ci for _ in range(len(ridx[inter_idx]))])
                ci += 1
    
    for irsti in formula.get_ir_smooth_term_idx():
@@ -1684,10 +1684,10 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
          n_coef *= len(by_levels)
 
          for by_level in by_levels:
-            coef_names = np.append(coef_names,[f"irf_{irsterm.state},{ink}_{by_level}" for ink in range(irsterm.nk)])
+            coef_names.extend([f"irf_{irsterm.state}_{ink}_{by_level}" for ink in range(irsterm.nk)])
       
       else:
-         coef_names = np.append(coef_names,[f"irf_{irsterm.state},{ink}" for ink in range(irsterm.nk)])
+         coef_names.extend([f"irf_{irsterm.state}_{ink}" for ink in range(irsterm.nk)])
 
       if pool is None:
          for s_cov,s_state in zip(cov,state_est):
@@ -1736,9 +1736,9 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
          
          # Now collect actual row indices
          for m_coli in range(len(term_elements)):
-            elements = np.append(elements,term_elements[:,m_coli])
-            rows = np.append(rows,ridx[term_idx[m_coli]])
-            cols = np.append(cols, [ci for _ in range(len(term_elements[:,m_coli]))])
+            elements.extend(term_elements[:,m_coli])
+            rows.extend(ridx[term_idx[m_coli]])
+            cols.extend([ci for _ in range(len(term_elements[:,m_coli]))])
             ci += 1
 
       else:
@@ -1766,17 +1766,17 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
                   n_coef *= n_j
                   for by_state in range(n_j):
                      for by_level in by_levels:
-                        coef_names = np.append(coef_names,[f"f_{vars[0]},{ink}_{by_level}_{by_state}" for ink in range(sterm.nk)])
+                        coef_names.extend([f"f_{vars[0]}_{ink}_{by_level}_{by_state}" for ink in range(sterm.nk)])
             else:
                for by_level in by_levels:
-                  coef_names = np.append(coef_names,[f"f_{vars[0]},{ink}_{by_level}" for ink in range(sterm.nk)])
+                  coef_names.extend([f"f_{vars[0]}_{ink}_{by_level}" for ink in range(sterm.nk)])
          
          else:
             if sterm.by_latent is not False and formula.has_sigma_split() is False:
                for by_state in range(n_j):
-                  coef_names = np.append(coef_names,[f"f_{vars[0]},{ink}_{by_state}" for ink in range(sterm.nk)])
+                  coef_names.extend([f"f_{vars[0]}_{ink}_{by_state}" for ink in range(sterm.nk)])
             else:
-               coef_names = np.append(coef_names,[f"f_{vars[0]},{ink}" for ink in range(sterm.nk)])
+               coef_names.extend([f"f_{vars[0]}_{ink}" for ink in range(sterm.nk)])
             
          # Calculate smooth term for corresponding covariate
          matrix_term = sterm.basis(None,cov_flat[:,var_map[vars[0]]], None, sterm.nk, **sterm.basis_kwargs)
@@ -1838,12 +1838,14 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
          offset = np.ones(n_y)
 
          by_cov = cov_flat[:,var_map[vars[0]]]
+         by_code_factors = coding_factors[vars[0]]
 
          for fl in range(len(factor_levels[vars[0]])):
-            coef_names = np.append(coef_names,[f"ri_{vars[0]}_{fl}"])
-            elements = np.append(elements,offset[by_cov == fl])
-            rows = np.append(rows,ridx[by_cov == fl])
-            cols = np.append(cols, [ci for _ in range(len(offset[by_cov == fl]))])
+            fl_idx = by_cov == fl
+            coef_names.extend([f"ri_{vars[0]}_{by_code_factors[fl]}"])
+            elements.extend(offset[fl_idx])
+            rows.extend(ridx[fl_idx])
+            cols.extend([ci for _ in range(len(offset[fl_idx]))])
             ci += 1
 
          
@@ -1851,5 +1853,5 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
          raise NotImplementedError("Random slope terms are not yet supported.")
 
    mat = scp.sparse.csc_array((elements,(rows,cols)),shape=(n_y,ci))
-   return mat,coef_names
+   return mat,np.array(coef_names)
 
