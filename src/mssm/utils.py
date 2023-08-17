@@ -334,23 +334,32 @@ def create_event_matrix_cov4_split(time,cov,state_est, identifiable = True, drop
 
 ##################################### Penalty functions #####################################
 
-def diff_pen(n,m=2,identifiable=True):
+def diff_pen(n,m=2,identifiable=False):
   # Creates difference (order=m) n*n penalty matrix
   # Based on code in Eilers & Marx (1996) and Wood (2017)
+  warnings.warn("Sparse difference penalties are not yet implemented. Instead a dense penalty is converted to a sparse one. This will not work for very wide model matrices.")
   if identifiable:
      n += 1
   D = np.diff(np.identity(n),m)
   if identifiable:
      D = D[0:-1,:]
   S = D @ D.T
-  return S,D
+  return scp.csc_array(S),scp.csc_array(D)
 
-def id_dist_pen(n,f=lambda x: 1):
+def id_dist_pen(n,f=None):
   # Creates identity matrix penalty in case f(i) = 1
   # Can be used to create event-distance weighted penalty matrices for deconvolving sms GAMMs
-  S = np.identity(n)
+  elements = np.zeros(n)
+  idx = np.zeros(n)
+
   for i in range(n):
-    S[i,i] = f(i+1)
+    if f is None:
+      elements[i] = 1
+    else:
+      elements[i] = f(i+1)
+    idx[i] = i
+
+  S = scp.sparse.csc_array((elements,(idx,idx)),shape=(n,n))
   return S
 
 def embed_in_S(penalty,embS,cIndex,lam=None):
@@ -1266,6 +1275,7 @@ class i(GammTerm):
 class f(GammTerm):
     def __init__(self,variables:list,
                 by:str=None,
+                id:int=None,
                 nk:int=10,
                 basis:Callable=B_spline_basis,
                 basis_kwargs:dict={"convolve":False},
@@ -1279,6 +1289,7 @@ class f(GammTerm):
         self.basis = basis
         self.basis_kwargs = basis_kwargs
         self.by = by
+        self.id = id
         self.nk = nk
         self.by_latent = by_latent
 
@@ -1286,6 +1297,7 @@ class irf(GammTerm):
     def __init__(self,variable:str,
                 state:int,
                 by:str=None,
+                id:int=None,
                 nk:int=10,
                 basis:Callable=B_spline_basis,
                 basis_kwargs:dict={"convolve":True},
@@ -1299,6 +1311,7 @@ class irf(GammTerm):
         self.basis_kwargs = basis_kwargs
         self.state = state
         self.by = by
+        self.id = id
         self.nk = nk
 
 class l(GammTerm):
@@ -1308,23 +1321,17 @@ class l(GammTerm):
         super().__init__(variables, TermType.LINEAR, False, [], [])
 
 class ri(GammTerm):
-    def __init__(self,variable:str,
-                is_penalized:bool = True,
-                penalty:list = [PenType.IDENTITY],
-                pen_kwargs:list = [None]) -> None:
+    def __init__(self,variable:str) -> None:
         
         # Initialization
-        super().__init__([variable], TermType.RANDINT, is_penalized, penalty, pen_kwargs)
+        super().__init__([variable], TermType.RANDINT, True, [PenType.IDENTITY], [None])
 
 class rs(GammTerm):
     def __init__(self,variable:str,
-                by:str,
-                is_penalized:bool = True,
-                penalty:list = [PenType.IDENTITY],
-                pen_kwargs:list = [None]) -> None:
+                by:str) -> None:
         
         # Initialization
-        super().__init__([variable], TermType.RANDSLOPE, is_penalized, penalty, pen_kwargs)
+        super().__init__([variable], TermType.RANDSLOPE, True, [PenType.IDENTITY], [None])
         self.by = by
 
 class lhs():
@@ -1354,6 +1361,7 @@ class Formula():
         self.__has_intercept = False
         self.__has_irf = False
         self.__n_irf = 0
+        self.unpenalized_coef = None
         cvi = 0
 
         # Perform input checks
@@ -1558,6 +1566,184 @@ def build_mat_for_series(formula,series_id:str):
 
    return y_flat,cov_flat,y,cov,sid
 
+def build_sparse_penalties_from_formula(formula,n_j,tol=1e-4):
+   var_types = formula.get_var_types()
+   var_map = formula.get_var_map()
+   factor_levels = formula.get_factor_levels()
+   coding_factors = formula.get_coding_factors()
+
+   terms = formula.get_terms()
+   penalties = []
+   start_idx = formula.unpenalized_coef
+
+   if start_idx is None:
+      ValueError("Penalty start index is ill-defined. Make sure to call 'build_sparse_matrix_from_formula' before calling this function.")
+
+   pen_start_idx = start_idx
+   cur_pen_idx = start_idx
+
+   for irsti in formula.get_ir_smooth_term_idx():
+      
+      if len(penalties) > 0:
+         pen_start_idx = None
+
+      irsterm = terms[irsti]
+
+      # Calculate nCoef 
+      n_coef = irsterm.nk
+
+      if irsterm.by is not None:
+         by_levels = factor_levels[irsterm.by]
+      
+      if not irsterm.is_penalized():
+         if len(penalties) == 0:
+
+            added_not_penalized = n_coef
+            if irsterm.by is not None:
+               added_not_penalized *= len(by_levels)
+            start_idx += added_not_penalized
+            formula.unpenalized_coef += added_not_penalized
+            pen_start_idx = start_idx
+            cur_pen_idx = start_idx
+
+            warnings.warn(f"Impulse response smooth {irsti} is not penalized. Smoothing terms should generally be penalized.")
+
+         else:
+            raise KeyError(f"Impulse response smooth {irsti} is not penalized and placed in the formula after penalized terms. Unpenalized terms should be moved to the beginning of the formula, ideally behind any linear terms.")
+      
+      else:
+
+         for penid,pen in enumerate(irsterm.penalty):
+            
+            # Smooth terms can have multiple penalties.
+            # In that case the starting index of every subsequent
+            # penalty needs to be reset.
+            if penid > 0:
+               pen_i_s_idx = cur_pen_idx
+            else:
+               pen_i_s_idx = pen_start_idx
+
+            # Determine penalty generator
+            if pen == PenType.DIFFERENCE:
+               pen_generator = diff_pen
+            else:
+               pen_generator = id_dist_pen
+               
+            if irsterm.by is not None:
+               if irsterm.id is not None:
+                  penalties.append(LambdaTerm(penalties=[pen_generator(n_coef,**irsterm.pen_kwargs[penid]) for _ in range(len(by_levels))],start_index=pen_i_s_idx))
+               else:
+                  for _ in range(len(by_levels)):
+                     penalties.append(LambdaTerm(penalties=[pen_generator(n_coef,**irsterm.pen_kwargs[penid])],start_index=pen_i_s_idx))
+                     pen_start_idx = None # Make sure that this is set to None in case this is the first time we add penalties.
+         
+         # Update current penalty starting idx
+         if irsterm.by is not None:
+            cur_pen_idx += (n_coef * len(by_levels))
+         else:
+            cur_pen_idx += n_coef
+
+   for sti in formula.get_smooth_term_idx():
+
+      if len(penalties) > 0:
+         pen_start_idx = None
+
+      sterm = terms[sti]
+      vars = sterm.variables
+
+      if len(vars) > 1:
+         raise NotImplementedError("Penalties for multivariate smooth terms are not yet supported.")
+
+      else: # Univariate smooth term
+
+         # Calculate nCoef
+         n_coef = sterm.nk
+
+         if sterm.by is not None:
+            by_levels = factor_levels[sterm.by]
+
+         if not sterm.is_penalized():
+            if len(penalties) == 0:
+
+               added_not_penalized = n_coef
+               if sterm.by is not None:
+                  added_not_penalized *= len(by_levels)
+
+               if sterm.by_latent is not False and formula.has_sigma_split() is False:
+                  added_not_penalized *= n_j
+
+               start_idx += added_not_penalized
+               formula.unpenalized_coef += added_not_penalized
+               pen_start_idx = start_idx
+
+               warnings.warn(f"Smooth {sti} is not penalized. Smoothing terms should generally be penalized.")
+
+            else:
+               raise KeyError(f"Smooth {sti} is not penalized and placed in the formula after penalized terms. Unpenalized terms should be moved to the beginning of the formula, ideally behind any linear terms.")
+         
+         else:
+
+            for penid,pen in enumerate(sterm.penalty):
+            
+               # Smooth terms can have multiple penalties.
+               # In that case the starting index of every subsequent
+               # penalty needs to be reset.
+               if penid > 0:
+                  pen_i_s_idx = cur_pen_idx
+               else:
+                  pen_i_s_idx = pen_start_idx
+
+               # Determine penalty generator
+               if pen == PenType.DIFFERENCE:
+                  pen_generator = diff_pen
+               else:
+                  pen_generator = id_dist_pen
+                  
+               if sterm.by is not None: 
+                  if sterm.id is not None:
+                     if sterm.by_latent is not False and formula.has_sigma_split() is False:
+                        penalties.append(LambdaTerm(penalties=[pen_generator(n_coef,**sterm.pen_kwargs[penid]) for _ in range(len(by_levels)*n_j)],start_index=pen_i_s_idx))
+                     else:
+                        penalties.append(LambdaTerm(penalties=[pen_generator(n_coef,**sterm.pen_kwargs[penid]) for _ in range(len(by_levels))],start_index=pen_i_s_idx))
+                  else:
+                     if sterm.by_latent is not False and formula.has_sigma_split() is False:
+                        for _ in range(n_j):
+                           for _ in range(len(by_levels)):
+                              penalties.append(LambdaTerm(penalties=[pen_generator(n_coef,**sterm.pen_kwargs[penid])],start_index=pen_i_s_idx))
+                              pen_start_idx = None # Make sure that this is set to None in case this is the first time we add penalties.
+                     else:
+                        for _ in range(len(by_levels)):
+                           penalties.append(LambdaTerm(penalties=[pen_generator(n_coef,**sterm.pen_kwargs[penid])],start_index=pen_i_s_idx))
+                           pen_start_idx = None # Make sure that this is set to None in case this is the first time we add penalties.
+            
+            # Update current penalty starting idx
+            if irsterm.by is not None:
+               if sterm.by_latent is not False and formula.has_sigma_split() is False:
+                  cur_pen_idx += (n_coef * len(by_levels) * n_j)
+               else:
+                  cur_pen_idx += (n_coef * len(by_levels))
+            else:
+               if sterm.by_latent is not False and formula.has_sigma_split() is False:
+                  cur_pen_idx += (n_coef * n_j)
+               else:
+                  cur_pen_idx += n_coef
+
+   for rti in formula.get_random_term_idx():
+
+      if len(penalties) > 0:
+         pen_start_idx = None
+
+      rterm = terms[rti]
+      vars = rterm.variables
+
+      if isinstance(rterm,ri):
+         penalties.append(LambdaTerm(penalties=[id_dist_pen(len(factor_levels[vars[0]]))],start_index=pen_start_idx))
+      else:
+         NotImplementedError("Penalties for random slopes are not yet supported.")
+
+   return penalties
+
+
 def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,state_est,sid,pool=None,tol=1e-4):
 
    var_types = formula.get_var_types()
@@ -1573,6 +1759,7 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
    cols = []
    coef_names = []
    ridx = np.array([ri for ri in range(n_y)])
+   formula.unpenalized_coef = 0
 
    ci = 0
    for lti in formula.get_linear_term_idx():
@@ -1584,6 +1771,7 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
          elements.extend(offset)
          rows.extend(ridx)
          cols.extend([ci for _ in range(n_y)])
+         formula.unpenalized_coef += 1
          ci += 1
       
       else:
@@ -1605,6 +1793,7 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
                   elements.extend(offset[fridx])
                   rows.extend(fridx)
                   cols.extend([ci for _ in range(len(fridx))])
+                  formula.unpenalized_coef += 1
                   ci += 1
 
             else: # Continuous predictor
@@ -1613,6 +1802,7 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
                elements.extend(slope)
                rows.extend(ridx)
                cols.extend([ci for _ in range(n_y)])
+               formula.unpenalized_coef += 1
                ci += 1
 
          else: # Interactions
@@ -1666,6 +1856,7 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
                elements.extend(inter[ridx[inter_idx]])
                rows.extend(ridx[inter_idx])
                cols.extend([ci for _ in range(len(ridx[inter_idx]))])
+               formula.unpenalized_coef += 1
                ci += 1
    
    for irsti in formula.get_ir_smooth_term_idx():
