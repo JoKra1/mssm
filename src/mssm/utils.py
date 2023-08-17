@@ -1566,6 +1566,44 @@ def build_mat_for_series(formula,series_id:str):
 
    return y_flat,cov_flat,y,cov,sid
 
+def embed_in_S_sparse(penalty,S_emb,S_col,cIndex,lam=None):
+   pen_dim = penalty.shape[1]
+
+   # Data in canonical format, for ease of manipulation we translate this to data, rows, columns
+   pen_elements = penalty.data
+   pen_idx = penalty.indices
+   pen_iptr = penalty.indptr
+
+   pen_data = []
+   pen_rows = []
+   pen_cols = []
+
+   #ToDo: This is unnecessary if instead of embedding the penalties in the build_sparse_penalties function I
+   # simply store data, rows, and cols.
+   for ci in range(pen_dim):
+      # See: https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csc_array.html#scipy.sparse.csc_array
+      c_data = pen_elements[pen_iptr[ci]:pen_iptr[ci+1]]
+      c_rows = pen_idx[pen_iptr[ci]:pen_iptr[ci+1]]
+
+      pen_data.extend(c_data)
+      pen_rows.extend(c_rows + cIndex)
+      pen_cols.extend([ci  + cIndex for _ in range(len(c_rows))])
+
+   pen_data = np.array(pen_data)
+
+   if S_emb is None:
+      if lam is None:
+         S_emb = scp.sparse.csc_array((pen_data,(pen_rows,pen_cols)),shape=(S_col,S_col))
+      else:
+         S_emb = scp.sparse.csc_array((pen_data*lam,(pen_rows,pen_cols)),shape=(S_col,S_col))
+   else:
+      if lam is None:
+         S_emb += scp.sparse.csc_array((pen_data,(pen_rows,pen_cols)),shape=(S_col,S_col))
+      else:
+         S_emb += scp.sparse.csc_array((pen_data*lam,(pen_rows,pen_cols)),shape=(S_col,S_col))
+
+   return S_emb,cIndex+pen_dim
+
 def build_sparse_penalties_from_formula(formula,n_j,tol=1e-4):
    var_types = formula.get_var_types()
    var_map = formula.get_var_map()
