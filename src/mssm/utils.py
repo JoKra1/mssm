@@ -9,6 +9,22 @@ import re
 import warnings
 import copy
 
+class TermType(Enum):
+    LSMOOTH = 1
+    SMOOTH = 2
+    LINEAR = 3
+    RANDINT = 4
+    RANDSLOPE = 5
+
+class VarType(Enum):
+    NUMERIC = 1
+    FACTOR = 2
+
+class PenType(Enum):
+    IDENTITY = 1
+    DIFFERENCE = 2
+    DISTANCE = 3
+
 ##################################### Conventional Pupil basis  #####################################
 
 def convolve_event(f,pulse_locations,i):
@@ -427,6 +443,7 @@ class LambdaTerm:
   lam:float = 1.1
   start_index:int = None
   frozen:bool = False
+  type:PenType = None
 
 ##################################### GAMM functions #####################################
 
@@ -1279,22 +1296,6 @@ def get_log_dur_prob_mat(n_j,max_dur,ps,cov):
     
     return dur_log_probs
 
-class TermType(Enum):
-    LSMOOTH = 1
-    SMOOTH = 2
-    LINEAR = 3
-    RANDINT = 4
-    RANDSLOPE = 5
-
-class VarType(Enum):
-    NUMERIC = 1
-    FACTOR = 2
-
-class PenType(Enum):
-    IDENTITY = 1
-    DIFFERENCE = 2
-    DISTANCE = 3
-
 class GammTerm():
    
    def __init__(self,variables:list[str],
@@ -1607,7 +1608,7 @@ def build_mat_for_series(formula,series_id:str):
 
    return y_flat,cov_flat,y,cov,sid
 
-def embed_in_S_sparse(pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,S_emb,D_emb,S_col,cIndex,lam=None):
+def embed_in_S_sparse(pen_data,pen_rows,pen_cols,S_emb,S_col,cIndex,lam=None):
 
    embedding = np.array(pen_data)
    r_embedding = np.array(pen_rows) + cIndex
@@ -1623,6 +1624,10 @@ def embed_in_S_sparse(pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,S
          S_emb += scp.sparse.csc_array((embedding,(r_embedding,c_embedding)),shape=(S_col,S_col))
       else:
          S_emb += scp.sparse.csc_array((embedding*lam,(r_embedding,c_embedding)),shape=(S_col,S_col))
+      
+   return S_emb,cIndex+(pen_cols[-1]+1)
+
+def embed_in_D_sparse(chol_data,chol_rows,chol_cols,D_emb,S_col,cIndex):
 
    D_embedding = np.array(chol_data)
    D_r_embedding = np.array(chol_rows) + cIndex
@@ -1633,7 +1638,19 @@ def embed_in_S_sparse(pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,S
    else:
       D_emb += scp.sparse.csc_array((D_embedding,(D_r_embedding,D_c_embedding)),shape=(S_col,S_col))
       
-   return S_emb,D_emb,cIndex+(pen_cols[-1]+1)
+   return D_emb,cIndex+(chol_cols[-1]+1)
+
+def embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,Sj,lam=None):
+
+   embedding = np.array(pen_data)
+   pen_col = pen_cols[-1]+1
+
+   if Sj is None:
+      Sj = scp.sparse.csc_array((embedding*lam,(pen_rows,pen_cols)),shape=(pen_col,pen_col))
+   else:
+      Sj += scp.sparse.csc_array((embedding*lam,(pen_rows,pen_cols)),shape=(pen_col,pen_col))
+      
+   return Sj
 
 def build_sparse_penalties_from_formula(formula,n_j,tol=1e-4):
    var_types = formula.get_var_types()
@@ -1725,7 +1742,8 @@ def build_sparse_penalties_from_formula(formula,n_j,tol=1e-4):
                                               pen_chols=term_chol_elements,
                                               r_pen_chols=term_chol_rows,
                                               c_pen_chols=term_chol_cols,
-                                              start_index=pen_i_s_idx))
+                                              start_index=pen_i_s_idx,
+                                              type = pen))
                else:
 
                   for _ in range(len(by_levels)):
@@ -1735,7 +1753,8 @@ def build_sparse_penalties_from_formula(formula,n_j,tol=1e-4):
                                                  pen_chols=[chol_data],
                                                  r_pen_chols=[chol_rows],
                                                  c_pen_chols=[chol_cols],
-                                                 start_index=pen_i_s_idx))
+                                                 start_index=pen_i_s_idx,
+                                                 type = pen))
                      
                      pen_start_idx = None # Make sure that this is set to None in case this is the first time we add penalties.
                      pen_i_s_idx = None
@@ -1842,7 +1861,8 @@ def build_sparse_penalties_from_formula(formula,n_j,tol=1e-4):
                                                 pen_chols=term_chol_elements,
                                                 r_pen_chols=term_chol_rows,
                                                 c_pen_chols=term_chol_cols,
-                                                start_index=pen_i_s_idx))
+                                                start_index=pen_i_s_idx,
+                                                type = pen))
 
                   else:
                      if sterm.by_latent is not False and formula.has_sigma_split() is False:
@@ -1855,7 +1875,8 @@ def build_sparse_penalties_from_formula(formula,n_j,tol=1e-4):
                                                           pen_chols=[chol_data],
                                                           r_pen_chols=[chol_rows],
                                                           c_pen_chols=[chol_cols],
-                                                          start_index=pen_i_s_idx))
+                                                          start_index=pen_i_s_idx,
+                                                          type = pen))
                               
                               pen_start_idx = None # Make sure that this is set to None in case this is the first time we add penalties.
                               pen_i_s_idx = None
@@ -1868,7 +1889,8 @@ def build_sparse_penalties_from_formula(formula,n_j,tol=1e-4):
                                                        pen_chols=[chol_data],
                                                        r_pen_chols=[chol_rows],
                                                        c_pen_chols=[chol_cols],
-                                                       start_index=pen_i_s_idx))
+                                                       start_index=pen_i_s_idx,
+                                                       type = pen))
                            
                            pen_start_idx = None # Make sure that this is set to None in case this is the first time we add penalties.
                            pen_i_s_idx = None
@@ -1882,7 +1904,8 @@ def build_sparse_penalties_from_formula(formula,n_j,tol=1e-4):
                                                     pen_chols=[chol_data],
                                                     r_pen_chols=[chol_rows],
                                                     c_pen_chols=[chol_cols],
-                                                    start_index=pen_i_s_idx))
+                                                    start_index=pen_i_s_idx,
+                                                    type = pen))
                         
                         pen_start_idx = None # Make sure that this is set to None in case this is the first time we add penalties.
                         pen_i_s_idx = None
@@ -1894,7 +1917,8 @@ def build_sparse_penalties_from_formula(formula,n_j,tol=1e-4):
                                                  pen_chols=[chol_data],
                                                  r_pen_chols=[chol_rows],
                                                  c_pen_chols=[chol_cols],
-                                                 start_index=pen_i_s_idx))
+                                                 start_index=pen_i_s_idx,
+                                                 type = pen))
             
             # Update current penalty starting idx
             if sterm.by is not None:
@@ -1924,7 +1948,8 @@ def build_sparse_penalties_from_formula(formula,n_j,tol=1e-4):
                                      pen_chols=[chol_data],
                                      r_pen_chols=[chol_rows],
                                      c_pen_chols=[chol_cols],
-                                     start_index=pen_start_idx))
+                                     start_index=pen_start_idx,
+                                     type = PenType.IDENTITY))
 
          cur_pen_idx += len(factor_levels[vars[0]])
       else:
@@ -2170,7 +2195,6 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
 
             by_cov = cov_flat[:,var_map[sterm.by]]
             
-            #print("step 1")
             # Split by cov and update rows with elements in columns
             for by_level in range(len(by_levels)):
                by_cidx = by_cov == by_level
@@ -2178,7 +2202,6 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
                   new_term_ridx.append(term_ridx[m_coli][by_cidx,])
 
             term_ridx = new_term_ridx
-            #print("step 1 done")
          
          # Handle split by latent variable if a shared sigma term across latent stages is assumed.
          if sterm.by_latent is not False and formula.has_sigma_split() is False:
