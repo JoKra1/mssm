@@ -344,13 +344,50 @@ def diff_pen(n,m=2,identifiable=False):
   if identifiable:
      D = D[0:-1,:]
   S = D @ D.T
-  return scp.sparse.csc_array(S)#,scp.sparse.csc_array(D)
+  S = scp.sparse.csc_array(S)
+  D = scp.sparse.csc_array(D)
+
+  # Data in S and D is in canonical format, for competability this is translated to data, rows, columns
+  pen_elements = S.data
+  pen_idx = S.indices
+  pen_iptr = S.indptr
+
+  pen_data = []
+  pen_rows = []
+  pen_cols = []
+
+  for ci in range(n):
+     # See: https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csc_array.html#scipy.sparse.csc_array
+     c_data = pen_elements[pen_iptr[ci]:pen_iptr[ci+1]]
+     c_rows = pen_idx[pen_iptr[ci]:pen_iptr[ci+1]]
+
+     pen_data.extend(c_data)
+     pen_rows.extend(c_rows)
+     pen_cols.extend([ci for _ in range(len(c_rows))])
+
+  chol_elements = D.data
+  chol_idx = D.indices
+  chol_iptr = D.indptr
+
+  chol_data = []
+  chol_rows = []
+  chol_cols = []
+
+  for ci in range(D.shape[1]):
+     c_data = chol_elements[chol_iptr[ci]:chol_iptr[ci+1]]
+     c_rows = chol_idx[chol_iptr[ci]:chol_iptr[ci+1]]
+
+     chol_data.extend(c_data)
+     chol_rows.extend(c_rows)
+     chol_cols.extend([ci for _ in range(len(c_rows))])
+
+  return pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols
 
 def id_dist_pen(n,f=None):
   # Creates identity matrix penalty in case f(i) = 1
   # Can be used to create event-distance weighted penalty matrices for deconvolving sms GAMMs
-  elements = np.zeros(n)
-  idx = np.zeros(n)
+  elements = [0 for _ in range(n)]
+  idx = [0 for _ in range(n)]
 
   for i in range(n):
     if f is None:
@@ -359,8 +396,7 @@ def id_dist_pen(n,f=None):
       elements[i] = f(i+1)
     idx[i] = i
 
-  S = scp.sparse.csc_array((elements,(idx,idx)),shape=(n,n))
-  return S
+  return elements,idx,idx,elements,idx,idx # I' @ I = I
 
 def embed_in_S(penalty,embS,cIndex,lam=None):
   # Embeds penalty into embS from upper left index cIndex.
@@ -383,6 +419,11 @@ class LambdaTerm:
   # start_index can be useful in case we want to have multiple penalties on some
   # coefficients (see Wood, 2017; Wood & Fasiolo, 2017).
   penalties:np.ndarray
+  r_penalties:np.ndarray
+  c_penalties:np.ndarray
+  pen_chols:np.ndarray=None
+  r_pen_chols:np.ndarray=None
+  c_pen_chols:np.ndarray=None
   lam:float = 1.1
   start_index:int = None
   frozen:bool = False
@@ -1566,43 +1607,33 @@ def build_mat_for_series(formula,series_id:str):
 
    return y_flat,cov_flat,y,cov,sid
 
-def embed_in_S_sparse(penalty,S_emb,S_col,cIndex,lam=None):
-   pen_dim = penalty.shape[1]
+def embed_in_S_sparse(pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,S_emb,D_emb,S_col,cIndex,lam=None):
 
-   # Data in canonical format, for ease of manipulation we translate this to data, rows, columns
-   pen_elements = penalty.data
-   pen_idx = penalty.indices
-   pen_iptr = penalty.indptr
-
-   pen_data = []
-   pen_rows = []
-   pen_cols = []
-
-   #ToDo: This is unnecessary if instead of embedding the penalties in the build_sparse_penalties function I
-   # simply store data, rows, and cols.
-   for ci in range(pen_dim):
-      # See: https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csc_array.html#scipy.sparse.csc_array
-      c_data = pen_elements[pen_iptr[ci]:pen_iptr[ci+1]]
-      c_rows = pen_idx[pen_iptr[ci]:pen_iptr[ci+1]]
-
-      pen_data.extend(c_data)
-      pen_rows.extend(c_rows + cIndex)
-      pen_cols.extend([ci  + cIndex for _ in range(len(c_rows))])
-
-   pen_data = np.array(pen_data)
+   embedding = np.array(pen_data)
+   r_embedding = np.array(pen_rows) + cIndex
+   c_embedding = np.array(pen_cols) + cIndex
 
    if S_emb is None:
       if lam is None:
-         S_emb = scp.sparse.csc_array((pen_data,(pen_rows,pen_cols)),shape=(S_col,S_col))
+         S_emb = scp.sparse.csc_array((embedding,(r_embedding,c_embedding)),shape=(S_col,S_col))
       else:
-         S_emb = scp.sparse.csc_array((pen_data*lam,(pen_rows,pen_cols)),shape=(S_col,S_col))
+         S_emb = scp.sparse.csc_array((embedding*lam,(r_embedding,c_embedding)),shape=(S_col,S_col))
    else:
       if lam is None:
-         S_emb += scp.sparse.csc_array((pen_data,(pen_rows,pen_cols)),shape=(S_col,S_col))
+         S_emb += scp.sparse.csc_array((embedding,(r_embedding,c_embedding)),shape=(S_col,S_col))
       else:
-         S_emb += scp.sparse.csc_array((pen_data*lam,(pen_rows,pen_cols)),shape=(S_col,S_col))
+         S_emb += scp.sparse.csc_array((embedding*lam,(r_embedding,c_embedding)),shape=(S_col,S_col))
 
-   return S_emb,cIndex+pen_dim
+   D_embedding = np.array(chol_data)
+   D_r_embedding = np.array(chol_rows) + cIndex
+   D_c_embedding = np.array(chol_cols) + cIndex
+   
+   if D_emb is None:
+      D_emb = scp.sparse.csc_array((D_embedding,(D_r_embedding,D_c_embedding)),shape=(S_col,S_col))
+   else:
+      D_emb += scp.sparse.csc_array((D_embedding,(D_r_embedding,D_c_embedding)),shape=(S_col,S_col))
+      
+   return S_emb,D_emb,cIndex+(pen_cols[-1]+1)
 
 def build_sparse_penalties_from_formula(formula,n_j,tol=1e-4):
    var_types = formula.get_var_types()
@@ -1666,13 +1697,46 @@ def build_sparse_penalties_from_formula(formula,n_j,tol=1e-4):
                pen_generator = diff_pen
             else:
                pen_generator = id_dist_pen
+
+            pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = pen_generator(n_coef,**irsterm.pen_kwargs[penid])
                
             if irsterm.by is not None:
                if irsterm.id is not None:
-                  penalties.append(LambdaTerm(penalties=[pen_generator(n_coef,**irsterm.pen_kwargs[penid]) for _ in range(len(by_levels))],start_index=pen_i_s_idx))
-               else:
+                  term_penalty_elements = []
+                  term_penalty_rows = []
+                  term_penalty_cols = []
+
+                  term_chol_elements = []
+                  term_chol_rows = []
+                  term_chol_cols = []
+
                   for _ in range(len(by_levels)):
-                     penalties.append(LambdaTerm(penalties=[pen_generator(n_coef,**irsterm.pen_kwargs[penid])],start_index=pen_i_s_idx))
+                     term_penalty_elements.append(pen_data)
+                     term_penalty_rows.append(pen_rows)
+                     term_penalty_cols.append(pen_cols)
+
+                     term_chol_elements.append(chol_data)
+                     term_chol_rows.append(chol_rows)
+                     term_chol_cols.append(chol_cols)
+
+                  penalties.append(LambdaTerm(penalties=term_penalty_elements,
+                                              r_penalties=term_penalty_rows,
+                                              c_penalties=term_penalty_cols,
+                                              pen_chols=term_chol_elements,
+                                              r_pen_chols=term_chol_rows,
+                                              c_pen_chols=term_chol_cols,
+                                              start_index=pen_i_s_idx))
+               else:
+
+                  for _ in range(len(by_levels)):
+                     penalties.append(LambdaTerm(penalties=[pen_data],
+                                                 r_penalties=[pen_rows],
+                                                 c_penalties=[pen_cols],
+                                                 pen_chols=[chol_data],
+                                                 r_pen_chols=[chol_rows],
+                                                 c_pen_chols=[chol_cols],
+                                                 start_index=pen_i_s_idx))
+                     
                      pen_start_idx = None # Make sure that this is set to None in case this is the first time we add penalties.
                      pen_i_s_idx = None
          
@@ -1737,34 +1801,100 @@ def build_sparse_penalties_from_formula(formula,n_j,tol=1e-4):
                   pen_generator = diff_pen
                else:
                   pen_generator = id_dist_pen
+
+               pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = pen_generator(n_coef,**sterm.pen_kwargs[penid]) 
                   
                if sterm.by is not None:
-                  print(sterm.id) 
+                  print(sterm.id)
+                  
                   if sterm.id is not None:
+                     term_penalty_elements = []
+                     term_penalty_rows = []
+                     term_penalty_cols = []
+
+                     term_chol_elements = []
+                     term_chol_rows = []
+                     term_chol_cols = []
+
                      if sterm.by_latent is not False and formula.has_sigma_split() is False:
-                        penalties.append(LambdaTerm(penalties=[pen_generator(n_coef,**sterm.pen_kwargs[penid]) for _ in range(len(by_levels)*n_j)],start_index=pen_i_s_idx))
+                        for _ in range(len(by_levels)*n_j):
+                           term_penalty_elements.append(pen_data)
+                           term_penalty_rows.append(pen_rows)
+                           term_penalty_cols.append(pen_cols)
+
+                           term_chol_elements.append(chol_data)
+                           term_chol_rows.append(chol_rows)
+                           term_chol_cols.append(chol_cols)
+                        
                      else:
-                        penalties.append(LambdaTerm(penalties=[pen_generator(n_coef,**sterm.pen_kwargs[penid]) for _ in range(len(by_levels))],start_index=pen_i_s_idx))
+                        for _ in range(len(by_levels)):
+                           term_penalty_elements.append(pen_data)
+                           term_penalty_rows.append(pen_rows)
+                           term_penalty_cols.append(pen_cols)
+
+                           term_chol_elements.append(chol_data)
+                           term_chol_rows.append(chol_rows)
+                           term_chol_cols.append(chol_cols)
+                     
+                     penalties.append(LambdaTerm(penalties=term_penalty_elements,
+                                                r_penalties=term_penalty_rows,
+                                                c_penalties=term_penalty_cols,
+                                                pen_chols=term_chol_elements,
+                                                r_pen_chols=term_chol_rows,
+                                                c_pen_chols=term_chol_cols,
+                                                start_index=pen_i_s_idx))
+
                   else:
                      if sterm.by_latent is not False and formula.has_sigma_split() is False:
                         for _ in range(n_j):
                            for _ in range(len(by_levels)):
-                              penalties.append(LambdaTerm(penalties=[pen_generator(n_coef,**sterm.pen_kwargs[penid])],start_index=pen_i_s_idx))
+                              
+                              penalties.append(LambdaTerm(penalties=[pen_data],
+                                                          r_penalties=[pen_rows],
+                                                          c_penalties=[pen_cols],
+                                                          pen_chols=[chol_data],
+                                                          r_pen_chols=[chol_rows],
+                                                          c_pen_chols=[chol_cols],
+                                                          start_index=pen_i_s_idx))
+                              
                               pen_start_idx = None # Make sure that this is set to None in case this is the first time we add penalties.
                               pen_i_s_idx = None
                      else:
                         for _ in range(len(by_levels)):
-                           penalties.append(LambdaTerm(penalties=[pen_generator(n_coef,**sterm.pen_kwargs[penid])],start_index=pen_i_s_idx))
+                           
+                           penalties.append(LambdaTerm(penalties=[pen_data],
+                                                       r_penalties=[pen_rows],
+                                                       c_penalties=[pen_cols],
+                                                       pen_chols=[chol_data],
+                                                       r_pen_chols=[chol_rows],
+                                                       c_pen_chols=[chol_cols],
+                                                       start_index=pen_i_s_idx))
+                           
                            pen_start_idx = None # Make sure that this is set to None in case this is the first time we add penalties.
                            pen_i_s_idx = None
                else:
                   if sterm.by_latent is not False and formula.has_sigma_split() is False:
                      for _ in range(n_j):
-                        penalties.append(LambdaTerm(penalties=[pen_generator(n_coef,**sterm.pen_kwargs[penid])],start_index=pen_i_s_idx))
+                        
+                        penalties.append(LambdaTerm(penalties=[pen_data],
+                                                    r_penalties=[pen_rows],
+                                                    c_penalties=[pen_cols],
+                                                    pen_chols=[chol_data],
+                                                    r_pen_chols=[chol_rows],
+                                                    c_pen_chols=[chol_cols],
+                                                    start_index=pen_i_s_idx))
+                        
                         pen_start_idx = None # Make sure that this is set to None in case this is the first time we add penalties.
                         pen_i_s_idx = None
                   else:
-                     penalties.append(LambdaTerm(penalties=[pen_generator(n_coef,**sterm.pen_kwargs[penid])],start_index=pen_i_s_idx))
+
+                     penalties.append(LambdaTerm(penalties=[pen_data],
+                                                 r_penalties=[pen_rows],
+                                                 c_penalties=[pen_cols],
+                                                 pen_chols=[chol_data],
+                                                 r_pen_chols=[chol_rows],
+                                                 c_pen_chols=[chol_cols],
+                                                 start_index=pen_i_s_idx))
             
             # Update current penalty starting idx
             if sterm.by is not None:
@@ -1787,7 +1917,15 @@ def build_sparse_penalties_from_formula(formula,n_j,tol=1e-4):
       vars = rterm.variables
 
       if isinstance(rterm,ri):
-         penalties.append(LambdaTerm(penalties=[id_dist_pen(len(factor_levels[vars[0]]))],start_index=pen_start_idx))
+         pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = id_dist_pen(len(factor_levels[vars[0]]))
+         penalties.append(LambdaTerm(penalties=[pen_data],
+                                     r_penalties=[pen_rows],
+                                     c_penalties=[pen_cols],
+                                     pen_chols=[chol_data],
+                                     r_pen_chols=[chol_rows],
+                                     c_pen_chols=[chol_cols],
+                                     start_index=pen_start_idx))
+
          cur_pen_idx += len(factor_levels[vars[0]])
       else:
          NotImplementedError("Penalties for random slopes are not yet supported.")
