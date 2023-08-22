@@ -9,6 +9,8 @@ import re
 import warnings
 import copy
 
+from .src import cpp_solvers
+
 class TermType(Enum):
     LSMOOTH = 1
     SMOOTH = 2
@@ -437,9 +439,12 @@ class LambdaTerm:
   penalties:np.ndarray
   r_penalties:np.ndarray
   c_penalties:np.ndarray
-  pen_chols:np.ndarray=None
-  r_pen_chols:np.ndarray=None
-  c_pen_chols:np.ndarray=None
+  pen_chols:np.ndarray
+  r_pen_chols:np.ndarray
+  c_pen_chols:np.ndarray
+  S_J:scp.sparse.csc_array=None
+  S_J_emb:scp.sparse.csc_array=None
+  D_J_emb:scp.sparse.csc_array=None
   lam:float = 1.1
   start_index:int = None
   frozen:bool = False
@@ -2258,3 +2263,101 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
    mat = scp.sparse.csc_array((elements,(rows,cols)),shape=(n_y,ci))
    return mat,np.array(coef_names)
 
+
+def cpp_chol(A):
+   return cpp_solvers.chol(A)
+
+def cpp_solve_am(y,X,S):
+   return cpp_solvers.solve_am(y,X,S)
+
+def solve_am_sparse(y,X,penalties,col_S):
+   cIndex = 0
+   cIndexPinv = 0
+   S_emb = None
+   S_pinv_elements = []
+   S_pinv_rows = []
+   S_pinv_cols = []
+   SJ = None
+   SJ_terms = 0
+   rep_SJ = 1
+   D_embs = []
+   n_lterms = len(penalties)
+
+   SJ_pinv_elements = []
+   SJ_pinv_rows = []
+   SJ_pinv_cols = []
+
+
+   for lti,lTerm in enumerate(penalties):
+      print(f"pen: {lti}")
+      D_emb = None
+      if lTerm.start_index is not None:
+         cIndex = lTerm.start_index
+         cIndexPinv = lTerm.start_index
+      
+      pidx = 0
+      for pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols in zip(lTerm.penalties,lTerm.r_penalties,lTerm.c_penalties,
+                                                                           lTerm.pen_chols,lTerm.r_pen_chols,lTerm.c_pen_chols):
+         
+         D_emb, _ = embed_in_D_sparse(chol_data,chol_rows,chol_cols,D_emb,col_S,cIndex)
+         D_embs.append(D_emb)
+         S_emb, cIndex = embed_in_S_sparse(pen_data,pen_rows,pen_cols,S_emb,col_S,cIndex,lam=lTerm.lam)
+         
+         if pidx < 1:
+               
+               SJ = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,SJ,lam=lTerm.lam)
+               rep_SJ = len(lTerm.penalties)
+               SJ_terms += 1
+               pidx +=1
+      
+      if lti < (n_lterms - 1) and penalties[lti + 1].start_index is not None:
+         print("Skip")
+         continue
+      else: # Now handle all pinv calculations because all penalties associated with a term have been embedded
+         print(f"repeat: {rep_SJ}")
+         if SJ_terms == 1 and lTerm.type == PenType.IDENTITY:
+               print("Identity shortcut")
+               SJ_pinv_elements,SJ_pinv_rows,SJ_pinv_cols,_,_,_ = id_dist_pen(SJ.shape[1],lambda x: 1/lTerm.lam)
+         else:
+               
+               t = scp.sparse.identity(SJ.shape[1],format="csc")
+               L = cpp_chol(SJ.T @ SJ + 1e-7*t)
+               LI = scp.sparse.linalg.spsolve(L,t)
+               SJ_pinv = LI.T @ LI @ SJ.T
+               print((SJ.T @ SJ @ SJ_pinv - SJ).toarray())
+               
+               ridx = np.array([ri for ri in range(SJ_pinv.shape[0])])
+
+               SJ_pinv_data = SJ_pinv.data
+               SJ_pinv_idx = SJ_pinv.indices
+               SJ_pinv_iptr = SJ_pinv.indptr
+
+               SJ_pinv_elements = []
+               SJ_pinv_rows = []
+               SJ_pinv_cols = []
+
+               for ci in range(SJ.shape[1]):
+                  c_data = SJ_pinv_data[SJ_pinv_iptr[ci]:SJ_pinv_iptr[ci+1]]
+                  c_rows = SJ_pinv_idx[SJ_pinv_iptr[ci]:SJ_pinv_iptr[ci+1]]
+
+                  SJ_pinv_elements.extend(c_data)
+                  SJ_pinv_rows.extend(c_rows)
+                  SJ_pinv_cols.extend([ci for _ in range(len(c_rows))])
+         
+         SJ_pinv_rows = np.array(SJ_pinv_rows)
+         SJ_pinv_cols = np.array(SJ_pinv_cols)
+
+         for rep in range(rep_SJ):
+               S_pinv_elements.extend(SJ_pinv_elements)
+               S_pinv_rows.extend(SJ_pinv_rows + cIndexPinv)
+               S_pinv_cols.extend(SJ_pinv_cols + cIndexPinv)
+               cIndexPinv += (SJ_pinv_cols[-1] + 1)
+         
+         SJ = None
+         rep_SJ = 1
+         SJ_terms = 0
+
+   Spinv = scp.sparse.csc_array((S_pinv_elements,(S_pinv_rows,S_pinv_cols)),shape=(col_S,col_S))
+   coef = cpp_solve_am(y,X,S_emb)
+   pred = X @ coef
+   return coef,pred
