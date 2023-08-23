@@ -1887,7 +1887,7 @@ def build_sparse_penalties_from_formula(formula,n_j,col_S,tol=1e-4):
          
          lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
          lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
-         # We can skip embedding S_J in case of random intercept identity penalties for pinv calculation.
+         lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
          penalties.append(lTerm)
 
       else:
@@ -2206,11 +2206,32 @@ def cpp_chol(A):
 def cpp_solve_am(y,X,S):
    return cpp_solvers.solve_am(y,X,S)
 
+def step_fellner_schall_sparse(gInv,CholInv,Perm,emb_SJ,emb_DJ,cCoef,cLam,sigma):
+  # Perform a generalized Fellner Schall update step for a lambda term. This update rule is
+  # discussed in Wood & Fasiolo (2016) and used here because of it's efficiency.
+  
+  # ToDo: There is a bug somewhere in here that leads to negative
+  # denom values. This should not happen based on Theorem 1 in Wood & Fasiolo (2017)
+  # so I am doing something wrong. This ugly max hack for now prevents this but of course this is no
+  # solution...
+  num = (gInv @ emb_SJ).trace() - (CholInv.T @ Perm @ emb_DJ).power(2).sum()
+  denom = cCoef.T @ emb_SJ @ cCoef
+  
+  cLam = sigma * max(num / denom,1e-10) * cLam
+  cLam = max(cLam,1e-10) # Prevent Lambda going to zero
+  cLam = min(cLam,1e+10) # Prevent overflow
+
+  return cLam
+
 def solve_am_sparse(y,X,penalties,col_S,maxiter=1):
    n_lterms = len(penalties)
+   rowsX,colsX = X.shape
+   pred = None
+   res = None
+   coef = None
 
    for iter in range(maxiter):
-      print(iter)
+      #print(iter)
       cIndexPinv = 0
       S_emb = None
       S_pinv_elements = []
@@ -2222,7 +2243,7 @@ def solve_am_sparse(y,X,penalties,col_S,maxiter=1):
       
       # Build S_emb and pinv(S_emb)
       for lti,lTerm in enumerate(penalties):
-         print(f"pen: {lti}")
+         #print(f"pen: {lti}")
 
          if lTerm.start_index is not None:
             cIndexPinv = lTerm.start_index
@@ -2245,13 +2266,13 @@ def solve_am_sparse(y,X,penalties,col_S,maxiter=1):
             S_emb += lTerm.S_J_emb * lTerm.lam
 
          if lti < (n_lterms - 1) and penalties[lti + 1].start_index is not None:
-            print("Skip")
+            #print("Skip")
             continue
          else: # Now handle all pinv calculations because all penalties associated with a term have been collected in SJ
-            print(f"repeat: {lTerm.rep_SJ}")
-            print(f"number of penalties on term: {SJ_terms}")
+            #print(f"repeat: {lTerm.rep_sj}")
+            #print(f"number of penalties on term: {SJ_terms}")
             if SJ_terms == 1 and lTerm.type == PenType.IDENTITY:
-                  print("Identity shortcut")
+                  #print("Identity shortcut")
                   SJ_pinv_elements,SJ_pinv_rows,SJ_pinv_cols,_,_,_ = id_dist_pen(SJ.shape[1],lambda x: 1/lTerm.lam)
             else:
                   # Compute pinv(SJ) via cholesky factor L so that L @ L' = SJ' @ SJ.
@@ -2264,7 +2285,7 @@ def solve_am_sparse(y,X,penalties,col_S,maxiter=1):
                   L = cpp_chol(SJ.T @ SJ + 1e-7*t)
                   LI = scp.sparse.linalg.spsolve(L,t)
                   SJ_pinv = LI.T @ LI @ SJ.T
-                  print((SJ.T @ SJ @ SJ_pinv - SJ).toarray())
+                  #print((SJ.T @ SJ @ SJ_pinv - SJ).toarray())
 
                   SJ_pinv_data = SJ_pinv.data
                   SJ_pinv_idx = SJ_pinv.indices
@@ -2285,7 +2306,7 @@ def solve_am_sparse(y,X,penalties,col_S,maxiter=1):
             SJ_pinv_rows = np.array(SJ_pinv_rows)
             SJ_pinv_cols = np.array(SJ_pinv_cols)
 
-            for _ in range(lTerm.rep_SJ):
+            for _ in range(lTerm.rep_sj):
                   S_pinv_elements.extend(SJ_pinv_elements)
                   S_pinv_rows.extend(SJ_pinv_rows + cIndexPinv)
                   S_pinv_cols.extend(SJ_pinv_cols + cIndexPinv)
@@ -2297,9 +2318,42 @@ def solve_am_sparse(y,X,penalties,col_S,maxiter=1):
 
       S_pinv = scp.sparse.csc_array((S_pinv_elements,(S_pinv_rows,S_pinv_cols)),shape=(col_S,col_S))
 
+      # Solve the model for coefficients using current smoothing parameters
+      InvCholXXSP, Pr, coef, code = cpp_solve_am(y,X,S_emb)
+      
+      nP = len(Pr)
+      P = [1 for _ in range(nP)]
+      Pc = [r for r in range(nP)]
+      Perm = scp.sparse.csc_array((P,(Pr,Pc)),shape=(nP,nP))
 
-      coef = cpp_solve_am(y,X,S_emb)
-   
-   pred = X @ coef
+      if code != 0:
+         warnings.warn(f"Solving for coef failed with code {code}")
 
-   return coef,pred
+      # Build sigma
+      pred = (X @ coef).reshape(-1,1)
+      res = y - pred
+      resDot = res.T.dot(res)[0,0]
+      
+      # Sigma estimate from Wood & Fasiolo (2016)
+      edf = colsX
+
+      # ToDo: The terms here could be reused
+      for lTerm in penalties:
+         edf -= (lTerm.lam * (InvCholXXSP.T @ Perm @ lTerm.D_J_emb).power(2).sum())
+
+      #print(resDot)
+      sigma = resDot / (rowsX - edf)
+      print(sigma)
+      # Perform Fellner Schall Update
+      for lTerm in penalties:
+         cLam = step_fellner_schall_sparse(S_pinv,InvCholXXSP,Perm,lTerm.S_J_emb,lTerm.D_J_emb,coef,lTerm.lam,sigma)
+         print(cLam)
+         if cLam < 0:
+            warnings.warn(f"Resetting Lambda Reason:\nPrevious Lambda = {lTerm.lam}, Next Lambda = {cLam}, Sigma = {sigma}")
+            cLam = 1.1
+         lTerm.lam = cLam
+
+   return coef,pred,res,sigma
+
+def cpp_solveLU(A,i):
+   return cpp_solvers.solveLU(A,i)

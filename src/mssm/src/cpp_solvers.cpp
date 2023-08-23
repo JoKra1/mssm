@@ -28,7 +28,7 @@ std::tuple<Eigen::SparseMatrix<double>,int> chol(Eigen::SparseMatrix<double> A){
     return std::make_tuple(std::move(L),0);
 }
 
-std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXd,int> solve_am(Eigen::VectorXd y, Eigen::SparseMatrix<double> X, Eigen::SparseMatrix<double> S){
+std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solve_am(Eigen::VectorXd y, Eigen::SparseMatrix<double> X, Eigen::SparseMatrix<double> S){
     
     int Xcols = X.cols();
 
@@ -44,22 +44,6 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXd,int> solve_am(Eigen::Vect
     Eigen::SparseMatrix<double> id(Xcols,Xcols);
     id.setIdentity();
 
-    if (solver.info()!=Eigen::Success)
-    {
-
-        return std::make_tuple(std::move(id),std::move(coef),1);
-    }
-
-    // Solve for coef
-    coef = solver.solve(X.transpose() * y);
-    std::cout << "Solved for coef";
-
-    if (solver.info()!=Eigen::Success)
-    {
-
-        return std::make_tuple(std::move(id),std::move(coef),2);
-    }
-
     // We also need inv(L') * P from P * X' * X + S * P' = L * L'
     // so the inverse of the upper matrix from the solver times the
     // permutation matrix created for us by eigen.
@@ -67,37 +51,33 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXd,int> solve_am(Eigen::Vect
     // First get the permutation
     Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic> P(solver.permutationP());
 
+    if (solver.info()!=Eigen::Success)
+    {
+
+        return std::make_tuple(std::move(id),P.indices(),std::move(coef),1);
+    }
+
+    // Solve for coef
+    coef = solver.solve(X.transpose() * y);
+
+    if (solver.info()!=Eigen::Success)
+    {
+
+        return std::make_tuple(std::move(id),P.indices(),std::move(coef),2);
+    }
+
+    // Now get L'
     // P * A * P' = L * L'
     // A = P' * L * L' * P
     // U = P' * L
     // U' = L' * P
     // A = U * U'
-    Eigen::SparseMatrix<double> L = solver.matrixU();
-    std::cout << LT;
+    //Eigen::SparseMatrix<double> LT = solver.matrixU();
+    solver.matrixL().solveInPlace(id);
 
-    // Now compute inverse
-    Eigen::SimplicialLLT<Eigen::SparseMatrix<double>,Eigen::Upper,Eigen::NaturalOrdering<int>> inv_solver;
-    inv_solver.compute(LT);
-
-    if (inv_solver.info()!=Eigen::Success)
-    {
-
-        return std::make_tuple(std::move(id),std::move(coef),3);
-    }
-
-    Eigen::SparseMatrix<double> invXXP = inv_solver.solve(id);
-
-    if (inv_solver.info()!=Eigen::Success)
-    {
-
-        return std::make_tuple(std::move(invXXP),std::move(coef),4);
-    }
-    
-    // Cholesky of inv(X' * X + S), not necessarily triangular!
-    Eigen::SparseMatrix<double> invXX = invXXP * P;
-
-    return std::make_tuple(std::move(invXX),std::move(coef),0);;
+    return std::make_tuple(std::move(id),P.indices(),std::move(coef),0);;
 }
+
 
 PYBIND11_MODULE(cpp_solvers, m) {
     m.doc() = "cpp solvers for sms (DC) GAMM estimation";
