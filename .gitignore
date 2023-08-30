@@ -161,5 +161,7 @@ cython_debug/
 
 
 .DS_Store
-tests.ipynb
+tests.*
 .vscode/*
+*.Rproj*
+.Rproj.user

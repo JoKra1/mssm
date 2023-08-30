@@ -9,7 +9,16 @@ import re
 import warnings
 import copy
 
+##################################### CPP imports  #####################################
 from .src import cpp_solvers
+
+def cpp_chol(A):
+   return cpp_solvers.chol(A)
+
+def cpp_solve_am(y,X,S):
+   return cpp_solvers.solve_am(y,X,S)
+
+##################################### Custom Types  #####################################
 
 class TermType(Enum):
     LSMOOTH = 1
@@ -97,15 +106,9 @@ def slope_basis(i,cov,state_est,convolve,max_c):
       slope[cov > max_c] = 0
    return slope.reshape(-1,1)
 
-def B_spline_basis(i, cov, state_est, nk, identifiable=False, drop_outer_k=False, convolve=False, min_c=None, max_c=None, deg=2):
+def B_spline_basis(i, cov, state_est, nk, drop_outer_k=False, convolve=False, min_c=None, max_c=None, deg=2):
   # Setup basis with even knot locations.
   # Code based on "Splines, Knots, and Penalties" by Eilers & Marx (2010)
-
-  # Identifiability constraint reduces dimensionality of matrix by one (Wood, 2017)
-  # so we add one extra dimension to make sure that everything still matches...
-  # ToDo: The identifiability behavior is odd, look into the reparameterization discussed in Wood, 2017
-  if identifiable:
-     nk += 1
 
   xl = min(cov)
   xr = max(cov)
@@ -129,10 +132,6 @@ def B_spline_basis(i, cov, state_est, nk, identifiable=False, drop_outer_k=False
 
   B = bbase(cov,knots,dx,deg)
 
-  if identifiable:
-     B = B[:,0:-1]
-     nk -= 1
-     
   if drop_outer_k:
      B = B[:,deg:-deg]
 
@@ -144,9 +143,6 @@ def B_spline_basis(i, cov, state_est, nk, identifiable=False, drop_outer_k=False
       o_restr[:,nki] = o[0:len(cov)]
 
     B = o_restr
-  
-  if identifiable:
-     B -= np.mean(B,axis=0,keepdims=True)
   
   return B
 
@@ -352,18 +348,26 @@ def create_event_matrix_cov4_split(time,cov,state_est, identifiable = True, drop
 
 ##################################### Penalty functions #####################################
 
-def diff_pen(n,m=2,identifiable=False):
+def diff_pen(n,m=2,Z=None):
   # Creates difference (order=m) n*n penalty matrix
   # Based on code in Eilers & Marx (1996) and Wood (2017)
-  warnings.warn("Sparse difference penalties are not yet implemented. Instead a dense penalty is converted to a sparse one. This will not work for very wide model matrices.")
-  if identifiable:
-     n += 1
+  warnings.warn("Sparse difference penalties are not yet implemented. Instead a dense penalty is converted to a sparse one, reducing performance.")
+
   D = np.diff(np.identity(n),m)
-  if identifiable:
-     D = D[0:-1,:]
-  S = D @ D.T
-  S = scp.sparse.csc_array(S)
-  D = scp.sparse.csc_array(D)
+  S = D @ D.T 
+
+  # Absorb any identifiability constraints
+  if Z is not None:
+     S = Z.T @ S @ Z
+     n -= 1
+
+  S = scp.sparse.csc_array(S) 
+
+  # S might have identifiability constraints - so we need to re-compute it's root. 
+  D, code = cpp_chol(S + 1e-7*scp.sparse.identity(n))
+
+  if code != 0:
+      warnings.warn(f"Cholesky factor computation failed with code {code}")
 
   # Data in S and D is in canonical format, for competability this is translated to data, rows, columns
   pen_elements = S.data
@@ -404,12 +408,12 @@ def diff_pen(n,m=2,identifiable=False):
 def id_dist_pen(n,f=None):
   # Creates identity matrix penalty in case f(i) = 1
   # Can be used to create event-distance weighted penalty matrices for deconvolving sms GAMMs
-  elements = [0 for _ in range(n)]
-  idx = [0 for _ in range(n)]
+  elements = [0.0 for _ in range(n)]
+  idx = [0.0 for _ in range(n)]
 
   for i in range(n):
     if f is None:
-      elements[i] = 1
+      elements[i] = 1.0
     else:
       elements[i] = f(i+1)
     idx[i] = i
@@ -1319,6 +1323,7 @@ class f(GammTerm):
                 by:str=None,
                 id:int=None,
                 nk:int=10,
+                identifiable:bool=True,
                 basis:Callable=B_spline_basis,
                 basis_kwargs:dict={"convolve":False},
                 by_latent:bool=False,
@@ -1328,6 +1333,8 @@ class f(GammTerm):
         
         # Initialization
         super().__init__(variables, TermType.SMOOTH, is_penalized, penalty, pen_kwargs)
+        self.is_identifiable = identifiable
+        self.Z = None
         self.basis = basis
         self.basis_kwargs = basis_kwargs
         self.by = by
@@ -1522,6 +1529,9 @@ class Formula():
     
     def get_terms(self) -> list[GammTerm]:
        return copy.deepcopy(self.__terms)
+    
+    def set_terms(self,terms) -> list[GammTerm]:
+       self.__terms = copy.deepcopy(terms)
     
     def get_data(self) -> pd.DataFrame:
        return copy.deepcopy(self.__data)
@@ -1787,14 +1797,23 @@ def build_sparse_penalties_from_formula(formula,n_j,col_S,tol=1e-4):
                else:
                   pen_i_s_idx = pen_start_idx
 
+               # We again have to deal with potential identifiable constraints!
+               # Then we again act as if n_k was n_k+1 for difference penalties
+               id_k = n_coef
+               pen_kwargs = sterm.pen_kwargs[penid]
+
                # Determine penalty generator
                if pen == PenType.DIFFERENCE:
                   pen_generator = diff_pen
+                  if sterm.is_identifiable:
+                     id_k += 1
+                     pen_kwargs["Z"] = sterm.Z
+
                else:
                   pen_generator = id_dist_pen
 
                # Again get penalty elements used by this term.
-               pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = pen_generator(n_coef,**sterm.pen_kwargs[penid])
+               pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = pen_generator(id_k,**pen_kwargs)
 
                # Create lambda term
                lTerm = LambdaTerm(start_index=pen_i_s_idx,
@@ -1806,7 +1825,6 @@ def build_sparse_penalties_from_formula(formula,n_j,col_S,tol=1e-4):
                lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
                   
                if sterm.by is not None:
-                  print(sterm.id)
                   
                   if sterm.id is not None:
 
@@ -2069,13 +2087,13 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
             if len(term_idx) < 1:
                for m_coli in range(m_cols):
                   final_col = final_term[:,m_coli]
-                  term_elements.append(final_col[final_col > tol])
-                  term_idx.append(final_col > tol)
+                  term_elements.append(final_col[abs(final_col) > tol])
+                  term_idx.append(abs(final_col) > tol)
             else:
                for m_coli in range(m_cols):
                   final_col = final_term[:,m_coli]
-                  term_elements[m_coli] = np.append(term_elements[m_coli],final_col[final_col > tol])
-                  term_idx[m_coli] = np.append(term_idx[m_coli], final_col > tol)
+                  term_elements[m_coli] = np.append(term_elements[m_coli],final_col[abs(final_col) > tol])
+                  term_idx[m_coli] = np.append(term_idx[m_coli], abs(final_col) > tol)
 
          if n_coef != len(term_elements):
             raise KeyError("Not all model matrix columns were created.")
@@ -2125,7 +2143,24 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
                coef_names.extend([f"f_{vars[0]}_{ink}" for ink in range(sterm.nk)])
             
          # Calculate smooth term for corresponding covariate
-         matrix_term = sterm.basis(None,cov_flat[:,var_map[vars[0]]], None, sterm.nk, **sterm.basis_kwargs)
+
+         # If the term needs to be identifiable I act as if you would have asked for nk+1!
+         # so that the identifiable term is of the dimension expected.
+         id_nk = sterm.nk
+
+         if sterm.is_identifiable:
+            id_nk += 1
+
+         matrix_term = sterm.basis(None,cov_flat[:,var_map[vars[0]]], None, id_nk, **sterm.basis_kwargs)
+
+         if sterm.is_identifiable:
+            # Wood (2017) 5.4.1 Identifiability constraints via QR. ToDo: Replace with cheaper reflection method.
+            C = np.sum(matrix_term,axis=0).reshape(-1,1)
+            Q,_ = scp.linalg.qr(C,pivoting=False,mode='full')
+            Z = Q[:,1:]
+            matrix_term = matrix_term @ Z
+            sterm.Z = Z
+
          m_rows, m_cols = matrix_term.shape
 
          term_ridx = [ridx[:] for _ in range(m_cols)]
@@ -2168,7 +2203,7 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
             final_col = matrix_term[final_ridx,m_coli%m_cols]
 
             # Tolerance row index for this columns
-            cidx = final_col > tol
+            cidx = abs(final_col) > tol
             elements.extend(final_col[cidx])
             rows.extend(final_ridx[cidx])
             cols.extend([ci for _ in range(len(final_ridx[cidx]))])
@@ -2197,14 +2232,8 @@ def build_sparse_matrix_from_formula(formula,cov_flat,cov,n_j,state_est_flat,sta
          raise NotImplementedError("Random slope terms are not yet supported.")
 
    mat = scp.sparse.csc_array((elements,(rows,cols)),shape=(n_y,ci))
+   formula.set_terms(terms)
    return mat,np.array(coef_names)
-
-
-def cpp_chol(A):
-   return cpp_solvers.chol(A)
-
-def cpp_solve_am(y,X,S):
-   return cpp_solvers.solve_am(y,X,S)
 
 def step_fellner_schall_sparse(gInv,CholInv,Perm,emb_SJ,emb_DJ,cCoef,cLam,sigma):
   # Perform a generalized Fellner Schall update step for a lambda term. This update rule is
@@ -2214,10 +2243,12 @@ def step_fellner_schall_sparse(gInv,CholInv,Perm,emb_SJ,emb_DJ,cCoef,cLam,sigma)
   # denom values. This should not happen based on Theorem 1 in Wood & Fasiolo (2017)
   # so I am doing something wrong. This ugly max hack for now prevents this but of course this is no
   # solution...
-  num = (gInv @ emb_SJ).trace() - (CholInv.T @ Perm @ emb_DJ).power(2).sum()
+  B = CholInv @ Perm @ emb_DJ
+  num = (gInv @ emb_SJ).trace() - B.power(2).sum()
   denom = cCoef.T @ emb_SJ @ cCoef
   
   cLam = sigma * max(num / denom,1e-10) * cLam
+  print((gInv @ emb_SJ).trace(),B.power(2).sum(),num,denom,cLam)
   cLam = max(cLam,1e-10) # Prevent Lambda going to zero
   cLam = min(cLam,1e+10) # Prevent overflow
 
@@ -2277,15 +2308,19 @@ def solve_am_sparse(y,X,penalties,col_S,maxiter=1):
             else:
                   # Compute pinv(SJ) via cholesky factor L so that L @ L' = SJ' @ SJ.
                   # If SJ is full rank, then pinv(SJ) = inv(L)' @ inv(L) @ SJ'.
-                  # However, SJ' @ SJ will usually be rank deficient so we add e=1e-7 to the main diagonal
+                  # However, SJ' @ SJ will usually be rank deficient so we add e=1e-7 to the main diagonal, because:
                   # As e -> 0 we get closer to pinv(SJ) if we base it on L_e in L_e @ L_e' = SJ' @ SJ + e*I
                   # where I is the identity.
 
                   t = scp.sparse.identity(SJ.shape[1],format="csc")
-                  L = cpp_chol(SJ.T @ SJ + 1e-7*t)
+                  L,code = cpp_chol(SJ.T @ SJ + 1e-7*t)
+
+                  if code != 0:
+                     warnings.warn(f"Cholesky factor computation failed with code {code}")
+
                   LI = scp.sparse.linalg.spsolve(L,t)
                   SJ_pinv = LI.T @ LI @ SJ.T
-                  #print((SJ.T @ SJ @ SJ_pinv - SJ).toarray())
+                  #print(np.max(abs((SJ.T @ SJ @ SJ_pinv - SJ).toarray())))
 
                   SJ_pinv_data = SJ_pinv.data
                   SJ_pinv_idx = SJ_pinv.indices
@@ -2323,7 +2358,7 @@ def solve_am_sparse(y,X,penalties,col_S,maxiter=1):
       
       nP = len(Pr)
       P = [1 for _ in range(nP)]
-      Pc = [r for r in range(nP)]
+      Pc = [c for c in range(nP)]
       Perm = scp.sparse.csc_array((P,(Pr,Pc)),shape=(nP,nP))
 
       if code != 0:
@@ -2339,21 +2374,19 @@ def solve_am_sparse(y,X,penalties,col_S,maxiter=1):
 
       # ToDo: The terms here could be reused
       for lTerm in penalties:
-         edf -= (lTerm.lam * (InvCholXXSP.T @ Perm @ lTerm.D_J_emb).power(2).sum())
+         B = InvCholXXSP @ Perm @ lTerm.D_J_emb
+         edf -= (lTerm.lam * B.power(2).sum())
 
-      #print(resDot)
       sigma = resDot / (rowsX - edf)
-      print(sigma)
+
       # Perform Fellner Schall Update
       for lTerm in penalties:
          cLam = step_fellner_schall_sparse(S_pinv,InvCholXXSP,Perm,lTerm.S_J_emb,lTerm.D_J_emb,coef,lTerm.lam,sigma)
-         print(cLam)
+
          if cLam < 0:
             warnings.warn(f"Resetting Lambda Reason:\nPrevious Lambda = {lTerm.lam}, Next Lambda = {cLam}, Sigma = {sigma}")
             cLam = 1.1
+
          lTerm.lam = cLam
 
    return coef,pred,res,sigma
-
-def cpp_solveLU(A,i):
-   return cpp_solvers.solveLU(A,i)

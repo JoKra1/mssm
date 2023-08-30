@@ -29,7 +29,15 @@ std::tuple<Eigen::SparseMatrix<double>,int> chol(Eigen::SparseMatrix<double> A){
 }
 
 std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solve_am(Eigen::VectorXd y, Eigen::SparseMatrix<double> X, Eigen::SparseMatrix<double> S){
-    
+    // Permuted Cholesky:
+    // P * A * P' = L * L'
+    // A = P' * L * L' * P
+    // U = P' * L
+    // U' = L' * P
+    // A = U * U'
+    // Inverse:
+    // inv(A) = P' * Inv(L)' * inv(L) * Perm
+
     int Xcols = X.cols();
 
     // Prepare and compute Cholesky factor of X' * X + S
@@ -44,8 +52,8 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
     Eigen::SparseMatrix<double> id(Xcols,Xcols);
     id.setIdentity();
 
-    // We also need inv(L') * P from P * X' * X + S * P' = L * L'
-    // so the inverse of the upper matrix from the solver times the
+    // We also need inv(L) * P from P * X' * X + S * P' = L * L'
+    // so the inverse of the lower matrix from the solver times the
     // permutation matrix created for us by eigen.
 
     // First get the permutation
@@ -66,13 +74,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
         return std::make_tuple(std::move(id),P.indices(),std::move(coef),2);
     }
 
-    // Now get L'
-    // P * A * P' = L * L'
-    // A = P' * L * L' * P
-    // U = P' * L
-    // U' = L' * P
-    // A = U * U'
-    //Eigen::SparseMatrix<double> LT = solver.matrixU();
+    // Now get inv(L) - don't forget to transpose outside!
     solver.matrixL().solveInPlace(id);
 
     return std::make_tuple(std::move(id),P.indices(),std::move(coef),0);;
