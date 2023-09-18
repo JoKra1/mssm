@@ -1,4 +1,5 @@
 import numpy as np
+import scipy as scp
 from tqdm import tqdm
 import warnings
 from . import utils
@@ -8,42 +9,31 @@ from itertools import repeat
 from matplotlib import pyplot as plt
 import re
 from copy import deepcopy
+from collections.abc import Callable
 
+##################################### Base Class #####################################
 
-class sMsGAMMBase:
+class MSSM:
 
-    def __init__(self,n_j,series,time,
-                 end_points,llk_fun,pre_llk_fun,
-                 covariates=None,is_DC=True,
-                 sep_per_j=None,
-                 split_p_by_cov = None,
-                 estimate_pi=False,
-                 estimate_TR=False,
-                 cpus=1):
+    def __init__(self,formula:utils.Formula,
+                 p_formula=None,
+                 pre_llk_fun:Callable = None,
+                 estimate_pi:bool=False,
+                 estimate_TR:bool=False,
+                 cpus:int=1):
         
-        self.n_j = n_j # Number of latent states
-        self.series = series 
-        self.n_s = len(series)
-        self.series_fl = np.array([o for s in series for o in s])
-        self.time = time
-
-        ## Log-likelihood and "prior" Log-likelihood functions
-        self.llk_fun = llk_fun
+        # Formulas associated with model
+        self.formula = formula # For coefficients
+        self.p_formula = p_formula # For sojourn time distributions
+        
+        ## "prior" Log-likelihood functions
         self.pre_llk_fun = pre_llk_fun
 
-        self.end_points = end_points
-        self.covariates = covariates
-        
-        self.is_DC = is_DC
-        self.sep_per_j = sep_per_j
-        self.split_p_by_cov = split_p_by_cov
+        ## Should transition matrices and initial distribution be estimated?
         self.estimate_pi = estimate_pi
         self.estimate_TR = estimate_TR
 
         self.cpus=cpus
-
-        # Build NAN index
-        self.is_NA_fl = np.isnan(self.series_fl)
 
         # Temperature schedule
         self.__temp = None
@@ -69,8 +59,6 @@ class sMsGAMMBase:
         # Function storage
         self.__sample_fun = None
         self.__sample_fun_kwargs = None
-        self.__build_mat_fun = None
-        self.__build_mat_kwargs = None
         self.m_pi = None
         self.m_TR = None
         self.m_ps = None
@@ -83,10 +71,6 @@ class sMsGAMMBase:
     def set_sample_fun(self,fun,**kwargs):
         self.__sample_fun = fun
         self.__sample_fun_kwargs = kwargs
-    
-    def set_mat_fun(self,fun,**kwargs):
-        self.__build_mat_fun = fun
-        self.__build_mat_kwargs = kwargs
     
     def set_par_ps(self,fun):
         self.par_ps = fun
@@ -106,59 +90,14 @@ class sMsGAMMBase:
 
     def set_temp(self,fun,iter=500,**kwargs):
         self.__temp = fun(iter,**kwargs)
-
-    def set_penalties(self,penalties):
-        self.__penalties = penalties
     
     ##################################### Getters #####################################
-
-    def get_last_pars_chain(self,chain=0):
-        return self.__state[chain], \
-               self.__coef[chain], \
-               self.__sigma[chain], \
-               self.__scale[chain], \
-               self.__pi[chain], \
-               self.__TR[chain]
     
-    def get_last_pars_max(self):
-        chain_last_llks = self.__llk_hist[:,-1]
-        idx = np.array(list(range(len(chain_last_llks))))
-        idx = idx[chain_last_llks == max(chain_last_llks)][0]
-        return idx,self.__state[idx], \
-               self.__coef[idx], \
-               self.__sigma[idx], \
-               self.__scale[idx], \
-               self.__pi[idx], \
-               self.__TR[idx] \
+    def get_pars(self):
+        pass
     
-    def get_last_llk_max(self):
-        chain_last_llks = self.__llk_hist[:,-1]
-        idx = np.array(list(range(len(chain_last_llks))))
-        idx = idx[chain_last_llks == max(chain_last_llks)][0]
-        return idx, chain_last_llks[idx]
-
-    def get_gcv_max(self):
-        if self.sep_per_j is not None and not self.is_DC:
-            warnings.warn("GCV currently only supported for DC GAMM")
-            return None
-
-        chain_last_llks = self.__llk_hist[:,-1]
-        idx = np.array(list(range(len(chain_last_llks))))
-        idx = idx[chain_last_llks == max(chain_last_llks)][0]
-
-        best_states = self.__state[idx]
-        best_coef = self.__coef[idx]
-        best_penalties = self.__penalties[idx]
-        with mp.Pool(processes=self.cpus) as pool:
-            n_mat = self.__build_all_mod_mat(pool,best_states)
-        n_mat = n_mat[np.isnan(self.series_fl) == False,:]
-        y = self.series_fl[np.isnan(self.series_fl) == False]
-        gcv = utils.compute_gcv(y,n_mat,best_coef,best_penalties)
-        
-        return gcv
-
-    def get_penalties(self):
-        return self.__penalties
+    def get_llk(self):
+        pass
     
     def get_coef_hist(self):
         return self.__coef_hist
@@ -169,16 +108,208 @@ class sMsGAMMBase:
     def get_scale_hist(self):
         return self.__scale_hist
     
-    ##################################### MP handlers #####################################
-    
-    def __build_all_mod_mat(self,pool,state_est):
-        args = zip(self.time, self.covariates, state_est)
-        mapping = zip(repeat(self.__build_mat_fun), args, repeat(self.__build_mat_kwargs))
-        
+    ##################################### Fitting #####################################
 
-        all_mat = pool.starmap(utils.map_unwrap_args_kwargs,mapping)
-        all_mat = np.concatenate(all_mat,axis=0)
-        return all_mat
+    def fit(self):
+        pass
+
+    ##################################### Prediction #####################################
+
+    def predict(self,terms,n_dat):
+        pass
+
+    ##################################### Plotting #####################################
+
+    def plot(self):
+        pass
+
+    def val_plot(self):
+        pass
+
+##################################### GAMM class #####################################
+
+class GAMM(MSSM):
+
+    def __init__(self, formula: utils.Formula):
+        super().__init__(formula)
+        self.pred = None
+        self.res = None
+        self.edf = None
+
+        self.lvi = None
+
+    ##################################### Getters #####################################
+
+    def get_pars(self):
+        return self.__coef,self.__sigma
+    
+    def get_llk(self):
+        if self.res is not None:
+            resDot = self.res.T.dot(self.res)[0,0]
+            return resDot
+        return None
+    
+    ##################################### Fitting #####################################
+    
+    def fit(self,maxiter=20):
+
+        # We need the initialized penalties
+        penalties = self.formula.penalties
+
+        # And then we need to build the model matrix once
+        terms = self.formula.get_terms()
+        has_intercept = self.formula.has_intercept()
+        has_sigma_split = False
+        ltx = self.formula.get_linear_term_idx()
+        irstx = []
+        stx = self.formula.get_smooth_term_idx()
+        rtx = self.formula.get_random_term_idx()
+        var_types = self.formula.get_var_types()
+        var_map = self.formula.get_var_map()
+        var_mins = self.formula.get_var_mins()
+        var_maxs = self.formula.get_var_maxs()
+        factor_levels = self.formula.get_factor_levels()
+        cov_flat = self.formula.cov_flat
+        cov = self.formula.cov
+        n_j = None
+        state_est_flat = None
+        state_est = None
+
+        # Build the model matrix with all information from the formula
+        model_mat = utils.build_sparse_matrix_from_formula(terms,has_intercept,has_sigma_split,
+                                                           ltx,irstx,stx,rtx,var_types,var_map,
+                                                           var_mins,var_maxs,factor_levels,
+                                                           cov_flat,cov,n_j,state_est_flat,state_est)
+        
+        # Now we have to estimate the model
+        coef,pred,res,sigma,LVI,edf = utils.solve_am_sparse(self.formula.y_flat,model_mat,penalties,
+                                                    self.formula.n_coef,maxiter)
+        
+        self.__coef = coef
+        self.__sigma = sigma
+        self.pred = pred
+        self.res = res
+        self.edf = edf
+
+        self.lvi = LVI
+    
+    ##################################### Prediction #####################################
+
+    def predict(self, use_terms, n_dat,alpha=0.05,ci=False):
+        var_map = self.formula.get_var_map()
+        var_keys = var_map.keys()
+
+        for k in var_keys:
+            if k not in n_dat.columns:
+                raise IndexError(f"Variable {k} is missing in new data.")
+        
+        # Encode test data
+        _,pred_cov_flat,_,pred_cov,_ = self.formula.encode_data(n_dat,prediction=True)
+
+        # Then, we need to build the model matrix - but only for the terms which should
+        # be included in the prediction!
+        terms = self.formula.get_terms()
+        has_intercept = self.formula.has_intercept()
+        has_sigma_split = False
+        ltx = self.formula.get_linear_term_idx()
+        irstx = []
+        stx = self.formula.get_smooth_term_idx()
+        rtx = self.formula.get_random_term_idx()
+        var_types = self.formula.get_var_types()
+        var_mins = self.formula.get_var_mins()
+        var_maxs = self.formula.get_var_maxs()
+        factor_levels = self.formula.get_factor_levels()
+        n_j = None
+        state_est_flat = None
+        state_est = None
+
+        # So we pass the desired terms to the use_only argument
+        predi_mat = utils.build_sparse_matrix_from_formula(terms,has_intercept,has_sigma_split,
+                                                           ltx,irstx,stx,rtx,var_types,var_map,
+                                                           var_mins,var_maxs,factor_levels,
+                                                           pred_cov_flat,pred_cov,n_j,state_est_flat,
+                                                           state_est,use_only=use_terms)
+        
+        # Now we calculate the prediction
+        pred = predi_mat @ self.__coef
+
+        # Optionally calculate the boundary for a 1-alpha CI
+        if ci:
+            # Wood (2017) 6.10
+            c = predi_mat @ self.lvi.T @ self.lvi * self.__sigma @ predi_mat.T
+            c = c.diagonal()
+            b = scp.stats.norm.ppf(1-(alpha/2)) * np.sqrt(c)
+            return pred,predi_mat,b
+
+        return pred,predi_mat,None
+    
+    def predict_diff(self,dat1,dat2,use_terms,alpha=0.05):
+        # Based on itsadug get_difference function
+        _,pmat1,_ = self.predict(use_terms,dat1)
+        _,pmat2,_ = self.predict(use_terms,dat2)
+
+        pmat_diff = pmat1 - pmat2
+        
+        # Predicted difference
+        diff = pmat_diff @ self.__coef
+        
+        # Difference CI
+        c = pmat_diff @ self.lvi.T @ self.lvi * self.__sigma @ pmat_diff.T
+        c = c.diagonal()
+        b = scp.stats.norm.ppf(1-(alpha/2)) * np.sqrt(c)
+
+        return diff,b
+
+        
+        
+            
+
+class sMsGAMM(MSSM):
+
+    def __init__(self, n_j, series, time,
+                 end_points, llk_fun, pre_llk_fun,
+                 covariates=None, is_DC=True,
+                 sep_per_j=utils.j_split,
+                 split_p_by_cov = None,
+                 estimate_pi=True,
+                 estimate_TR=True, cpus=1):
+        super().__init__(n_j, series, time,
+                         end_points, llk_fun, pre_llk_fun,
+                         covariates, is_DC, sep_per_j,
+                         split_p_by_cov,estimate_pi,
+                         estimate_TR, cpus)
+
+        if sep_per_j is not None:
+            self.set_e_bs(utils.get_log_o_prob_mat)
+            self.set_sample_fun(utils.se_step_sms_gamm)
+        else:
+            warnings.warn("Don't forget to call set_e_bs() and set_sample_fun().")
+
+        self.set_m_pi(utils.m_pi_sms_gamm)
+        self.set_m_TR(utils.m_TR_sms_gamm)
+        self.set_m_ps(utils.m_gamma2s_sms_gamm)
+        self.set_par_ps(utils.par_gamma2s)
+
+class sMsDCGAMM(MSSM):
+
+    def __init__(self, n_j, series, time,
+                 end_points, llk_fun, pre_llk_fun,
+                 covariates=None, is_DC=True,
+                 sep_per_j=None, split_p_by_cov = None,
+                 estimate_pi=False,
+                 estimate_TR=False, cpus=1):
+        super().__init__(n_j, series, time,
+                         end_points, llk_fun, pre_llk_fun,
+                         covariates, is_DC, sep_per_j,
+                         split_p_by_cov,estimate_pi,
+                         estimate_TR, cpus)
+
+        self.set_e_bs(utils.get_log_o_prob_mat)
+        self.set_m_ps(utils.m_gamma2s_sms_dc_gamm)
+        self.set_par_ps(utils.par_gamma2s)
+        self.set_sample_fun(utils.se_step_sms_dc_gamm)
+    
+    ##################################### MP handlers #####################################
     
     def __propose_all_states(self,pool,temp,pi,TR,state_durs_est,state_est,ps,coef,sigma):
         args = zip(repeat(self.n_j),repeat(temp),self.series,self.end_points,self.time,
@@ -369,107 +500,3 @@ class sMsGAMMBase:
         for ic in range(n_chains):
             plt.plot(self.__llk_hist[ic,:])
         plt.show()
-
-class sMsGAMM(sMsGAMMBase):
-
-    def __init__(self, n_j, series, time,
-                 end_points, llk_fun, pre_llk_fun,
-                 covariates=None, is_DC=True,
-                 sep_per_j=utils.j_split,
-                 split_p_by_cov = None,
-                 estimate_pi=True,
-                 estimate_TR=True, cpus=1):
-        super().__init__(n_j, series, time,
-                         end_points, llk_fun, pre_llk_fun,
-                         covariates, is_DC, sep_per_j,
-                         split_p_by_cov,estimate_pi,
-                         estimate_TR, cpus)
-
-        if sep_per_j is not None:
-            self.set_e_bs(utils.get_log_o_prob_mat)
-            self.set_sample_fun(utils.se_step_sms_gamm)
-        else:
-            warnings.warn("Don't forget to call set_e_bs() and set_sample_fun().")
-
-        self.set_m_pi(utils.m_pi_sms_gamm)
-        self.set_m_TR(utils.m_TR_sms_gamm)
-        self.set_m_ps(utils.m_gamma2s_sms_gamm)
-        self.set_par_ps(utils.par_gamma2s)
-
-class sMsDCGAMM(sMsGAMMBase):
-
-    def __init__(self, n_j, series, time,
-                 end_points, llk_fun, pre_llk_fun,
-                 covariates=None, is_DC=True,
-                 sep_per_j=None, split_p_by_cov = None,
-                 estimate_pi=False,
-                 estimate_TR=False, cpus=1):
-        super().__init__(n_j, series, time,
-                         end_points, llk_fun, pre_llk_fun,
-                         covariates, is_DC, sep_per_j,
-                         split_p_by_cov,estimate_pi,
-                         estimate_TR, cpus)
-
-        self.set_e_bs(utils.get_log_o_prob_mat)
-        self.set_m_ps(utils.m_gamma2s_sms_dc_gamm)
-        self.set_par_ps(utils.par_gamma2s)
-        self.set_sample_fun(utils.se_step_sms_dc_gamm)
-
-    def parse_formula(self,formula,data):
-        """
-        Parse a formula to build model from data.
-        """
-
-        LHS,RHS = formula.split("~")
-        LHS = LHS.replace(" ","")
-
-        if LHS not in data.columns:
-            raise IndexError(f"Column '{LHS}' does not exist in Dataframe.")
-
-        DV = data[LHS]
-
-        RHS = RHS.split("+")
-        term_strings = [t.replace(" ","") for t in RHS]
-        terms = []
-        print(term_strings)
-
-        for term_string in term_strings:
-            rec_lat_smooth = re.fullmatch(r"f\(L[0-9]+__[_a-zA-Z0-9]+[,=_a-zA-Z0-9]*\)",term_string)
-            if rec_lat_smooth is None:
-                rec_smooth = re.fullmatch(r"f\([_a-zA-Z0-9]+[,=_a-zA-Z0-9]*\)",term_string)
-                if rec_smooth is None:
-                    rec_linear = re.fullmatch(r"[_a-zA-Z0-9]+",term_string)
-                    if rec_linear is None:
-                        rec_randint = re.fullmatch(r"ri\([_a-zA-Z0-9]+\)",term_string)
-                        if rec_randint is None:
-                            rec_randslope = re.fullmatch(r"rs\([_a-zA-Z0-9]+,by=[_a-zA-Z0-9]+\)",term_string)
-                            if rec_randslope is None:
-                                raise KeyError(f"Term '{term_string}' cannot be recognized.")
-                            else:
-                                new_term = utils.GammTerm(formula=term_string,type=utils.TermType.RANDSLOPE)
-                                utils.parse_arguments(new_term)
-                                utils.parse_variables(new_term,data)
-                                terms.append(new_term)
-
-                        else:
-                            new_term = utils.GammTerm(formula=term_string,type=utils.TermType.RANDINT)
-                            utils.parse_arguments(new_term)
-                            utils.parse_variables(new_term,data)
-                            terms.append(new_term)
-                    else:
-                        new_term = utils.GammTerm(formula=term_string,type=utils.TermType.LINEAR)
-                        utils.parse_arguments(new_term)
-                        utils.parse_variables(new_term,data)
-                        terms.append(new_term)
-                else:
-                    new_term = utils.GammTerm(formula=term_string,type=utils.TermType.SMOOTH)
-                    utils.parse_arguments(new_term)
-                    utils.parse_variables(new_term,data)
-                    terms.append(new_term)
-            else:
-                new_term = utils.GammTerm(formula=term_string,type=utils.TermType.LSMOOTH)
-                utils.parse_arguments(new_term)
-                utils.parse_variables(new_term,data)
-                terms.append(new_term)
-            
-        print(terms)

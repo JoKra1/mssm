@@ -15,6 +15,9 @@ from .src import cpp_solvers
 def cpp_chol(A):
    return cpp_solvers.chol(A)
 
+def cpp_qr(A):
+   return cpp_solvers.pqr(A)
+
 def cpp_solve_am(y,X,S):
    return cpp_solvers.solve_am(y,X,S)
 
@@ -354,20 +357,16 @@ def diff_pen(n,m=2,Z=None):
   warnings.warn("Sparse difference penalties are not yet implemented. Instead a dense penalty is converted to a sparse one, reducing performance.")
 
   D = np.diff(np.identity(n),m)
-  S = D @ D.T + 1e-7*scp.sparse.identity(n)
+  S = D @ D.T
 
   # Absorb any identifiability constraints
   if Z is not None:
      S = Z.T @ S @ Z
+     D = Z.T @ D
      n -= 1
 
-  S = scp.sparse.csc_array(S) 
-
-  # S might have identifiability constraints - so we need to re-compute it's root. 
-  D, code = cpp_chol(S)
-
-  if code != 0:
-      warnings.warn(f"Cholesky factor computation failed with code {code}")
+  S = scp.sparse.csc_array(S)
+  D = scp.sparse.csc_array(D)
 
   # Data in S and D is in canonical format, for competability this is translated to data, rows, columns
   pen_elements = S.data
@@ -1434,6 +1433,7 @@ class Formula():
         self.unpenalized_coef = None
         self.coef_names = None
         self.n_coef = None # Number of total coefficients in formula.
+        self.ordered_coef_per_term = None # Number of coefficients associated with each term - order: linear terms, irf terms, f terms, random terms
         cvi = 0 # Number of variables included in some way as predictors
 
         # Encoding from data frame to series-level dependent values + predictor values (in cov)
@@ -1568,8 +1568,14 @@ class Formula():
         
         # Compute number of coef and coef names
         self.__get_coef_info()
-        # Encode formula into columns usable by the model
-        self.__encode_formula()
+        # Encode data into columns usable by the model
+        y_flat,cov_flat,y,cov,sid = self.encode_data(self.__data)
+        # Store encoding
+        self.y_flat = y_flat
+        self.cov_flat = cov_flat
+        self.y = y
+        self.cov = cov
+        self.sid = sid
         # Absorb any constraints for model terms
         self.__absorb_constraints()
         # Compute penalties
@@ -1586,6 +1592,7 @@ class Formula():
       self.unpenalized_coef = 0
       self.n_coef = 0
       self.coef_names = []
+      self.ordered_coef_per_term = []
 
       for lti in self.get_linear_term_idx():
          lterm = terms[lti]
@@ -1594,6 +1601,7 @@ class Formula():
             self.coef_names.append("Intercept")
             self.unpenalized_coef += 1
             self.n_coef += 1
+            self.ordered_coef_per_term.append(1)
          
          else:
             # Main effects
@@ -1611,10 +1619,13 @@ class Formula():
                      self.unpenalized_coef += 1
                      self.n_coef += 1
 
+                  self.ordered_coef_per_term.append(len(factor_levels[var]) - fl_start)
+
                else: # Continuous predictor
                   self.coef_names.append(f"{var}")
                   self.unpenalized_coef += 1
                   self.n_coef += 1
+                  self.ordered_coef_per_term.append(1)
 
             else: # Interactions
                interactions = []
@@ -1653,6 +1664,8 @@ class Formula():
                   self.coef_names.append(name)
                   self.unpenalized_coef += 1
                   self.n_coef += 1
+
+               self.ordered_coef_per_term.append(len(inter_coef_names))
       
       for irsti in self.get_ir_smooth_term_idx():
          # Calculate Coef names for impulse response terms
@@ -1671,6 +1684,7 @@ class Formula():
             self.coef_names.extend([f"irf_{irsterm.state}_{ink}" for ink in range(irsterm.nk)])
          
          self.n_coef += n_coef
+         self.ordered_coef_per_term.append(n_coef)
 
       for sti in self.get_smooth_term_idx():
 
@@ -1705,6 +1719,7 @@ class Formula():
                   self.coef_names.extend([f"f_{vars[0]}_{ink}" for ink in range(sterm.nk)])
             
             self.n_coef += n_coef
+            self.ordered_coef_per_term.append(n_coef)
 
       for rti in self.get_random_term_idx():
          rterm = terms[rti]
@@ -1717,11 +1732,24 @@ class Formula():
                self.coef_names.append(f"ri_{vars[0]}_{by_code_factors[fl]}")
                self.n_coef += 1
 
+            self.ordered_coef_per_term.append(len(factor_levels[vars[0]]))
+
          elif isinstance(rterm,rs):
             raise NotImplementedError("Random slope terms are not yet supported.")
     
-    def __encode_formula(self):
-      data = self.__data
+    def encode_data(self,r_data,prediction=False):
+
+      # Drop NAs for fitting
+      if prediction:
+         data = r_data
+      else:
+         data = r_data[np.isnan(r_data[self.get_lhs().variable]) == False]
+
+      if data.shape[0] != r_data.shape[0]:
+         warnings.warn(f"{r_data.shape[0] - data.shape[0]} {self.get_lhs().variable} values ({round((r_data.shape[0] - data.shape[0]) / r_data.shape[0] * 100,ndigits=2)}%) are NA. Corresponding rows are excluded from fitting.")
+
+      n_y = data.shape[0]
+
       id_col = np.array(data[self.series_id])
       var_map = self.get_var_map()
       n_var = len(var_map)
@@ -1735,12 +1763,15 @@ class Formula():
       _, id = np.unique(id_col,return_index=True)
       sid = np.sort(id)
 
-      # Collect entire y column
-      y_flat = np.array(data[self.get_lhs().variable]).reshape(-1,1)
-      n_y = y_flat.shape[0]
-
-      # Then split by seried id
-      y = np.split(y_flat,sid[1:])
+      if prediction: # For encoding new data
+         y_flat = None
+         y = None
+      else:
+         # Collect entire y column
+         y_flat = np.array(data[self.get_lhs().variable]).reshape(-1,1)
+         
+         # Then split by seried id
+         y = np.split(y_flat,sid[1:])
 
       # Now all predictor variables
       cov_flat = np.zeros((n_y,n_var),dtype=float) # Treating all predictors as floats has important implications for factors and requires special care!
@@ -1751,6 +1782,8 @@ class Formula():
          if var_types[c] == VarType.FACTOR:
 
             c_coding = factor_coding[c]
+
+            # Code factor variable
             c_code = [c_coding[cr] for cr in c_raw]
 
             cov_flat[:,var_map[c]] = c_code
@@ -1761,12 +1794,7 @@ class Formula():
       # Now split cov by series id as well
       cov = np.split(cov_flat,sid[1:],axis=0)
 
-      # Store encoding
-      self.y_flat = y_flat
-      self.cov_flat = cov_flat
-      self.y = y
-      self.cov = cov
-      self.sid = sid
+      return y_flat,cov_flat,y,cov,sid
 
     def __absorb_constraints(self):
       var_map = self.get_var_map()
@@ -1796,9 +1824,7 @@ class Formula():
             # Wood (2017) 5.4.1 Identifiability constraints via QR. ToDo: Replace with cheaper reflection method.
             C = np.sum(matrix_term,axis=0).reshape(-1,1)
             Q,_ = scp.linalg.qr(C,pivoting=False,mode='full')
-            Z = Q[:,1:]
-            matrix_term = matrix_term @ Z
-            sterm.Z = Z
+            sterm.Z = Q[:,1:]
 
     def __build_penalties(self):
       col_S = self.n_coef
@@ -2162,12 +2188,15 @@ def embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,Sj):
       
    return Sj
 
-def build_sparse_matrix_from_formula(terms,has_intercept,has_sigma_split,
+def build_sparse_matrix_from_formula(terms,has_intercept,
+                                     has_sigma_split,
                                      ltx,irstx,stx,rtx,
                                      var_types,var_map,
                                      var_mins,var_maxs,
-                                     factor_levels,cov_flat,cov,n_j,state_est_flat,
-                                     state_est,pool=None,tol=1e-4):
+                                     factor_levels,cov_flat,
+                                     cov,n_j,state_est_flat,
+                                     state_est,pool=None,
+                                     use_only=None,tol=1e-4):
 
    n_y = cov_flat.shape[0]
    elements = []
@@ -2181,9 +2210,10 @@ def build_sparse_matrix_from_formula(terms,has_intercept,has_sigma_split,
 
       if isinstance(lterm,i):
          offset = np.ones(n_y)
-         elements.extend(offset)
-         rows.extend(ridx)
-         cols.extend([ci for _ in range(n_y)])
+         if use_only is None or lti in use_only:
+            elements.extend(offset)
+            rows.extend(ridx)
+            cols.extend([ci for _ in range(n_y)])
          ci += 1
       
       else:
@@ -2201,16 +2231,18 @@ def build_sparse_matrix_from_formula(terms,has_intercept,has_sigma_split,
 
                for fl in range(fl_start,len(factor_levels[var])):
                   fridx = ridx[cov_flat[:,var_map[var]] == fl]
-                  elements.extend(offset[fridx])
-                  rows.extend(fridx)
-                  cols.extend([ci for _ in range(len(fridx))])
+                  if use_only is None or lti in use_only:
+                     elements.extend(offset[fridx])
+                     rows.extend(fridx)
+                     cols.extend([ci for _ in range(len(fridx))])
                   ci += 1
 
             else: # Continuous predictor
                slope = cov_flat[:,var_map[var]]
-               elements.extend(slope)
-               rows.extend(ridx)
-               cols.extend([ci for _ in range(n_y)])
+               if use_only is None or lti in use_only:
+                  elements.extend(slope)
+                  rows.extend(ridx)
+                  cols.extend([ci for _ in range(n_y)])
                ci += 1
 
          else: # Interactions
@@ -2256,9 +2288,10 @@ def build_sparse_matrix_from_formula(terms,has_intercept,has_sigma_split,
 
             # Now write interaction terms into model matrix
             for inter,inter_idx in zip(interactions,inter_idx):
-               elements.extend(inter[ridx[inter_idx]])
-               rows.extend(ridx[inter_idx])
-               cols.extend([ci for _ in range(len(ridx[inter_idx]))])
+               if use_only is None or lti in use_only:
+                  elements.extend(inter[ridx[inter_idx]])
+                  rows.extend(ridx[inter_idx])
+                  cols.extend([ci for _ in range(len(ridx[inter_idx]))])
                ci += 1
    
    for irsti in irstx:
@@ -2323,9 +2356,10 @@ def build_sparse_matrix_from_formula(terms,has_intercept,has_sigma_split,
          
          # Now collect actual row indices
          for m_coli in range(len(term_elements)):
-            elements.extend(term_elements[:,m_coli])
-            rows.extend(ridx[term_idx[m_coli]])
-            cols.extend([ci for _ in range(len(term_elements[:,m_coli]))])
+            if use_only is None or irsti in use_only:
+               elements.extend(term_elements[:,m_coli])
+               rows.extend(ridx[term_idx[m_coli]])
+               cols.extend([ci for _ in range(len(term_elements[:,m_coli]))])
             ci += 1
 
       else:
@@ -2409,9 +2443,10 @@ def build_sparse_matrix_from_formula(terms,has_intercept,has_sigma_split,
 
             # Tolerance row index for this columns
             cidx = abs(final_col) > tol
-            elements.extend(final_col[cidx])
-            rows.extend(final_ridx[cidx])
-            cols.extend([ci for _ in range(len(final_ridx[cidx]))])
+            if use_only is None or sti in use_only:
+               elements.extend(final_col[cidx])
+               rows.extend(final_ridx[cidx])
+               cols.extend([ci for _ in range(len(final_ridx[cidx]))])
             ci += 1
 
    for rti in rtx:
@@ -2425,9 +2460,10 @@ def build_sparse_matrix_from_formula(terms,has_intercept,has_sigma_split,
 
          for fl in range(len(factor_levels[vars[0]])):
             fl_idx = by_cov == fl
-            elements.extend(offset[fl_idx])
-            rows.extend(ridx[fl_idx])
-            cols.extend([ci for _ in range(len(offset[fl_idx]))])
+            if use_only is None or rti in use_only:
+               elements.extend(offset[fl_idx])
+               rows.extend(ridx[fl_idx])
+               cols.extend([ci for _ in range(len(offset[fl_idx]))])
             ci += 1
 
          
@@ -2457,7 +2493,7 @@ def step_fellner_schall_sparse(gInv,CholInv,Perm,emb_SJ,emb_DJ,cCoef,cLam,sigma)
 
   return cLam
 
-def solve_am_sparse(y,X,penalties,col_S,maxiter=1):
+def solve_am_sparse(y,X,penalties,col_S,maxiter=1,pinv="svd"):
    n_lterms = len(penalties)
    rowsX,colsX = X.shape
    pred = None
@@ -2514,16 +2550,23 @@ def solve_am_sparse(y,X,penalties,col_S,maxiter=1):
                   # However, SJ' @ SJ will usually be rank deficient so we add e=1e-7 to the main diagonal, because:
                   # As e -> 0 we get closer to pinv(SJ) if we base it on L_e in L_e @ L_e' = SJ' @ SJ + e*I
                   # where I is the identity.
+                  if pinv != "svd":
+                     t = scp.sparse.identity(SJ.shape[1],format="csc")
+                     L,code = cpp_chol(SJ.T @ SJ + 1e-7*t)
 
-                  t = scp.sparse.identity(SJ.shape[1],format="csc")
-                  L,code = cpp_chol(SJ.T @ SJ + 1e-7*t)
+                     if code != 0:
+                        warnings.warn(f"Cholesky factor computation failed with code {code}")
 
-                  if code != 0:
-                     warnings.warn(f"Cholesky factor computation failed with code {code}")
+                     LI = scp.sparse.linalg.spsolve(L,t)
+                     SJ_pinv = LI.T @ LI @ SJ.T
+                     #print(np.max(abs((SJ.T @ SJ @ SJ_pinv - SJ).toarray())))
 
-                  LI = scp.sparse.linalg.spsolve(L,t)
-                  SJ_pinv = LI.T @ LI @ SJ.T
-                  #print(np.max(abs((SJ.T @ SJ @ SJ_pinv - SJ).toarray())))
+                  # Compute pinv via SVD
+                  else:
+                     u, Sig, vt = scp.sparse.linalg.svds(SJ,SJ.shape[1]-1)
+                     rs = [1/s if s > 1e-7 else 0 for s in Sig]
+                     SJ_pinv = vt.T @ np.diag(rs) @ u.T
+                     SJ_pinv = scp.sparse.csc_array(SJ_pinv)
 
                   SJ_pinv_data = SJ_pinv.data
                   SJ_pinv_idx = SJ_pinv.indices
@@ -2575,7 +2618,7 @@ def solve_am_sparse(y,X,penalties,col_S,maxiter=1):
       # Sigma estimate from Wood & Fasiolo (2016)
       edf = colsX
 
-      # ToDo: The terms here could be reused
+      # ToDo: The terms here could be reused in the actual update below.
       for lTerm in penalties:
          B = InvCholXXSP @ Perm @ lTerm.D_J_emb
          edf -= (lTerm.lam * B.power(2).sum())
@@ -2592,4 +2635,4 @@ def solve_am_sparse(y,X,penalties,col_S,maxiter=1):
 
          lTerm.lam = cLam
 
-   return coef,pred,res,sigma
+   return coef,pred,res,sigma,InvCholXXSP @ Perm,edf

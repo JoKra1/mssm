@@ -28,6 +28,38 @@ std::tuple<Eigen::SparseMatrix<double>,int> chol(Eigen::SparseMatrix<double> A){
     return std::make_tuple(std::move(L),0);
 }
 
+std::tuple<Eigen::SparseMatrix<double>,Eigen::SparseMatrix<double>,Eigen::VectorXi, int> pqr(Eigen::SparseMatrix<double> A) {
+    // Computed column-pivoted QR factorization of A.
+    Eigen::SparseQR<Eigen::SparseMatrix<double>,Eigen::COLAMDOrdering<int>> solver;
+    solver.compute(A);
+
+    // Column permutation matrix
+    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic> P(solver.colsPermutation());
+
+    if(solver.info()!=Eigen::Success)
+    {
+        Eigen::SparseMatrix<double> Q(A.rows(),A.cols());
+        Q.setIdentity();
+
+        Eigen::SparseMatrix<double> R(A.cols(),A.cols());
+        R.setIdentity();
+        return std::make_tuple(std::move(Q),std::move(R),P.indices(),1);
+    }
+
+    // see: https://eigen.tuxfamily.org/dox/classEigen_1_1SparseQR.html
+    Eigen::SparseMatrix<double> Q;
+    Q = solver.matrixQ();
+
+    // Upper triagonal factor
+    Eigen::SparseMatrix<double> R = solver.matrixR();
+
+    // Upper triagonal factor after applying the permuation.
+    //Eigen::SparseMatrix<double> R = solver.matrixR().eval() * P.transpose();
+
+    return std::make_tuple(std::move(Q),R,P.indices(),0);
+    
+}
+
 std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solve_am(Eigen::VectorXd y, Eigen::SparseMatrix<double> X, Eigen::SparseMatrix<double> S){
     // Permuted Cholesky:
     // P * A * P' = L * L'
@@ -85,5 +117,6 @@ PYBIND11_MODULE(cpp_solvers, m) {
     m.doc() = "cpp solvers for sms (DC) GAMM estimation";
 
     m.def("chol", &chol, "Compute cholesky factor L of A");
+    m.def("pqr", &pqr, "Perform column pivoted QR decomposition of A");
     m.def("solve_am", &solve_am, "Solve additive model, return coefficient vector and inverse");
 }
