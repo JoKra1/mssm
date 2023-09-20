@@ -149,6 +149,13 @@ def B_spline_basis(i, cov, state_est, nk, drop_outer_k=False, convolve=False, mi
   
   return B
 
+def TP_basis_calc(cTP,nB):
+   # see: https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.khatri_rao.html
+   # Function performs col-wise Kron - we need row-wise for the Tensor smooths
+   # see Wood(2017) 5.6.1 and B.4
+   # ToDo: Sparse calculation might be desirable..
+   return scp.linalg.khatri_rao(cTP.T,nB.T).T
+
 def split_term_cov(term,cov_val,cov,cov_coding):
    rowsMat, colsMat = term.shape
    exp_term = np.zeros((rowsMat,colsMat * len(cov_coding[cov])))
@@ -351,6 +358,28 @@ def create_event_matrix_cov4_split(time,cov,state_est, identifiable = True, drop
 
 ##################################### Penalty functions #####################################
 
+def translate_sparse(mat):
+  # Translate canonical sparse csc matrix representation into data, row, col representation
+  # See: https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csc_array.html#scipy.sparse.csc_array
+  elements = mat.data
+  idx = mat.indices
+  iptr = mat.indptr
+
+  data = []
+  rows = []
+  cols = []
+
+  for ci in range(mat.shape[1]):
+     
+     c_data = elements[iptr[ci]:iptr[ci+1]]
+     c_rows = idx[iptr[ci]:iptr[ci+1]]
+
+     data.extend(c_data)
+     rows.extend(c_rows)
+     cols.extend([ci for _ in range(len(c_rows))])
+
+  return data, rows, cols
+
 def diff_pen(n,m=2,Z=None):
   # Creates difference (order=m) n*n penalty matrix
   # Based on code in Eilers & Marx (1996) and Wood (2017)
@@ -369,38 +398,8 @@ def diff_pen(n,m=2,Z=None):
   D = scp.sparse.csc_array(D)
 
   # Data in S and D is in canonical format, for competability this is translated to data, rows, columns
-  pen_elements = S.data
-  pen_idx = S.indices
-  pen_iptr = S.indptr
-
-  pen_data = []
-  pen_rows = []
-  pen_cols = []
-
-  for ci in range(n):
-     # See: https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csc_array.html#scipy.sparse.csc_array
-     c_data = pen_elements[pen_iptr[ci]:pen_iptr[ci+1]]
-     c_rows = pen_idx[pen_iptr[ci]:pen_iptr[ci+1]]
-
-     pen_data.extend(c_data)
-     pen_rows.extend(c_rows)
-     pen_cols.extend([ci for _ in range(len(c_rows))])
-
-  chol_elements = D.data
-  chol_idx = D.indices
-  chol_iptr = D.indptr
-
-  chol_data = []
-  chol_rows = []
-  chol_cols = []
-
-  for ci in range(D.shape[1]):
-     c_data = chol_elements[chol_iptr[ci]:chol_iptr[ci+1]]
-     c_rows = chol_idx[chol_iptr[ci]:chol_iptr[ci+1]]
-
-     chol_data.extend(c_data)
-     chol_rows.extend(c_rows)
-     chol_cols.extend([ci for _ in range(len(c_rows))])
+  pen_data,pen_rows,pen_cols = translate_sparse(S)
+  chol_data,chol_rows,chol_cols = translate_sparse(D)
 
   return pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols
 
@@ -418,6 +417,29 @@ def id_dist_pen(n,f=None):
     idx[i] = i
 
   return elements,idx,idx,elements,idx,idx # I' @ I = I
+
+def TP_pen(S_j,D_j,j,ks):
+   # Tensor smooth penalty - not including the reparameterization of Wood (2017) 5.6.2
+   # but reflecting Eilers & Marx (2003) instead
+   if j == 0:
+      S_TP = S_j
+      D_TP = D_j
+   else:
+      S_TP = scp.sparse.identity(ks[0])
+      D_TP = scp.sparse.identity(ks[0])
+   
+   for i in range(1,len(ks)):
+      if j == i:
+         S_TP = scp.sparse.kron(S_TP,S_j,format='csc')
+         D_TP = scp.sparse.kron(D_TP,D_j,format='csc')
+      else:
+         S_TP = scp.sparse.kron(S_TP,scp.sparse.identity(ks[i]),format='csc')
+         D_TP = scp.sparse.kron(D_TP,scp.sparse.identity(ks[i]),format='csc')
+   
+   pen_data,pen_rows,pen_cols = translate_sparse(S_TP)
+   chol_data,chol_rows,chol_cols = translate_sparse(D_TP)
+      
+   return pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols
 
 def embed_in_S(penalty,embS,cIndex,lam=None):
   # Embeds penalty into embS from upper left index cIndex.
@@ -1746,7 +1768,7 @@ class Formula():
          data = r_data[np.isnan(r_data[self.get_lhs().variable]) == False]
 
       if data.shape[0] != r_data.shape[0]:
-         warnings.warn(f"{r_data.shape[0] - data.shape[0]} {self.get_lhs().variable} values ({round((r_data.shape[0] - data.shape[0]) / r_data.shape[0] * 100,ndigits=2)}%) are NA. Corresponding rows are excluded from fitting.")
+         warnings.warn(f"{r_data.shape[0] - data.shape[0]} {self.get_lhs().variable} values ({round((r_data.shape[0] - data.shape[0]) / r_data.shape[0] * 100,ndigits=2)}%) are NA.")
 
       n_y = data.shape[0]
 
@@ -1984,7 +2006,7 @@ class Formula():
                      pen_i_s_idx = cur_pen_idx
                   else:
                      pen_i_s_idx = pen_start_idx
-                  print(penid,pen_i_s_idx,pen,cur_pen_idx,pen_start_idx)
+                  #print(penid,pen_i_s_idx,pen,cur_pen_idx,pen_start_idx)
                   # We again have to deal with potential identifiable constraints!
                   # Then we again act as if n_k was n_k+1 for difference penalties
                   id_k = n_coef
@@ -2474,7 +2496,7 @@ def build_sparse_matrix_from_formula(terms,has_intercept,
 
    return mat
 
-def step_fellner_schall_sparse(gInv,CholInv,Perm,emb_SJ,emb_DJ,cCoef,cLam,sigma):
+def step_fellner_schall_sparse(gInv,CholInv,Perm,emb_SJ,emb_DJ,cCoef,cLam,sigma,verbose=False):
   # Perform a generalized Fellner Schall update step for a lambda term. This update rule is
   # discussed in Wood & Fasiolo (2016) and used here because of it's efficiency.
   
@@ -2487,13 +2509,14 @@ def step_fellner_schall_sparse(gInv,CholInv,Perm,emb_SJ,emb_DJ,cCoef,cLam,sigma)
   denom = cCoef.T @ emb_SJ @ cCoef
   
   cLam = sigma * max(num / denom,1e-10) * cLam
-  print((gInv @ emb_SJ).trace(),B.power(2).sum(),num,denom,cLam)
+  if verbose:
+   print(f"Num = {(gInv @ emb_SJ).trace()} - {B.power(2).sum()} == {num}\nDenom = {denom}; Lambda = {cLam}")
   cLam = max(cLam,1e-10) # Prevent Lambda going to zero
   cLam = min(cLam,1e+10) # Prevent overflow
 
   return cLam
 
-def solve_am_sparse(y,X,penalties,col_S,maxiter=1,pinv="svd"):
+def solve_am_sparse(y,X,penalties,col_S,maxiter=10,pinv="svd"):
    n_lterms = len(penalties)
    rowsX,colsX = X.shape
    pred = None
@@ -2542,56 +2565,42 @@ def solve_am_sparse(y,X,penalties,col_S,maxiter=1,pinv="svd"):
             #print(f"repeat: {lTerm.rep_sj}")
             #print(f"number of penalties on term: {SJ_terms}")
             if SJ_terms == 1 and lTerm.type == PenType.IDENTITY:
-                  #print("Identity shortcut")
-                  SJ_pinv_elements,SJ_pinv_rows,SJ_pinv_cols,_,_,_ = id_dist_pen(SJ.shape[1],lambda x: 1/lTerm.lam)
+               #print("Identity shortcut")
+               SJ_pinv_elements,SJ_pinv_rows,SJ_pinv_cols,_,_,_ = id_dist_pen(SJ.shape[1],lambda x: 1/lTerm.lam)
             else:
-                  # Compute pinv(SJ) via cholesky factor L so that L @ L' = SJ' @ SJ.
-                  # If SJ is full rank, then pinv(SJ) = inv(L)' @ inv(L) @ SJ'.
-                  # However, SJ' @ SJ will usually be rank deficient so we add e=1e-7 to the main diagonal, because:
-                  # As e -> 0 we get closer to pinv(SJ) if we base it on L_e in L_e @ L_e' = SJ' @ SJ + e*I
-                  # where I is the identity.
-                  if pinv != "svd":
-                     t = scp.sparse.identity(SJ.shape[1],format="csc")
-                     L,code = cpp_chol(SJ.T @ SJ + 1e-7*t)
+               # Compute pinv(SJ) via cholesky factor L so that L @ L' = SJ' @ SJ.
+               # If SJ is full rank, then pinv(SJ) = inv(L)' @ inv(L) @ SJ'.
+               # However, SJ' @ SJ will usually be rank deficient so we add e=1e-7 to the main diagonal, because:
+               # As e -> 0 we get closer to pinv(SJ) if we base it on L_e in L_e @ L_e' = SJ' @ SJ + e*I
+               # where I is the identity.
+               if pinv != "svd":
+                  t = scp.sparse.identity(SJ.shape[1],format="csc")
+                  L,code = cpp_chol(SJ.T @ SJ + 1e-7*t)
 
-                     if code != 0:
-                        warnings.warn(f"Cholesky factor computation failed with code {code}")
+                  if code != 0:
+                     warnings.warn(f"Cholesky factor computation failed with code {code}")
 
-                     LI = scp.sparse.linalg.spsolve(L,t)
-                     SJ_pinv = LI.T @ LI @ SJ.T
-                     #print(np.max(abs((SJ.T @ SJ @ SJ_pinv - SJ).toarray())))
+                  LI = scp.sparse.linalg.spsolve(L,t)
+                  SJ_pinv = LI.T @ LI @ SJ.T
+                  #print(np.max(abs((SJ.T @ SJ @ SJ_pinv - SJ).toarray())))
 
-                  # Compute pinv via SVD
-                  else:
-                     u, Sig, vt = scp.sparse.linalg.svds(SJ,SJ.shape[1]-1)
-                     rs = [1/s if s > 1e-7 else 0 for s in Sig]
-                     SJ_pinv = vt.T @ np.diag(rs) @ u.T
-                     SJ_pinv = scp.sparse.csc_array(SJ_pinv)
+               # Compute pinv via SVD
+               else:
+                  u, Sig, vt = scp.sparse.linalg.svds(SJ,SJ.shape[1]-1)
+                  rs = [1/s if s > 1e-7 else 0 for s in Sig]
+                  SJ_pinv = vt.T @ np.diag(rs) @ u.T
+                  SJ_pinv = scp.sparse.csc_array(SJ_pinv)
 
-                  SJ_pinv_data = SJ_pinv.data
-                  SJ_pinv_idx = SJ_pinv.indices
-                  SJ_pinv_iptr = SJ_pinv.indptr
-
-                  SJ_pinv_elements = []
-                  SJ_pinv_rows = []
-                  SJ_pinv_cols = []
-
-                  for ci in range(SJ.shape[1]):
-                     c_data = SJ_pinv_data[SJ_pinv_iptr[ci]:SJ_pinv_iptr[ci+1]]
-                     c_rows = SJ_pinv_idx[SJ_pinv_iptr[ci]:SJ_pinv_iptr[ci+1]]
-
-                     SJ_pinv_elements.extend(c_data)
-                     SJ_pinv_rows.extend(c_rows)
-                     SJ_pinv_cols.extend([ci for _ in range(len(c_rows))])
+               SJ_pinv_elements,SJ_pinv_rows,SJ_pinv_cols = translate_sparse(SJ_pinv)
             
             SJ_pinv_rows = np.array(SJ_pinv_rows)
             SJ_pinv_cols = np.array(SJ_pinv_cols)
 
             for _ in range(lTerm.rep_sj):
-                  S_pinv_elements.extend(SJ_pinv_elements)
-                  S_pinv_rows.extend(SJ_pinv_rows + cIndexPinv)
-                  S_pinv_cols.extend(SJ_pinv_cols + cIndexPinv)
-                  cIndexPinv += (SJ_pinv_cols[-1] + 1)
+               S_pinv_elements.extend(SJ_pinv_elements)
+               S_pinv_rows.extend(SJ_pinv_rows + cIndexPinv)
+               S_pinv_cols.extend(SJ_pinv_cols + cIndexPinv)
+               cIndexPinv += (SJ_pinv_cols[-1] + 1)
             
             # Reset number of penalties and SJ
             SJ = None

@@ -165,3 +165,4 @@ tests.*
 .vscode/*
 *.Rproj*
 .Rproj.user
+.Rhistory
