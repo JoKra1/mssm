@@ -112,6 +112,7 @@ def slope_basis(i,cov,state_est,convolve,max_c):
 def B_spline_basis(i, cov, state_est, nk, drop_outer_k=False, convolve=False, min_c=None, max_c=None, deg=2):
   # Setup basis with even knot locations.
   # Code based on "Splines, Knots, and Penalties" by Eilers & Marx (2010)
+  # However, knot location calculation is taken directly from mgcv (Wood, 2017)
 
   xl = min(cov)
   xr = max(cov)
@@ -130,10 +131,13 @@ def B_spline_basis(i, cov, state_est, nk, drop_outer_k=False, convolve=False, mi
   else:
     ndx = nk - deg
 
-  dx = rg / (ndx)
-  knots = np.arange(xl - deg * dx, xr + deg * dx + (0.99*dx),dx)
+  xr += 0.001*rg
+  xl -= 0.001*rg
 
-  B = bbase(cov,knots,dx,deg)
+  dx = (xr-xl) / (ndx-1)
+  knots = np.linspace(xl - dx * (deg + 1), xr + dx * (deg + 1),ndx+2*deg+2)
+
+  B = bbase(cov,knots,dx,deg+1)
 
   if drop_outer_k:
      B = B[:,deg:-deg]
@@ -1345,16 +1349,34 @@ class f(GammTerm):
     def __init__(self,variables:list,
                 by:str=None,
                 id:int=None,
-                nk:int=10,
+                nk:int or list[int] = 10,
                 identifiable:bool=True,
                 basis:Callable=B_spline_basis,
                 basis_kwargs:dict={"convolve":False},
                 by_latent:bool=False,
                 is_penalized:bool = True,
-                penalty:list[PenType] = [PenType.DIFFERENCE],
-                pen_kwargs:list[dict] = [{"m":2}]) -> None:
+                penalty:list[PenType] or None = None,
+                pen_kwargs:list[dict] or None = None) -> None:
         
-        # Initialization
+        # Default penalty setup
+        if penalty is None:
+           penalty = [PenType.DIFFERENCE]
+           pen_kwargs = [{"m":2}]
+
+        # For tensor product smooths we need to for every penalty in
+        # penalty (and kwargs as well) repeat the penalty (and kwargs) for len(variables)
+        if len(variables) > 1:
+           tp_pens = []
+           tp_pen_kwargs = []
+           for pen,pen_kwarg in zip(penalty,pen_kwargs):
+              for _ in range(len(variables)):
+               tp_pens.append(copy.deepcopy(pen))
+               tp_pen_kwargs.append(copy.deepcopy(pen_kwarg))
+         
+           penalty = tp_pens
+           pen_kwargs = tp_pen_kwargs
+        
+        # Initialization: ToDo: the deepcopy can be dropped now.
         super().__init__(variables, TermType.SMOOTH, is_penalized, copy.deepcopy(penalty), copy.deepcopy(pen_kwargs))
         self.is_identifiable = identifiable
         self.Z = None
@@ -1362,7 +1384,13 @@ class f(GammTerm):
         self.basis_kwargs = basis_kwargs
         self.by = by
         self.id = id
-        self.nk = nk
+
+        # Tensor bases can each have different number of basis functions
+        if len(variables) == 1 or isinstance(nk,list):
+         self.nk = nk
+        else:
+         self.nk = [nk for _ in range(len(variables))]
+              
         self.by_latent = by_latent
         
 class irf(GammTerm):
@@ -1374,10 +1402,15 @@ class irf(GammTerm):
                 basis:Callable=B_spline_basis,
                 basis_kwargs:dict={"convolve":True},
                 is_penalized:bool = True,
-                penalty:list[PenType] = [PenType.DIFFERENCE],
-                pen_kwargs:list[dict] = [{"m":2}]) -> None:
+                penalty:list[PenType] or None = None,
+                pen_kwargs:list[dict] or None = None) -> None:
         
-        # Initialization
+        # Default penalty setup
+        if penalty is None:
+           penalty = [PenType.DIFFERENCE]
+           pen_kwargs = [{"m":2}]
+        
+        # Initialization: ToDo: the deepcopy can be dropped now.
         super().__init__([variable], TermType.LSMOOTH, is_penalized, copy.deepcopy(penalty), copy.deepcopy(pen_kwargs))
         self.basis = basis
         self.basis_kwargs = basis_kwargs
@@ -1668,7 +1701,7 @@ class Formula():
                            for fl in range(fl_start,len(factor_levels[var])):
                               new_inter_coef_names.append(f"{var}_{coding_factors[var][fl]}")
                      else:
-                           for old_inter,old_idx,old_name in zip(interactions,inter_idx,inter_coef_names):
+                           for old_name in inter_coef_names:
                               for fl in range(fl_start,len(factor_levels[var])):
                                  new_inter_coef_names.append(old_name + f"_{var}_{coding_factors[var][fl]}")
 
@@ -1676,7 +1709,7 @@ class Formula():
                      if len(interactions) == 0:
                            new_inter_coef_names.append(var)
                      else:
-                           for old_inter,old_idx,old_name in zip(interactions,inter_idx,inter_coef_names):
+                           for old_name in inter_coef_names:
                               new_inter_coef_names.append(old_name + f"_{var}")
                   
                   inter_coef_names = copy.deepcopy(new_inter_coef_names)
@@ -1713,35 +1746,42 @@ class Formula():
          sterm = terms[sti]
          vars = sterm.variables
 
+         # Calculate Coef names
          if len(vars) > 1:
-            raise NotImplementedError("Multivariate smooth terms are not yet supported.")
+            term_n_coef = np.prod(sterm.nk)
+         else:
+            term_n_coef = sterm.nk
 
-         else: # Univariate smooth term
-            # Calculate Coef names
-            n_coef = sterm.nk
+         # Total coef accounting for potential by keywords.
+         n_coef = term_n_coef
 
-            if sterm.by is not None:
-               by_levels = factor_levels[sterm.by]
-               n_coef *= len(by_levels)
+         # var label
+         var_label = vars[0]
+         if len(vars) > 1:
+            var_label = "_".join(vars)
 
-               if sterm.by_latent is not False and self.has_sigma_split() is False:
-                     n_coef *= self.__n_j
-                     for by_state in range(self.__n_j):
-                        for by_level in by_levels:
-                           self.coef_names.extend([f"f_{vars[0]}_{ink}_{by_level}_{by_state}" for ink in range(sterm.nk)])
-               else:
-                  for by_level in by_levels:
-                     self.coef_names.extend([f"f_{vars[0]}_{ink}_{by_level}" for ink in range(sterm.nk)])
-            
-            else:
-               if sterm.by_latent is not False and self.has_sigma_split() is False:
+         if sterm.by is not None:
+            by_levels = factor_levels[sterm.by]
+            n_coef *= len(by_levels)
+
+            if sterm.by_latent is not False and self.has_sigma_split() is False:
+                  n_coef *= self.__n_j
                   for by_state in range(self.__n_j):
-                     self.coef_names.extend([f"f_{vars[0]}_{ink}_{by_state}" for ink in range(sterm.nk)])
-               else:
-                  self.coef_names.extend([f"f_{vars[0]}_{ink}" for ink in range(sterm.nk)])
-            
-            self.n_coef += n_coef
-            self.ordered_coef_per_term.append(n_coef)
+                     for by_level in by_levels:
+                        self.coef_names.extend([f"f_{var_label}_{ink}_{by_level}_{by_state}" for ink in range(term_n_coef)])
+            else:
+               for by_level in by_levels:
+                  self.coef_names.extend([f"f_{var_label}_{ink}_{by_level}" for ink in range(term_n_coef)])
+         
+         else:
+            if sterm.by_latent is not False and self.has_sigma_split() is False:
+               for by_state in range(self.__n_j):
+                  self.coef_names.extend([f"f_{var_label}_{ink}_{by_state}" for ink in range(term_n_coef)])
+            else:
+               self.coef_names.extend([f"f_{var_label}_{ink}" for ink in range(term_n_coef)])
+         
+         self.n_coef += n_coef
+         self.ordered_coef_per_term.append(n_coef)
 
       for rti in self.get_random_term_idx():
          rterm = terms[rti]
@@ -1828,25 +1868,24 @@ class Formula():
          if not sterm.is_identifiable:
             continue
          
+         sterm.Z = []
          vars = sterm.variables
 
-         if len(vars) > 1:
-            raise NotImplementedError("Multivariate smooth terms are not yet supported.")
-
-         else: # Univariate smooth term
-
-            # Calculate smooth term for corresponding covariate
-
-            # If the term needs to be identifiable I act as if you would have asked for nk+1!
+         for vi in range(len(vars)):
+            # If a smooth term needs to be identifiable I act as if you would have asked for nk+1!
             # so that the identifiable term is of the dimension expected.
-            id_nk = sterm.nk + 1
+            
+            if len(vars) > 1:
+               id_nk = sterm.nk[vi] + 1
+            else:
+               id_nk = sterm.nk + 1
 
-            matrix_term = sterm.basis(None,self.cov_flat[:,var_map[vars[0]]], None, id_nk,min_c=self.__var_mins[vars[0]],max_c=self.__var_maxs[vars[0]], **sterm.basis_kwargs)
+            matrix_term = sterm.basis(None,self.cov_flat[:,var_map[vars[vi]]], None, id_nk,min_c=self.__var_mins[vars[vi]],max_c=self.__var_maxs[vars[vi]], **sterm.basis_kwargs)
 
             # Wood (2017) 5.4.1 Identifiability constraints via QR. ToDo: Replace with cheaper reflection method.
             C = np.sum(matrix_term,axis=0).reshape(-1,1)
             Q,_ = scp.linalg.qr(C,pivoting=False,mode='full')
-            sterm.Z = Q[:,1:]
+            sterm.Z.append(Q[:,1:])
 
     def __build_penalties(self):
       col_S = self.n_coef
@@ -1964,140 +2003,156 @@ class Formula():
          sterm = terms[sti]
          vars = sterm.variables
 
+         # Calculate nCoef
          if len(vars) > 1:
-            raise NotImplementedError("Penalties for multivariate smooth terms are not yet supported.")
-
-         else: # Univariate smooth term
-
-            # Calculate nCoef
+            n_coef = np.prod(sterm.nk)
+         else:
             n_coef = sterm.nk
 
-            if sterm.by is not None:
-               by_levels = factor_levels[sterm.by]
+         if sterm.by is not None:
+            by_levels = factor_levels[sterm.by]
 
-            if not sterm.is_penalized:
-               if len(penalties) == 0:
+         if not sterm.is_penalized:
+            if len(penalties) == 0:
 
-                  added_not_penalized = n_coef
-                  if sterm.by is not None:
-                     added_not_penalized *= len(by_levels)
+               added_not_penalized = n_coef
+               if sterm.by is not None:
+                  added_not_penalized *= len(by_levels)
 
-                  if sterm.by_latent is not False and self.has_sigma_split() is False:
-                     added_not_penalized *= self.__n_j
+               if sterm.by_latent is not False and self.has_sigma_split() is False:
+                  added_not_penalized *= self.__n_j
 
-                  start_idx += added_not_penalized
-                  self.unpenalized_coef += added_not_penalized
-                  pen_start_idx = start_idx
+               start_idx += added_not_penalized
+               self.unpenalized_coef += added_not_penalized
+               pen_start_idx = start_idx
 
-                  warnings.warn(f"Smooth {sti} is not penalized. Smoothing terms should generally be penalized.")
+               warnings.warn(f"Smooth {sti} is not penalized. Smoothing terms should generally be penalized.")
+
+            else:
+               raise KeyError(f"Smooth {sti} is not penalized and placed in the formula after penalized terms. Unpenalized terms should be moved to the beginning of the formula, ideally behind any linear terms.")
+         
+         else:
+            
+            for penid,pen in enumerate(sterm.penalty):
+            
+               # Smooth terms can have multiple penalties.
+               # In that case the starting index of every subsequent
+               # penalty needs to be reset.
+               if penid > 0:
+                  cur_pen_idx = prev_pen_idx
+                  pen_i_s_idx = cur_pen_idx
+               else:
+                  pen_i_s_idx = pen_start_idx
+               #print(penid,pen_i_s_idx,pen,cur_pen_idx,pen_start_idx)
+               # We again have to deal with potential identifiable constraints!
+               # Then we again act as if n_k was n_k+1 for difference penalties
+
+               # penid % len(vars) because it will just go from 0-(len(vars)-1) and
+               # reset if penid >= len(vars) which might happen in case of multiple penalties on
+               # every tp basis
+
+               if len(vars) > 1:
+                  id_k = sterm.nk[penid % len(vars)]
+               else:
+                  id_k = n_coef
+
+               pen_kwargs = sterm.pen_kwargs[penid]
+               
+               # Determine penalty generator
+               if pen == PenType.DIFFERENCE:
+                  pen_generator = diff_pen
+                  if sterm.is_identifiable:
+                     id_k += 1
+                     pen_kwargs["Z"] = sterm.Z[penid % len(vars)]
 
                else:
-                  raise KeyError(f"Smooth {sti} is not penalized and placed in the formula after penalized terms. Unpenalized terms should be moved to the beginning of the formula, ideally behind any linear terms.")
-            
-            else:
-               
-               for penid,pen in enumerate(sterm.penalty):
-               
-                  # Smooth terms can have multiple penalties.
-                  # In that case the starting index of every subsequent
-                  # penalty needs to be reset.
-                  if penid > 0:
-                     cur_pen_idx = prev_pen_idx
-                     pen_i_s_idx = cur_pen_idx
-                  else:
-                     pen_i_s_idx = pen_start_idx
-                  #print(penid,pen_i_s_idx,pen,cur_pen_idx,pen_start_idx)
-                  # We again have to deal with potential identifiable constraints!
-                  # Then we again act as if n_k was n_k+1 for difference penalties
-                  id_k = n_coef
-                  pen_kwargs = sterm.pen_kwargs[penid]
+                  pen_generator = id_dist_pen
+
+               # Again get penalty elements used by this term.
+               pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = pen_generator(id_k,**pen_kwargs)
+
+               # Create lambda term
+               lTerm = LambdaTerm(start_index=pen_i_s_idx,
+                                 type = pen)
+
+               # For tensor product smooths we first have to recalculate:
+               # pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols via TP_pen()
+               # Then they can just be embedded via the calls below.
+
+               if len(vars) > 1:
+                  pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = TP_pen(scp.sparse.csc_array((pen_data,(pen_rows,pen_cols)),shape=(pen_cols[-1]+1,pen_cols[-1]+1)),
+                                                                                    scp.sparse.csc_array((chol_data,(chol_rows,chol_cols)),shape=(pen_cols[-1]+1,pen_cols[-1]+1)),
+                                                                                    penid % len(vars),sterm.nk)
+
+               # Embed first penalty - if the term has a by-keyword more are added below.
+               lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
+               lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
+               lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
                   
-                  # Determine penalty generator
-                  if pen == PenType.DIFFERENCE:
-                     pen_generator = diff_pen
-                     if sterm.is_identifiable:
-                        id_k += 1
-                        pen_kwargs["Z"] = sterm.Z
+               if sterm.by is not None:
+                  
+                  if sterm.id is not None:
 
-                  else:
-                     pen_generator = id_dist_pen
+                     pen_iter = len(by_levels) - 1
 
-                  # Again get penalty elements used by this term.
-                  pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = pen_generator(id_k,**pen_kwargs)
-
-                  # Create lambda term
-                  lTerm = LambdaTerm(start_index=pen_i_s_idx,
-                                    type = pen)
-
-                  # Embed first penalty - if the term has a by-keyword more are added below.
-                  lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
-                  lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
-                  lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
-                     
-                  if sterm.by is not None:
-                     
-                     if sterm.id is not None:
-
-                        pen_iter = len(by_levels) - 1
-
-                        if sterm.by_latent is not False and self.has_sigma_split() is False:
-                           pen_iter = (len(by_levels)*self.__n_j)-1
-
-                        for _ in range(pen_iter):
-                           lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
-                           lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
-
-                        # For pinv calculation during model fitting.
-                        lTerm.rep_sj = pen_iter + 1
-                        penalties.append(lTerm)
-
-                     else:
-                        # In case all levels get their own smoothing penalty - append first lterm then create new ones for
-                        # remaining levels.
-                        penalties.append(lTerm)
-
-                        # Make sure that this is set to None in case the lambda term for the first level received a start_idx reset.
-                        pen_start_idx = None 
-                        pen_i_s_idx = None
-
-                        pen_iter = len(by_levels) - 1
-
-                        if sterm.by_latent is not False and self.has_sigma_split() is False:
-                           pen_iter = (len(by_levels) * self.__n_j)-1
-
-                        for _ in range(pen_iter):
-
-                           # Create lambda term
-                           lTerm = LambdaTerm(start_index=pen_i_s_idx,
-                                             type = pen)
-
-                           # Embed penalties
-                           lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
-                           lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
-                           lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
-                           penalties.append(lTerm)
-
-                  else:
                      if sterm.by_latent is not False and self.has_sigma_split() is False:
-                        # Handle by latent split - all latent levels get unique id
+                        pen_iter = (len(by_levels)*self.__n_j)-1
+
+                     for _ in range(pen_iter):
+                        lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
+                        lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
+
+                     # For pinv calculation during model fitting.
+                     lTerm.rep_sj = pen_iter + 1
+                     penalties.append(lTerm)
+
+                  else:
+                     # In case all levels get their own smoothing penalty - append first lterm then create new ones for
+                     # remaining levels.
+                     penalties.append(lTerm)
+
+                     # Make sure that this is set to None in case the lambda term for the first level received a start_idx reset.
+                     pen_start_idx = None 
+                     pen_i_s_idx = None
+
+                     pen_iter = len(by_levels) - 1
+
+                     if sterm.by_latent is not False and self.has_sigma_split() is False:
+                        pen_iter = (len(by_levels) * self.__n_j)-1
+
+                     for _ in range(pen_iter):
+
+                        # Create lambda term
+                        lTerm = LambdaTerm(start_index=pen_i_s_idx,
+                                          type = pen)
+
+                        # Embed penalties
+                        lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
+                        lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
+                        lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
                         penalties.append(lTerm)
 
-                        # Make sure that this is set to None in case the lambda term for the first level received a start_idx reset.
-                        pen_start_idx = None 
-                        pen_i_s_idx = None
+               else:
+                  if sterm.by_latent is not False and self.has_sigma_split() is False:
+                     # Handle by latent split - all latent levels get unique id
+                     penalties.append(lTerm)
 
-                        for _ in range(self.__n_j-1):
-                           # Create lambda term
-                           lTerm = LambdaTerm(start_index=pen_i_s_idx,
-                                             type = pen)
+                     # Make sure that this is set to None in case the lambda term for the first level received a start_idx reset.
+                     pen_start_idx = None 
+                     pen_i_s_idx = None
 
-                           # Embed penalties
-                           lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
-                           lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
-                           lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
-                           penalties.append(lTerm)
-                     else:
+                     for _ in range(self.__n_j-1):
+                        # Create lambda term
+                        lTerm = LambdaTerm(start_index=pen_i_s_idx,
+                                          type = pen)
+
+                        # Embed penalties
+                        lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
+                        lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
+                        lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
                         penalties.append(lTerm)
+                  else:
+                     penalties.append(lTerm)
 
          # Keep track of previous penalty starting index
          prev_pen_idx = cur_pen_idx
@@ -2218,7 +2273,7 @@ def build_sparse_matrix_from_formula(terms,has_intercept,
                                      factor_levels,cov_flat,
                                      cov,n_j,state_est_flat,
                                      state_est,pool=None,
-                                     use_only=None,tol=1e-4):
+                                     use_only=None,tol=1e-10):
 
    n_y = cov_flat.shape[0]
    elements = []
@@ -2392,84 +2447,95 @@ def build_sparse_matrix_from_formula(terms,has_intercept,
       sterm = terms[sti]
       vars = sterm.variables
 
+      term_ridx = []
+
+      # Calculate Coef number for control checks
       if len(vars) > 1:
-         raise NotImplementedError("Multivariate smooth terms are not yet supported.")
-
-      else: # Univariate smooth term
-         term_ridx = []
-
-         # Calculate Coef names
+         n_coef = np.prod(sterm.nk)
+      else:
          n_coef = sterm.nk
-         #print(n_coef)
+      #print(n_coef)
 
-         if sterm.by is not None:
-            by_levels = factor_levels[sterm.by]
-            n_coef *= len(by_levels)
+      if sterm.by is not None:
+         by_levels = factor_levels[sterm.by]
+         n_coef *= len(by_levels)
 
-            if sterm.by_latent is not False and has_sigma_split is False:
-                  n_coef *= n_j
-            
-         # Calculate smooth term for corresponding covariate
+         if sterm.by_latent is not False and has_sigma_split is False:
+               n_coef *= n_j
+         
+      # Calculate smooth term for corresponding covariate
 
-         # Handle identifiability constraints
-         id_nk = sterm.nk
+      # Handle identifiability constraints for every basis and
+      # optionally update tensor surface.
+      for vi in range(len(vars)):
+
+         if len(vars) > 1:
+            id_nk = sterm.nk[vi]
+         else:
+            id_nk = sterm.nk
 
          if sterm.is_identifiable:
             id_nk += 1
+
          #print(var_mins[vars[0]],var_maxs[vars[0]])
-         matrix_term = sterm.basis(None,cov_flat[:,var_map[vars[0]]], None, id_nk, min_c=var_mins[vars[0]],max_c=var_maxs[vars[0]], **sterm.basis_kwargs)
+         matrix_term_v = sterm.basis(None,cov_flat[:,var_map[vars[vi]]], None, id_nk, min_c=var_mins[vars[vi]],max_c=var_maxs[vars[vi]], **sterm.basis_kwargs)
 
          if sterm.is_identifiable:
-            matrix_term = matrix_term @ sterm.Z
-
-         m_rows, m_cols = matrix_term.shape
-         #print(m_cols)
-         term_ridx = [ridx[:] for _ in range(m_cols)]
-
-         # Handle optional by keyword
-         if sterm.by is not None:
-            new_term_ridx = []
-
-            by_cov = cov_flat[:,var_map[sterm.by]]
-            
-            # Split by cov and update rows with elements in columns
-            for by_level in range(len(by_levels)):
-               by_cidx = by_cov == by_level
-               for m_coli in range(m_cols):
-                  new_term_ridx.append(term_ridx[m_coli][by_cidx,])
-
-            term_ridx = new_term_ridx
+            matrix_term_v = matrix_term_v @ sterm.Z[vi]
          
-         # Handle split by latent variable if a shared sigma term across latent stages is assumed.
-         if sterm.by_latent is not False and has_sigma_split is False:
-            new_term_ridx = []
+         if vi == 0:
+            matrix_term = matrix_term_v
+         else:
+            matrix_term = TP_basis_calc(matrix_term,matrix_term_v)
 
-            # Split by state and update rows with elements in columns
-            for by_state in range(n_j):
-               for m_coli in range(len(term_elements)):
-                  # Adjust state estimate for potential by split earlier.
-                  col_cor_state_est = state_est_flat[term_ridx[m_coli]]
-                  new_term_ridx.append(term_ridx[m_coli][col_cor_state_est == by_state,])
+      m_rows, m_cols = matrix_term.shape
+      #print(m_cols)
+      term_ridx = [ridx[:] for _ in range(m_cols)]
 
-            term_ridx = new_term_ridx
+      # Handle optional by keyword
+      if sterm.by is not None:
+         new_term_ridx = []
 
-         f_cols = len(term_ridx)
+         by_cov = cov_flat[:,var_map[sterm.by]]
+         
+         # Split by cov and update rows with elements in columns
+         for by_level in range(len(by_levels)):
+            by_cidx = by_cov == by_level
+            for m_coli in range(m_cols):
+               new_term_ridx.append(term_ridx[m_coli][by_cidx,])
 
-         if n_coef != f_cols:
-            raise KeyError("Not all model matrix columns were created.")
+         term_ridx = new_term_ridx
+      
+      # Handle split by latent variable if a shared sigma term across latent stages is assumed.
+      if sterm.by_latent is not False and has_sigma_split is False:
+         new_term_ridx = []
 
-         # Find basis elements > 0 and collect correspondings elements and row indices
-         for m_coli in range(f_cols):
-            final_ridx = term_ridx[m_coli]
-            final_col = matrix_term[final_ridx,m_coli%m_cols]
+         # Split by state and update rows with elements in columns
+         for by_state in range(n_j):
+            for m_coli in range(len(term_elements)):
+               # Adjust state estimate for potential by split earlier.
+               col_cor_state_est = state_est_flat[term_ridx[m_coli]]
+               new_term_ridx.append(term_ridx[m_coli][col_cor_state_est == by_state,])
 
-            # Tolerance row index for this columns
-            cidx = abs(final_col) > tol
-            if use_only is None or sti in use_only:
-               elements.extend(final_col[cidx])
-               rows.extend(final_ridx[cidx])
-               cols.extend([ci for _ in range(len(final_ridx[cidx]))])
-            ci += 1
+         term_ridx = new_term_ridx
+
+      f_cols = len(term_ridx)
+
+      if n_coef != f_cols:
+         raise KeyError("Not all model matrix columns were created.")
+
+      # Find basis elements > 0 and collect correspondings elements and row indices
+      for m_coli in range(f_cols):
+         final_ridx = term_ridx[m_coli]
+         final_col = matrix_term[final_ridx,m_coli%m_cols]
+
+         # Tolerance row index for this columns
+         cidx = abs(final_col) > tol
+         if use_only is None or sti in use_only:
+            elements.extend(final_col[cidx])
+            rows.extend(final_ridx[cidx])
+            cols.extend([ci for _ in range(len(final_ridx[cidx]))])
+         ci += 1
 
    for rti in rtx:
       rterm = terms[rti]
@@ -2496,23 +2562,20 @@ def build_sparse_matrix_from_formula(terms,has_intercept,
 
    return mat
 
-def step_fellner_schall_sparse(gInv,CholInv,Perm,emb_SJ,emb_DJ,cCoef,cLam,sigma,verbose=False):
+def step_fellner_schall_sparse(gInv,CholInv,Perm,emb_SJ,emb_DJ,cCoef,cLam,sigma,verbose=True):
   # Perform a generalized Fellner Schall update step for a lambda term. This update rule is
   # discussed in Wood & Fasiolo (2016) and used here because of it's efficiency.
   
-  # ToDo: There is a bug somewhere in here that leads to negative
-  # denom values. This should not happen based on Theorem 1 in Wood & Fasiolo (2017)
-  # so I am doing something wrong. This ugly max hack for now prevents this but of course this is no
-  # solution...
   B = CholInv @ Perm @ emb_DJ
   num = (gInv @ emb_SJ).trace() - B.power(2).sum()
   denom = cCoef.T @ emb_SJ @ cCoef
   
-  cLam = sigma * max(num / denom,1e-10) * cLam
+  cLam = sigma * max(num / denom,1e-7) * cLam
+  cLam = max(cLam,1e-7) # Prevent Lambda going to zero
+  cLam = min(cLam,1e+7) # Prevent overflow
+
   if verbose:
    print(f"Num = {(gInv @ emb_SJ).trace()} - {B.power(2).sum()} == {num}\nDenom = {denom}; Lambda = {cLam}")
-  cLam = max(cLam,1e-10) # Prevent Lambda going to zero
-  cLam = min(cLam,1e+10) # Prevent overflow
 
   return cLam
 
@@ -2575,7 +2638,7 @@ def solve_am_sparse(y,X,penalties,col_S,maxiter=10,pinv="svd"):
                # where I is the identity.
                if pinv != "svd":
                   t = scp.sparse.identity(SJ.shape[1],format="csc")
-                  L,code = cpp_chol(SJ.T @ SJ + 1e-7*t)
+                  L,code = cpp_chol(SJ.T @ SJ + 1e-10*t)
 
                   if code != 0:
                      warnings.warn(f"Cholesky factor computation failed with code {code}")
