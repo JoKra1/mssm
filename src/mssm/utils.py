@@ -2562,12 +2562,11 @@ def build_sparse_matrix_from_formula(terms,has_intercept,
 
    return mat
 
-def step_fellner_schall_sparse(gInv,CholInv,Perm,emb_SJ,emb_DJ,cCoef,cLam,sigma,verbose=True):
+def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,sigma,verbose=True):
   # Perform a generalized Fellner Schall update step for a lambda term. This update rule is
   # discussed in Wood & Fasiolo (2016) and used here because of it's efficiency.
   
-  B = CholInv @ Perm @ emb_DJ
-  num = (gInv @ emb_SJ).trace() - B.power(2).sum()
+  num = (gInv @ emb_SJ).trace() - Bps
   denom = cCoef.T @ emb_SJ @ cCoef
   
   cLam = sigma * max(num / denom,1e-7) * cLam
@@ -2575,7 +2574,7 @@ def step_fellner_schall_sparse(gInv,CholInv,Perm,emb_SJ,emb_DJ,cCoef,cLam,sigma,
   cLam = min(cLam,1e+7) # Prevent overflow
 
   if verbose:
-   print(f"Num = {(gInv @ emb_SJ).trace()} - {B.power(2).sum()} == {num}\nDenom = {denom}; Lambda = {cLam}")
+   print(f"Num = {(gInv @ emb_SJ).trace()} - {Bps} == {num}\nDenom = {denom}; Lambda = {cLam}")
 
   return cLam
 
@@ -2690,16 +2689,19 @@ def solve_am_sparse(y,X,penalties,col_S,maxiter=10,pinv="svd"):
       # Sigma estimate from Wood & Fasiolo (2016)
       edf = colsX
 
-      # ToDo: The terms here could be reused in the actual update below.
+      # Calculate edf needed for sigma
+      Bs = []
       for lTerm in penalties:
          B = InvCholXXSP @ Perm @ lTerm.D_J_emb
-         edf -= (lTerm.lam * B.power(2).sum())
+         Bps = B.power(2).sum()
+         edf -= (lTerm.lam * Bps)
+         Bs.append(Bps)
 
       sigma = resDot / (rowsX - edf)
 
       # Perform Fellner Schall Update
-      for lTerm in penalties:
-         cLam = step_fellner_schall_sparse(S_pinv,InvCholXXSP,Perm,lTerm.S_J_emb,lTerm.D_J_emb,coef,lTerm.lam,sigma)
+      for lti,lTerm in enumerate(penalties):
+         cLam = step_fellner_schall_sparse(S_pinv,lTerm.S_J_emb,Bs[lti],coef,lTerm.lam,sigma)
 
          if cLam < 0:
             warnings.warn(f"Resetting Lambda Reason:\nPrevious Lambda = {lTerm.lam}, Next Lambda = {cLam}, Sigma = {sigma}")
