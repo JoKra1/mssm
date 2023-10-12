@@ -384,7 +384,7 @@ def translate_sparse(mat):
 
   return data, rows, cols
 
-def diff_pen(n,m=2,Z=None):
+def diff_pen(n,m=2,Z=None,sel=False):
   # Creates difference (order=m) n*n penalty matrix
   # Based on code in Eilers & Marx (1996) and Wood (2017)
   warnings.warn("Sparse difference penalties are not yet implemented. Instead a dense penalty is converted to a sparse one, reducing performance.")
@@ -396,7 +396,26 @@ def diff_pen(n,m=2,Z=None):
   if Z is not None:
      S = Z.T @ S @ Z
      D = Z.T @ D
-     n -= 1
+  
+  # mgcv scales penalties - so I do this
+  # as well. It's not exactly the same though.
+  FS = np.linalg.norm(S,'fro')
+  S = S / FS
+  D = D / FS**0.5
+
+  if sel:
+     # Null-space penalty
+     # based on: https://eric-pedersen.github.io/mgcv-esa-workshop/slides/03-model-selection.pdf
+     # and: https://rdrr.io/cran/mgcv/man/gam.selection.html
+     # ToDo: If the null-space dimension is > 1, then the behavior below
+     # does not match mgcv. Simon Wood places a "separate penalty on every null-space component"
+     # https://stat.ethz.ch/R-manual/R-devel/library/mgcv/html/smooth.construct.fs.smooth.spec.html
+     # so would for every column in D create an individual S + individual lambda term. I need to change
+     # this here to match that behavior.
+     s, U =scp.linalg.eig(S,left=True,right=False)
+     D = U[:,s <= 1e-7]
+     S = D @ D.T
+
 
   S = scp.sparse.csc_array(S)
   D = scp.sparse.csc_array(D)
@@ -2566,10 +2585,9 @@ def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,sigma,verbose=True):
   # Perform a generalized Fellner Schall update step for a lambda term. This update rule is
   # discussed in Wood & Fasiolo (2016) and used here because of it's efficiency.
   
-  num = (gInv @ emb_SJ).trace() - Bps
-  denom = cCoef.T @ emb_SJ @ cCoef
-  
-  cLam = sigma * max(num / denom,1e-7) * cLam
+  num = max(0,(gInv @ emb_SJ).trace() - Bps)
+  denom = max(0,cCoef.T @ emb_SJ @ cCoef)
+  cLam = sigma * (num / denom) * cLam
   cLam = max(cLam,1e-7) # Prevent Lambda going to zero
   cLam = min(cLam,1e+7) # Prevent overflow
 
@@ -2679,7 +2697,7 @@ def solve_am_sparse(y,X,penalties,col_S,maxiter=10,pinv="svd"):
       Perm = scp.sparse.csc_array((P,(Pr,Pc)),shape=(nP,nP))
 
       if code != 0:
-         warnings.warn(f"Solving for coef failed with code {code}")
+         raise ArithmeticError(f"Solving for coef failed with code {code}. Model is likely unidentifiable.")
 
       # Build sigma
       pred = (X @ coef).reshape(-1,1)
@@ -2691,11 +2709,14 @@ def solve_am_sparse(y,X,penalties,col_S,maxiter=10,pinv="svd"):
 
       # Calculate edf needed for sigma
       Bs = []
+      term_edfs = []
       for lTerm in penalties:
          B = InvCholXXSP @ Perm @ lTerm.D_J_emb
          Bps = B.power(2).sum()
-         edf -= (lTerm.lam * Bps)
+         pen_params = lTerm.lam * Bps
+         edf -= pen_params
          Bs.append(Bps)
+         term_edfs.append(lTerm.S_J.shape[1] - pen_params)
 
       sigma = resDot / (rowsX - edf)
 
