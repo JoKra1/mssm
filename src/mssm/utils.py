@@ -2750,13 +2750,16 @@ class Family:
 
 class Binomial(Family):
    
-   def __init__(self, link: Link=Logit, scale: float = 1, n = 1) -> None:
+   def __init__(self, link: Link=Logit(), scale: float = 1, n = 1) -> None:
       super().__init__(link,False,scale)
       self.n = n # Number of independent samples from Binomial!
    
    def init_mu(self,y):
       # Estimation assumes proportions as dep. variable
-      return y/self.n
+      prop = y/self.n
+      prop[prop >= 1] = 1 - 1e-2
+      prop[prop <= 0] = 1e-2
+      return prop
    
    def V(self,mu):
       # Faraway (2016):
@@ -2794,7 +2797,7 @@ def PIRLS_pdat_weights(y,mu,eta,family:Family):
    # Compute pseudo-data and weights for Penalized Reweighted Least Squares iteration (Wood, 2017, 6.1.1)
    # Calculation is based on a(mu) = 1, so reflects Fisher scoring!
    dy1 = family.link.dy1(mu)
-   z = dy1 * (y - mu) / (1 + eta)
+   z = dy1 * (y - mu) / 1 + eta
    w = 1 / (dy1**2 * family.V(mu))
    return z, w
 
@@ -2808,10 +2811,11 @@ def PIRLS(y,yb,mu,eta,X,Xb,S_emb,family,maxiter_inner):
       if isinstance(family,Gaussian) == False:
          # Compute weights and pseudo-dat
          z, w = PIRLS_pdat_weights(y,mu,eta,family)
-         
-         Wr = scp.sparse.spdiags([np.sqrt(w)],[0])
+
+         Wr = scp.sparse.spdiags([np.sqrt(np.ndarray.flatten(w))],[0])
+
          # Update yb and Xb
-         yb = Wr @ z.reshape(-1,1)
+         yb = Wr @ z
          Xb = Wr @ X
       
       # Solve additive model
@@ -2827,9 +2831,9 @@ def PIRLS(y,yb,mu,eta,X,Xb,S_emb,family,maxiter_inner):
       if isinstance(family,Gaussian) == False:
          mu = family.link.fi(eta)
       
-      return y,yb,mu,eta,X,Xb,z,Wr,InvCholXXSP,Pr,coef
+   return y,yb,mu,eta,X,Xb,z,Wr,InvCholXXSP,Pr,coef
 
-def solve_gamm_sparse(y,X,penalties,col_S,family:Family,maxiter_outer=10,maxiter_inner=1,pinv="svd",gamma=0):
+def solve_gamm_sparse(y,X,penalties,col_S,family:Family,maxiter_outer=10,maxiter_inner=1,pinv="svd"):
    # Estimates a penalized Generalized additive mixed model, following the steps outlined in Wood (2017)
    rowsX,colsX = X.shape
    coef = None
@@ -2843,7 +2847,7 @@ def solve_gamm_sparse(y,X,penalties,col_S,family:Family,maxiter_outer=10,maxiter
    Xb = X
 
    # mu and eta (start estimates in case the family is not Gaussian)
-   mu = y + gamma
+   mu = y
    eta = mu
 
    if isinstance(family,Gaussian) == False:

@@ -200,19 +200,14 @@ class GAMM(MSSM):
                                                            var_mins,var_maxs,factor_levels,
                                                            cov_flat,cov,n_j,state_est_flat,state_est)
         
-        # Get an initial estimate of mu:
+        # Constrain y/get initial estimate of mu:
         init_mu_flat = self.family.init_mu(self.formula.y_flat)
-
-        if isinstance(self.family,utils.Binomial):
-            gamma = 0.001
-        else:
-            gamma = 0
 
         # Now we have to estimate the model
         coef,eta,wres,scale,LVI,edf,term_edf,penalty = utils.solve_gamm_sparse(init_mu_flat,model_mat,
                                                                                penalties,self.formula.n_coef,
                                                                                self.family,maxiter_outer,
-                                                                               maxiter_inner,gamma=gamma)
+                                                                               maxiter_inner)
         
         self.__coef = coef
         self.__sigma = scale # ToDo: scale name is used in another context for more general mssm..
