@@ -15,7 +15,9 @@ from collections.abc import Callable
 
 class MSSM:
 
-    def __init__(self,formula:utils.Formula,
+    def __init__(self,
+                 formula:utils.Formula,
+                 family:utils.Family,
                  p_formula=None,
                  pre_llk_fun:Callable = None,
                  estimate_pi:bool=False,
@@ -25,6 +27,9 @@ class MSSM:
         # Formulas associated with model
         self.formula = formula # For coefficients
         self.p_formula = p_formula # For sojourn time distributions
+
+        # Family of model
+        self.family = family
         
         ## "prior" Log-likelihood functions
         self.pre_llk_fun = pre_llk_fun
@@ -130,28 +135,42 @@ class MSSM:
 
 class GAMM(MSSM):
 
-    def __init__(self, formula: utils.Formula):
-        super().__init__(formula)
+    def __init__(self,
+                 formula: utils.Formula,
+                 family: utils.Family):
+        super().__init__(formula,family)
+
         self.pred = None
         self.res = None
         self.edf = None
+        self.term_edf = None
 
         self.lvi = None
+        self.penalty = 0
 
     ##################################### Getters #####################################
 
     def get_pars(self):
         return self.__coef,self.__sigma
     
-    def get_llk(self):
-        if self.res is not None:
-            resDot = self.res.T.dot(self.res)[0,0]
-            return resDot
+    def get_llk(self,penalized=True):
+        # Get (Penalized) log-likelihood of estimated model.
+        pen = 0
+        if penalized:
+            pen = self.penalty
+        if self.pred is not None:
+            mu = self.pred
+            if isinstance(self.family,utils.Gaussian) == False:
+                mu = self.family.link.fi(self.pred)
+            if self.family.twopar:
+                return self.family.llk(self.formula.y_flat,mu,self.__sigma) - pen
+            else:
+                return self.family.llk(self.formula.y_flat,mu) - pen
         return None
     
     ##################################### Fitting #####################################
     
-    def fit(self,maxiter=20):
+    def fit(self,maxiter_outer=20,maxiter_inner=1):
 
         # We need the initialized penalties
         penalties = self.formula.penalties
@@ -181,15 +200,27 @@ class GAMM(MSSM):
                                                            var_mins,var_maxs,factor_levels,
                                                            cov_flat,cov,n_j,state_est_flat,state_est)
         
+        # Get an initial estimate of mu:
+        init_mu_flat = self.family.init_mu(self.formula.y_flat)
+
+        if isinstance(self.family,utils.Binomial):
+            gamma = 0.001
+        else:
+            gamma = 0
+
         # Now we have to estimate the model
-        coef,pred,res,sigma,LVI,edf = utils.solve_am_sparse(self.formula.y_flat,model_mat,penalties,
-                                                    self.formula.n_coef,maxiter)
+        coef,eta,wres,scale,LVI,edf,term_edf,penalty = utils.solve_gamm_sparse(init_mu_flat,model_mat,
+                                                                               penalties,self.formula.n_coef,
+                                                                               self.family,maxiter_outer,
+                                                                               maxiter_inner,gamma=gamma)
         
         self.__coef = coef
-        self.__sigma = sigma
-        self.pred = pred
-        self.res = res
+        self.__sigma = scale # ToDo: scale name is used in another context for more general mssm..
+        self.pred = eta
+        self.res = wres
         self.edf = edf
+        self.term_edf = term_edf
+        self.penalty = penalty
 
         self.lvi = LVI
     

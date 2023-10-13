@@ -2587,17 +2587,335 @@ def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,sigma,verbose=True):
   
   num = max(0,(gInv @ emb_SJ).trace() - Bps)
   denom = max(0,cCoef.T @ emb_SJ @ cCoef)
-  cLam = sigma * (num / denom) * cLam
-  cLam = max(cLam,1e-7) # Prevent Lambda going to zero
-  cLam = min(cLam,1e+7) # Prevent overflow
+  nLam = sigma * (num / denom) * cLam
+  nLam = max(nLam,1e-7) # Prevent Lambda going to zero
+  nLam = min(nLam,1e+7) # Prevent overflow
 
   if verbose:
-   print(f"Num = {(gInv @ emb_SJ).trace()} - {Bps} == {num}\nDenom = {denom}; Lambda = {cLam}")
+   print(f"Num = {(gInv @ emb_SJ).trace()} - {Bps} == {num}\nDenom = {denom}; Lambda = {nLam}")
 
-  return cLam
+  return nLam-cLam
+
+def compute_S_emb_pinv_det(col_S,penalties,pinv):
+   # Computes final S multiplied with lambda
+   # and the pseudo-inverse of this term.
+   cIndexPinv = 0
+   n_lterms = len(penalties)
+   S_emb = None
+   S_pinv_elements = []
+   S_pinv_rows = []
+   S_pinv_cols = []
+
+   SJ = None
+   SJ_terms = 0
+   
+   # Build S_emb and pinv(S_emb)
+   for lti,lTerm in enumerate(penalties):
+      #print(f"pen: {lti}")
+
+      if lTerm.start_index is not None:
+         cIndexPinv = lTerm.start_index
+
+      # Collect number of penalties on the term
+      SJ_terms += 1
+
+      # We need to compute the pseudo-inverse on the penalty block (so sum of all
+      # penalties weighted by lambda) for the term so we first add all penalties
+      # on this term together.
+      if SJ is None:
+         SJ = lTerm.S_J*lTerm.lam
+      else:
+         SJ += lTerm.S_J*lTerm.lam
+
+      # Add S_J_emb * lambda to the overall S_emb
+      if lti == 0:
+         S_emb = lTerm.S_J_emb * lTerm.lam
+      else:
+         S_emb += lTerm.S_J_emb * lTerm.lam
+
+      if lti < (n_lterms - 1) and penalties[lti + 1].start_index is not None:
+         #print("Skip")
+         continue
+      else: # Now handle all pinv calculations because all penalties associated with a term have been collected in SJ
+         #print(f"repeat: {lTerm.rep_sj}")
+         #print(f"number of penalties on term: {SJ_terms}")
+         if SJ_terms == 1 and lTerm.type == PenType.IDENTITY:
+            #print("Identity shortcut")
+            SJ_pinv_elements,SJ_pinv_rows,SJ_pinv_cols,_,_,_ = id_dist_pen(SJ.shape[1],lambda x: 1/lTerm.lam)
+         else:
+            # Compute pinv(SJ) via cholesky factor L so that L @ L' = SJ' @ SJ.
+            # If SJ is full rank, then pinv(SJ) = inv(L)' @ inv(L) @ SJ'.
+            # However, SJ' @ SJ will usually be rank deficient so we add e=1e-7 to the main diagonal, because:
+            # As e -> 0 we get closer to pinv(SJ) if we base it on L_e in L_e @ L_e' = SJ' @ SJ + e*I
+            # where I is the identity.
+            if pinv != "svd":
+               t = scp.sparse.identity(SJ.shape[1],format="csc")
+               L,code = cpp_chol(SJ.T @ SJ + 1e-10*t)
+
+               if code != 0:
+                  warnings.warn(f"Cholesky factor computation failed with code {code}")
+
+               LI = scp.sparse.linalg.spsolve(L,t)
+               SJ_pinv = LI.T @ LI @ SJ.T
+               #print(np.max(abs((SJ.T @ SJ @ SJ_pinv - SJ).toarray())))
+
+            # Compute pinv via SVD
+            else:
+               u, Sig, vt = scp.sparse.linalg.svds(SJ,SJ.shape[1]-1)
+               rs = [1/s if s > 1e-7 else 0 for s in Sig]
+               SJ_pinv = vt.T @ np.diag(rs) @ u.T
+               SJ_pinv = scp.sparse.csc_array(SJ_pinv)
+
+            SJ_pinv_elements,SJ_pinv_rows,SJ_pinv_cols = translate_sparse(SJ_pinv)
+         
+         SJ_pinv_rows = np.array(SJ_pinv_rows)
+         SJ_pinv_cols = np.array(SJ_pinv_cols)
+
+         for _ in range(lTerm.rep_sj):
+            S_pinv_elements.extend(SJ_pinv_elements)
+            S_pinv_rows.extend(SJ_pinv_rows + cIndexPinv)
+            S_pinv_cols.extend(SJ_pinv_cols + cIndexPinv)
+            cIndexPinv += (SJ_pinv_cols[-1] + 1)
+         
+         # Reset number of penalties and SJ
+         SJ = None
+         SJ_terms = 0
+
+   S_pinv = scp.sparse.csc_array((S_pinv_elements,(S_pinv_rows,S_pinv_cols)),shape=(col_S,col_S))
+   return S_emb, S_pinv
+
+class Link:
+   
+   def f(self,mu):
+      # Link function f() mapping mean mu of an exponential family to the model prediction f(mu) = eta
+      # Wood (2017, 3.1.2) and Faraway (2016)
+      pass
+
+   def fi(self,eta):
+      # Inverse of the link function mapping eta = f(mu) to the mean fi(eta) = fi(f(mu)) = mu
+      # Faraway (2016)
+      pass
+
+   def dy1(self,mu):
+      # First derivative of f(mu) with respect to mu
+      # Needed for Fisher scoring/PIRLS (Wood, 2017)
+      pass
+
+class Logit(Link):
+
+   def f(self, mu):
+      # Canonical link for binomial distribution
+      # with mu = p the probability of success
+      return np.log(mu / (1 - mu))
+
+   def fi(self,eta):
+      # eta = log-odds, so mu = exp(eta) / (1 + exp(eta))
+      # see Faraway (2016):
+      return np.exp(eta) / (1 + np.exp(eta))
+   
+   def dy1(self,mu):
+      # f(mu) = log(mu / (1 - mu))
+      #       = log(mu) - log(1 - mu)
+      # dln(x)/dx = 1/x and sum rule: 
+      # df(mu)/dmu = 1/mu - 1/(1 - mu)
+      # Which Wolfram simplifies to:
+      # df(mu)/dmu = 1 / (mu - mu**2) = 1/ ((1-mu)mu)
+      # Both should be fine, but the latter matches Faraway (2016):
+      return 1 / ((1 - mu) * mu)
+
+
+class Family:
+   # Base class to be implemented by Exp. family member
+   def __init__(self,link:Link or None,twopar:bool,scale:float=None) -> None:
+      self.link = link
+      self.twopar = twopar
+      self.scale = scale # Known scale parameter!
+
+   def init_mu(self,y):
+      # Convenience function to compute an initial mu estimate passed to the
+      # GAMM/PIRLS estimation routine
+      return y
+   
+   def V(self,mu,**kwargs):
+      # Variance function (Wood, 2017, 3.1.2)
+      pass
+   
+   def llk(self,y,mu,**kwargs):
+      # log-likelihood of y under this family with mean=mu
+      pass
+   
+   def lp(self,y,mu,**kwargs):
+      # Log-probability of observing every value in y under this family with mean=mu
+      pass
+
+class Binomial(Family):
+   
+   def __init__(self, link: Link=Logit, scale: float = 1, n = 1) -> None:
+      super().__init__(link,False,scale)
+      self.n = n # Number of independent samples from Binomial!
+   
+   def init_mu(self,y):
+      # Estimation assumes proportions as dep. variable
+      return y/self.n
+   
+   def V(self,mu):
+      # Faraway (2016):
+      return mu * (1 - mu)/self.n
+   
+   def lp(self,y,mu):
+      # y is counts of success
+      return scp.stats.binom.logpmf(k=y,p=mu,n=self.n)
+   
+   def llk(self,y,mu):
+      # y is counts of success
+      return sum(self.lp(y,mu,self.n))
+
+class Gaussian(Family):
+   def __init__(self, link: Link=None, scale: float = None) -> None:
+      super().__init__(link, True, scale)
+
+   def est_scale(self,res,rows_X,total_edf):
+      # Sigma estimate from Wood & Fasiolo (2016)
+      resDot = res.T.dot(res)[0,0]
+      sigma = resDot / (rows_X - total_edf)
+      return sigma
+
+   def V(self,mu):
+      # Faraway (2016)
+      return np.ones(len(mu))
+   
+   def lp(self,y,mu,sigma=1):
+      return scp.stats.norm.logpdf(y,loc=mu,scale=math.sqrt(sigma))
+   
+   def llk(self,y,mu,sigma = 1):
+      return sum(self.lp(y,mu,sigma))
+
+def PIRLS_pdat_weights(y,mu,eta,family:Family):
+   # Compute pseudo-data and weights for Penalized Reweighted Least Squares iteration (Wood, 2017, 6.1.1)
+   # Calculation is based on a(mu) = 1, so reflects Fisher scoring!
+   dy1 = family.link.dy1(mu)
+   z = dy1 * (y - mu) / (1 + eta)
+   w = 1 / (dy1**2 * family.V(mu))
+   return z, w
+
+def PIRLS(y,yb,mu,eta,X,Xb,S_emb,family,maxiter_inner):
+   # Perform Penalized Iterative Reweighted Least Squares for current lambda parameter (Wood, 2017,6.1.1)
+   prev_coef = None
+   z = None
+   Wr = None
+   for i_iter in range(maxiter_inner):
+
+      if isinstance(family,Gaussian) == False:
+         # Compute weights and pseudo-dat
+         z, w = PIRLS_pdat_weights(y,mu,eta,family)
+         
+         Wr = scp.sparse.spdiags([np.sqrt(w)],[0])
+         # Update yb and Xb
+         yb = Wr @ z.reshape(-1,1)
+         Xb = Wr @ X
+      
+      # Solve additive model
+      InvCholXXSP, Pr, coef, code = cpp_solve_am(yb,Xb,S_emb)
+
+      if code != 0:
+         raise ArithmeticError(f"Solving for coef failed with code {code}. Model is likely unidentifiable.")
+      
+      # Update mu & eta
+      eta = (X @ coef).reshape(-1,1)
+      mu = eta
+
+      if isinstance(family,Gaussian) == False:
+         mu = family.link.fi(eta)
+      
+      return y,yb,mu,eta,X,Xb,z,Wr,InvCholXXSP,Pr,coef
+
+def solve_gamm_sparse(y,X,penalties,col_S,family:Family,maxiter_outer=10,maxiter_inner=1,pinv="svd",gamma=0):
+   # Estimates a penalized Generalized additive mixed model, following the steps outlined in Wood (2017)
+   rowsX,colsX = X.shape
+   coef = None
+   prev_lam_delta = None
+
+   # Additive mixed model can simply be fit on y and X
+   # Generalized mixedl model needs to be fit on weighted X and pseudo-dat
+   # but the same routine can be used (Wood, 2017) so both should end
+   # up in the same variables passed down:
+   yb = y
+   Xb = X
+
+   # mu and eta (start estimates in case the family is not Gaussian)
+   mu = y + gamma
+   eta = mu
+
+   if isinstance(family,Gaussian) == False:
+      eta = family.link.f(mu)
+
+   # Compute starting estimate S_emb and S_pinv
+   S_emb,S_pinv = compute_S_emb_pinv_det(col_S,penalties,pinv)
+
+   # Outer Loop - to optimize smoothing parameter
+   for o_iter in range(maxiter_outer):
+      
+      # Inner Loop to optionally update pseudo data and weights i.e.,
+      # to perform PIRLS (Wood, 2017) or to simply calculate an AMM
+      y,yb,mu,eta,X,Xb,z,Wr,InvCholXXSP,Pr,coef = PIRLS(y,yb,mu,eta,X,Xb,S_emb,family,maxiter_inner)
+
+      # Calculate Pearson residuals for GAMM (Wood, 3.1.7)
+      # Standard residuals for AMM
+      if isinstance(family,Gaussian) == False:
+         wres = Wr @ (z - eta)
+      else:
+         wres = y - eta
+
+      # Calculate total and term wise edf
+      nP = len(Pr)
+      P = [1 for _ in range(nP)]
+      Pc = [c for c in range(nP)]
+      Perm = scp.sparse.csc_array((P,(Pr,Pc)),shape=(nP,nP))
+
+      total_edf = colsX
+
+      Bs = []
+      term_edfs = []
+      InvCholXXS = InvCholXXSP @ Perm
+      for lTerm in penalties:
+         B = InvCholXXS @ lTerm.D_J_emb # Needed for Fellner Schall update (Wood & Fasiolo, 2016)
+         Bps = B.power(2).sum()
+         pen_params = lTerm.lam * Bps
+         total_edf -= pen_params
+         Bs.append(Bps)
+         term_edfs.append(lTerm.S_J.shape[1] - pen_params)
+
+
+      # Optionally estimate scale parameter
+      if family.scale is None:
+         scale = family.est_scale(wres,rowsX,total_edf)
+      else:
+         scale = family.scale
+
+      # Perform Fellner Schall Update
+      lam_delta = []
+      for lti,lTerm in enumerate(penalties):
+         dLam = step_fellner_schall_sparse(S_pinv,lTerm.S_J_emb,Bs[lti],coef,lTerm.lam,scale)
+         lam_delta.append(dLam)
+
+      # ToDo: Optionally test lambda step - right now just apply
+      for lti,lTerm in enumerate(penalties):
+         lTerm.lam += lam_delta[lti]
+      
+      # ToDo: Convergence control
+      lam_delta = np.array(lam_delta).reshape(-1,1)
+      prev_lam_delta = lam_delta[:]
+
+      # Re-compute S_emb and S_pinv
+      S_emb,S_pinv = compute_S_emb_pinv_det(col_S,penalties,pinv)
+
+   # Finaly penalty
+   penalty = coef.T @ S_emb @ coef
+   return coef,eta,wres,scale,InvCholXXS,total_edf,term_edfs,penalty
+
 
 def solve_am_sparse(y,X,penalties,col_S,maxiter=10,pinv="svd"):
-   n_lterms = len(penalties)
+
    rowsX,colsX = X.shape
    pred = None
    res = None
@@ -2605,88 +2923,7 @@ def solve_am_sparse(y,X,penalties,col_S,maxiter=10,pinv="svd"):
 
    for iter in range(maxiter):
       #print(iter)
-      cIndexPinv = 0
-      S_emb = None
-      S_pinv_elements = []
-      S_pinv_rows = []
-      S_pinv_cols = []
-
-      SJ = None
-      SJ_terms = 0
-      
-      # Build S_emb and pinv(S_emb)
-      for lti,lTerm in enumerate(penalties):
-         #print(f"pen: {lti}")
-
-         if lTerm.start_index is not None:
-            cIndexPinv = lTerm.start_index
-
-         # Collect number of penalties on the term
-         SJ_terms += 1
-
-         # We need to compute the pseudo-inverse on the penalty block (so sum of all
-         # penalties weighted by lambda) for the term so we first add all penalties
-         # on this term together.
-         if SJ is None:
-            SJ = lTerm.S_J*lTerm.lam
-         else:
-            SJ += lTerm.S_J*lTerm.lam
-
-         # Add S_J_emb * lambda to the overall S_emb
-         if lti == 0:
-            S_emb = lTerm.S_J_emb * lTerm.lam
-         else:
-            S_emb += lTerm.S_J_emb * lTerm.lam
-
-         if lti < (n_lterms - 1) and penalties[lti + 1].start_index is not None:
-            #print("Skip")
-            continue
-         else: # Now handle all pinv calculations because all penalties associated with a term have been collected in SJ
-            #print(f"repeat: {lTerm.rep_sj}")
-            #print(f"number of penalties on term: {SJ_terms}")
-            if SJ_terms == 1 and lTerm.type == PenType.IDENTITY:
-               #print("Identity shortcut")
-               SJ_pinv_elements,SJ_pinv_rows,SJ_pinv_cols,_,_,_ = id_dist_pen(SJ.shape[1],lambda x: 1/lTerm.lam)
-            else:
-               # Compute pinv(SJ) via cholesky factor L so that L @ L' = SJ' @ SJ.
-               # If SJ is full rank, then pinv(SJ) = inv(L)' @ inv(L) @ SJ'.
-               # However, SJ' @ SJ will usually be rank deficient so we add e=1e-7 to the main diagonal, because:
-               # As e -> 0 we get closer to pinv(SJ) if we base it on L_e in L_e @ L_e' = SJ' @ SJ + e*I
-               # where I is the identity.
-               if pinv != "svd":
-                  t = scp.sparse.identity(SJ.shape[1],format="csc")
-                  L,code = cpp_chol(SJ.T @ SJ + 1e-10*t)
-
-                  if code != 0:
-                     warnings.warn(f"Cholesky factor computation failed with code {code}")
-
-                  LI = scp.sparse.linalg.spsolve(L,t)
-                  SJ_pinv = LI.T @ LI @ SJ.T
-                  #print(np.max(abs((SJ.T @ SJ @ SJ_pinv - SJ).toarray())))
-
-               # Compute pinv via SVD
-               else:
-                  u, Sig, vt = scp.sparse.linalg.svds(SJ,SJ.shape[1]-1)
-                  rs = [1/s if s > 1e-7 else 0 for s in Sig]
-                  SJ_pinv = vt.T @ np.diag(rs) @ u.T
-                  SJ_pinv = scp.sparse.csc_array(SJ_pinv)
-
-               SJ_pinv_elements,SJ_pinv_rows,SJ_pinv_cols = translate_sparse(SJ_pinv)
-            
-            SJ_pinv_rows = np.array(SJ_pinv_rows)
-            SJ_pinv_cols = np.array(SJ_pinv_cols)
-
-            for _ in range(lTerm.rep_sj):
-               S_pinv_elements.extend(SJ_pinv_elements)
-               S_pinv_rows.extend(SJ_pinv_rows + cIndexPinv)
-               S_pinv_cols.extend(SJ_pinv_cols + cIndexPinv)
-               cIndexPinv += (SJ_pinv_cols[-1] + 1)
-            
-            # Reset number of penalties and SJ
-            SJ = None
-            SJ_terms = 0
-
-      S_pinv = scp.sparse.csc_array((S_pinv_elements,(S_pinv_rows,S_pinv_cols)),shape=(col_S,col_S))
+      S_emb,S_pinv = compute_S_emb_pinv_det(col_S,penalties,pinv)
 
       # Solve the model for coefficients using current smoothing parameters
       InvCholXXSP, Pr, coef, code = cpp_solve_am(y,X,S_emb)
@@ -2722,12 +2959,7 @@ def solve_am_sparse(y,X,penalties,col_S,maxiter=10,pinv="svd"):
 
       # Perform Fellner Schall Update
       for lti,lTerm in enumerate(penalties):
-         cLam = step_fellner_schall_sparse(S_pinv,lTerm.S_J_emb,Bs[lti],coef,lTerm.lam,sigma)
-
-         if cLam < 0:
-            warnings.warn(f"Resetting Lambda Reason:\nPrevious Lambda = {lTerm.lam}, Next Lambda = {cLam}, Sigma = {sigma}")
-            cLam = 1.1
-
-         lTerm.lam = cLam
+         dLam = step_fellner_schall_sparse(S_pinv,lTerm.S_J_emb,Bs[lti],coef,lTerm.lam,sigma)
+         lTerm.lam += dLam
 
    return coef,pred,res,sigma,InvCholXXSP @ Perm,edf
