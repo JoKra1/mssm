@@ -200,12 +200,12 @@ class GAMM(MSSM):
                                                            var_mins,var_maxs,factor_levels,
                                                            cov_flat,cov,n_j,state_est_flat,state_est)
         
-        # Constrain y/get initial estimate of mu:
+        # Get initial estimate of mu based on family:
         init_mu_flat = self.family.init_mu(self.formula.y_flat)
 
         # Now we have to estimate the model
-        coef,eta,wres,scale,LVI,edf,term_edf,penalty = utils.solve_gamm_sparse(init_mu_flat,model_mat,
-                                                                               penalties,self.formula.n_coef,
+        coef,eta,wres,scale,LVI,edf,term_edf,penalty = utils.solve_gamm_sparse(init_mu_flat,self.formula.y_flat,
+                                                                               model_mat,penalties,self.formula.n_coef,
                                                                                self.family,maxiter_outer,
                                                                                maxiter_inner)
         

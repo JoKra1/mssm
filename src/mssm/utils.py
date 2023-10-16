@@ -2756,9 +2756,12 @@ class Binomial(Family):
    
    def init_mu(self,y):
       # Estimation assumes proportions as dep. variable
-      prop = y/self.n
-      prop[prop >= 1] = 1 - 1e-2
-      prop[prop <= 0] = 1e-2
+      # According to: https://stackoverflow.com/questions/60526586/
+      # the glm() function in R always initializes mu = 0.75 for observed proportions (y)
+      # of 1 and mu = 0.25 for proportions of zero.
+      # This can be achieved by adding 0.5 to the observed proportion of success
+      # (and adding one observation):
+      prop = (y+0.5)/(2)
       return prop
    
    def V(self,mu):
@@ -2766,11 +2769,11 @@ class Binomial(Family):
       return mu * (1 - mu)/self.n
    
    def lp(self,y,mu):
-      # y is counts of success
-      return scp.stats.binom.logpmf(k=y,p=mu,n=self.n)
+      # y is observed proportion of success
+      return scp.stats.binom.logpmf(k=y*self.n,p=mu,n=self.n)
    
    def llk(self,y,mu):
-      # y is counts of success
+      # y is observed proportion of success
       return sum(self.lp(y,mu,self.n))
 
 class Gaussian(Family):
@@ -2797,7 +2800,7 @@ def PIRLS_pdat_weights(y,mu,eta,family:Family):
    # Compute pseudo-data and weights for Penalized Reweighted Least Squares iteration (Wood, 2017, 6.1.1)
    # Calculation is based on a(mu) = 1, so reflects Fisher scoring!
    dy1 = family.link.dy1(mu)
-   z = dy1 * (y - mu) / 1 + eta
+   z = dy1 * (y - mu) + eta
    w = 1 / (dy1**2 * family.V(mu))
    return z, w
 
@@ -2833,7 +2836,7 @@ def PIRLS(y,yb,mu,eta,X,Xb,S_emb,family,maxiter_inner):
       
    return y,yb,mu,eta,X,Xb,z,Wr,InvCholXXSP,Pr,coef
 
-def solve_gamm_sparse(y,X,penalties,col_S,family:Family,maxiter_outer=10,maxiter_inner=1,pinv="svd"):
+def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter_outer=10,maxiter_inner=1,pinv="svd"):
    # Estimates a penalized Generalized additive mixed model, following the steps outlined in Wood (2017)
    rowsX,colsX = X.shape
    coef = None
@@ -2847,14 +2850,17 @@ def solve_gamm_sparse(y,X,penalties,col_S,family:Family,maxiter_outer=10,maxiter
    Xb = X
 
    # mu and eta (start estimates in case the family is not Gaussian)
-   mu = y
+   mu = mu_init
    eta = mu
 
    if isinstance(family,Gaussian) == False:
       eta = family.link.f(mu)
 
    # Compute starting estimate S_emb and S_pinv
-   S_emb,S_pinv = compute_S_emb_pinv_det(col_S,penalties,pinv)
+   if len(penalties) > 0:
+      S_emb,S_pinv = compute_S_emb_pinv_det(col_S,penalties,pinv)
+   else:
+      S_emb = scp.sparse.csc_array((colsX, colsX), dtype=np.float64)
 
    # Outer Loop - to optimize smoothing parameter
    for o_iter in range(maxiter_outer):
@@ -2875,20 +2881,24 @@ def solve_gamm_sparse(y,X,penalties,col_S,family:Family,maxiter_outer=10,maxiter
       P = [1 for _ in range(nP)]
       Pc = [c for c in range(nP)]
       Perm = scp.sparse.csc_array((P,(Pr,Pc)),shape=(nP,nP))
+      InvCholXXS = InvCholXXSP @ Perm
 
       total_edf = colsX
 
-      Bs = []
-      term_edfs = []
-      InvCholXXS = InvCholXXSP @ Perm
-      for lTerm in penalties:
-         B = InvCholXXS @ lTerm.D_J_emb # Needed for Fellner Schall update (Wood & Fasiolo, 2016)
-         Bps = B.power(2).sum()
-         pen_params = lTerm.lam * Bps
-         total_edf -= pen_params
-         Bs.append(Bps)
-         term_edfs.append(lTerm.S_J.shape[1] - pen_params)
+      # If there are penalized terms we need to adjust the total_edf
+      if len(penalties) > 0:
+         Bs = []
+         term_edfs = []
 
+         for lTerm in penalties:
+            B = InvCholXXS @ lTerm.D_J_emb # Needed for Fellner Schall update (Wood & Fasiolo, 2016)
+            Bps = B.power(2).sum()
+            pen_params = lTerm.lam * Bps
+            total_edf -= pen_params
+            Bs.append(Bps)
+            term_edfs.append(lTerm.S_J.shape[1] - pen_params)
+      else:
+         term_edfs = None
 
       # Optionally estimate scale parameter
       if family.scale is None:
@@ -2896,25 +2906,30 @@ def solve_gamm_sparse(y,X,penalties,col_S,family:Family,maxiter_outer=10,maxiter
       else:
          scale = family.scale
 
-      # Perform Fellner Schall Update
-      lam_delta = []
-      for lti,lTerm in enumerate(penalties):
-         dLam = step_fellner_schall_sparse(S_pinv,lTerm.S_J_emb,Bs[lti],coef,lTerm.lam,scale)
-         lam_delta.append(dLam)
+      # Perform Fellner Schall Update if there are penalized terms:
+      if len(penalties) > 0:
+         lam_delta = []
+         for lti,lTerm in enumerate(penalties):
+            dLam = step_fellner_schall_sparse(S_pinv,lTerm.S_J_emb,Bs[lti],coef,lTerm.lam,scale)
+            lam_delta.append(dLam)
 
-      # ToDo: Optionally test lambda step - right now just apply
-      for lti,lTerm in enumerate(penalties):
-         lTerm.lam += lam_delta[lti]
-      
-      # ToDo: Convergence control
-      lam_delta = np.array(lam_delta).reshape(-1,1)
-      prev_lam_delta = lam_delta[:]
+         # ToDo: Optionally test lambda step - right now just apply
+         for lti,lTerm in enumerate(penalties):
+            lTerm.lam += lam_delta[lti]
+         
+         # ToDo: Convergence control
+         lam_delta = np.array(lam_delta).reshape(-1,1)
+         prev_lam_delta = lam_delta[:]
 
-      # Re-compute S_emb and S_pinv
-      S_emb,S_pinv = compute_S_emb_pinv_det(col_S,penalties,pinv)
+         # Re-compute S_emb and S_pinv
+         S_emb,S_pinv = compute_S_emb_pinv_det(col_S,penalties,pinv)
 
-   # Finaly penalty
-   penalty = coef.T @ S_emb @ coef
+   # Final penalty
+   if len(penalties) > 0:
+      penalty = coef.T @ S_emb @ coef
+   else:
+      penalty = 0
+
    return coef,eta,wres,scale,InvCholXXS,total_edf,term_edfs,penalty
 
 
