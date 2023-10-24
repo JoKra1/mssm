@@ -10,14 +10,19 @@ from matplotlib import pyplot as plt
 import re
 from copy import deepcopy
 from collections.abc import Callable
+from .src.python.formula import *
+from .src.python.terms import *
+from .src.python.penalties import *
+from .src.python.exp_fam import *
+from .src.python.gamm_solvers import solve_gamm_sparse
 
 ##################################### Base Class #####################################
 
 class MSSM:
 
     def __init__(self,
-                 formula:utils.Formula,
-                 family:utils.Family,
+                 formula:Formula,
+                 family:Family,
                  p_formula=None,
                  pre_llk_fun:Callable = None,
                  estimate_pi:bool=False,
@@ -136,8 +141,8 @@ class MSSM:
 class GAMM(MSSM):
 
     def __init__(self,
-                 formula: utils.Formula,
-                 family: utils.Family):
+                 formula: Formula,
+                 family: Family):
         super().__init__(formula,family)
 
         self.pred = None
@@ -160,7 +165,7 @@ class GAMM(MSSM):
             pen = self.penalty
         if self.pred is not None:
             mu = self.pred
-            if isinstance(self.family,utils.Gaussian) == False:
+            if isinstance(self.family,Gaussian) == False:
                 mu = self.family.link.fi(self.pred)
             if self.family.twopar:
                 return self.family.llk(self.formula.y_flat,mu,self.__sigma) - pen
@@ -195,19 +200,19 @@ class GAMM(MSSM):
         state_est = None
 
         # Build the model matrix with all information from the formula
-        model_mat = utils.build_sparse_matrix_from_formula(terms,has_intercept,has_sigma_split,
-                                                           ltx,irstx,stx,rtx,var_types,var_map,
-                                                           var_mins,var_maxs,factor_levels,
-                                                           cov_flat,cov,n_j,state_est_flat,state_est)
+        model_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_sigma_split,
+                                                     ltx,irstx,stx,rtx,var_types,var_map,
+                                                     var_mins,var_maxs,factor_levels,
+                                                     cov_flat,cov,n_j,state_est_flat,state_est)
         
         # Get initial estimate of mu based on family:
         init_mu_flat = self.family.init_mu(self.formula.y_flat)
 
         # Now we have to estimate the model
-        coef,eta,wres,scale,LVI,edf,term_edf,penalty = utils.solve_gamm_sparse(init_mu_flat,self.formula.y_flat,
-                                                                               model_mat,penalties,self.formula.n_coef,
-                                                                               self.family,maxiter_outer,
-                                                                               maxiter_inner)
+        coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,self.formula.y_flat,
+                                                                         model_mat,penalties,self.formula.n_coef,
+                                                                         self.family,maxiter_outer,
+                                                                         maxiter_inner)
         
         self.__coef = coef
         self.__sigma = scale # ToDo: scale name is used in another context for more general mssm..
@@ -250,11 +255,11 @@ class GAMM(MSSM):
         state_est = None
 
         # So we pass the desired terms to the use_only argument
-        predi_mat = utils.build_sparse_matrix_from_formula(terms,has_intercept,has_sigma_split,
-                                                           ltx,irstx,stx,rtx,var_types,var_map,
-                                                           var_mins,var_maxs,factor_levels,
-                                                           pred_cov_flat,pred_cov,n_j,state_est_flat,
-                                                           state_est,use_only=use_terms)
+        predi_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_sigma_split,
+                                                     ltx,irstx,stx,rtx,var_types,var_map,
+                                                     var_mins,var_maxs,factor_levels,
+                                                     pred_cov_flat,pred_cov,n_j,state_est_flat,
+                                                     state_est,use_only=use_terms)
         
         # Now we calculate the prediction
         pred = predi_mat @ self.__coef
