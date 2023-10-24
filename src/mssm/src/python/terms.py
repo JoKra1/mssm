@@ -125,11 +125,12 @@ class ri(GammTerm):
 
 class rs(GammTerm):
     def __init__(self,
-                 variable:str,
+                 variables:list,
                  by:str,
                  by_latent:bool=False) -> None:
         
         # Initialization
-        super().__init__([variable], TermType.RANDSLOPE, True, [penalties.PenType.IDENTITY], [{}])
+        super().__init__(variables, TermType.RANDSLOPE, True, [penalties.PenType.IDENTITY], [{}])
+        self.var_coef = None
         self.by = by
         self.by_latent = by_latent

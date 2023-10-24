@@ -48,7 +48,6 @@ def get_coef_info_linear(has_intercept,lterm,var_types,coding_factors,factor_lev
             coef_per_term.append(1)
 
     else: # Interactions
-        interactions = []
         inter_coef_names = []
 
         for var in lterm.variables:
@@ -61,7 +60,7 @@ def get_coef_info_linear(has_intercept,lterm,var_types,coding_factors,factor_lev
                 if has_intercept: # Dummy coding when intercept is added.
                     fl_start = 1
 
-                if len(interactions) == 0:
+                if len(inter_coef_names) == 0:
                     for fl in range(fl_start,len(factor_levels[var])):
                         new_inter_coef_names.append(f"{var}_{coding_factors[var][fl]}")
                 else:
@@ -70,7 +69,7 @@ def get_coef_info_linear(has_intercept,lterm,var_types,coding_factors,factor_lev
                             new_inter_coef_names.append(old_name + f"_{var}_{coding_factors[var][fl]}")
 
             else: # Interaction with continuous predictor as start
-                if len(interactions) == 0:
+                if len(inter_coef_names) == 0:
                     new_inter_coef_names.append(var)
                 else:
                     for old_name in inter_coef_names:
@@ -494,7 +493,7 @@ class Formula():
       factor_levels = self.get_factor_levels()
       coding_factors = self.get_coding_factors()
 
-      terms = self.get_terms()
+      terms = self.__terms
       self.unpenalized_coef = 0
       self.n_coef = 0
       self.coef_names = []
@@ -510,7 +509,7 @@ class Formula():
             self.ordered_coef_per_term.append(1)
          
          else:
-            # Main effects
+            # Linear effects
             t_total_coef,\
             t_unpenalized_coef,\
             t_coef_names,\
@@ -568,7 +567,28 @@ class Formula():
             self.ordered_coef_per_term.append(len(factor_levels[vars[0]]))
 
          elif isinstance(rterm,rs):
-            raise NotImplementedError("Random slope terms are not yet supported.")
+            t_total_coef,\
+            _,\
+            t_coef_names,\
+            _ = get_coef_info_linear(False,
+                                     rterm,var_types,
+                                     coding_factors,
+                                     factor_levels)
+
+            rterm.var_coef = t_total_coef # We need t_total_coef penalties for this term later.
+            by_code_factors = coding_factors[rterm.by]
+            by_code_levels = factor_levels[rterm.by]
+            
+            rf_coef_names = []
+            for cname in t_coef_names:
+               rf_coef_names.extend([f"{cname}_{by_code_factors[fl]}" for fl in range(len(by_code_levels))])
+            
+            t_ncoef = len(rf_coef_names)
+            self.coef_names.extend(rf_coef_names)
+            self.ordered_coef_per_term.append(t_ncoef)
+            self.n_coef += t_ncoef
+            
+               
     
     def encode_data(self,r_data,prediction=False):
 
@@ -800,8 +820,33 @@ class Formula():
             penalties.append(lTerm)
 
          else:
-            NotImplementedError("Penalties for random slopes are not yet supported.")
-      
+            if rterm.var_coef is None:
+               raise ValueError("Number of coefficients for random slope were not initialized.")
+            if len(vars) > 1:
+               # Separate penalties for every level of interactions
+               pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = id_dist_pen(len(factor_levels[rterm.by]))
+               for _ in range(rterm.var_coef):
+                  lTerm = LambdaTerm(start_index=pen_start_idx,
+                                             type = PenType.IDENTITY)
+            
+                  lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
+                  lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
+                  lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
+                  penalties.append(lTerm)
+
+            else:
+               # Single penalty for main effects
+               pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = id_dist_pen(len(factor_levels[rterm.by])*rterm.var_coef)
+
+
+               lTerm = LambdaTerm(start_index=pen_start_idx,
+                                             type = PenType.IDENTITY)
+            
+               lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
+               lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
+               lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
+               penalties.append(lTerm)
+            
       if cur_pen_idx != col_S:
          raise ValueError("Penalty dimension {cur_pen_idx},{cur_pen_idx} does not match outer model matrix dimension {col_S}")
 
@@ -888,6 +933,339 @@ def embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,Sj):
       
    return Sj
 
+
+def build_linear_term_matrix(ci,n_y,has_intercept,lti,lterm,var_types,var_map,factor_levels,ridx,cov_flat,use_only):
+   new_elements = []
+   new_rows = []
+   new_cols = []
+   new_ci = 0
+   # Main effects
+   if len(lterm.variables) == 1:
+      var = lterm.variables[0]
+      if var_types[var] == VarType.FACTOR:
+         offset = np.ones(n_y)
+         
+         fl_start = 0
+
+         if has_intercept: # Dummy coding when intercept is added.
+            fl_start = 1
+
+         for fl in range(fl_start,len(factor_levels[var])):
+            fridx = ridx[cov_flat[:,var_map[var]] == fl]
+            if use_only is None or lti in use_only:
+               new_elements.extend(offset[fridx])
+               new_rows.extend(fridx)
+               new_cols.extend([ci for _ in range(len(fridx))])
+            ci += 1
+            new_ci += 1
+
+      else: # Continuous predictor
+         slope = cov_flat[:,var_map[var]]
+         if use_only is None or lti in use_only:
+            new_elements.extend(slope)
+            new_rows.extend(ridx)
+            new_cols.extend([ci for _ in range(n_y)])
+         ci += 1
+         new_ci += 1
+
+   else: # Interactions
+      interactions = []
+      inter_idx = []
+
+      for var in lterm.variables:
+         new_interactions = []
+         new_inter_idx = []
+
+         # Interaction with categorical predictor as start
+         if var_types[var] == VarType.FACTOR:
+            fl_start = 0
+
+            if has_intercept: # Dummy coding when intercept is added.
+                  fl_start = 1
+
+            if len(interactions) == 0:
+                  for fl in range(fl_start,len(factor_levels[var])):
+                     new_interactions.append(np.ones(n_y))
+                     new_inter_idx.append(cov_flat[:,var_map[var]] == fl)
+
+            else:
+                  for old_inter,old_idx in zip(interactions,inter_idx):
+                     for fl in range(fl_start,len(factor_levels[var])):
+                        new_interactions.append(old_inter)
+                        new_idx = cov_flat[:,var_map[var]] == fl
+                        new_inter_idx.append(old_idx == new_idx)
+
+         else: # Interaction with continuous predictor as start
+            if len(interactions) == 0:
+                  new_interactions.append(cov_flat[:,var_map[var]])
+                  new_inter_idx.append(np.array([True for _ in range(n_y)]))
+
+            else:
+                  for old_inter,old_idx in zip(interactions,inter_idx):
+                     new_interactions.append(old_inter * cov_flat[:,var_map[var]]) # handle continuous * continuous case.
+                     new_inter_idx.append(old_idx)
+
+         
+         interactions = copy.deepcopy(new_interactions)
+         inter_idx = copy.deepcopy(new_inter_idx)
+
+      # Now write interaction terms into model matrix
+      for inter,inter_idx in zip(interactions,inter_idx):
+         if use_only is None or lti in use_only:
+            new_elements.extend(inter[ridx[inter_idx]])
+            new_rows.extend(ridx[inter_idx])
+            new_cols.extend([ci for _ in range(len(ridx[inter_idx]))])
+         ci += 1
+         new_ci += 1
+   
+   return new_elements,new_rows,new_cols,new_ci
+
+def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,factor_levels,ridx,cov,state_est,use_only,pool,tol):
+   var = irsterm.variables[0]
+   term_elements = []
+   term_idx = []
+
+   new_elements = []
+   new_rows = []
+   new_cols = []
+   new_ci = 0
+
+   # Calculate Coef names
+   n_coef = irsterm.nk
+
+   if irsterm.by is not None:
+      by_levels = factor_levels[irsterm.by]
+      n_coef *= len(by_levels)
+
+   if pool is None:
+      for s_cov,s_state in zip(cov,state_est):
+         
+         # Create matrix for state corresponding to term.
+         matrix_term = irsterm.basis(irsterm.state,s_cov[:,var_map[var]],s_state, irsterm.nk, **irsterm.basis_kwargs)
+         m_rows,m_cols = matrix_term.shape
+
+         # Handle optional by keyword
+         if irsterm.by is not None:
+            
+            by_matrix_term = np.zeros((m_rows,m_cols*len(by_levels)),dtype=float)
+
+            by_cov = s_cov[:,var_map[irsterm.by]]
+
+            if len(np.unique(by_cov)) > 1:
+               raise ValueError(f"By-variable {irsterm.by} has varying levels on series level. This should not be the case.")
+            
+            # Fill the by matrix blocks.
+            cByIndex = 0
+            for by_level in range(len(by_levels)):
+               if by_level == by_cov[0]:
+                  by_matrix_term[:,cByIndex:cByIndex+m_cols] = matrix_term
+                  cByIndex += m_cols
+            
+            final_term = by_matrix_term
+         else:
+            final_term = matrix_term
+
+         m_rows,m_cols = final_term.shape
+
+         # Find basis elements > 0
+         if len(term_idx) < 1:
+            for m_coli in range(m_cols):
+               final_col = final_term[:,m_coli]
+               term_elements.append(final_col[abs(final_col) > tol])
+               term_idx.append(abs(final_col) > tol)
+         else:
+            for m_coli in range(m_cols):
+               final_col = final_term[:,m_coli]
+               term_elements[m_coli] = np.append(term_elements[m_coli],final_col[abs(final_col) > tol])
+               term_idx[m_coli] = np.append(term_idx[m_coli], abs(final_col) > tol)
+
+      if n_coef != len(term_elements):
+         raise KeyError("Not all model matrix columns were created.")
+      
+      # Now collect actual row indices
+      for m_coli in range(len(term_elements)):
+         if use_only is None or irsti in use_only:
+            new_elements.extend(term_elements[:,m_coli])
+            new_rows.extend(ridx[term_idx[m_coli]])
+            new_cols.extend([ci for _ in range(len(term_elements[:,m_coli]))])
+         ci += 1
+         new_ci += 1
+
+   else:
+      raise NotImplementedError("Multiprocessing code for impulse response terms is not yet implemented in new formula api.")
+   
+   return new_elements,new_rows,new_cols,new_ci
+
+def build_smooth_term_matrix(ci,n_j,has_sigma_split,sti,sterm,var_map,var_mins,var_maxs,factor_levels,ridx,cov_flat,state_est_flat,use_only,tol):
+   vars = sterm.variables
+   term_ridx = []
+
+   new_elements = []
+   new_rows = []
+   new_cols = []
+   new_ci = 0
+
+   # Calculate Coef number for control checks
+   if len(vars) > 1:
+      n_coef = np.prod(sterm.nk)
+   else:
+      n_coef = sterm.nk
+   #print(n_coef)
+
+   if sterm.by is not None:
+      by_levels = factor_levels[sterm.by]
+      n_coef *= len(by_levels)
+
+      if sterm.by_latent is not False and has_sigma_split is False:
+            n_coef *= n_j
+      
+   # Calculate smooth term for corresponding covariate
+
+   # Handle identifiability constraints for every basis and
+   # optionally update tensor surface.
+   for vi in range(len(vars)):
+
+      if len(vars) > 1:
+         id_nk = sterm.nk[vi]
+      else:
+         id_nk = sterm.nk
+
+      if sterm.is_identifiable:
+         id_nk += 1
+
+      #print(var_mins[vars[0]],var_maxs[vars[0]])
+      matrix_term_v = sterm.basis(None,cov_flat[:,var_map[vars[vi]]],
+                                  None, id_nk, min_c=var_mins[vars[vi]],
+                                  max_c=var_maxs[vars[vi]], **sterm.basis_kwargs)
+
+      if sterm.is_identifiable:
+         matrix_term_v = matrix_term_v @ sterm.Z[vi]
+      
+      if vi == 0:
+         matrix_term = matrix_term_v
+      else:
+         matrix_term = TP_basis_calc(matrix_term,matrix_term_v)
+
+   m_rows, m_cols = matrix_term.shape
+   #print(m_cols)
+   term_ridx = [ridx[:] for _ in range(m_cols)]
+
+   # Handle optional by keyword
+   if sterm.by is not None:
+      new_term_ridx = []
+
+      by_cov = cov_flat[:,var_map[sterm.by]]
+      
+      # Split by cov and update rows with elements in columns
+      for by_level in range(len(by_levels)):
+         by_cidx = by_cov == by_level
+         for m_coli in range(m_cols):
+            new_term_ridx.append(term_ridx[m_coli][by_cidx,])
+
+      term_ridx = new_term_ridx
+   
+   # Handle split by latent variable if a shared sigma term across latent stages is assumed.
+   if sterm.by_latent is not False and has_sigma_split is False:
+      new_term_ridx = []
+
+      # Split by state and update rows with elements in columns
+      for by_state in range(n_j):
+         for m_coli in range(len(term_ridx)):
+            # Adjust state estimate for potential by split earlier.
+            col_cor_state_est = state_est_flat[term_ridx[m_coli]]
+            new_term_ridx.append(term_ridx[m_coli][col_cor_state_est == by_state,])
+
+      term_ridx = new_term_ridx
+
+   f_cols = len(term_ridx)
+
+   if n_coef != f_cols:
+      raise KeyError("Not all model matrix columns were created.")
+
+   # Find basis elements > 0 and collect correspondings elements and row indices
+   for m_coli in range(f_cols):
+      final_ridx = term_ridx[m_coli]
+      final_col = matrix_term[final_ridx,m_coli%m_cols]
+
+      # Tolerance row index for this columns
+      cidx = abs(final_col) > tol
+      if use_only is None or sti in use_only:
+         new_elements.extend(final_col[cidx])
+         new_rows.extend(final_ridx[cidx])
+         new_cols.extend([ci for _ in range(len(final_ridx[cidx]))])
+      new_ci += 1
+      ci += 1
+   
+   return new_elements,new_rows,new_cols,new_ci
+
+def build_ri_term_matrix(ci,n_y,rti,rterm,var_map,factor_levels,ridx,cov_flat,use_only):
+   vars = rterm.variables
+   offset = np.ones(n_y)
+   by_cov = cov_flat[:,var_map[vars[0]]]
+
+   new_elements = []
+   new_rows = []
+   new_cols = []
+   new_ci = 0
+
+   for fl in range(len(factor_levels[vars[0]])):
+      fl_idx = by_cov == fl
+      if use_only is None or rti in use_only:
+         new_elements.extend(offset[fl_idx])
+         new_rows.extend(ridx[fl_idx])
+         new_cols.extend([ci for _ in range(len(offset[fl_idx]))])
+      new_ci += 1
+      ci += 1
+
+   return new_elements,new_rows,new_cols,new_ci
+
+def build_rs_term_matrix(ci,n_y,rti,rterm,var_types,var_map,factor_levels,ridx,cov_flat,use_only):
+
+   by_cov = cov_flat[:,var_map[rterm.by]]
+   by_levels = factor_levels[rterm.by]
+   old_ci = ci
+
+   # First get all interaction columns
+   lin_elements,\
+   lin_rows,\
+   lin_cols,\
+   lin_ci = build_linear_term_matrix(ci,n_y,False,rti,rterm,
+                                     var_types,var_map,factor_levels,
+                                     ridx,cov_flat,None)
+   
+   # Need to cast to np.array for indexing
+   lin_elements = np.array(lin_elements)
+   lin_rows = np.array(lin_rows)
+   lin_cols = np.array(lin_cols)
+
+   new_elements = []
+   new_rows = []
+   new_cols = []
+   new_ci = 0
+   
+   # For every interaction column
+   for coef_i in range(lin_ci): 
+      # Collect the interaction column and row index
+      inter_i = lin_elements[lin_cols == old_ci]
+      rdx_i = lin_rows[lin_cols == old_ci]
+      # split the column over len(by_levels) columns for every level of the random factor
+      for fl in range(len(by_levels)): 
+         # First check which of the remaining rows correspond to current level of random factor
+         fl_idx = by_cov == fl
+         # Then adjust to the rows actually present in the interaction column
+         fl_idx = fl_idx[rdx_i]
+         # Now collect
+         if use_only is None or rti in use_only:
+            new_elements.extend(inter_i[fl_idx])
+            new_rows.extend(rdx_i[fl_idx])
+            new_cols.extend([ci for _ in range(len(inter_i[fl_idx]))])
+         new_ci += 1
+         ci += 1
+      old_ci += 1
+
+   return new_elements,new_rows,new_cols,new_ci
+
+
 def build_sparse_matrix_from_formula(terms,has_intercept,
                                      has_sigma_split,
                                      ltx,irstx,stx,rtx,
@@ -918,268 +1296,72 @@ def build_sparse_matrix_from_formula(terms,has_intercept,
       
       else:
          
-         # Main effects
-         if len(lterm.variables) == 1:
-            var = lterm.variables[0]
-            if var_types[var] == VarType.FACTOR:
-               offset = np.ones(n_y)
-               
-               fl_start = 0
-
-               if has_intercept: # Dummy coding when intercept is added.
-                  fl_start = 1
-
-               for fl in range(fl_start,len(factor_levels[var])):
-                  fridx = ridx[cov_flat[:,var_map[var]] == fl]
-                  if use_only is None or lti in use_only:
-                     elements.extend(offset[fridx])
-                     rows.extend(fridx)
-                     cols.extend([ci for _ in range(len(fridx))])
-                  ci += 1
-
-            else: # Continuous predictor
-               slope = cov_flat[:,var_map[var]]
-               if use_only is None or lti in use_only:
-                  elements.extend(slope)
-                  rows.extend(ridx)
-                  cols.extend([ci for _ in range(n_y)])
-               ci += 1
-
-         else: # Interactions
-            interactions = []
-            inter_idx = []
-
-            for var in lterm.variables:
-               new_interactions = []
-               new_inter_idx = []
-
-               # Interaction with categorical predictor as start
-               if var_types[var] == VarType.FACTOR:
-                  fl_start = 0
-
-                  if has_intercept: # Dummy coding when intercept is added.
-                        fl_start = 1
-
-                  if len(interactions) == 0:
-                        for fl in range(fl_start,len(factor_levels[var])):
-                           new_interactions.append(np.ones(n_y))
-                           new_inter_idx.append(cov_flat[:,var_map[var]] == fl)
-
-                  else:
-                        for old_inter,old_idx in zip(interactions,inter_idx):
-                           for fl in range(fl_start,len(factor_levels[var])):
-                              new_interactions.append(old_inter)
-                              new_idx = cov_flat[:,var_map[var]] == fl
-                              new_inter_idx.append(old_idx == new_idx)
-
-               else: # Interaction with continuous predictor as start
-                  if len(interactions) == 0:
-                        new_interactions.append(cov_flat[:,var_map[var]])
-                        new_inter_idx.append(np.array([True for _ in range(n_y)]))
-
-                  else:
-                        for old_inter,old_idx in zip(interactions,inter_idx):
-                           new_interactions.append(old_inter * cov_flat[:,var_map[var]]) # handle continuous * continuous case.
-                           new_inter_idx.append(old_idx)
-
-               
-               interactions = copy.deepcopy(new_interactions)
-               inter_idx = copy.deepcopy(new_inter_idx)
-
-            # Now write interaction terms into model matrix
-            for inter,inter_idx in zip(interactions,inter_idx):
-               if use_only is None or lti in use_only:
-                  elements.extend(inter[ridx[inter_idx]])
-                  rows.extend(ridx[inter_idx])
-                  cols.extend([ci for _ in range(len(ridx[inter_idx]))])
-               ci += 1
+         new_elements,\
+         new_rows,\
+         new_cols,\
+         new_ci = build_linear_term_matrix(ci,n_y,has_intercept,lti,lterm,
+                                           var_types,var_map,factor_levels,
+                                           ridx,cov_flat,use_only)
+         elements.extend(new_elements)
+         rows.extend(new_rows)
+         cols.extend(new_cols)
+         ci += new_ci
    
    for irsti in irstx:
       # Impulse response terms need to be calculate for every series individually - costly
       irsterm = terms[irsti]
-      var = irsterm.variables[0]
-
-      term_elements = []
-      term_idx = []
-
-      # Calculate Coef names
-      n_coef = irsterm.nk
-
-      if irsterm.by is not None:
-         by_levels = factor_levels[irsterm.by]
-         n_coef *= len(by_levels)
-
-      if pool is None:
-         for s_cov,s_state in zip(cov,state_est):
-            
-            # Create matrix for state corresponding to term.
-            matrix_term = irsterm.basis(irsterm.state,s_cov[:,var_map[var]],s_state, irsterm.nk, **irsterm.basis_kwargs)
-            m_rows,m_cols = matrix_term.shape
-
-            # Handle optional by keyword
-            if irsterm.by is not None:
-               
-               by_matrix_term = np.zeros((m_rows,m_cols*len(by_levels)),dtype=float)
-
-               by_cov = s_cov[:,var_map[irsterm.by]]
-
-               if len(np.unique(by_cov)) > 1:
-                  raise ValueError(f"By-variable {irsterm.by} has varying levels on series level. This should not be the case.")
-               
-               # Fill the by matrix blocks.
-               cByIndex = 0
-               for by_level in range(len(by_levels)):
-                  if by_level == by_cov[0]:
-                     by_matrix_term[:,cByIndex:cByIndex+m_cols] = matrix_term
-                     cByIndex += m_cols
-               
-               final_term = by_matrix_term
-            else:
-               final_term = matrix_term
-
-            m_rows,m_cols = final_term.shape
-
-            # Find basis elements > 0
-            if len(term_idx) < 1:
-               for m_coli in range(m_cols):
-                  final_col = final_term[:,m_coli]
-                  term_elements.append(final_col[abs(final_col) > tol])
-                  term_idx.append(abs(final_col) > tol)
-            else:
-               for m_coli in range(m_cols):
-                  final_col = final_term[:,m_coli]
-                  term_elements[m_coli] = np.append(term_elements[m_coli],final_col[abs(final_col) > tol])
-                  term_idx[m_coli] = np.append(term_idx[m_coli], abs(final_col) > tol)
-
-         if n_coef != len(term_elements):
-            raise KeyError("Not all model matrix columns were created.")
-         
-         # Now collect actual row indices
-         for m_coli in range(len(term_elements)):
-            if use_only is None or irsti in use_only:
-               elements.extend(term_elements[:,m_coli])
-               rows.extend(ridx[term_idx[m_coli]])
-               cols.extend([ci for _ in range(len(term_elements[:,m_coli]))])
-            ci += 1
-
-      else:
-         raise NotImplementedError("Multiprocessing code for impulse response terms is not yet implemented in new formula api.")
+      
+      new_elements,\
+      new_rows,\
+      new_cols,\
+      new_ci = build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,
+                                           factor_levels,ridx,cov,
+                                           state_est,use_only,pool,tol)
+      elements.extend(new_elements)
+      rows.extend(new_rows)
+      cols.extend(new_cols)
+      ci += new_ci
 
    for sti in stx:
 
       sterm = terms[sti]
-      vars = sterm.variables
 
-      term_ridx = []
-
-      # Calculate Coef number for control checks
-      if len(vars) > 1:
-         n_coef = np.prod(sterm.nk)
-      else:
-         n_coef = sterm.nk
-      #print(n_coef)
-
-      if sterm.by is not None:
-         by_levels = factor_levels[sterm.by]
-         n_coef *= len(by_levels)
-
-         if sterm.by_latent is not False and has_sigma_split is False:
-               n_coef *= n_j
-         
-      # Calculate smooth term for corresponding covariate
-
-      # Handle identifiability constraints for every basis and
-      # optionally update tensor surface.
-      for vi in range(len(vars)):
-
-         if len(vars) > 1:
-            id_nk = sterm.nk[vi]
-         else:
-            id_nk = sterm.nk
-
-         if sterm.is_identifiable:
-            id_nk += 1
-
-         #print(var_mins[vars[0]],var_maxs[vars[0]])
-         matrix_term_v = sterm.basis(None,cov_flat[:,var_map[vars[vi]]], None, id_nk, min_c=var_mins[vars[vi]],max_c=var_maxs[vars[vi]], **sterm.basis_kwargs)
-
-         if sterm.is_identifiable:
-            matrix_term_v = matrix_term_v @ sterm.Z[vi]
-         
-         if vi == 0:
-            matrix_term = matrix_term_v
-         else:
-            matrix_term = TP_basis_calc(matrix_term,matrix_term_v)
-
-      m_rows, m_cols = matrix_term.shape
-      #print(m_cols)
-      term_ridx = [ridx[:] for _ in range(m_cols)]
-
-      # Handle optional by keyword
-      if sterm.by is not None:
-         new_term_ridx = []
-
-         by_cov = cov_flat[:,var_map[sterm.by]]
-         
-         # Split by cov and update rows with elements in columns
-         for by_level in range(len(by_levels)):
-            by_cidx = by_cov == by_level
-            for m_coli in range(m_cols):
-               new_term_ridx.append(term_ridx[m_coli][by_cidx,])
-
-         term_ridx = new_term_ridx
+      new_elements,\
+      new_rows,\
+      new_cols,\
+      new_ci = build_smooth_term_matrix(ci,n_j,has_sigma_split,sti,sterm,
+                                        var_map,var_mins,var_maxs,
+                                        factor_levels,ridx,cov_flat,
+                                        state_est_flat,use_only,tol)
+      elements.extend(new_elements)
+      rows.extend(new_rows)
+      cols.extend(new_cols)
+      ci += new_ci
       
-      # Handle split by latent variable if a shared sigma term across latent stages is assumed.
-      if sterm.by_latent is not False and has_sigma_split is False:
-         new_term_ridx = []
-
-         # Split by state and update rows with elements in columns
-         for by_state in range(n_j):
-            for m_coli in range(len(term_elements)):
-               # Adjust state estimate for potential by split earlier.
-               col_cor_state_est = state_est_flat[term_ridx[m_coli]]
-               new_term_ridx.append(term_ridx[m_coli][col_cor_state_est == by_state,])
-
-         term_ridx = new_term_ridx
-
-      f_cols = len(term_ridx)
-
-      if n_coef != f_cols:
-         raise KeyError("Not all model matrix columns were created.")
-
-      # Find basis elements > 0 and collect correspondings elements and row indices
-      for m_coli in range(f_cols):
-         final_ridx = term_ridx[m_coli]
-         final_col = matrix_term[final_ridx,m_coli%m_cols]
-
-         # Tolerance row index for this columns
-         cidx = abs(final_col) > tol
-         if use_only is None or sti in use_only:
-            elements.extend(final_col[cidx])
-            rows.extend(final_ridx[cidx])
-            cols.extend([ci for _ in range(len(final_ridx[cidx]))])
-         ci += 1
-
    for rti in rtx:
       rterm = terms[rti]
-      vars = rterm.variables
 
       if isinstance(rterm,ri):
-         offset = np.ones(n_y)
+         new_elements,\
+         new_rows,\
+         new_cols,\
+         new_ci = build_ri_term_matrix(ci,n_y,rti,rterm,var_map,factor_levels,
+                                       ridx,cov_flat,use_only)
+         elements.extend(new_elements)
+         rows.extend(new_rows)
+         cols.extend(new_cols)
+         ci += new_ci
 
-         by_cov = cov_flat[:,var_map[vars[0]]]
-
-         for fl in range(len(factor_levels[vars[0]])):
-            fl_idx = by_cov == fl
-            if use_only is None or rti in use_only:
-               elements.extend(offset[fl_idx])
-               rows.extend(ridx[fl_idx])
-               cols.extend([ci for _ in range(len(offset[fl_idx]))])
-            ci += 1
-
-         
       elif isinstance(rterm,rs):
-         raise NotImplementedError("Random slope terms are not yet supported.")
+         new_elements,\
+         new_rows,\
+         new_cols,\
+         new_ci = build_rs_term_matrix(ci,n_y,rti,rterm,var_types,var_map,
+                                       factor_levels,ridx,cov_flat,use_only)
+         elements.extend(new_elements)
+         rows.extend(new_rows)
+         cols.extend(new_cols)
+         ci += new_ci
 
    mat = scp.sparse.csc_array((elements,(rows,cols)),shape=(n_y,ci))
 

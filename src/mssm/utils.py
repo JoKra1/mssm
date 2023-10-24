@@ -471,8 +471,10 @@ def par_gamma2s(scales):
 ##################################### HsMM functions #####################################
 
 def forward_eta(n_j,n_t,pi,TR,log_dur_mat,log_obs_mat):
-   # Forward pass for HsMM as described in Yu (2011). Our
-   # sampler requires the probabilities P(S_t = j| obs, pars).
+   # Forward pass for HsMM based on math in Yu (2011) and inspired by
+   # implementation in edhsmm (https://github.com/poypoyan/edhsmm).
+
+   # Our sampler requires the probabilities P(S_t = j| obs, pars).
    # So we need only compute eta(t,j,d) to ultimately compute gamma(t,j).
    # For the etas we have to compute the forward and backward pass so we
    # get alphas and betas anyway.
@@ -540,8 +542,10 @@ def forward_eta(n_j,n_t,pi,TR,log_dur_mat,log_obs_mat):
    return scp.special.logsumexp(alpha_t), etas, u
 
 def backward_eta(n_j,n_t,TR,log_dur_mat,etas,u):
-   # Backward pass for HsMM as described in Yu (2011). Gets the partially
-   # computed etas from the forward_eta() function. Since we have already
+   # Backward pass based on math in Yu (2011) and inspired by
+   # implementation in edhsmm (https://github.com/poypoyan/edhsmm).
+
+   # Gets the partially computed etas from the forward_eta() function. Since we have already
    # computed the u term from equation 20, we pass that one along as well!
    # Computes gammas(t,j) on the fly.
 
