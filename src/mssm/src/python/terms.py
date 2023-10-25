@@ -41,6 +41,7 @@ class f(GammTerm):
                 basis_kwargs:dict={"convolve":False},
                 by_latent:bool=False,
                 is_penalized:bool = True,
+                penalize_null:bool = False,
                 penalty:list[penalties.PenType] or None = None,
                 pen_kwargs:list[dict] or None = None) -> None:
         
@@ -70,6 +71,7 @@ class f(GammTerm):
         self.basis_kwargs = basis_kwargs
         self.by = by
         self.id = id
+        self.has_null_penalty = penalize_null
 
         # Tensor bases can each have different number of basis functions
         if len(variables) == 1 or isinstance(nk,list):

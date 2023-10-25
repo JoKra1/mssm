@@ -33,7 +33,7 @@ def translate_sparse(mat):
 
   return data, rows, cols
 
-def diff_pen(n,m=2,Z=None,sel=False):
+def diff_pen(n,m=2,Z=None):
   # Creates difference (order=m) n*n penalty matrix
   # Based on code in Eilers & Marx (1996) and Wood (2017)
   warnings.warn("Sparse difference penalties are not yet implemented. Instead a dense penalty is converted to a sparse one, reducing performance.")
@@ -51,20 +51,6 @@ def diff_pen(n,m=2,Z=None,sel=False):
   FS = np.linalg.norm(S,'fro')
   S = S / FS
   D = D / FS**0.5
-
-  if sel:
-     # Null-space penalty
-     # based on: https://eric-pedersen.github.io/mgcv-esa-workshop/slides/03-model-selection.pdf
-     # and: https://rdrr.io/cran/mgcv/man/gam.selection.html
-     # ToDo: If the null-space dimension is > 1, then the behavior below
-     # does not match mgcv. Simon Wood places a "separate penalty on every null-space component"
-     # https://stat.ethz.ch/R-manual/R-devel/library/mgcv/html/smooth.construct.fs.smooth.spec.html
-     # so would for every column in D create an individual S + individual lambda term. I need to change
-     # this here to match that behavior.
-     s, U =scp.linalg.eig(S,left=True,right=False)
-     D = U[:,s <= 1e-7]
-     S = D @ D.T
-
 
   S = scp.sparse.csc_array(S)
   D = scp.sparse.csc_array(D)
