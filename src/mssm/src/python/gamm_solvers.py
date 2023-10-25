@@ -33,6 +33,9 @@ def compute_S_emb_pinv_det(col_S,penalties,pinv):
    # Computes final S multiplied with lambda
    # and the pseudo-inverse of this term.
    cIndexPinv = 0
+   if penalties[0].start_index is not None:
+      cIndexPinv = penalties[0].start_index
+      
    n_lterms = len(penalties)
    S_emb = None
    S_pinv_elements = []
@@ -45,9 +48,6 @@ def compute_S_emb_pinv_det(col_S,penalties,pinv):
    # Build S_emb and pinv(S_emb)
    for lti,lTerm in enumerate(penalties):
       #print(f"pen: {lti}")
-
-      if lTerm.start_index is not None:
-         cIndexPinv = lTerm.start_index
 
       # Collect number of penalties on the term
       SJ_terms += 1

@@ -131,7 +131,7 @@ def get_coef_info_smooth(has_sigma_split,n_j,sterm,factor_levels):
     return total_coef,coef_names,coef_per_term
 
 def build_smooth_penalties(has_sigma_split,n_j,penalties,cur_pen_idx,
-                           pen_i_s_idx,pen_start_idx,pen,penid,sterm,
+                           pen_start_idx,pen,penid,sterm,
                            vars,by_levels,n_coef,col_S):
     # We again have to deal with potential identifiable constraints!
     # Then we again act as if n_k was n_k+1 for difference penalties
@@ -161,7 +161,7 @@ def build_smooth_penalties(has_sigma_split,n_j,penalties,cur_pen_idx,
     pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = pen_generator(id_k,**pen_kwargs)
 
     # Create lambda term
-    lTerm = LambdaTerm(start_index=pen_i_s_idx,
+    lTerm = LambdaTerm(start_index=pen_start_idx,
                        type = pen)
 
     # For tensor product smooths we first have to recalculate:
@@ -205,9 +205,8 @@ def build_smooth_penalties(has_sigma_split,n_j,penalties,cur_pen_idx,
             # remaining levels.
             penalties.append(lTerm)
 
-                # Make sure that this is set to None in case the lambda term for the first level received a start_idx reset.
-            pen_start_idx = None 
-            pen_i_s_idx = None
+            # Make sure that this is set to None in case the lambda term for the first level received a start_idx reset.
+            pen_start_idx = None
 
             pen_iter = len(by_levels) - 1
 
@@ -217,7 +216,7 @@ def build_smooth_penalties(has_sigma_split,n_j,penalties,cur_pen_idx,
             for _ in range(pen_iter):
 
                 # Create lambda term
-                lTerm = LambdaTerm(start_index=pen_i_s_idx,
+                lTerm = LambdaTerm(start_index=pen_start_idx,
                                 type = pen)
 
                 # Embed penalties
@@ -232,12 +231,11 @@ def build_smooth_penalties(has_sigma_split,n_j,penalties,cur_pen_idx,
             penalties.append(lTerm)
 
             # Make sure that this is set to None in case the lambda term for the first level received a start_idx reset.
-            pen_start_idx = None 
-            pen_i_s_idx = None
+            pen_start_idx = None
 
             for _ in range(n_j-1):
                 # Create lambda term
-                lTerm = LambdaTerm(start_index=pen_i_s_idx,
+                lTerm = LambdaTerm(start_index=pen_start_idx,
                                 type = pen)
 
                 # Embed penalties
@@ -248,9 +246,9 @@ def build_smooth_penalties(has_sigma_split,n_j,penalties,cur_pen_idx,
         else:
             penalties.append(lTerm)
 
-    return penalties,cur_pen_idx,pen_start_idx
+    return penalties,cur_pen_idx
 
-def build_irf_penalties(penalties,cur_pen_idx,pen_i_s_idx,pen_start_idx,
+def build_irf_penalties(penalties,cur_pen_idx,pen_start_idx,
                         pen,penid,irsterm,by_levels,n_coef,col_S):
     # Determine penalty generator
     if pen == PenType.DIFFERENCE:
@@ -262,7 +260,7 @@ def build_irf_penalties(penalties,cur_pen_idx,pen_i_s_idx,pen_start_idx,
     pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = pen_generator(n_coef,**irsterm.pen_kwargs[penid])
 
     # Create lambda term
-    lTerm = LambdaTerm(start_index=pen_i_s_idx,
+    lTerm = LambdaTerm(start_index=pen_start_idx,
                         type = pen)
 
     # Embed first penalty - if the term has a by-keyword more are added below.
@@ -287,10 +285,10 @@ def build_irf_penalties(penalties,cur_pen_idx,pen_i_s_idx,pen_start_idx,
 
             # Make sure that this is set to None in case the lambda term for the first level received a start_idx reset.
             pen_start_idx = None 
-            pen_i_s_idx = None
+
             for _ in range(len(by_levels)-1):
                 # Create lambda term
-                lTerm = LambdaTerm(start_index=pen_i_s_idx,
+                lTerm = LambdaTerm(start_index=pen_start_idx,
                                 type = pen)
 
                 # Embed penalties
@@ -301,7 +299,7 @@ def build_irf_penalties(penalties,cur_pen_idx,pen_i_s_idx,pen_start_idx,
     else:
         penalties.append(lTerm)
     
-    return penalties,cur_pen_idx,pen_start_idx
+    return penalties,cur_pen_idx
 
 class Formula():
     def __init__(self,
@@ -731,13 +729,17 @@ class Formula():
                # penalty needs to be reset.
                if penid > 0:
                   cur_pen_idx = prev_pen_idx
-                  pen_i_s_idx = cur_pen_idx
-               else:
-                  pen_i_s_idx = pen_start_idx
+                  pen_start_idx = cur_pen_idx
 
-               penalties,cur_pen_idx,pen_start_idx = build_irf_penalties(penalties,cur_pen_idx,pen_i_s_idx,
-                                                                         pen_start_idx,pen,penid,irsterm,
-                                                                         by_levels,n_coef,col_S)
+               penalties,cur_pen_idx = build_irf_penalties(penalties,cur_pen_idx,
+                                                           pen_start_idx,pen,penid,irsterm,
+                                                           by_levels,n_coef,col_S)
+               
+               # Start index should be set to None after a penalty has added
+               # the the next penalty automatically is associated with next
+               # index at the pseudo-inverse calculation step.
+               # This is over-written in case a term has multiple penalties (see above)
+               pen_start_idx = None
          
          # Keep track of previous penalty starting index
          prev_pen_idx = cur_pen_idx
@@ -788,14 +790,14 @@ class Formula():
                # penalty needs to be reset.
                if penid > 0:
                   cur_pen_idx = prev_pen_idx
-                  pen_i_s_idx = cur_pen_idx
-               else:
-                  pen_i_s_idx = pen_start_idx
+                  pen_start_idx = cur_pen_idx
                
-               penalties,cur_pen_idx,pen_start_idx = build_smooth_penalties(self.has_sigma_split(),self.__n_j,
-                                                                            penalties,cur_pen_idx,pen_i_s_idx,
-                                                                            pen_start_idx,pen,penid,sterm,vars,
-                                                                            by_levels,n_coef,col_S)
+               penalties,cur_pen_idx = build_smooth_penalties(self.has_sigma_split(),self.__n_j,
+                                                              penalties,cur_pen_idx,
+                                                              pen_start_idx,pen,penid,sterm,vars,
+                                                              by_levels,n_coef,col_S)
+               
+               pen_start_idx = None
 
          # Keep track of previous penalty starting index
          prev_pen_idx = cur_pen_idx
