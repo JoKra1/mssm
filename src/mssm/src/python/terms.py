@@ -35,7 +35,7 @@ class f(GammTerm):
     def __init__(self,variables:list,
                 by:str=None,
                 id:int=None,
-                nk:int or list[int] = 10,
+                nk:int or list[int] = 9,
                 identifiable:bool=True,
                 basis:Callable=smooths.B_spline_basis,
                 basis_kwargs:dict={"convolve":False},
@@ -80,6 +80,21 @@ class f(GammTerm):
          self.nk = [nk for _ in range(len(variables))]
               
         self.by_latent = by_latent
+
+class fs(f): # Approximates bs='fs' in mgcv
+   def __init__(self,
+                variables: list,
+                rf: str = None,
+                nk: int = 9,
+                basis: Callable = smooths.B_spline_basis,
+                basis_kwargs: dict = {},
+                by_latent: bool = False):
+
+      penalty = [penalties.PenType.DIFFERENCE]
+      pen_kwargs = [{"m":1}]
+      super().__init__(variables, rf, 99, nk+1, False,
+                       basis, basis_kwargs, by_latent,
+                       True, True, penalty, pen_kwargs)
         
 class irf(GammTerm):
     def __init__(self,variable:str,
@@ -128,11 +143,11 @@ class ri(GammTerm):
 class rs(GammTerm):
     def __init__(self,
                  variables:list,
-                 by:str,
+                 rf:str,
                  by_latent:bool=False) -> None:
         
         # Initialization
         super().__init__(variables, TermType.RANDSLOPE, True, [penalties.PenType.IDENTITY], [{}])
         self.var_coef = None
-        self.by = by
+        self.by = rf
         self.by_latent = by_latent

@@ -853,6 +853,9 @@ class Formula():
                   else:
                      # Independent penalties via by
                      # Append penalty for first level
+                     # ToDo: here is the origin of the bug indicated in the gamm_solvers file
+                     # We need to insert every null-space penalty directly after their corresponding by penalty
+                     # and they all need a start_idx reset. The latter is easy just: pen_start_idx += S_j_last.shape[1]
                      penalties.append(lTerm)
 
                      # Now set starting index to None

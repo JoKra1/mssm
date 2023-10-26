@@ -66,6 +66,9 @@ def compute_S_emb_pinv_det(col_S,penalties,pinv):
       else:
          S_emb += lTerm.S_J_emb * lTerm.lam
 
+      # ToDo: There is a bug here with null-space penalties
+      # placed on terms with a by and without id. The statement below
+      # does not catch this. This one is gonna be tricky..
       if lti < (n_lterms - 1) and penalties[lti + 1].start_index is not None:
          #print("Skip")
          continue
