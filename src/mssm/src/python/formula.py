@@ -801,6 +801,9 @@ class Formula():
                pen_start_idx = None
 
                if sterm.has_null_penalty:
+                  # ToDo: Distinguish between smooths of multiple variables and
+                  # single variable smooths.
+
                   n_pen = len(penalties)
                   # Optionally include a Null-space penalty - an extra penalty on the
                   # function space not regularized by the penalty we just created:
@@ -808,72 +811,64 @@ class Formula():
                   S_j_last = penalties[-1].S_J.toarray()
                   last_pen_rep = penalties[-1].rep_sj
                   
-                  # Based on: https://eric-pedersen.github.io/mgcv-esa-workshop/slides/03-model-selection.pdf
-                  # and: https://rdrr.io/cran/mgcv/man/gam.selection.html
-                  s, U =scp.linalg.eig(S_j_last,left=True,right=False)
-                  D = U[:,s <= 1e-7]
-                  D = D.reshape(S_j_last.shape[1],-1)
+                  # Based on: Marra & Wood (2011) and: https://rdrr.io/cran/mgcv/man/gam.selection.html
+                  # and: https://eric-pedersen.github.io/mgcv-esa-workshop/slides/03-model-selection.pdf
+                  s, U =scp.linalg.eigh(S_j_last)
+                  DNULL = U[:,s <= 1e-7]
+                  DNULL = DNULL.reshape(S_j_last.shape[1],-1)
 
+                  SNULL = DNULL @ DNULL.T
 
-                  # However, Simon Wood places a "separate penalty on every null-space component"
-                  # https://stat.ethz.ch/R-manual/R-devel/library/mgcv/html/smooth.construct.fs.smooth.spec.html
-                  # so for every column in D an individual S + individual lambda term is created.
-                  for nci in range(D.shape[1]):
-                     Di = D[:,nci]
-                     Di = Di.reshape(-1,1)
-                     Si = Di @ Di.T
+                  SNULL = scp.sparse.csc_array(SNULL)
+                  DNULL = scp.sparse.csc_array(DNULL)
 
-                     Si = scp.sparse.csc_array(Si)
-                     Di = scp.sparse.csc_array(Di)
+                  # Data in S and D is in canonical format, for competability this is translated to data, rows, columns
+                  pen_data,pen_rows,pen_cols = translate_sparse(SNULL)
+                  chol_data,chol_rows,chol_cols = translate_sparse(DNULL)
 
-                     # Data in S and D is in canonical format, for competability this is translated to data, rows, columns
-                     pen_data,pen_rows,pen_cols = translate_sparse(Si)
-                     chol_data,chol_rows,chol_cols = translate_sparse(Di)
+                  cur_pen_idx = prev_pen_idx
+                  pen_start_idx = cur_pen_idx
 
-                     cur_pen_idx = prev_pen_idx
-                     pen_start_idx = cur_pen_idx
-
-                     lTerm = LambdaTerm(start_index=pen_start_idx,
-                                        type = pen)
+                  lTerm = LambdaTerm(start_index=pen_start_idx,
+                                       type = pen)
+                  
+                  # Embed first penalty - if the term has a by-keyword more are added below.
+                  lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
+                  lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
+                  lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
+                  
+                  # Single penalty added - but could involve by keyword
+                  if (n_pen - prev_n_pen) == 1:
                      
-                     # Embed first penalty - if the term has a by-keyword more are added below.
-                     lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
-                     lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
-                     lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
-                     
-                     # Single penalty added - but could involve by keyword
-                     if (n_pen - prev_n_pen) == 1:
-                        
-                        # Handle any By-keyword
-                        if last_pen_rep > 1:
-                           for _ in range(last_pen_rep - 1):
-                              lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
-                              lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
-                        
-                           lTerm.rep_sj = last_pen_rep
-
-                        # In any case, term can be appended here.
-                        penalties.append(lTerm)
-                     else:
-                        # Independent penalties via by
-                        # Append penalty for first level
-                        penalties.append(lTerm)
-
-                        # Now set starting index to None
-                        pen_start_idx = None
-
-                        # And add the penalties again for the remaining levels as separate terms
-                        for _ in range((n_pen - prev_n_pen) - 1):
-                           lTerm = LambdaTerm(start_index=pen_start_idx,
-                                        type = pen)
-                     
-                           # Embed penalties
+                     # Handle any By-keyword
+                     if last_pen_rep > 1:
+                        for _ in range(last_pen_rep - 1):
                            lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
                            lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
-                           lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
-                           penalties.append(lTerm)
-                           
+                     
+                        lTerm.rep_sj = last_pen_rep
 
+                     # In any case, term can be appended here.
+                     penalties.append(lTerm)
+                  else:
+                     # Independent penalties via by
+                     # Append penalty for first level
+                     penalties.append(lTerm)
+
+                     # Now set starting index to None
+                     pen_start_idx = None
+
+                     # And add the penalties again for the remaining levels as separate terms
+                     for _ in range((n_pen - prev_n_pen) - 1):
+                        lTerm = LambdaTerm(start_index=pen_start_idx,
+                                       type = pen)
+                  
+                        # Embed penalties
+                        lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
+                        lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
+                        lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
+                        penalties.append(lTerm)
+                           
                   pen_start_idx = None
 
          # Keep track of previous penalty starting index
