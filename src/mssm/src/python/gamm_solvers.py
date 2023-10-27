@@ -97,7 +97,14 @@ def compute_S_emb_pinv_det(col_S,penalties,pinv):
 
             # Compute pinv via SVD
             else:
-               u, Sig, vt = scp.sparse.linalg.svds(SJ,SJ.shape[1]-1)
+               # ToDo: Find a better svd implementation. The sparse svds fails with propack
+               # but propack is the only one for which we can set k=SJ.shape[1]. This is requried
+               # since especially the null-penalty terms require all vectors to be recoverd to
+               # compute an accurate pseudo-inverse.
+               # casting to an array and then using svd works but I would rather avoid that to benefit
+               # from the smaller memory footprint of the sparse variants.
+               #u, Sig, vt = scp.sparse.linalg.svds(SJ,SJ.shape[1],solver='propack',maxiter=20*SJ.shape[1])
+               u, Sig, vt = scp.linalg.svd(SJ.toarray())
                rs = [1/s if s > 1e-7 else 0 for s in Sig]
                SJ_pinv = vt.T @ np.diag(rs) @ u.T
                SJ_pinv = scp.sparse.csc_array(SJ_pinv)
@@ -158,16 +165,69 @@ def PIRLS(y,yb,mu,eta,X,Xb,S_emb,family,maxiter_inner):
       if isinstance(family,Gaussian) == False:
          mu = family.link.fi(eta)
       
-   return y,yb,mu,eta,X,Xb,z,Wr,InvCholXXSP,Pr,coef
+   return yb,mu,eta,Xb,z,Wr,InvCholXXSP,Pr,coef
 
+def apply_eigen_perm(Pr,InvCholXXSP):
+   nP = len(Pr)
+   P = [1 for _ in range(nP)]
+   Pc = [c for c in range(nP)]
+   Perm = scp.sparse.csc_array((P,(Pr,Pc)),shape=(nP,nP))
+   InvCholXXS = InvCholXXSP @ Perm
+   return InvCholXXS
+
+def calculate_edf(InvCholXXS,penalties,colsX):
+   total_edf = colsX
+   Bs = []
+   term_edfs = []
+
+   for lTerm in penalties:
+      B = InvCholXXS @ lTerm.D_J_emb # Needed for Fellner Schall update (Wood & Fasiolo, 2016)
+      Bps = B.power(2).sum()
+      pen_params = lTerm.lam * Bps
+      total_edf -= pen_params
+      Bs.append(Bps)
+      term_edfs.append(lTerm.S_J.shape[1] - pen_params)
+   
+   return total_edf,term_edfs,Bs
+
+def update_coef_given_lambda(y,yb,mu,eta,rowsX,colsX,X,Xb,S_emb,family,penalties,maxiter_inner):
+   # Inner Loop to optionally update pseudo data and weights i.e.,
+   # to perform PIRLS (Wood, 2017) or to simply calculate an AMM
+   yb,mu,eta,Xb,z,Wr,InvCholXXSP,Pr,coef = PIRLS(y,yb,mu,eta,X,Xb,S_emb,family,maxiter_inner)
+
+   # Calculate Pearson residuals for GAMM (Wood, 3.1.7)
+   # Standard residuals for AMM
+   if isinstance(family,Gaussian) == False:
+      wres = Wr @ (z - eta)
+   else:
+      wres = y - eta
+
+   # Calculate total and term wise edf
+   InvCholXXS = apply_eigen_perm(Pr,InvCholXXSP)
+
+   # If there are penalized terms we need to adjust the total_edf
+   if len(penalties) > 0:
+      total_edf, term_edfs, Bs = calculate_edf(InvCholXXS,penalties,colsX)
+   else:
+      total_edf = colsX
+      term_edfs = None
+      Bs = None
+
+   # Optionally estimate scale parameter
+   if family.scale is None:
+      scale = family.est_scale(wres,rowsX,total_edf)
+   else:
+      scale = family.scale
+   
+   return wres,yb,mu,eta,Xb,z,Wr,InvCholXXS,coef,total_edf,term_edfs,Bs,scale
+   
 def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter_outer=10,maxiter_inner=1,pinv="svd"):
    # Estimates a penalized Generalized additive mixed model, following the steps outlined in Wood (2017)
    rowsX,colsX = X.shape
    coef = None
-   prev_lam_delta = None
 
    # Additive mixed model can simply be fit on y and X
-   # Generalized mixedl model needs to be fit on weighted X and pseudo-dat
+   # Generalized mixed model needs to be fit on weighted X and pseudo-dat
    # but the same routine can be used (Wood, 2017) so both should end
    # up in the same variables passed down:
    yb = y
@@ -186,49 +246,25 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter_outer=10
    else:
       S_emb = scp.sparse.csc_array((colsX, colsX), dtype=np.float64)
 
+   # Estimate coefficients for starting lambda
+   wres,\
+   yb,\
+   mu,\
+   eta,\
+   Xb,\
+   _,\
+   _,\
+   InvCholXXS,\
+   coef,\
+   total_edf,\
+   term_edfs,\
+   Bs,\
+   scale = update_coef_given_lambda(y,yb,mu,eta,rowsX,colsX,X,Xb,
+                                    S_emb,family,penalties,
+                                    maxiter_inner)
+
    # Outer Loop - to optimize smoothing parameter
    for o_iter in range(maxiter_outer):
-      
-      # Inner Loop to optionally update pseudo data and weights i.e.,
-      # to perform PIRLS (Wood, 2017) or to simply calculate an AMM
-      y,yb,mu,eta,X,Xb,z,Wr,InvCholXXSP,Pr,coef = PIRLS(y,yb,mu,eta,X,Xb,S_emb,family,maxiter_inner)
-
-      # Calculate Pearson residuals for GAMM (Wood, 3.1.7)
-      # Standard residuals for AMM
-      if isinstance(family,Gaussian) == False:
-         wres = Wr @ (z - eta)
-      else:
-         wres = y - eta
-
-      # Calculate total and term wise edf
-      nP = len(Pr)
-      P = [1 for _ in range(nP)]
-      Pc = [c for c in range(nP)]
-      Perm = scp.sparse.csc_array((P,(Pr,Pc)),shape=(nP,nP))
-      InvCholXXS = InvCholXXSP @ Perm
-
-      total_edf = colsX
-
-      # If there are penalized terms we need to adjust the total_edf
-      if len(penalties) > 0:
-         Bs = []
-         term_edfs = []
-
-         for lTerm in penalties:
-            B = InvCholXXS @ lTerm.D_J_emb # Needed for Fellner Schall update (Wood & Fasiolo, 2016)
-            Bps = B.power(2).sum()
-            pen_params = lTerm.lam * Bps
-            total_edf -= pen_params
-            Bs.append(Bps)
-            term_edfs.append(lTerm.S_J.shape[1] - pen_params)
-      else:
-         term_edfs = None
-
-      # Optionally estimate scale parameter
-      if family.scale is None:
-         scale = family.est_scale(wres,rowsX,total_edf)
-      else:
-         scale = family.scale
 
       # Perform Fellner Schall Update if there are penalized terms:
       if len(penalties) > 0:
@@ -238,15 +274,39 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter_outer=10
             lam_delta.append(dLam)
 
          # ToDo: Optionally test lambda step - right now just apply
+         abs_lam_delt = 0
+         abs_lam = 0
          for lti,lTerm in enumerate(penalties):
             lTerm.lam += lam_delta[lti]
-         
-         # ToDo: Convergence control
-         lam_delta = np.array(lam_delta).reshape(-1,1)
-         prev_lam_delta = lam_delta[:]
+            abs_lam_delt += abs(lam_delta[lti])
+            abs_lam += abs(lTerm.lam)
 
          # Re-compute S_emb and S_pinv
          S_emb,S_pinv = compute_S_emb_pinv_det(col_S,penalties,pinv)
+
+         # Update coefficients
+         wres,\
+         yb,\
+         mu,\
+         eta,\
+         Xb,\
+         _,\
+         _,\
+         InvCholXXS,\
+         coef,\
+         total_edf,\
+         term_edfs,\
+         Bs,\
+         scale = update_coef_given_lambda(y,yb,mu,eta,rowsX,colsX,X,Xb,
+                                          S_emb,family,penalties,
+                                          maxiter_inner)
+         
+         # ToDo: Better convergence control
+         if abs_lam_delt < 1e-5*abs_lam:
+            print("Converged",o_iter)
+            break
+         else:
+            print("False")
 
    # Final penalty
    if len(penalties) > 0:

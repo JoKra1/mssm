@@ -175,7 +175,7 @@ class GAMM(MSSM):
     
     ##################################### Fitting #####################################
     
-    def fit(self,maxiter_outer=20,maxiter_inner=1):
+    def fit(self,maxiter_outer=30,maxiter_inner=1):
 
         # We need the initialized penalties
         penalties = self.formula.penalties
