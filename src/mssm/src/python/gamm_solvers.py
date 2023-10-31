@@ -287,10 +287,15 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter=10,pinv=
 
    # Now we propose a lambda extension vial the Fellner Schall method
    # by Wood & Fasiolo (2016)
+   # We also consider an extension term as reccomended by Wood & Fasiolo (2016)
+   extend_by = 2
    if len(penalties) > 0:
       lam_delta = []
       for lti,lTerm in enumerate(penalties):
          dLam = step_fellner_schall_sparse(S_pinv,lTerm.S_J_emb,Bs[lti],coef,lTerm.lam,scale)
+         extension = lTerm.lam  + dLam*extend_by
+         if extension < 1e7 and extension > 1e-7: # Keep lambda in correct space
+            dLam *= extend_by
          lam_delta.append(dLam)
 
       lam_delta = np.array(lam_delta).reshape(-1,1)
@@ -327,7 +332,6 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter=10,pinv=
             if corrections > 30:
                # If we could not find a better coefficient set simply accept
                # previous coefficient
-               print("small change")
                n_coef = coef[:]
          
             n_coef = (coef + n_coef)/2
@@ -381,46 +385,41 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter=10,pinv=
             term_edfs,\
             Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
                                                   X,Xb,family,S_emb,penalties)
-
-            print(scale)
             
             # Compute gradient of REML with respect to lambda
             # to check if step size needs to be reduced.
             lam_grad = [grad_lambda(S_pinv,penalties[lti].S_J_emb,Bs[lti],n_coef,scale) for lti in range(len(penalties))]
             lam_grad = np.array(lam_grad).reshape(-1,1) 
             check = lam_grad.T @ lam_delta
-            print(lam_grad,check,1e-7*pen_dev,lam_delta)
+
             if check[0,0] < 0: # because of minimization in Wood (2017) they use a different check.
                # Cut the step taken in half
-               print("reducing step taken")
                for lti,lTerm in enumerate(penalties):
-                  lam_delta[lti] = lam_delta[lti]/2
-                  lTerm.lam -= lam_delta[lti][0]
+                  if extend_by > 1:
+                     lTerm.lam -= lam_delta[lti][0]
+                     lam_delta[lti] *= (1 - 0.5/extend_by)
+                     lTerm.lam += lam_delta[lti][0]
+                  else: # If the step size extension is already at the minimum, fall back to the strategy by Wood (2017) to just half the step
+                     lam_delta[lti] = lam_delta[lti]/2
+                     lTerm.lam -= lam_delta[lti][0]
+               if extend_by > 1:
+                  extend_by -= 0.5 # Try shorter step next time.
             else:
-               extensions = 0
-               if lam_checks == 0: # Try longer step
-                  print("Trying to extend step")
-               
-                  for lti,lTerm in enumerate(penalties):
-                     extension = lTerm.lam  + lam_delta[lti][0]
-                     print(extension)
-                     if extension < 1e7 and extension > 1e-7: # Keep Lambda in possible space
-                        print(extension)
-                        lTerm.lam += lam_delta[lti][0]
-                        lam_delta[lti] = lam_delta[lti]*2
-                        extensions += 1
+               if lam_checks == 0: # Try longer step next time.
+                  extend_by += 0.5
 
-               if extensions == 0:
-                  # Accept the step and propose a new one as well!
-                  print([lterm.lam for lterm in penalties])
-                  lam_accepted = True
-                  lam_delta = []
-                  for lti,lTerm in enumerate(penalties):
-                     dLam = step_fellner_schall_sparse(S_pinv,lTerm.S_J_emb,Bs[lti],n_coef,lTerm.lam,scale)
-                     lam_delta.append(dLam)
+               # Accept the step and propose a new one as well!
+               lam_accepted = True
+               lam_delta = []
+               for lti,lTerm in enumerate(penalties):
+                  dLam = step_fellner_schall_sparse(S_pinv,lTerm.S_J_emb,Bs[lti],n_coef,lTerm.lam,scale)
+                  extension = lTerm.lam  + dLam*extend_by
+                  if extension < 1e7 and extension > 1e-7:
+                     dLam *= extend_by
+                  lam_delta.append(dLam)
 
-                  lam_delta = np.array(lam_delta).reshape(-1,1)
-            
+               lam_delta = np.array(lam_delta).reshape(-1,1)
+
             lam_checks += 1
       
       else:
