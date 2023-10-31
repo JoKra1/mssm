@@ -15,7 +15,7 @@ def cpp_solve_am(y,X,S):
    return cpp_solvers.solve_am(y,X,S)
 
 def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,sigma,verbose=True):
-  # Perform a generalized Fellner Schall update step for a lambda term. This update rule is
+  # Compute a generalized Fellner Schall update step for a lambda term. This update rule is
   # discussed in Wood & Fasiolo (2016) and used here because of it's efficiency.
   
   num = max(0,(gInv @ emb_SJ).trace() - Bps)
@@ -28,6 +28,11 @@ def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,sigma,verbose=True):
    print(f"Num = {(gInv @ emb_SJ).trace()} - {Bps} == {num}\nDenom = {denom}; Lambda = {nLam}")
 
   return nLam-cLam
+
+def grad_lambda(gInv,emb_SJ,Bps,cCoef,sigma):
+   # P. Deriv of restricted likelihood with respect to lambda.
+   # From Wood & Fasiolo (2016)
+   return (gInv @ emb_SJ).trace()/2 - Bps/2 - (cCoef.T @ emb_SJ @ cCoef) / (2*sigma)
 
 def compute_S_emb_pinv_det(col_S,penalties,pinv):
    # Computes final S multiplied with lambda
@@ -135,35 +140,34 @@ def PIRLS_pdat_weights(y,mu,eta,family:Family):
    w = 1 / (dy1**2 * family.V(mu))
    return z, w
 
-def PIRLS(y,yb,mu,eta,X,Xb,S_emb,family,maxiter_inner):
-   # Perform Penalized Iterative Reweighted Least Squares for current lambda parameter (Wood, 2017,6.1.1)
-   prev_coef = None
+def PIRLS(y,yb,mu,eta,X,Xb,S_emb,family):
+   # Perform Penalized Iterative Reweighted Least Squares
+   # step for current lambda parameter (Wood, 2017,6.1.1)
    z = None
    Wr = None
-   for i_iter in range(maxiter_inner):
 
-      if isinstance(family,Gaussian) == False:
-         # Compute weights and pseudo-dat
-         z, w = PIRLS_pdat_weights(y,mu,eta,family)
+   if isinstance(family,Gaussian) == False:
+      # Compute weights and pseudo-dat
+      z, w = PIRLS_pdat_weights(y,mu,eta,family)
 
-         Wr = scp.sparse.spdiags([np.sqrt(np.ndarray.flatten(w))],[0])
+      Wr = scp.sparse.spdiags([np.sqrt(np.ndarray.flatten(w))],[0])
 
-         # Update yb and Xb
-         yb = Wr @ z
-         Xb = Wr @ X
-      
-      # Solve additive model
-      InvCholXXSP, Pr, coef, code = cpp_solve_am(yb,Xb,S_emb)
+      # Update yb and Xb
+      yb = Wr @ z
+      Xb = Wr @ X
+   
+   # Solve additive model
+   InvCholXXSP, Pr, coef, code = cpp_solve_am(yb,Xb,S_emb)
 
-      if code != 0:
-         raise ArithmeticError(f"Solving for coef failed with code {code}. Model is likely unidentifiable.")
-      
-      # Update mu & eta
-      eta = (X @ coef).reshape(-1,1)
-      mu = eta
+   if code != 0:
+      raise ArithmeticError(f"Solving for coef failed with code {code}. Model is likely unidentifiable.")
+   
+   # Update mu & eta
+   eta = (X @ coef).reshape(-1,1)
+   mu = eta
 
-      if isinstance(family,Gaussian) == False:
-         mu = family.link.fi(eta)
+   if isinstance(family,Gaussian) == False:
+      mu = family.link.fi(eta)
       
    return yb,mu,eta,Xb,z,Wr,InvCholXXSP,Pr,coef
 
@@ -190,10 +194,10 @@ def calculate_edf(InvCholXXS,penalties,colsX):
    
    return total_edf,term_edfs,Bs
 
-def update_coef_given_lambda(y,yb,mu,eta,rowsX,colsX,X,Xb,S_emb,family,penalties,maxiter_inner):
+def update_coef_given_lambda(y,yb,mu,eta,rowsX,colsX,X,Xb,S_emb,family,penalties):
    # Inner Loop to optionally update pseudo data and weights i.e.,
    # to perform PIRLS (Wood, 2017) or to simply calculate an AMM
-   yb,mu,eta,Xb,z,Wr,InvCholXXSP,Pr,coef = PIRLS(y,yb,mu,eta,X,Xb,S_emb,family,maxiter_inner)
+   yb,mu,eta,Xb,z,Wr,InvCholXXSP,Pr,coef = PIRLS(y,yb,mu,eta,X,Xb,S_emb,family,)
 
    # Calculate Pearson residuals for GAMM (Wood, 3.1.7)
    # Standard residuals for AMM
@@ -221,10 +225,13 @@ def update_coef_given_lambda(y,yb,mu,eta,rowsX,colsX,X,Xb,S_emb,family,penalties
    
    return wres,yb,mu,eta,Xb,z,Wr,InvCholXXS,coef,total_edf,term_edfs,Bs,scale
    
-def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter_outer=10,maxiter_inner=1,pinv="svd"):
+def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter=10,pinv="svd"):
    # Estimates a penalized Generalized additive mixed model, following the steps outlined in Wood (2017)
+   # "Generalized Additive Models for Gigadata"
+
    rowsX,colsX = X.shape
    coef = None
+   n_coef = None
 
    # Additive mixed model can simply be fit on y and X
    # Generalized mixed model needs to be fit on weighted X and pseudo-dat
@@ -247,6 +254,9 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter_outer=10
       S_emb = scp.sparse.csc_array((colsX, colsX), dtype=np.float64)
 
    # Estimate coefficients for starting lambda
+   # We just accept those here - no step control, since
+   # there are no previous coefficients/deviance that we can
+   # compare the result to.
    wres,\
    yb,\
    mu,\
@@ -260,31 +270,160 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter_outer=10
    term_edfs,\
    Bs,\
    scale = update_coef_given_lambda(y,yb,mu,eta,rowsX,colsX,X,Xb,
-                                    S_emb,family,penalties,
-                                    maxiter_inner)
+                                    S_emb,family,penalties)
+   
+   # Deviance under these starting coefficients
+   # As well as penalized deviance
+   dev = family.deviance(y,mu)
+   pen_dev = dev
 
-   # Outer Loop - to optimize smoothing parameter
-   for o_iter in range(maxiter_outer):
+   if len(penalties) > 0:
+      pen_dev += coef.T @ S_emb @ coef
 
-      # Perform Fellner Schall Update if there are penalized terms:
-      if len(penalties) > 0:
-         lam_delta = []
+   # Now we propose a lambda extension vial the Fellner Schall method
+   # by Wood & Fasiolo (2016)
+   if len(penalties) > 0:
+      lam_delta = []
+      for lti,lTerm in enumerate(penalties):
+         dLam = step_fellner_schall_sparse(S_pinv,lTerm.S_J_emb,Bs[lti],coef,lTerm.lam,scale)
+         lam_delta.append(dLam)
+
+      lam_delta = np.array(lam_delta).reshape(-1,1)
+   
+   # Loop to optimize smoothing parameter (see Wood, 2017)
+   converged = False
+   o_iter = 0
+   while o_iter < maxiter and not converged:
+
+      # We need the previous deviance and penalized deviance
+      # for step control and convergence control respectively
+      prev_dev = dev
+      prev_pen_dev = pen_dev
+      
+      if o_iter > 0:
+
+         # Obtain deviance and penalized deviance terms
+         # under current lambda for proposed coef (n_coef)
+         # and current coef.
+         dev = family.deviance(y,mu) 
+         pen_dev = dev
+         c_dev_prev = prev_dev
+
+         if len(penalties) > 0:
+            pen_dev += n_coef.T @ S_emb @ n_coef
+            c_dev_prev += coef.T @ S_emb @ coef
+
+         # Perform step-length control for the coefficients (Step 3 in Wood, 2017)
+         corrections = 0
+         while pen_dev > c_dev_prev:
+            # Newton step did not improve deviance - so correction
+            # is necessary.
+
+            if corrections > 30:
+               # If we could not find a better coefficient set simply accept
+               # previous coefficient
+               print("small change")
+               n_coef = coef[:]
+         
+            n_coef = (coef + n_coef)/2
+
+            # Update mu & eta for correction
+            eta = (X @ n_coef).reshape(-1,1)
+            mu = eta
+
+            if isinstance(family,Gaussian) == False:
+               mu = family.link.fi(eta)
+            
+            # Update deviance
+            dev = family.deviance(y,mu)
+
+            # And penalized deviance term
+            if len(penalties) > 0:
+               pen_dev = dev + n_coef.T @ S_emb @ n_coef
+            corrections += 1
+         
+         # Collect accepted coefficient
+         coef = n_coef[:]
+
+         # Test for convergence (Step 2 in Wood, 2017)
+         if abs(pen_dev - prev_pen_dev) < 1e-7*pen_dev:
+            print("Converged",o_iter)
+            converged = True
+            break
+         
+      # Step length control for proposed lambda change
+      if len(penalties) > 0: 
+         
+         # Test the lambda update
          for lti,lTerm in enumerate(penalties):
-            dLam = step_fellner_schall_sparse(S_pinv,lTerm.S_J_emb,Bs[lti],coef,lTerm.lam,scale)
-            lam_delta.append(dLam)
+            lTerm.lam += lam_delta[lti][0]
+            #print(lTerm.lam,lam_delta[lti][0])
 
-         # ToDo: Optionally test lambda step - right now just apply
-         abs_lam_delt = 0
-         abs_lam = 0
-         for lti,lTerm in enumerate(penalties):
-            lTerm.lam += lam_delta[lti]
-            abs_lam_delt += abs(lam_delta[lti])
-            abs_lam += abs(lTerm.lam)
+         lam_accepted = False
+         lam_checks = 0
+         while not lam_accepted:
 
-         # Re-compute S_emb and S_pinv
-         S_emb,S_pinv = compute_S_emb_pinv_det(col_S,penalties,pinv)
+            # Re-compute S_emb and S_pinv
+            S_emb,S_pinv = compute_S_emb_pinv_det(col_S,penalties,pinv)
 
-         # Update coefficients
+            # Update coefficients
+            wres,\
+            yb,\
+            mu,\
+            eta,\
+            Xb,\
+            _,\
+            _,\
+            InvCholXXS,\
+            n_coef,\
+            total_edf,\
+            term_edfs,\
+            Bs,\
+            scale = update_coef_given_lambda(y,yb,mu,eta,rowsX,colsX,X,Xb,
+                                             S_emb,family,penalties)
+            print(scale)
+            
+            # Compute gradient of REML with respect to lambda
+            # to check if step size needs to be reduced.
+            lam_grad = [grad_lambda(S_pinv,penalties[lti].S_J_emb,Bs[lti],n_coef,scale) for lti in range(len(penalties))]
+            lam_grad = np.array(lam_grad).reshape(-1,1) * -1 # -1 because of minimization in Wood (2017)
+            check = lam_grad.T @ lam_delta
+            print(lam_grad,check,1e-5*pen_dev,lam_delta)
+            if check[0,0] > 1e-5*pen_dev:
+               # Cut the step taken in half
+               print("reducing step taken")
+               for lti,lTerm in enumerate(penalties):
+                  lam_delta[lti] = lam_delta[lti]/2
+                  lTerm.lam -= lam_delta[lti][0]
+            else:
+               extensions = 0
+               if lam_checks == 0: # Try longer step
+                  print("Trying to extend step")
+               
+                  for lti,lTerm in enumerate(penalties):
+                     extension = lam_delta[lti] + lam_delta[lti][0]
+                     if extension < 1e7 and extension > 1e-7: # Keep Lambda in possible space
+                        print(extension)
+                        lTerm.lam += lam_delta[lti][0]
+                        lam_delta[lti] = lam_delta[lti]*2
+                        extensions += 1
+
+               if extensions == 0:
+                  # Accept the step and propose a new one as well!
+                  print([lterm.lam for lterm in penalties])
+                  lam_accepted = True
+                  lam_delta = []
+                  for lti,lTerm in enumerate(penalties):
+                     dLam = step_fellner_schall_sparse(S_pinv,lTerm.S_J_emb,Bs[lti],n_coef,lTerm.lam,scale)
+                     lam_delta.append(dLam)
+
+                  lam_delta = np.array(lam_delta).reshape(-1,1)
+            
+            lam_checks += 1
+      
+      else:
+         # If there are no penalties simply perform a newton step
+         # for the coefficients only
          wres,\
          yb,\
          mu,\
@@ -293,20 +432,15 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter_outer=10
          _,\
          _,\
          InvCholXXS,\
-         coef,\
+         n_coef,\
          total_edf,\
          term_edfs,\
          Bs,\
          scale = update_coef_given_lambda(y,yb,mu,eta,rowsX,colsX,X,Xb,
-                                          S_emb,family,penalties,
-                                          maxiter_inner)
-         
-         # ToDo: Better convergence control
-         if abs_lam_delt < 1e-5*abs_lam:
-            print("Converged",o_iter)
-            break
-         else:
-            print("False")
+                                          S_emb,family,penalties)
+
+      # Update number of iterations completed
+      o_iter += 1
 
    # Final penalty
    if len(penalties) > 0:

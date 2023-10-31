@@ -66,11 +66,16 @@ class Family:
       # Log-probability of observing every value in y under this family with mean=mu
       pass
 
+   def deviance(self,u,mu):
+      # Deviance: 2 * (llk_max - llk_c) * scale (Wood, 2017; Faraway, 2016)
+      pass
+
 class Binomial(Family):
    
    def __init__(self, link: Link=Logit(), scale: float = 1, n = 1) -> None:
       super().__init__(link,False,scale)
       self.n = n # Number of independent samples from Binomial!
+      self.__max_llk = None # Needed for Deviance calculation.
    
    def init_mu(self,y):
       # Estimation assumes proportions as dep. variable
@@ -80,6 +85,7 @@ class Binomial(Family):
       # This can be achieved by adding 0.5 to the observed proportion of success
       # (and adding one observation):
       prop = (y+0.5)/(2)
+      self.__max_llk = self.llk(y,y)
       return prop
    
    def V(self,mu):
@@ -92,7 +98,11 @@ class Binomial(Family):
    
    def llk(self,y,mu):
       # y is observed proportion of success
-      return sum(self.lp(y,mu,self.n))
+      return sum(self.lp(y,mu))
+   
+   def deviance(self,y,mu):
+      D = 2 * (self.__max_llk - self.llk(y,mu))
+      return D[0]
 
 class Gaussian(Family):
    def __init__(self, link: Link=None, scale: float = None) -> None:
@@ -113,3 +123,9 @@ class Gaussian(Family):
    
    def llk(self,y,mu,sigma = 1):
       return sum(self.lp(y,mu,sigma))
+   
+   def deviance(self,y,mu):
+      # Based on Faraway (2016)
+      res = y - mu
+      rss = res.T @ res
+      return rss[0,0]
