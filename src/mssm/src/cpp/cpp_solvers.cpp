@@ -112,6 +112,45 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
     return std::make_tuple(std::move(id),P.indices(),std::move(coef),0);;
 }
 
+std::tuple<Eigen::VectorXd,int> solve_coef(Eigen::VectorXd y, Eigen::SparseMatrix<double> X, Eigen::SparseMatrix<double> S){
+    // Permuted Cholesky:
+    // P * A * P' = L * L'
+    // A = P' * L * L' * P
+    // U = P' * L
+    // U' = L' * P
+    // A = U * U'
+    // Inverse:
+    // inv(A) = P' * Inv(L)' * inv(L) * Perm
+    // Here solve just for coef
+
+    int Xcols = X.cols();
+
+    // Prepare and compute Cholesky factor of X' * X + S
+    Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver;
+    solver.compute(X.transpose() * X + S);
+
+    // Initialize coef vector
+    Eigen::VectorXd coef;
+    coef.setZero(Xcols);
+
+    if (solver.info()!=Eigen::Success)
+    {
+
+        return std::make_tuple(std::move(coef),1);
+    }
+
+    // Solve for coef
+    coef = solver.solve(X.transpose() * y);
+
+    if (solver.info()!=Eigen::Success)
+    {
+
+        return std::make_tuple(std::move(coef),2);
+    }
+
+    return std::make_tuple(std::move(coef),0);;
+}
+
 
 PYBIND11_MODULE(cpp_solvers, m) {
     m.doc() = "cpp solvers for sms (DC) GAMM estimation";
@@ -119,4 +158,5 @@ PYBIND11_MODULE(cpp_solvers, m) {
     m.def("chol", &chol, "Compute cholesky factor L of A");
     m.def("pqr", &pqr, "Perform column pivoted QR decomposition of A");
     m.def("solve_am", &solve_am, "Solve additive model, return coefficient vector and inverse");
+    m.def("solve_coef", &solve_coef, "Solve additive model, return coefficient vector");
 }

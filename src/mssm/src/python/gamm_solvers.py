@@ -14,6 +14,9 @@ def cpp_qr(A):
 def cpp_solve_am(y,X,S):
    return cpp_solvers.solve_am(y,X,S)
 
+def cpp_solve_coef(y,X,S):
+   return cpp_solvers.solve_coef(y,X,S)
+
 def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,sigma,verbose=True):
   # Compute a generalized Fellner Schall update step for a lambda term. This update rule is
   # discussed in Wood & Fasiolo (2016) and used here because of it's efficiency.
@@ -140,9 +143,9 @@ def PIRLS_pdat_weights(y,mu,eta,family:Family):
    w = 1 / (dy1**2 * family.V(mu))
    return z, w
 
-def PIRLS(y,yb,mu,eta,X,Xb,S_emb,family):
-   # Perform Penalized Iterative Reweighted Least Squares
-   # step for current lambda parameter (Wood, 2017,6.1.1)
+def update_PIRLS(y,yb,mu,eta,X,Xb,family):
+   # Update the PIRLS weights and data (if the model is not Gaussian)
+   # and update the fitting matrices yb & Xb
    z = None
    Wr = None
 
@@ -156,20 +159,7 @@ def PIRLS(y,yb,mu,eta,X,Xb,S_emb,family):
       yb = Wr @ z
       Xb = Wr @ X
    
-   # Solve additive model
-   InvCholXXSP, Pr, coef, code = cpp_solve_am(yb,Xb,S_emb)
-
-   if code != 0:
-      raise ArithmeticError(f"Solving for coef failed with code {code}. Model is likely unidentifiable.")
-   
-   # Update mu & eta
-   eta = (X @ coef).reshape(-1,1)
-   mu = eta
-
-   if isinstance(family,Gaussian) == False:
-      mu = family.link.fi(eta)
-      
-   return yb,mu,eta,Xb,z,Wr,InvCholXXSP,Pr,coef
+   return yb,Xb,z,Wr
 
 def apply_eigen_perm(Pr,InvCholXXSP):
    nP = len(Pr)
@@ -194,11 +184,11 @@ def calculate_edf(InvCholXXS,penalties,colsX):
    
    return total_edf,term_edfs,Bs
 
-def update_coef_given_lambda(y,yb,mu,eta,rowsX,colsX,X,Xb,S_emb,family,penalties):
-   # Inner Loop to optionally update pseudo data and weights i.e.,
-   # to perform PIRLS (Wood, 2017) or to simply calculate an AMM
-   yb,mu,eta,Xb,z,Wr,InvCholXXSP,Pr,coef = PIRLS(y,yb,mu,eta,X,Xb,S_emb,family,)
-
+def update_scale_edf(y,z,eta,Wr,rowsX,colsX,InvCholXXSP,Pr,family,penalties):
+   # Updates the scale of the model. For this the edf
+   # are computed as well - they are returned because they are needed for the
+   # lambda step proposal anyway.
+   
    # Calculate Pearson residuals for GAMM (Wood, 3.1.7)
    # Standard residuals for AMM
    if isinstance(family,Gaussian) == False:
@@ -223,7 +213,25 @@ def update_coef_given_lambda(y,yb,mu,eta,rowsX,colsX,X,Xb,S_emb,family,penalties
    else:
       scale = family.scale
    
-   return wres,yb,mu,eta,Xb,z,Wr,InvCholXXS,coef,total_edf,term_edfs,Bs,scale
+   return wres,InvCholXXS,total_edf,term_edfs,Bs,scale
+
+def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,penalties):
+   # Solves the additive model for a given set of weights and penalty
+   InvCholXXSP, Pr, coef, code = cpp_solve_am(yb,Xb,S_emb)
+
+   if code != 0:
+      raise ArithmeticError(f"Solving for coef failed with code {code}. Model is likely unidentifiable.")
+   
+   # Update mu & eta
+   eta = (X @ coef).reshape(-1,1)
+   mu = eta
+
+   if isinstance(family,Gaussian) == False:
+      mu = family.link.fi(eta)
+
+   # Update scale parameter
+   wres,InvCholXXS,total_edf,term_edfs,Bs,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,InvCholXXSP,Pr,family,penalties)
+   return eta,mu,coef,InvCholXXS,total_edf,term_edfs,Bs,scale,wres
    
 def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter=10,pinv="svd"):
    # Estimates a penalized Generalized additive mixed model, following the steps outlined in Wood (2017)
@@ -257,20 +265,17 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter=10,pinv=
    # We just accept those here - no step control, since
    # there are no previous coefficients/deviance that we can
    # compare the result to.
-   wres,\
-   yb,\
-   mu,\
-   eta,\
-   Xb,\
-   _,\
-   _,\
+
+   # First (optionally, only in the non Gaussian case) compute pseudo-dat and weights:
+   yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta,X,Xb,family)
+   
+   # Solve additive model
+   eta,mu,coef,\
    InvCholXXS,\
-   coef,\
    total_edf,\
    term_edfs,\
-   Bs,\
-   scale = update_coef_given_lambda(y,yb,mu,eta,rowsX,colsX,X,Xb,
-                                    S_emb,family,penalties)
+   Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
+                                         X,Xb,family,S_emb,penalties)
    
    # Deviance under these starting coefficients
    # As well as penalized deviance
@@ -350,6 +355,9 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter=10,pinv=
             print("Converged",o_iter)
             converged = True
             break
+
+      # Update pseudo-dat weights for next coefficient step
+      yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta,X,Xb,family)
          
       # Step length control for proposed lambda change
       if len(penalties) > 0: 
@@ -367,29 +375,22 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter=10,pinv=
             S_emb,S_pinv = compute_S_emb_pinv_det(col_S,penalties,pinv)
 
             # Update coefficients
-            wres,\
-            yb,\
-            mu,\
-            eta,\
-            Xb,\
-            _,\
-            _,\
+            eta,mu,n_coef,\
             InvCholXXS,\
-            n_coef,\
             total_edf,\
             term_edfs,\
-            Bs,\
-            scale = update_coef_given_lambda(y,yb,mu,eta,rowsX,colsX,X,Xb,
-                                             S_emb,family,penalties)
+            Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
+                                                  X,Xb,family,S_emb,penalties)
+
             print(scale)
             
             # Compute gradient of REML with respect to lambda
             # to check if step size needs to be reduced.
             lam_grad = [grad_lambda(S_pinv,penalties[lti].S_J_emb,Bs[lti],n_coef,scale) for lti in range(len(penalties))]
-            lam_grad = np.array(lam_grad).reshape(-1,1) * -1 # -1 because of minimization in Wood (2017)
+            lam_grad = np.array(lam_grad).reshape(-1,1) 
             check = lam_grad.T @ lam_delta
-            print(lam_grad,check,1e-5*pen_dev,lam_delta)
-            if check[0,0] > 1e-5*pen_dev:
+            print(lam_grad,check,1e-7*pen_dev,lam_delta)
+            if check[0,0] < 0: # because of minimization in Wood (2017) they use a different check.
                # Cut the step taken in half
                print("reducing step taken")
                for lti,lTerm in enumerate(penalties):
@@ -401,7 +402,8 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter=10,pinv=
                   print("Trying to extend step")
                
                   for lti,lTerm in enumerate(penalties):
-                     extension = lam_delta[lti] + lam_delta[lti][0]
+                     extension = lTerm.lam  + lam_delta[lti][0]
+                     print(extension)
                      if extension < 1e7 and extension > 1e-7: # Keep Lambda in possible space
                         print(extension)
                         lTerm.lam += lam_delta[lti][0]
@@ -424,20 +426,12 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter=10,pinv=
       else:
          # If there are no penalties simply perform a newton step
          # for the coefficients only
-         wres,\
-         yb,\
-         mu,\
-         eta,\
-         Xb,\
-         _,\
-         _,\
+         eta,mu,n_coef,\
          InvCholXXS,\
-         n_coef,\
          total_edf,\
          term_edfs,\
-         Bs,\
-         scale = update_coef_given_lambda(y,yb,mu,eta,rowsX,colsX,X,Xb,
-                                          S_emb,family,penalties)
+         Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
+                                               X,Xb,family,S_emb,penalties)
 
       # Update number of iterations completed
       o_iter += 1
