@@ -175,7 +175,7 @@ class GAMM(MSSM):
     
     ##################################### Fitting #####################################
     
-    def fit(self,maxiter=30):
+    def fit(self,maxiter=30,conv_tol=1e-7,extend_lambda=True):
 
         # We need the initialized penalties
         penalties = self.formula.penalties
@@ -211,7 +211,8 @@ class GAMM(MSSM):
         # Now we have to estimate the model
         coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,self.formula.y_flat,
                                                                          model_mat,penalties,self.formula.n_coef,
-                                                                         self.family,maxiter)
+                                                                         self.family,maxiter,"svd",
+                                                                         conv_tol,extend_lambda)
         
         self.__coef = coef
         self.__sigma = scale # ToDo: scale name is used in another context for more general mssm..

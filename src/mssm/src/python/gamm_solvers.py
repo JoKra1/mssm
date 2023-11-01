@@ -35,7 +35,7 @@ def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,sigma,verbose=True):
 def grad_lambda(gInv,emb_SJ,Bps,cCoef,sigma):
    # P. Deriv of restricted likelihood with respect to lambda.
    # From Wood & Fasiolo (2016)
-   return (gInv @ emb_SJ).trace()/2 - Bps/2 - (cCoef.T @ emb_SJ @ cCoef) / (2*sigma)
+   return (gInv @ emb_SJ).trace() - Bps - (cCoef.T @ emb_SJ @ cCoef) / (sigma)
 
 def compute_S_emb_pinv_det(col_S,penalties,pinv):
    # Computes final S multiplied with lambda
@@ -233,7 +233,7 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,penalties):
    wres,InvCholXXS,total_edf,term_edfs,Bs,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,InvCholXXSP,Pr,family,penalties)
    return eta,mu,coef,InvCholXXS,total_edf,term_edfs,Bs,scale,wres
    
-def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter=10,pinv="svd"):
+def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter=10,pinv="svd",conv_tol=1e-7,extend_lambda=True):
    # Estimates a penalized Generalized additive mixed model, following the steps outlined in Wood (2017)
    # "Generalized Additive Models for Gigadata"
 
@@ -293,9 +293,11 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter=10,pinv=
       lam_delta = []
       for lti,lTerm in enumerate(penalties):
          dLam = step_fellner_schall_sparse(S_pinv,lTerm.S_J_emb,Bs[lti],coef,lTerm.lam,scale)
-         extension = lTerm.lam  + dLam*extend_by
-         if extension < 1e7 and extension > 1e-7: # Keep lambda in correct space
-            dLam *= extend_by
+
+         if extend_lambda:
+            extension = lTerm.lam  + dLam*extend_by
+            if extension < 1e7 and extension > 1e-7: # Keep lambda in correct space
+               dLam *= extend_by
          lam_delta.append(dLam)
 
       lam_delta = np.array(lam_delta).reshape(-1,1)
@@ -355,7 +357,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter=10,pinv=
          coef = n_coef[:]
 
          # Test for convergence (Step 2 in Wood, 2017)
-         if abs(pen_dev - prev_pen_dev) < 1e-7*pen_dev:
+         if abs(pen_dev - prev_pen_dev) < conv_tol*pen_dev:
             print("Converged",o_iter)
             converged = True
             break
@@ -395,17 +397,17 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter=10,pinv=
             if check[0,0] < 0: # because of minimization in Wood (2017) they use a different check.
                # Cut the step taken in half
                for lti,lTerm in enumerate(penalties):
-                  if extend_by > 1:
+                  if extend_lambda and extend_by > 1:
                      lTerm.lam -= lam_delta[lti][0]
                      lam_delta[lti] *= (1 - 0.5/extend_by)
                      lTerm.lam += lam_delta[lti][0]
                   else: # If the step size extension is already at the minimum, fall back to the strategy by Wood (2017) to just half the step
                      lam_delta[lti] = lam_delta[lti]/2
                      lTerm.lam -= lam_delta[lti][0]
-               if extend_by > 1:
+               if extend_lambda and extend_by > 1:
                   extend_by -= 0.5 # Try shorter step next time.
             else:
-               if lam_checks == 0: # Try longer step next time.
+               if extend_lambda and lam_checks == 0: # Try longer step next time.
                   extend_by += 0.5
 
                # Accept the step and propose a new one as well!
@@ -413,9 +415,11 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter=10,pinv=
                lam_delta = []
                for lti,lTerm in enumerate(penalties):
                   dLam = step_fellner_schall_sparse(S_pinv,lTerm.S_J_emb,Bs[lti],n_coef,lTerm.lam,scale)
-                  extension = lTerm.lam  + dLam*extend_by
-                  if extension < 1e7 and extension > 1e-7:
-                     dLam *= extend_by
+
+                  if extend_lambda:
+                     extension = lTerm.lam  + dLam*extend_by
+                     if extension < 1e7 and extension > 1e-7:
+                        dLam *= extend_by
                   lam_delta.append(dLam)
 
                lam_delta = np.array(lam_delta).reshape(-1,1)
