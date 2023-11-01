@@ -36,7 +36,6 @@ def translate_sparse(mat):
 def diff_pen(n,m=2,Z=None):
   # Creates difference (order=m) n*n penalty matrix
   # Based on code in Eilers & Marx (1996) and Wood (2017)
-  warnings.warn("Sparse difference penalties are not yet implemented. Instead a dense penalty is converted to a sparse one, reducing performance.")
 
   D = np.diff(np.identity(n),m)
   S = D @ D.T

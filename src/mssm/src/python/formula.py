@@ -343,8 +343,10 @@ class Formula():
         # sid holds series end indices for quick splitting.
         self.y_flat = None
         self.cov_flat = None
+        self.NOT_NA_flat = None
         self.y = None
         self.cov = None
+        self.NOT_NA = None
         self.sid = None
         # Penalties
         self.penalties = None
@@ -472,17 +474,17 @@ class Formula():
         # Compute number of coef and coef names
         self.__get_coef_info()
         # Encode data into columns usable by the model
-        y_flat,cov_flat,y,cov,sid = self.encode_data(self.__data)
+        y_flat,cov_flat,NAs_flat,y,cov,NAs,sid = self.encode_data(self.__data)
         # Store encoding
         self.y_flat = y_flat
         self.cov_flat = cov_flat
+        self.NOT_NA_flat = NAs_flat
         self.y = y
         self.cov = cov
+        self.NOT_NA = NAs
         self.sid = sid
         # Absorb any constraints for model terms
         self.__absorb_constraints()
-        # Compute penalties
-        self.__build_penalties()
 
         #print(self.n_coef,len(self.coef_names))
   
@@ -588,16 +590,17 @@ class Formula():
             
                
     
-    def encode_data(self,r_data,prediction=False):
+    def encode_data(self,data,prediction=False):
 
-      # Drop NAs for fitting
+      # Build NA index
       if prediction:
-         data = r_data
+         NAs = None
+         NAs_flat = None
       else:
-         data = r_data[np.isnan(r_data[self.get_lhs().variable]) == False]
+         NAs_flat = np.isnan(data[self.get_lhs().variable]) == False
 
-      if data.shape[0] != r_data.shape[0]:
-         warnings.warn(f"{r_data.shape[0] - data.shape[0]} {self.get_lhs().variable} values ({round((r_data.shape[0] - data.shape[0]) / r_data.shape[0] * 100,ndigits=2)}%) are NA.")
+      if not prediction and data.shape[0] != data[NAs_flat].shape[0]:
+         warnings.warn(f"{data.shape[0] - data[NAs_flat].shape[0]} {self.get_lhs().variable} values ({round((data.shape[0] - data[NAs_flat].shape[0]) / data.shape[0] * 100,ndigits=2)}%) are NA.")
 
       n_y = data.shape[0]
 
@@ -624,6 +627,9 @@ class Formula():
          # Then split by seried id
          y = np.split(y_flat,sid[1:])
 
+         # Also split NA index
+         NAs = np.split(NAs_flat,sid[1:])
+
       # Now all predictor variables
       cov_flat = np.zeros((n_y,n_var),dtype=float) # Treating all predictors as floats has important implications for factors and requires special care!
 
@@ -645,7 +651,7 @@ class Formula():
       # Now split cov by series id as well
       cov = np.split(cov_flat,sid[1:],axis=0)
 
-      return y_flat,cov_flat,y,cov,sid
+      return y_flat,cov_flat,NAs_flat,y,cov,NAs,sid
 
     def __absorb_constraints(self):
       var_map = self.get_var_map()
@@ -669,14 +675,22 @@ class Formula():
             else:
                id_nk = sterm.nk + 1
 
-            matrix_term = sterm.basis(None,self.cov_flat[:,var_map[vars[vi]]], None, id_nk,min_c=self.__var_mins[vars[vi]],max_c=self.__var_maxs[vars[vi]], **sterm.basis_kwargs)
+            matrix_term = sterm.basis(None,self.cov_flat[self.NOT_NA_flat,var_map[vars[vi]]],
+                                      None,id_nk,min_c=self.__var_mins[vars[vi]],
+                                      max_c=self.__var_maxs[vars[vi]], **sterm.basis_kwargs)
 
             # Wood (2017) 5.4.1 Identifiability constraints via QR. ToDo: Replace with cheaper reflection method.
             C = np.sum(matrix_term,axis=0).reshape(-1,1)
             Q,_ = scp.linalg.qr(C,pivoting=False,mode='full')
             sterm.Z.append(Q[:,1:])
 
-    def __build_penalties(self):
+    def build_penalties(self):
+
+      if self.penalties is not None:
+         warnings.warn("Penalties were already initialized. Resetting them.")
+         self.__get_coef_info() # Because previous initialization might have over-written n_coef or unpenalized _coef
+         self.penalties = None
+
       col_S = self.n_coef
       factor_levels = self.get_factor_levels()
       terms = self.__terms

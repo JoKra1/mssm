@@ -175,10 +175,15 @@ class GAMM(MSSM):
     
     ##################################### Fitting #####################################
     
-    def fit(self,maxiter=30,conv_tol=1e-7,extend_lambda=True):
+    def fit(self,maxiter=30,conv_tol=1e-7,extend_lambda=True,restart=False):
 
-        # We need the initialized penalties
+        # We need to initialize penalties
+        if not restart:
+            self.formula.build_penalties()
         penalties = self.formula.penalties
+
+        if penalties is None and restart:
+            raise ValueError("Penalties were not initialized. Restart must be set to False.")
 
         # And then we need to build the model matrix once
         terms = self.formula.get_terms()
@@ -193,8 +198,13 @@ class GAMM(MSSM):
         var_mins = self.formula.get_var_mins()
         var_maxs = self.formula.get_var_maxs()
         factor_levels = self.formula.get_factor_levels()
-        cov_flat = self.formula.cov_flat
-        cov = self.formula.cov
+        cov_flat = self.formula.cov_flat[self.formula.NOT_NA_flat]
+        y_flat = self.formula.y_flat[self.formula.NOT_NA_flat]
+
+        if y_flat.shape[0] != self.formula.y_flat.shape[0]:
+            print("NAs were excluded for fitting.")
+
+        cov = None
         n_j = None
         state_est_flat = None
         state_est = None
@@ -206,10 +216,10 @@ class GAMM(MSSM):
                                                      cov_flat,cov,n_j,state_est_flat,state_est)
         
         # Get initial estimate of mu based on family:
-        init_mu_flat = self.family.init_mu(self.formula.y_flat)
+        init_mu_flat = self.family.init_mu(y_flat)
 
         # Now we have to estimate the model
-        coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,self.formula.y_flat,
+        coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,y_flat,
                                                                          model_mat,penalties,self.formula.n_coef,
                                                                          self.family,maxiter,"svd",
                                                                          conv_tol,extend_lambda)
@@ -235,7 +245,7 @@ class GAMM(MSSM):
                 raise IndexError(f"Variable {k} is missing in new data.")
         
         # Encode test data
-        _,pred_cov_flat,_,pred_cov,_ = self.formula.encode_data(n_dat,prediction=True)
+        _,pred_cov_flat,_,_,pred_cov,_,_ = self.formula.encode_data(n_dat,prediction=True)
 
         # Then, we need to build the model matrix - but only for the terms which should
         # be included in the prediction!
