@@ -52,8 +52,8 @@ class MSSM:
         self.__coef_hist = None
         self.__state_dur_hist = None
         self.__state_hist = None
+        self.__phi_hist = None
         self.__scale_hist = None
-        self.__sigma_hist = None
         self.__TR_hist = None
         self.__pi_hist = None
 
@@ -61,8 +61,8 @@ class MSSM:
         self.__coef = None
         self.__state_dur = None
         self.__state = None
+        self.__phi = None
         self.__scale = None
-        self.__sigma = None
         self.__TR = None
         self.__pi = None
 
@@ -115,8 +115,8 @@ class MSSM:
     def get_state_hist(self):
         return self.__state_hist
     
-    def get_scale_hist(self):
-        return self.__scale_hist
+    def get_phi_hist(self):
+        return self.__phi_hist
     
     ##################################### Fitting #####################################
 
@@ -156,7 +156,7 @@ class GAMM(MSSM):
     ##################################### Getters #####################################
 
     def get_pars(self):
-        return self.__coef,self.__sigma
+        return self.__coef,self.__scale
     
     def get_llk(self,penalized=True):
         # Get (Penalized) log-likelihood of estimated model.
@@ -168,7 +168,7 @@ class GAMM(MSSM):
             if isinstance(self.family,Gaussian) == False:
                 mu = self.family.link.fi(self.pred)
             if self.family.twopar:
-                return self.family.llk(self.formula.y_flat,mu,self.__sigma) - pen
+                return self.family.llk(self.formula.y_flat,mu,self.__scale) - pen
             else:
                 return self.family.llk(self.formula.y_flat,mu) - pen
         return None
@@ -188,7 +188,7 @@ class GAMM(MSSM):
         # And then we need to build the model matrix once
         terms = self.formula.get_terms()
         has_intercept = self.formula.has_intercept()
-        has_sigma_split = False
+        has_scale_split = False
         ltx = self.formula.get_linear_term_idx()
         irstx = []
         stx = self.formula.get_smooth_term_idx()
@@ -210,7 +210,7 @@ class GAMM(MSSM):
         state_est = None
 
         # Build the model matrix with all information from the formula
-        model_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_sigma_split,
+        model_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
                                                      ltx,irstx,stx,rtx,var_types,var_map,
                                                      var_mins,var_maxs,factor_levels,
                                                      cov_flat,cov,n_j,state_est_flat,state_est)
@@ -225,7 +225,7 @@ class GAMM(MSSM):
                                                                          conv_tol,extend_lambda)
         
         self.__coef = coef
-        self.__sigma = scale # ToDo: scale name is used in another context for more general mssm..
+        self.__scale = scale # ToDo: scale name is used in another context for more general mssm..
         self.pred = eta
         self.res = wres
         self.edf = edf
@@ -251,7 +251,7 @@ class GAMM(MSSM):
         # be included in the prediction!
         terms = self.formula.get_terms()
         has_intercept = self.formula.has_intercept()
-        has_sigma_split = False
+        has_scale_split = False
         ltx = self.formula.get_linear_term_idx()
         irstx = []
         stx = self.formula.get_smooth_term_idx()
@@ -265,7 +265,7 @@ class GAMM(MSSM):
         state_est = None
 
         # So we pass the desired terms to the use_only argument
-        predi_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_sigma_split,
+        predi_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
                                                      ltx,irstx,stx,rtx,var_types,var_map,
                                                      var_mins,var_maxs,factor_levels,
                                                      pred_cov_flat,pred_cov,n_j,state_est_flat,
@@ -277,7 +277,7 @@ class GAMM(MSSM):
         # Optionally calculate the boundary for a 1-alpha CI
         if ci:
             # Wood (2017) 6.10
-            c = predi_mat @ self.lvi.T @ self.lvi * self.__sigma @ predi_mat.T
+            c = predi_mat @ self.lvi.T @ self.lvi * self.__scale @ predi_mat.T
             c = c.diagonal()
             b = scp.stats.norm.ppf(1-(alpha/2)) * np.sqrt(c)
             return pred,predi_mat,b
@@ -295,15 +295,11 @@ class GAMM(MSSM):
         diff = pmat_diff @ self.__coef
         
         # Difference CI
-        c = pmat_diff @ self.lvi.T @ self.lvi * self.__sigma @ pmat_diff.T
+        c = pmat_diff @ self.lvi.T @ self.lvi * self.__scale @ pmat_diff.T
         c = c.diagonal()
         b = scp.stats.norm.ppf(1-(alpha/2)) * np.sqrt(c)
 
         return diff,b
-
-        
-        
-            
 
 class sMsGAMM(MSSM):
 
@@ -352,10 +348,10 @@ class sMsDCGAMM(MSSM):
     
     ##################################### MP handlers #####################################
     
-    def __propose_all_states(self,pool,temp,pi,TR,state_durs_est,state_est,ps,coef,sigma):
+    def __propose_all_states(self,pool,temp,pi,TR,state_durs_est,state_est,ps,coef,scale):
         args = zip(repeat(self.n_j),repeat(temp),self.series,self.end_points,self.time,
                    self.covariates,repeat(pi),repeat(TR),state_durs_est,state_est,repeat(ps),
-                   repeat(coef),repeat(sigma),repeat(self.__build_mat_fun), repeat(self.pre_llk_fun),
+                   repeat(coef),repeat(scale),repeat(self.__build_mat_fun), repeat(self.pre_llk_fun),
                    repeat(self.llk_fun),repeat(self.e_bs),repeat(self.sep_per_j is not None),
                    repeat(self.split_p_by_cov),repeat(self.__build_mat_kwargs),
                    repeat(self.__e_bs_kwargs))
@@ -372,7 +368,7 @@ class sMsDCGAMM(MSSM):
     
     ##################################### SEM - Estimation #####################################
 
-    def __advance_chain(self,chain,pool,temp,c_pi,c_TR,c_p_pars,c_coef,c_sigma,c_state_durs_est,c_state_est):
+    def __advance_chain(self,chain,pool,temp,c_pi,c_TR,c_p_pars,c_coef,c_scale,c_state_durs_est,c_state_est):
         # Performs One Stochastic Expectation maiximization iteration (or something quite like it if is_DC=True).
         # See utils.py for details but also Nielsen (2002).
 
@@ -385,7 +381,7 @@ class sMsDCGAMM(MSSM):
         n_state_dur_est, n_state_est = self.__propose_all_states(pool,temp,c_pi,c_TR,
                                                                  c_state_durs_est,
                                                                  c_state_est,ps,
-                                                                 c_coef,c_sigma)
+                                                                 c_coef,c_scale)
 
         # Calculate M-steps based on new latent state estimate
 
@@ -394,51 +390,51 @@ class sMsDCGAMM(MSSM):
 
         ## Now actually update coefficients based on proposal
         if self.sep_per_j is not None and not self.is_DC:
-            ### If we have truely separate models per latent state, we update the coefs and sigmas separately
+            ### If we have truely separate models per latent state, we update the coefs and scales separately
             n_logprobs = np.zeros(len(self.series_fl))
             
             n_state_est_fl = np.array([st for s in n_state_est for st in s],dtype=int)
             y_split, x_split = self.sep_per_j(self.n_j,n_state_est_fl,self.series_fl, n_mat)
             
-            n_coef, self.__penalties[chain][0], n_sigma, j_embS = utils.solve_am(x_split[0],
+            n_coef, self.__penalties[chain][0], n_scale, j_embS = utils.solve_am(x_split[0],
                                                                                  y_split[0],
                                                                                  self.__penalties[chain][0],
                                                                                  0,maxiter=10)
-            n_sigma = [n_sigma]
+            n_scale = [n_scale]
             
 
             ### Get probabilities of observing series under new model for this state
             n_logprobs[n_state_est_fl == 0] = self.e_bs(self.n_j,y_split[0], x_split[0], n_coef,
-                                                        n_sigma[0], False, **self.__e_bs_kwargs)
+                                                        n_scale[0], False, **self.__e_bs_kwargs)
 
             tot_penalty = n_coef.T @ j_embS @ n_coef
             
             #### Repeat for remaining states
             for j in range(1,self.n_j):
-                nj_coef, self.__penalties[chain][j], nj_sigma, j_embS = utils.solve_am(x_split[j],
+                nj_coef, self.__penalties[chain][j], nj_scale, j_embS = utils.solve_am(x_split[j],
                                                                                        y_split[j],
                                                                                        self.__penalties[chain][j],
                                                                                        0,maxiter=10)
                 n_coef = np.concatenate((n_coef,nj_coef))
                 
-                n_sigma.append(nj_sigma)
+                n_scale.append(nj_scale)
                 tot_penalty += nj_coef.T @ j_embS @ nj_coef
                 
                 n_logprobs[n_state_est_fl == j] = self.e_bs(self.n_j,y_split[j], x_split[j],
-                                                            nj_coef, nj_sigma, False,
+                                                            nj_coef, nj_scale, False,
                                                             **self.__e_bs_kwargs)
 
-            n_sigma = np.array(n_sigma)
+            n_scale = np.array(n_scale)
 
         else:
             ### Otherwise we can fit a shared model.
-            n_coef, self.__penalties[chain], n_sigma, embS = utils.solve_am(n_mat,self.series_fl,
+            n_coef, self.__penalties[chain], n_scale, embS = utils.solve_am(n_mat,self.series_fl,
                                                                             self.__penalties[chain],
                                                                             0,maxiter=10)
             tot_penalty = n_coef.T @ embS @ n_coef
 
             ### Get probabilities of observing series under new model for all states at once.
-            n_logprobs = self.e_bs(self.n_j,self.series_fl,n_mat, n_coef,n_sigma, False, mask_by_j=None)
+            n_logprobs = self.e_bs(self.n_j,self.series_fl,n_mat, n_coef,n_scale, False, mask_by_j=None)
 
 
         ## M-step sojourn distributions (see utils)
@@ -463,18 +459,18 @@ class sMsDCGAMM(MSSM):
         ## Then calculate log likelihood of new model
         llks_new = self.__calc_llk_all_events(pool,n_pi,n_TR,n_state_dur_est,n_state_est,ps,n_logprobs)
 
-        return np.sum(llks_new) - tot_penalty, n_state_dur_est, n_state_est, n_coef, n_p_pars,n_pi, n_TR,n_sigma
+        return np.sum(llks_new) - tot_penalty, n_state_dur_est, n_state_est, n_coef, n_p_pars,n_pi, n_TR,n_scale
 
-    def fit(self,i_pi,i_TR,i_coef,i_sigma,i_p_pars,i_state_durs,i_states,n_chains=10,collect_hist=False):
+    def fit(self,i_pi,i_TR,i_coef,i_scale,i_p_pars,i_state_durs,i_states,n_chains=10,collect_hist=False):
         
         ### Initialize
         iter = len(self.__temp)
         self.__state_dur = deepcopy(i_state_durs)
         self.__state = deepcopy(i_states)
 
-        self.__scale = deepcopy(i_p_pars)
+        self.__phi = deepcopy(i_p_pars)
         self.__coef = deepcopy(i_coef)
-        self.__sigma = deepcopy(i_sigma)
+        self.__scale = deepcopy(i_scale)
         
         self.__pi = deepcopy(i_pi)
         self.__TR = deepcopy(i_TR)
@@ -486,9 +482,9 @@ class sMsDCGAMM(MSSM):
             self.__state_dur_hist = [[deepcopy(i_state_dur)] for i_state_dur in i_state_durs]
             self.__state_hist = [[deepcopy(i_st)] for i_st in i_states]
 
-            self.__scale_hist = [[deepcopy(i_pp)] for i_pp in i_p_pars]
+            self.__phi_hist = [[deepcopy(i_pp)] for i_pp in i_p_pars]
             self.__coef_hist = [[deepcopy(i_cf)] for i_cf in i_coef]
-            self.__sigma_hist = [[deepcopy(i_sig)] for i_sig in i_sigma]
+            self.__scale_hist = [[deepcopy(i_sig)] for i_sig in i_scale]
             
             self.__pi_hist = [[deepcopy(i_pii)] for i_pii in i_pi] 
             self.__TR_hist = [[deepcopy(i_tr)] for i_tr in i_TR] 
@@ -505,21 +501,21 @@ class sMsDCGAMM(MSSM):
                     # Perform SEM step for current chain.
                     llk, n_states_dur, n_states, \
                     n_coef, n_p_pars, n_pi, \
-                    n_TR, n_sigma  = self.__advance_chain(ic,pool,
+                    n_TR, n_scale  = self.__advance_chain(ic,pool,
                                                           self.__temp[i],
                                                           self.__pi[ic],
                                                           self.__TR[ic],
-                                                          self.__scale[ic],
+                                                          self.__phi[ic],
                                                           self.__coef[ic],
-                                                          self.__sigma[ic],
+                                                          self.__scale[ic],
                                                           self.__state_dur[ic],
                                                           self.__state[ic])
                     
                     self.__pi[ic] = n_pi
                     self.__TR[ic] = n_TR
-                    self.__scale[ic] = n_p_pars
+                    self.__phi[ic] = n_p_pars
                     self.__coef[ic] = n_coef
-                    self.__sigma[ic] = n_sigma
+                    self.__scale[ic] = n_scale
                     self.__state_dur[ic] = n_states_dur
                     self.__state[ic] = n_states
                     
@@ -529,9 +525,9 @@ class sMsDCGAMM(MSSM):
                         self.__state_hist[ic].append(deepcopy(n_states))
 
                         self.__coef_hist[ic].append(deepcopy(n_coef))
-                        self.__sigma_hist[ic].append(deepcopy(n_sigma))
+                        self.__scale_hist[ic].append(deepcopy(n_scale))
 
-                        self.__scale_hist[ic].append(deepcopy(n_p_pars))
+                        self.__phi_hist[ic].append(deepcopy(n_p_pars))
 
                         self.__pi_hist[ic].append(deepcopy(n_pi))
                         self.__TR_hist[ic].append(deepcopy(n_TR))

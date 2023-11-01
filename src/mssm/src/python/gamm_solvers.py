@@ -17,13 +17,13 @@ def cpp_solve_am(y,X,S):
 def cpp_solve_coef(y,X,S):
    return cpp_solvers.solve_coef(y,X,S)
 
-def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,sigma,verbose=True):
+def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,scale,verbose=True):
   # Compute a generalized Fellner Schall update step for a lambda term. This update rule is
   # discussed in Wood & Fasiolo (2016) and used here because of it's efficiency.
   
   num = max(0,(gInv @ emb_SJ).trace() - Bps)
   denom = max(0,cCoef.T @ emb_SJ @ cCoef)
-  nLam = sigma * (num / denom) * cLam
+  nLam = scale * (num / denom) * cLam
   nLam = max(nLam,1e-7) # Prevent Lambda going to zero
   nLam = min(nLam,1e+7) # Prevent overflow
 
@@ -32,10 +32,10 @@ def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,sigma,verbose=True):
 
   return nLam-cLam
 
-def grad_lambda(gInv,emb_SJ,Bps,cCoef,sigma):
+def grad_lambda(gInv,emb_SJ,Bps,cCoef,scale):
    # P. Deriv of restricted likelihood with respect to lambda.
    # From Wood & Fasiolo (2016)
-   return (gInv @ emb_SJ).trace() - Bps - (cCoef.T @ emb_SJ @ cCoef) / (sigma)
+   return (gInv @ emb_SJ).trace() - Bps - (cCoef.T @ emb_SJ @ cCoef) / (scale)
 
 def compute_S_emb_pinv_det(col_S,penalties,pinv):
    # Computes final S multiplied with lambda

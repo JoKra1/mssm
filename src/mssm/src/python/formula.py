@@ -86,7 +86,7 @@ def get_coef_info_linear(has_intercept,lterm,var_types,coding_factors,factor_lev
         coef_per_term.append(len(inter_coef_names))
     return total_coef,unpenalized_coef,coef_names,coef_per_term
 
-def get_coef_info_smooth(has_sigma_split,n_j,sterm,factor_levels):
+def get_coef_info_smooth(has_scale_split,n_j,sterm,factor_levels):
     coef_names = []
     total_coef = 0
     coef_per_term = []
@@ -110,7 +110,7 @@ def get_coef_info_smooth(has_sigma_split,n_j,sterm,factor_levels):
         by_levels = factor_levels[sterm.by]
         n_coef *= len(by_levels)
 
-        if sterm.by_latent is not False and has_sigma_split is False:
+        if sterm.by_latent is not False and has_scale_split is False:
             n_coef *= n_j
             for by_state in range(n_j):
                 for by_level in by_levels:
@@ -120,7 +120,7 @@ def get_coef_info_smooth(has_sigma_split,n_j,sterm,factor_levels):
                 coef_names.extend([f"f_{var_label}_{ink}_{by_level}" for ink in range(term_n_coef)])
          
     else:
-        if sterm.by_latent is not False and has_sigma_split is False:
+        if sterm.by_latent is not False and has_scale_split is False:
             for by_state in range(n_j):
                 coef_names.extend([f"f_{var_label}_{ink}_{by_state}" for ink in range(term_n_coef)])
         else:
@@ -130,7 +130,7 @@ def get_coef_info_smooth(has_sigma_split,n_j,sterm,factor_levels):
     coef_per_term.append(n_coef)
     return total_coef,coef_names,coef_per_term
 
-def build_smooth_penalties(has_sigma_split,n_j,penalties,cur_pen_idx,
+def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
                            pen_start_idx,pen,penid,sterm,
                            vars,by_levels,n_coef,col_S):
     # We again have to deal with potential identifiable constraints!
@@ -189,7 +189,7 @@ def build_smooth_penalties(has_sigma_split,n_j,penalties,cur_pen_idx,
 
             pen_iter = len(by_levels) - 1
 
-            if sterm.by_latent is not False and has_sigma_split is False:
+            if sterm.by_latent is not False and has_scale_split is False:
                 pen_iter = (len(by_levels)*n_j)-1
 
             for _ in range(pen_iter):
@@ -210,7 +210,7 @@ def build_smooth_penalties(has_sigma_split,n_j,penalties,cur_pen_idx,
 
             pen_iter = len(by_levels) - 1
 
-            if sterm.by_latent is not False and has_sigma_split is False:
+            if sterm.by_latent is not False and has_scale_split is False:
                 pen_iter = (len(by_levels) * n_j)-1
 
             for _ in range(pen_iter):
@@ -226,7 +226,7 @@ def build_smooth_penalties(has_sigma_split,n_j,penalties,cur_pen_idx,
                 penalties.append(lTerm)
 
     else:
-        if sterm.by_latent is not False and has_sigma_split is False:
+        if sterm.by_latent is not False and has_scale_split is False:
             # Handle by latent split - all latent levels get unique id
             penalties.append(lTerm)
 
@@ -307,17 +307,17 @@ class Formula():
                  terms:list[GammTerm],
                  data:pd.DataFrame,
                  series_id:str,
-                 split_sigma:bool=False,
+                 split_scale:bool=False,
                  n_j:int=3) -> None:
         
         self.__lhs = lhs
         self.__terms = terms
         self.__data = data
         self.series_id = series_id
-        self.__split_sigma = split_sigma # Separate sigma parameters per state, if true then formula counts for individual state.
+        self.__split_scale = split_scale # Separate scale parameters per state, if true then formula counts for individual state.
         self.__n_j = n_j # Number of latent states to estimate - not for irf terms but for f terms!
-        if self.__split_sigma:
-           warnings.warn("split_sigma==True! All terms will be estimted per latent stage, independent of terms' by_latent status.")
+        if self.__split_scale:
+           warnings.warn("split_scale==True! All terms will be estimted per latent stage, independent of terms' by_latent status.")
         self.__factor_codings = {}
         self.__coding_factors = {}
         self.__factor_levels = {}
@@ -465,8 +465,8 @@ class Formula():
         if self.__n_irf > 0:
            self.__has_irf = True
 
-        if self.__has_irf and self.__split_sigma:
-           raise ValueError("Formula includes an impulse response term. split_sigma must be set to False!")
+        if self.__has_irf and self.__split_scale:
+           raise ValueError("Formula includes an impulse response term. split_scale must be set to False!")
         
         if self.__has_irf and self.__has_by_latent:
            raise NotImplementedError("Formula includes an impulse response term. Having regular smooth terms differ by latent stages is currently not supported.")
@@ -546,7 +546,7 @@ class Formula():
          sterm = terms[sti]
          s_total_coef,\
          s_coef_names,\
-         s_coef_per_term = get_coef_info_smooth(self.has_sigma_split(),
+         s_coef_per_term = get_coef_info_smooth(self.has_scale_split(),
                                                 self.__n_j,sterm,
                                                 factor_levels)
          self.coef_names.extend(s_coef_names)
@@ -783,7 +783,7 @@ class Formula():
                if sterm.by is not None:
                   added_not_penalized *= len(by_levels)
 
-               if sterm.by_latent is not False and self.has_sigma_split() is False:
+               if sterm.by_latent is not False and self.has_scale_split() is False:
                   added_not_penalized *= self.__n_j
 
                start_idx += added_not_penalized
@@ -807,7 +807,7 @@ class Formula():
                   pen_start_idx = cur_pen_idx
                
                prev_n_pen = len(penalties)
-               penalties,cur_pen_idx = build_smooth_penalties(self.has_sigma_split(),self.__n_j,
+               penalties,cur_pen_idx = build_smooth_penalties(self.has_scale_split(),self.__n_j,
                                                               penalties,cur_pen_idx,
                                                               pen_start_idx,pen,penid,sterm,vars,
                                                               by_levels,n_coef,col_S)
@@ -996,8 +996,8 @@ class Formula():
     def has_ir_terms(self) -> bool:
        return self.__has_irf
     
-    def has_sigma_split(self) -> bool:
-       return self.__split_sigma
+    def has_scale_split(self) -> bool:
+       return self.__split_scale
 
 def embed_in_S_sparse(pen_data,pen_rows,pen_cols,S_emb,S_col,cIndex):
 
@@ -1187,7 +1187,7 @@ def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,factor_levels,ridx,cov,
    
    return new_elements,new_rows,new_cols,new_ci
 
-def build_smooth_term_matrix(ci,n_j,has_sigma_split,sti,sterm,var_map,var_mins,var_maxs,factor_levels,ridx,cov_flat,state_est_flat,use_only,tol):
+def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,var_maxs,factor_levels,ridx,cov_flat,state_est_flat,use_only,tol):
    vars = sterm.variables
    term_ridx = []
 
@@ -1207,7 +1207,7 @@ def build_smooth_term_matrix(ci,n_j,has_sigma_split,sti,sterm,var_map,var_mins,v
       by_levels = factor_levels[sterm.by]
       n_coef *= len(by_levels)
 
-      if sterm.by_latent is not False and has_sigma_split is False:
+      if sterm.by_latent is not False and has_scale_split is False:
             n_coef *= n_j
       
    # Calculate smooth term for corresponding covariate
@@ -1255,8 +1255,8 @@ def build_smooth_term_matrix(ci,n_j,has_sigma_split,sti,sterm,var_map,var_mins,v
 
       term_ridx = new_term_ridx
    
-   # Handle split by latent variable if a shared sigma term across latent stages is assumed.
-   if sterm.by_latent is not False and has_sigma_split is False:
+   # Handle split by latent variable if a shared scale term across latent stages is assumed.
+   if sterm.by_latent is not False and has_scale_split is False:
       new_term_ridx = []
 
       # Split by state and update rows with elements in columns
@@ -1358,7 +1358,7 @@ def build_rs_term_matrix(ci,n_y,rti,rterm,var_types,var_map,factor_levels,ridx,c
 
 
 def build_sparse_matrix_from_formula(terms,has_intercept,
-                                     has_sigma_split,
+                                     has_scale_split,
                                      ltx,irstx,stx,rtx,
                                      var_types,var_map,
                                      var_mins,var_maxs,
@@ -1420,7 +1420,7 @@ def build_sparse_matrix_from_formula(terms,has_intercept,
       new_elements,\
       new_rows,\
       new_cols,\
-      new_ci = build_smooth_term_matrix(ci,n_j,has_sigma_split,sti,sterm,
+      new_ci = build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,
                                         var_map,var_mins,var_maxs,
                                         factor_levels,ridx,cov_flat,
                                         state_est_flat,use_only,tol)
