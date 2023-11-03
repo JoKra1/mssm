@@ -17,7 +17,7 @@ def cpp_solve_am(y,X,S):
 def cpp_solve_coef(y,X,S):
    return cpp_solvers.solve_coef(y,X,S)
 
-def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,scale,verbose=True):
+def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,scale,verbose=False):
   # Compute a generalized Fellner Schall update step for a lambda term. This update rule is
   # discussed in Wood & Fasiolo (2016) and used here because of it's efficiency.
   
@@ -35,7 +35,7 @@ def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,scale,verbose=True):
 def grad_lambda(gInv,emb_SJ,Bps,cCoef,scale):
    # P. Deriv of restricted likelihood with respect to lambda.
    # From Wood & Fasiolo (2016)
-   return (gInv @ emb_SJ).trace() - Bps - (cCoef.T @ emb_SJ @ cCoef) / (scale)
+   return (gInv @ emb_SJ).trace()/2 - Bps/2 - (cCoef.T @ emb_SJ @ cCoef) / (2*scale)
 
 def compute_S_emb_pinv_det(col_S,penalties,pinv):
    # Computes final S multiplied with lambda
@@ -358,7 +358,6 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter=10,pinv=
 
          # Test for convergence (Step 2 in Wood, 2017)
          if abs(pen_dev - prev_pen_dev) < conv_tol*pen_dev:
-            print("Converged",o_iter)
             converged = True
             break
 

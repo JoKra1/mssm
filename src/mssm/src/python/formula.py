@@ -990,6 +990,9 @@ class Formula():
     def get_random_term_idx(self) -> list[int]:
        return(copy.deepcopy(self.__random_terms))
     
+    def get_nj(self) -> int:
+       return self.__n_j
+    
     def has_intercept(self) -> bool:
        return self.__has_intercept
     
@@ -1208,7 +1211,7 @@ def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,v
       n_coef *= len(by_levels)
 
       if sterm.by_latent is not False and has_scale_split is False:
-            n_coef *= n_j
+         n_coef *= n_j
       
    # Calculate smooth term for corresponding covariate
 
@@ -1457,3 +1460,78 @@ def build_sparse_matrix_from_formula(terms,has_intercept,
    mat = scp.sparse.csc_array((elements,(rows,cols)),shape=(n_y,ci))
 
    return mat
+
+
+class PTerm():
+   # Storage for sojourn time distribution
+   def __init__(self,distribution:callable,
+                init_kwargs:dict or None=None,
+                fit_kwargs:dict or None=None,
+                split_by:str or None=None) -> None:
+      self.distribution = distribution
+      self.kwargs = init_kwargs # Any parameters required to use distribution.
+      if self.kwargs is None:
+         self.kwargs = {}
+      self.split_by = split_by
+      self.fit_kwargs = fit_kwargs
+      if self.fit_kwargs is None:
+         self.fit_kwargs = {}
+      self.n_by = None
+      self.params = None
+
+   def log_prob(self,d,by_i=None):
+      # Get log-probability of durations d under current
+      # sojourn distribution
+      if self.params is None:
+         return self.distribution.logpdf(d,**self.kwargs)
+
+      if self.split_by is None:
+         return self.distribution.logpdf(d,*self.params)
+      
+      # Optionally use distribution associated with a particular variable
+      return self.distribution.logpdf(d,*self.params[by_i,:])
+
+   def sample(self,N,by_i=None):
+      # Sample N values from current sojourn time distribution
+      if self.split_by is None:
+
+         if not self.params is None:
+            return self.distribution.rvs(*self.params,size=N)
+
+      if not self.params is None:
+         # Optionally again pick distribution parameters associated with
+         # specific by variable
+         return self.distribution.rvs(*self.params[by_i,:],size=N)
+      
+      # Initial sampling might be based on distributions default parameters
+      # as provided by scipy and any necessary parameter specified in kwargs.
+      return self.distribution.rvs(**self.kwargs,size=N)
+   
+   def fit(self,d,by_i=None):
+      # Update parameters of distribution(s)
+      if self.split_by is None:
+         self.params = self.distribution.fit(d,**self.fit_kwargs)
+      else:
+         fit = self.distribution.fit(d,**self.fit_kwargs)
+         if self.params is None:
+            self.params = np.zeros((self.n_by,len(fit)))
+         self.params[by_i,:] = fit
+   
+   def max_ppf(self,q):
+      # Return the criticial value for quantile q.
+      # In case split_by is true, return the max critical
+      # value taken over all splits
+      if self.params is None:
+         return self.distribution.ppf(q,**self.kwargs)
+      
+      if not self.split_by is None:
+         return max([self.distribution.ppf(q,*self.params[by_i,:]) for by_i in range(self.n_by)])
+      
+      return self.distribution.ppf(q,*self.params)
+      
+class PFormula():
+   def __init__(self,terms:list[PTerm]) -> None:
+      self.__terms = terms
+   
+   def get_terms(self):
+      return copy.deepcopy(self.__terms)
