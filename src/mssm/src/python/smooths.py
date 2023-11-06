@@ -39,23 +39,29 @@ def h_basis(i,time,pulse_locations,n=10.1,t_max=930,f=1e-24):
 def tpower(x, t, p):
   # Truncated p-th power function
   # Function taken from "Splines, Knots, and Penalties" by Eilers & Marx (2010)
-  return (x - t) ** (p * (x > t))
+  return np.power(x - t,p) * (x > t)
 
 def bbase(x, knots, dx, deg):
    # Function taken from "Splines, Knots, and Penalties" by Eilers & Marx (2010)
-   P = P = tpower(x[:,None],knots,deg)
-   n = P.shape[1]
-   D = np.diff(np.identity(n),n=deg+1) / (scp.special.gamma(deg + 1) * dx ** deg)
-   B = (-1) ** (deg + 1) * P.dot(D)
+   P = tpower(x[:,None],knots,deg)
+   n = P.shape[1] # Actually n + 1 + 2*deg
+   D = np.diff(np.identity(n),n=deg+1) / (scp.special.gamma(deg + 1) * np.power(dx,deg))
+   B = np.power(-1, deg + 1) * P @ D
    return B
 
 def B_spline_basis(i, cov, state_est, nk, drop_outer_k=False, convolve=False, min_c=None, max_c=None, deg=2):
   # Setup basis with even knot locations.
   # Code based on "Splines, Knots, and Penalties" by Eilers & Marx (2010)
-  # However, knot location calculation is taken directly from mgcv (Wood, 2017)
+  # However, knot location calculation was adapted to match mgcv (Wood, 2017)
 
   xl = min(cov)
   xr = max(cov)
+
+  rg = xr - xl
+
+  # MGCV adjustment.
+  xr += 0.001*rg
+  xl -= 0.001*rg
 
   if not max_c is None:
      xr = max_c
@@ -63,21 +69,21 @@ def B_spline_basis(i, cov, state_est, nk, drop_outer_k=False, convolve=False, mi
   if not min_c is None:
      xl = min_c
 
-  rg = xr - xl
-
+  # ndx is equal to n in Eilers & Marx (2011)
+  # So there will be n-1 knots (without expansion)
+  # n + 1 + 2*deg knots with expansion
+  # and nk basis functions computed.
+  # drop_outer is experimental.
   if drop_outer_k:
     ndx = (nk - deg + 2*deg)
      
   else:
     ndx = nk - deg
 
-  xr += 0.001*rg
-  xl -= 0.001*rg
+  dx = (xr-xl) / ndx
+  knots = np.linspace(xl - dx * deg, xr + dx * deg,ndx + 1 + 2 * deg)
 
-  dx = (xr-xl) / (ndx-1)
-  knots = np.linspace(xl - dx * (deg + 1), xr + dx * (deg + 1),ndx+2*deg+2)
-
-  B = bbase(cov,knots,dx,deg+1)
+  B = bbase(cov,knots,dx,deg)
 
   if drop_outer_k:
      B = B[:,deg:-deg]
