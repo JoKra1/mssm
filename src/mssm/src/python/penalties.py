@@ -40,17 +40,17 @@ def diff_pen(n,m=2,Z=None):
   D = np.diff(np.identity(n),m)
   S = D @ D.T
 
+  # ToDo: mgcv scales penalties - I wanted to do something
+  # similar, but the approach below does not work.
+  #FS = np.linalg.norm(S,1)
+  #S = S / FS
+  #D = D / FS**0.5
+
   # Absorb any identifiability constraints
   if Z is not None:
      S = Z.T @ S @ Z
      D = Z.T @ D
   
-  # mgcv scales penalties - so I do this
-  # as well. It's not exactly the same though.
-  FS = np.linalg.norm(S,'fro')
-  S = S / FS
-  D = D / FS**0.5
-
   S = scp.sparse.csc_array(S)
   D = scp.sparse.csc_array(D)
 

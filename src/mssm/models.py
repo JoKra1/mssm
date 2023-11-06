@@ -173,7 +173,39 @@ class GAMM(MSSM):
             else:
                 return self.family.llk(self.formula.y_flat,mu) - pen
         return None
-    
+
+    def get_mmat(self,):
+        # Returns the model-matrix used for fitting.
+        if self.formula.penalties is None:
+            raise ValueError("Model matrix cannot be returned if penalties have not been initialized. Call model.fit() first.")
+        else:
+            terms = self.formula.get_terms()
+            has_intercept = self.formula.has_intercept()
+            has_scale_split = False
+            ltx = self.formula.get_linear_term_idx()
+            irstx = []
+            stx = self.formula.get_smooth_term_idx()
+            rtx = self.formula.get_random_term_idx()
+            var_types = self.formula.get_var_types()
+            var_map = self.formula.get_var_map()
+            var_mins = self.formula.get_var_mins()
+            var_maxs = self.formula.get_var_maxs()
+            factor_levels = self.formula.get_factor_levels()
+            cov_flat = self.formula.cov_flat[self.formula.NOT_NA_flat]
+
+            cov = None
+            n_j = None
+            state_est_flat = None
+            state_est = None
+
+            # Build the model matrix with all information from the formula
+            model_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
+                                                        ltx,irstx,stx,rtx,var_types,var_map,
+                                                        var_mins,var_maxs,factor_levels,
+                                                        cov_flat,cov,n_j,state_est_flat,state_est)
+            
+            return model_mat
+
     ##################################### Fitting #####################################
     
     def fit(self,maxiter=30,conv_tol=1e-7,extend_lambda=True,restart=False):

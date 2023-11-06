@@ -57,17 +57,17 @@ def B_spline_basis(i, cov, state_est, nk, drop_outer_k=False, convolve=False, mi
   xl = min(cov)
   xr = max(cov)
 
-  rg = xr - xl
-
-  # MGCV adjustment.
-  xr += 0.001*rg
-  xl -= 0.001*rg
-
   if not max_c is None:
      xr = max_c
 
   if not min_c is None:
      xl = min_c
+
+  rg = xr - xl
+
+  # MGCV adjustment.
+  xr += 0.001*rg
+  xl -= 0.001*rg
 
   # ndx is equal to n in Eilers & Marx (2011)
   # So there will be n-1 knots (without expansion)
