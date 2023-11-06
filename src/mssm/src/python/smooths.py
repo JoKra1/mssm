@@ -49,7 +49,7 @@ def bbase(x, knots, dx, deg):
    B = np.power(-1, deg + 1) * P @ D
    return B
 
-def B_spline_basis(i, cov, state_est, nk, drop_outer_k=False, convolve=False, min_c=None, max_c=None, deg=2):
+def B_spline_basis(i, cov, state_est, nk, drop_outer_k=False, convolve=False, min_c=None, max_c=None, deg=3):
   # Setup basis with even knot locations.
   # Code based on "Splines, Knots, and Penalties" by Eilers & Marx (2010)
   # However, knot location calculation was adapted to match mgcv (Wood, 2017)
