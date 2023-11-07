@@ -131,7 +131,7 @@ def get_coef_info_smooth(has_scale_split,n_j,sterm,factor_levels):
     return total_coef,coef_names,coef_per_term
 
 def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
-                           pen_start_idx,pen,penid,sterm,
+                           pen,penid,sterm,
                            vars,by_levels,n_coef,col_S):
     # We again have to deal with potential identifiable constraints!
     # Then we again act as if n_k was n_k+1 for difference penalties
@@ -161,7 +161,7 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
     pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = pen_generator(id_k,**pen_kwargs)
 
     # Create lambda term
-    lTerm = LambdaTerm(start_index=pen_start_idx,
+    lTerm = LambdaTerm(start_index=cur_pen_idx,
                        type = pen)
 
     # For tensor product smooths we first have to recalculate:
@@ -205,9 +205,6 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
             # remaining levels.
             penalties.append(lTerm)
 
-            # Make sure that this is set to None in case the lambda term for the first level received a start_idx reset.
-            pen_start_idx = None
-
             pen_iter = len(by_levels) - 1
 
             if sterm.by_latent is not False and has_scale_split is False:
@@ -216,7 +213,7 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
             for _ in range(pen_iter):
 
                 # Create lambda term
-                lTerm = LambdaTerm(start_index=pen_start_idx,
+                lTerm = LambdaTerm(start_index=cur_pen_idx,
                                 type = pen)
 
                 # Embed penalties
@@ -230,12 +227,9 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
             # Handle by latent split - all latent levels get unique id
             penalties.append(lTerm)
 
-            # Make sure that this is set to None in case the lambda term for the first level received a start_idx reset.
-            pen_start_idx = None
-
             for _ in range(n_j-1):
                 # Create lambda term
-                lTerm = LambdaTerm(start_index=pen_start_idx,
+                lTerm = LambdaTerm(start_index=cur_pen_idx,
                                 type = pen)
 
                 # Embed penalties
@@ -248,7 +242,7 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
 
     return penalties,cur_pen_idx
 
-def build_irf_penalties(penalties,cur_pen_idx,pen_start_idx,
+def build_irf_penalties(penalties,cur_pen_idx,
                         pen,penid,irsterm,by_levels,n_coef,col_S):
     # Determine penalty generator
     if pen == PenType.DIFFERENCE:
@@ -260,7 +254,7 @@ def build_irf_penalties(penalties,cur_pen_idx,pen_start_idx,
     pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = pen_generator(n_coef,**irsterm.pen_kwargs[penid])
 
     # Create lambda term
-    lTerm = LambdaTerm(start_index=pen_start_idx,
+    lTerm = LambdaTerm(start_index=cur_pen_idx,
                         type = pen)
 
     # Embed first penalty - if the term has a by-keyword more are added below.
@@ -283,12 +277,9 @@ def build_irf_penalties(penalties,cur_pen_idx,pen_start_idx,
             # remaining levels.
             penalties.append(lTerm)
 
-            # Make sure that this is set to None in case the lambda term for the first level received a start_idx reset.
-            pen_start_idx = None 
-
             for _ in range(len(by_levels)-1):
                 # Create lambda term
-                lTerm = LambdaTerm(start_index=pen_start_idx,
+                lTerm = LambdaTerm(start_index=cur_pen_idx,
                                 type = pen)
 
                 # Embed penalties
@@ -700,14 +691,10 @@ class Formula():
       if start_idx is None:
          ValueError("Penalty start index is ill-defined. Make sure to call 'formula.__get_coef_info' before calling this function.")
 
-      pen_start_idx = start_idx
       cur_pen_idx = start_idx
       prev_pen_idx = start_idx
 
       for irsti in self.get_ir_smooth_term_idx():
-         
-         if len(penalties) > 0:
-            pen_start_idx = None
 
          irsterm = terms[irsti]
 
@@ -726,7 +713,6 @@ class Formula():
                   added_not_penalized *= len(by_levels)
                start_idx += added_not_penalized
                self.unpenalized_coef += added_not_penalized
-               pen_start_idx = start_idx
                cur_pen_idx = start_idx
 
                warnings.warn(f"Impulse response smooth {irsti} is not penalized. Smoothing terms should generally be penalized.")
@@ -743,25 +729,15 @@ class Formula():
                # penalty needs to be reset.
                if penid > 0:
                   cur_pen_idx = prev_pen_idx
-                  pen_start_idx = cur_pen_idx
 
                penalties,cur_pen_idx = build_irf_penalties(penalties,cur_pen_idx,
-                                                           pen_start_idx,pen,penid,irsterm,
+                                                           pen,penid,irsterm,
                                                            by_levels,n_coef,col_S)
-               
-               # Start index should be set to None after a penalty has added
-               # the the next penalty automatically is associated with next
-               # index at the pseudo-inverse calculation step.
-               # This is over-written in case a term has multiple penalties (see above)
-               pen_start_idx = None
          
          # Keep track of previous penalty starting index
          prev_pen_idx = cur_pen_idx
                         
       for sti in self.get_smooth_term_idx():
-
-         if len(penalties) > 0:
-            pen_start_idx = None
 
          sterm = terms[sti]
          vars = sterm.variables
@@ -788,7 +764,6 @@ class Formula():
 
                start_idx += added_not_penalized
                self.unpenalized_coef += added_not_penalized
-               pen_start_idx = start_idx
 
                warnings.warn(f"Smooth {sti} is not penalized. Smoothing terms should generally be penalized.")
 
@@ -804,15 +779,12 @@ class Formula():
                # penalty needs to be reset.
                if penid > 0:
                   cur_pen_idx = prev_pen_idx
-                  pen_start_idx = cur_pen_idx
                
                prev_n_pen = len(penalties)
                penalties,cur_pen_idx = build_smooth_penalties(self.has_scale_split(),self.__n_j,
                                                               penalties,cur_pen_idx,
-                                                              pen_start_idx,pen,penid,sterm,vars,
+                                                              pen,penid,sterm,vars,
                                                               by_levels,n_coef,col_S)
-               
-               pen_start_idx = None
 
                if sterm.has_null_penalty:
                   # ToDo: Distinguish between smooths of multiple variables and
@@ -841,9 +813,8 @@ class Formula():
                   chol_data,chol_rows,chol_cols = translate_sparse(DNULL)
 
                   cur_pen_idx = prev_pen_idx
-                  pen_start_idx = cur_pen_idx
 
-                  lTerm = LambdaTerm(start_index=pen_start_idx,
+                  lTerm = LambdaTerm(start_index=cur_pen_idx,
                                        type = pen)
                   
                   # Embed first penalty - if the term has a by-keyword more are added below.
@@ -867,17 +838,11 @@ class Formula():
                   else:
                      # Independent penalties via by
                      # Append penalty for first level
-                     # ToDo: here is the origin of the bug indicated in the gamm_solvers file
-                     # We need to insert every null-space penalty directly after their corresponding by penalty
-                     # and they all need a start_idx reset. The latter is easy just: pen_start_idx += S_j_last.shape[1]
                      penalties.append(lTerm)
-
-                     # Now set starting index to None
-                     pen_start_idx = None
 
                      # And add the penalties again for the remaining levels as separate terms
                      for _ in range((n_pen - prev_n_pen) - 1):
-                        lTerm = LambdaTerm(start_index=pen_start_idx,
+                        lTerm = LambdaTerm(start_index=cur_pen_idx,
                                        type = pen)
                   
                         # Embed penalties
@@ -885,16 +850,11 @@ class Formula():
                         lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
                         lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
                         penalties.append(lTerm)
-                           
-                  pen_start_idx = None
 
          # Keep track of previous penalty starting index
          prev_pen_idx = cur_pen_idx
 
       for rti in self.get_random_term_idx():
-
-         if len(penalties) > 0:
-            pen_start_idx = None
 
          rterm = terms[rti]
          vars = rterm.variables
@@ -902,7 +862,7 @@ class Formula():
          if isinstance(rterm,ri):
             pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = id_dist_pen(len(factor_levels[vars[0]]))
 
-            lTerm = LambdaTerm(start_index=pen_start_idx,
+            lTerm = LambdaTerm(start_index=cur_pen_idx,
                                              type = PenType.IDENTITY)
             
             lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
@@ -917,7 +877,7 @@ class Formula():
                # Separate penalties for every level of interactions
                pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = id_dist_pen(len(factor_levels[rterm.by]))
                for _ in range(rterm.var_coef):
-                  lTerm = LambdaTerm(start_index=pen_start_idx,
+                  lTerm = LambdaTerm(start_index=cur_pen_idx,
                                              type = PenType.IDENTITY)
             
                   lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
@@ -930,7 +890,7 @@ class Formula():
                pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = id_dist_pen(len(factor_levels[rterm.by])*rterm.var_coef)
 
 
-               lTerm = LambdaTerm(start_index=pen_start_idx,
+               lTerm = LambdaTerm(start_index=cur_pen_idx,
                                              type = PenType.IDENTITY)
             
                lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)

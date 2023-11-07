@@ -40,33 +40,23 @@ def grad_lambda(gInv,emb_SJ,Bps,cCoef,scale):
 def compute_S_emb_pinv_det(col_S,penalties,pinv):
    # Computes final S multiplied with lambda
    # and the pseudo-inverse of this term.
-   cIndexPinv = 0
-   if penalties[0].start_index is not None:
-      cIndexPinv = penalties[0].start_index
-      
-   n_lterms = len(penalties)
    S_emb = None
-   S_pinv_elements = []
-   S_pinv_rows = []
-   S_pinv_cols = []
 
-   SJ = None
-   SJ_terms = 0
-   
-   # Build S_emb and pinv(S_emb)
+   # We need to compute the pseudo-inverse on the penalty block (so sum of all
+   # penalties weighted by lambda) for every term so we first collect and sum
+   # all term penalties together.
+   SJs = [] # Summed SJs for every term
+   SJ_terms = [] # How many penalties were summed
+   SJ_types = [] # None if summation otherwise penalty type
+   SJ_lams = [] # None if summation otherwise penalty lambda
+   SJ_reps = [] # How often should pinv(SJ) be stacked (for terms with id)
+   SJ_idx = [] # Starting index of every SJ
+   SJ_idx_max = 0 # Max starting index - used to decide whether a new SJ should be added.
+   SJ_idx_len = 0 # Number of separate SJ blocks.
+
+   # Build S_emb and collect every block for pinv(S_emb)
    for lti,lTerm in enumerate(penalties):
       #print(f"pen: {lti}")
-
-      # Collect number of penalties on the term
-      SJ_terms += 1
-
-      # We need to compute the pseudo-inverse on the penalty block (so sum of all
-      # penalties weighted by lambda) for the term so we first add all penalties
-      # on this term together.
-      if SJ is None:
-         SJ = lTerm.S_J*lTerm.lam
-      else:
-         SJ += lTerm.S_J*lTerm.lam
 
       # Add S_J_emb * lambda to the overall S_emb
       if lti == 0:
@@ -74,63 +64,84 @@ def compute_S_emb_pinv_det(col_S,penalties,pinv):
       else:
          S_emb += lTerm.S_J_emb * lTerm.lam
 
-      # ToDo: There is a bug here with null-space penalties
-      # placed on terms with a by and without id. The statement below
-      # does not catch this. This one is gonna be tricky..
-      if lti < (n_lterms - 1) and penalties[lti + 1].start_index is not None:
-         #print("Skip")
-         continue
-      else: # Now handle all pinv calculations because all penalties associated with a term have been collected in SJ
-         #print(f"repeat: {lTerm.rep_sj}")
-         #print(f"number of penalties on term: {SJ_terms}")
-         if SJ_terms == 1 and lTerm.type == PenType.IDENTITY:
-            #print("Identity shortcut")
-            SJ_pinv_elements,SJ_pinv_rows,SJ_pinv_cols,_,_,_ = id_dist_pen(SJ.shape[1],lambda x: 1/lTerm.lam)
+      # Now collect the S_J for the pinv calculation in the next step.
+      if lti == 0 or lTerm.start_index > SJ_idx_max:
+         SJs.append(lTerm.S_J*lTerm.lam)
+         SJ_terms.append(1)
+         SJ_types.append(lTerm.type)
+         SJ_lams.append(lTerm.lam)
+         SJ_reps.append(lTerm.rep_sj)
+         SJ_idx.append(lTerm.start_index)
+         SJ_idx_max = lTerm.start_index
+         SJ_idx_len += 1
+
+      else: # A term with the same starting index exists already - so sum the SJs
+         idx_match = [idx for idx in range(SJ_idx_len) if SJ_idx[idx] == lTerm.start_index]
+         #print(idx_match,lTerm.start_index)
+         if len(idx_match) > 1:
+            raise ValueError("Penalty index matches multiple previous locations.")
+         SJs[idx_match[0]] += lTerm.S_J*lTerm.lam
+         SJ_terms[idx_match[0]] += 1
+         SJ_types[idx_match[0]] = None
+         SJ_lams[idx_match[0]] = None
+         if SJ_reps[idx_match[0]] != lTerm.rep_sj:
+            raise ValueError("Repeat Number for penalty does not match previous penalties repeat number.")
+
+   #print(SJ_idx_len)
+   #print(SJ_reps,SJ_lams,SJ_idx)
+   S_pinv_elements = []
+   S_pinv_rows = []
+   S_pinv_cols = []
+   cIndexPinv = SJ_idx[0]
+
+   for SJi in range(SJ_idx_len):
+      # Now handle all pinv calculations because all penalties
+      # associated with a term have been collected in SJ
+      
+      if SJ_terms[SJi] == 1 and SJ_types[SJi] == PenType.IDENTITY:
+         #print("Identity shortcut",SJ_lams[SJi])
+         SJ_pinv_elements,SJ_pinv_rows,SJ_pinv_cols,_,_,_ = id_dist_pen(SJs[SJi].shape[1],lambda x: 1/SJ_lams[SJi])
+      else:
+         # Compute pinv(SJ) via cholesky factor L so that L @ L' = SJ' @ SJ.
+         # If SJ is full rank, then pinv(SJ) = inv(L)' @ inv(L) @ SJ'.
+         # However, SJ' @ SJ will usually be rank deficient so we add e=1e-7 to the main diagonal, because:
+         # As e -> 0 we get closer to pinv(SJ) if we base it on L_e in L_e @ L_e' = SJ' @ SJ + e*I
+         # where I is the identity.
+         if pinv != "svd":
+            t = scp.sparse.identity(SJs[SJi].shape[1],format="csc")
+            L,code = cpp_chol(SJs[SJi].T @ SJs[SJi] + 1e-10*t)
+
+            if code != 0:
+               warnings.warn(f"Cholesky factor computation failed with code {code}")
+
+            LI = scp.sparse.linalg.spsolve(L,t)
+            SJ_pinv = LI.T @ LI @ SJs[SJi].T
+            #print(np.max(abs((SJ.T @ SJ @ SJ_pinv - SJ).toarray())))
+
+         # Compute pinv via SVD
          else:
-            # Compute pinv(SJ) via cholesky factor L so that L @ L' = SJ' @ SJ.
-            # If SJ is full rank, then pinv(SJ) = inv(L)' @ inv(L) @ SJ'.
-            # However, SJ' @ SJ will usually be rank deficient so we add e=1e-7 to the main diagonal, because:
-            # As e -> 0 we get closer to pinv(SJ) if we base it on L_e in L_e @ L_e' = SJ' @ SJ + e*I
-            # where I is the identity.
-            if pinv != "svd":
-               t = scp.sparse.identity(SJ.shape[1],format="csc")
-               L,code = cpp_chol(SJ.T @ SJ + 1e-10*t)
+            # ToDo: Find a better svd implementation. The sparse svds commonly fails with propack
+            # but propack is the only one for which we can set k=SJ.shape[1]. This is requried
+            # since especially the null-penalty terms require all vectors to be recoverd to
+            # compute an accurate pseudo-inverse.
+            # casting to an array and then using svd works but I would rather avoid that to benefit
+            # from the smaller memory footprint of the sparse variants.
+            #u, Sig, vt = scp.sparse.linalg.svds(SJ,SJ.shape[1],solver='propack',maxiter=20*SJ.shape[1])
+            u, Sig, vt = scp.linalg.svd(SJs[SJi].toarray())
+            rs = [1/s if s > 1e-7 else 0 for s in Sig]
+            SJ_pinv = vt.T @ np.diag(rs) @ u.T
+            SJ_pinv = scp.sparse.csc_array(SJ_pinv)
 
-               if code != 0:
-                  warnings.warn(f"Cholesky factor computation failed with code {code}")
+         SJ_pinv_elements,SJ_pinv_rows,SJ_pinv_cols = translate_sparse(SJ_pinv)
+      
+      SJ_pinv_rows = np.array(SJ_pinv_rows)
+      SJ_pinv_cols = np.array(SJ_pinv_cols)
 
-               LI = scp.sparse.linalg.spsolve(L,t)
-               SJ_pinv = LI.T @ LI @ SJ.T
-               #print(np.max(abs((SJ.T @ SJ @ SJ_pinv - SJ).toarray())))
-
-            # Compute pinv via SVD
-            else:
-               # ToDo: Find a better svd implementation. The sparse svds fails with propack
-               # but propack is the only one for which we can set k=SJ.shape[1]. This is requried
-               # since especially the null-penalty terms require all vectors to be recoverd to
-               # compute an accurate pseudo-inverse.
-               # casting to an array and then using svd works but I would rather avoid that to benefit
-               # from the smaller memory footprint of the sparse variants.
-               #u, Sig, vt = scp.sparse.linalg.svds(SJ,SJ.shape[1],solver='propack',maxiter=20*SJ.shape[1])
-               u, Sig, vt = scp.linalg.svd(SJ.toarray())
-               rs = [1/s if s > 1e-7 else 0 for s in Sig]
-               SJ_pinv = vt.T @ np.diag(rs) @ u.T
-               SJ_pinv = scp.sparse.csc_array(SJ_pinv)
-
-            SJ_pinv_elements,SJ_pinv_rows,SJ_pinv_cols = translate_sparse(SJ_pinv)
-         
-         SJ_pinv_rows = np.array(SJ_pinv_rows)
-         SJ_pinv_cols = np.array(SJ_pinv_cols)
-
-         for _ in range(lTerm.rep_sj):
-            S_pinv_elements.extend(SJ_pinv_elements)
-            S_pinv_rows.extend(SJ_pinv_rows + cIndexPinv)
-            S_pinv_cols.extend(SJ_pinv_cols + cIndexPinv)
-            cIndexPinv += (SJ_pinv_cols[-1] + 1)
-         
-         # Reset number of penalties and SJ
-         SJ = None
-         SJ_terms = 0
+      for _ in range(SJ_reps[SJi]):
+         S_pinv_elements.extend(SJ_pinv_elements)
+         S_pinv_rows.extend(SJ_pinv_rows + cIndexPinv)
+         S_pinv_cols.extend(SJ_pinv_cols + cIndexPinv)
+         cIndexPinv += (SJ_pinv_cols[-1] + 1)
 
    S_pinv = scp.sparse.csc_array((S_pinv_elements,(S_pinv_rows,S_pinv_cols)),shape=(col_S,col_S))
    return S_emb, S_pinv
@@ -392,6 +403,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter=10,pinv=
             lam_grad = [grad_lambda(S_pinv,penalties[lti].S_J_emb,Bs[lti],n_coef,scale) for lti in range(len(penalties))]
             lam_grad = np.array(lam_grad).reshape(-1,1) 
             check = lam_grad.T @ lam_delta
+            #print(lam_grad,lam_delta,check)
 
             if check[0,0] < 0: # because of minimization in Wood (2017) they use a different check.
                # Cut the step taken in half
