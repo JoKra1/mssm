@@ -208,7 +208,7 @@ class GAMM(MSSM):
 
     ##################################### Fitting #####################################
     
-    def fit(self,maxiter=30,conv_tol=1e-7,extend_lambda=True,restart=False):
+    def fit(self,maxiter=30,conv_tol=1e-7,extend_lambda=True,control_lambda=True,restart=False):
 
         # We need to initialize penalties
         if not restart:
@@ -255,7 +255,7 @@ class GAMM(MSSM):
         coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,y_flat,
                                                                          model_mat,penalties,self.formula.n_coef,
                                                                          self.family,maxiter,"svd",
-                                                                         conv_tol,extend_lambda)
+                                                                         conv_tol,extend_lambda,control_lambda)
         
         self.__coef = coef
         self.__scale = scale # ToDo: scale name is used in another context for more general mssm..
@@ -429,7 +429,7 @@ class sMsGAMM(MSSM):
         state_durs_new, states_new, llks = zip(*pool.starmap(se_step_sms_gamm,args))
         return list(state_durs_new),list(states_new),list(llks)
     
-    def fit(self,maxiter_outer=100,maxiter_inner=30,max_no_improv=15,conv_tol=1e-4,extend_lambda=True,init_scale=100,b=0.25):
+    def fit(self,maxiter_outer=100,maxiter_inner=30,max_no_improv=15,conv_tol=1e-4,extend_lambda=True,control_lambda=True,init_scale=100,b=0.25):
         # Performs Stochastic Expectation maiximization based on Nielsen (2002) see also the sem.py file for
         # more details.
         
@@ -625,7 +625,7 @@ class sMsGAMM(MSSM):
                     coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,state_y,
                                                                                     model_mat,penalties[j],self.formula.n_coef,
                                                                                     self.family,maxiter_inner,"svd",
-                                                                                    conv_tol,extend_lambda)
+                                                                                    conv_tol,extend_lambda,control_lambda)
                     
                     
                     

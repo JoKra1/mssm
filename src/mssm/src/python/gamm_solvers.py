@@ -17,7 +17,7 @@ def cpp_solve_am(y,X,S):
 def cpp_solve_coef(y,X,S):
    return cpp_solvers.solve_coef(y,X,S)
 
-def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,scale,verbose=False):
+def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,scale,verbose=True):
   # Compute a generalized Fellner Schall update step for a lambda term. This update rule is
   # discussed in Wood & Fasiolo (2016) and used here because of it's efficiency.
   
@@ -244,7 +244,9 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,penalties):
    wres,InvCholXXS,total_edf,term_edfs,Bs,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,InvCholXXSP,Pr,family,penalties)
    return eta,mu,coef,InvCholXXS,total_edf,term_edfs,Bs,scale,wres
    
-def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter=10,pinv="svd",conv_tol=1e-7,extend_lambda=True):
+def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
+                      maxiter=10,pinv="svd",conv_tol=1e-7,
+                      extend_lambda=True,control_lambda=True):
    # Estimates a penalized Generalized additive mixed model, following the steps outlined in Wood (2017)
    # "Generalized Additive Models for Gigadata"
 
@@ -405,7 +407,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,maxiter=10,pinv=
             check = lam_grad.T @ lam_delta
             #print(lam_grad,lam_delta,check)
 
-            if check[0,0] < 0: # because of minimization in Wood (2017) they use a different check.
+            if check[0,0] < 0 and control_lambda: # because of minimization in Wood (2017) they use a different check.
                # Cut the step taken in half
                for lti,lTerm in enumerate(penalties):
                   if extend_lambda and extend_by > 1:
