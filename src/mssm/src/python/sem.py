@@ -1,15 +1,23 @@
 import numpy as np
 import scipy as scp
 import math
+from .formula import build_sparse_matrix_from_formula
+from .exp_fam import Gaussian
 
 ##################################### Temperature functions #####################################
 
-def anneal_temps_zero(iter,b=4):
+def anneal_temps_zero(iter,t0=0.25,ratio=0.925):
    # Annealing schedule as proposed by Kirkpatrick, Gelatt and Vecchi (1983).
    ts = np.array(list(range(iter)))
 
-   temp = np.array([1/(b*math.sqrt(t+1)) for t in ts])
+   temp = np.array([t0*ratio**t for t in ts])
    return temp
+
+def const_temps(iter):
+   # Don't use temperature schedule.
+   ts = np.array(list(range(iter)))
+
+   return np.array([1 for t in ts])
 
 ##################################### HsMM functions #####################################
 
@@ -142,13 +150,15 @@ def backward_eta(n_j,n_t,TR,log_dur_mat,etas,u):
           
    return etas, gammas
 
+##################################### sms GAMM SEM functions #####################################
+
 def prop_smoothed(n_j,n_t,smoothed):
    # Simple proposal for sMs-GAMM with state re-entries, based on
    # the smoothed probabilities P(State_t == j|parameters).
    # We simply select a state at every time-point t based on those
    # probabilities.
    # This is different from previous MCMC sampling approaches in the HsMM
-   # literature (see Guedon, 2003; Guedon, 2005; Guedon, 2007) for alternative approaches
+   # literature (see Guedon, 2003; Guedon, 2005; Guedon, 2007 for alternative approaches)
    # but seems to work quite well. 
    js = np.arange(n_j)
 
@@ -225,3 +235,231 @@ def se_step_sms_gamm(n_j,temp,series,cov,end_point,pi,TR,
       rejected = pre_lln_fn(n_j, end_point, n_state_durs_est, n_state_est)
     
     return n_state_durs_est,n_state_est,llk_fwd
+
+##################################### sMs IR GAMM SEM functions #####################################
+
+def prop_norm(end_point,c_state_est,sd,fix,fix_at):
+    # Standard proposal for random walk MH sampler, acts as proposal for
+    # left-right impulse response GAMM: We simply propose a neighbor
+    # for every state onset according to an onset centered Gaussian.
+    # see: https://en.wikipedia.org/wiki/Metropolis–Hastings_algorithm
+
+    n_state_est = np.round(scp.stats.norm.rvs(loc=c_state_est,scale=sd)).astype(int)
+
+    if fix is not None:
+       for ev,at in zip(fix,fix_at):
+          # fix holds event that should be fixed
+          # fix_at holds the sample at which it should be fixed.
+          if at == -1:
+            n_state_est[ev] = end_point
+          else:
+            n_state_est[ev] = at
+
+    # Collect duration of every state
+    n_state_dur_est = []
+    last_state_est = 0
+    # State lasts from prev event (or series start) to next event
+    for j in range(len(n_state_est)):
+       n_state_dur_est.append([j, n_state_est[j] - last_state_est])
+       last_state_est = n_state_est[j]
+   
+    # Last state lasts from last event to series end
+    n_state_dur_est.append([len(n_state_est), end_point - n_state_est[-1]])
+    
+    return np.array(n_state_dur_est,dtype=int), n_state_est
+
+def pre_ll_sms_IR_gamm(n_j, end_point, state_dur_est, state_est,fix,fix_at):
+    # Prior likelihood check for left-right impulse_response sMs GAMM.
+    # Checks whether likelihood should be set to - inf based
+    # on any knowledge about the support of the likelihood function.
+
+    if not fix is None and 0 in fix:
+      # Cannot have state onset before 0
+      if np.any(state_est < 0):
+         return True
+    # Cannot have state onset before 1
+    elif np.any(state_est <= 0): 
+       return True
+    
+    if not fix is None and -1 in fix_at:
+      # Cannot have state onset after trial is over
+      if np.any(state_est > end_point):
+         return True
+    # Cannot have state onset after end_point - 1
+    elif np.any(state_est >= end_point):
+       return True
+    
+    # Cannot violate left-right ordering
+    if np.any(state_est[1:len(state_est)] - state_est[0:-1] < 1):
+       return True
+    
+    return False
+
+def init_states_IR(end_point,n_j,pre_llk_fun,fix,fix_at):
+   # Number of events == number of states - 1
+   n_event = n_j - 1
+   # Function to initialize state estimate for sms IR GAMM.
+   # Start with equally spaced states
+   if n_event == 1:
+      start = np.array([0])
+   elif n_event == 2:
+      start = np.array([0,end_point])
+   else:
+      start = np.array(range(0,
+                                    end_point,
+                                    round(end_point/n_event)))[1:(n_event - 1)]
+
+      start = np.insert(start,0,0)
+      start = np.insert(start,len(start),end_point)
+
+   # Then make large random steps away from equally spaced states.
+   prop_dur_state, prop_state = prop_norm(end_point,start,5,fix,fix_at)
+   
+   rejection = pre_llk_fun(n_j,end_point,prop_dur_state,prop_state,fix,fix_at)
+
+   # Repeat until we find a suitable candidate
+   while rejection:
+      prop_dur_state, prop_state = prop_norm(end_point,start,5,fix,fix_at)
+      
+      rejection = pre_llk_fun(n_j,end_point,prop_dur_state,prop_state,fix,fix_at)
+
+   return prop_dur_state, prop_state
+
+def ll_sms_dc_gamm(n_j,pds,cov,var_map,state_dur_est,log_o_probs,fix):
+   # Complete data likelihood function for left-right impulse response GAMM.
+   # Yu (2011): alpha_t(j) = Probability of state j terminating at time t
+   # AND observing values o[1:t] given current parameters.
+
+   # In the left-right sms dc gamm model we further assume last state ends at last time
+   # point. Thus, we don't need to marginalize out j - we simply assume no other state
+   # can terminate at last time-point. Thus our complete data likelihood of observing values o[1:last_timepoint]
+   # given current parameters is simply alpha_last_timepoint(n_j).
+
+   # Because of the left-right assumptions calculation of the complete data likelihood
+   # is trivial (essentially a simplification of equation 15 in Yu, 2011).
+   # We simply add the log probabilities of every state lasting until the onset of the
+   # subsequent one.
+   # We then add the sum of the log-probabilities of observing y_t at any t, given our
+   # GAMM based on the known state onsets. This works because we assume that given
+   # stage onsets, given the GAMM parameters, given the gamm predictions Y_hat_t:
+   # Y_t ~ N(Y_hat_t,sigma) so Y is i.i.d.
+
+   js = np.arange(n_j)
+   alpha = 0
+
+   # Duration probability for every state
+   for j in js:
+      # Skip fixed states!
+      if fix is None or not j in fix: 
+         # We again need to pick the correct state duration distributions
+         # for this particular trial. Because of the required acceptance step
+         # we cannot pre-compute probabilities for specific durations for all series - since under
+         # the new proposal we might have a new max duration. So we have to do that here.
+         pd_j = pds[j]
+         if pd_j.split_by is not None:
+            alpha += pd_j.log_prob(state_dur_est[j,1],cov[0,var_map[pd_j.split_by]])
+         else:
+            alpha += pd_j.log_prob(state_dur_est[j,1])
+
+   # observation probabilities
+   alpha += np.sum(log_o_probs[np.isnan(log_o_probs) == False])
+
+   # Complete data likelihood.
+   return alpha
+
+def se_step_sms_dc_gamm(n_j,temp,series,NOT_NAs,end_point,cov,
+                        state_durs,states,coef,scale,
+                        log_o_probs,pds,pre_lln_fn,var_map,
+                        family,terms,has_intercept,ltx,irstx,
+                        stx,rtx,var_types,var_mins,
+                        var_maxs,factor_levels,
+                        fix,fix_at,sd,
+                        n_prop):
+    
+    # Proposes a new candidate solution for a left-right Impulse response Gamm via a random walk step. The proposed
+    # state is accepted according to a modified Metropolis Hastings acceptance ratio used for simulated annealing
+    # (Kirkpatrick, Gelatt and Vecchi, 1983).
+    #
+    # Some thoughts:
+    # The resulting proposal is not a sample from P(State | obs, current_par) as done in the classical stochastic expectation step (Nielsen, 2000).
+    # In principle if we increase n_prop and leave temp==1, state_dist should however become a close representation of this distribution (assuming we
+    # monitor burn in and correlation between candidates). Not sampling directly from P(State | obs, current_par) also seems to be a feature of
+    # Stochastic approximate Expectation Maximization or Stochastic Simulated Annealing Expectation Maximization.
+    # However, these approaches seem to form an iterative approximation of Q: Q_{t+1} = Q_{t-1} + lambda * Q_{t},
+    # where Q_{t} is based on the stochastic/approximate E step, and then maximize Q_{t+1} (see Celeux, Chauveau & Diebolt, 1995; Delyon, 1999).
+    # We simply maximize the CDL based on our candidate - which IS again closer to traditional SEM.
+    # The sampler for the most general case (se_step_sms_gamm) behaves more like traditional SEM so the acceptance step is not necessary (might however improve convergence?).
+    # For temp != 1 we really use simulated annealing and do not form a sample to approximate P(State | obs, current_par) any longer. Why? The idea
+    # is that in later iterations (temp < 1) we should have a relatively good estimate so approximating the entire P(State | obs, current_par) is not that
+    # important, rather we want to look more and more (the more temp < 1) at similarly likely new candidates so that we don't oscillate widely around a
+    # good estimate.
+
+    n_cand = 1 # ToDo: I considered allowing to return multiple samples, which might help with performance but I haven't implemented that yet.
+
+    # Get complete data likelihood under current state series and parameters.
+    c_llk = ll_sms_dc_gamm(n_j,pds,cov,var_map,state_durs,log_o_probs,fix)
+
+    cutoffs = scp.stats.uniform.rvs(size=n_prop)
+
+    state_dist = np.zeros((n_prop,n_j - 1),dtype=int)
+    states_durs_dist = []
+    state_llks = []
+
+    for i in range(n_prop):
+      
+      # Propose new onset
+      n_state_durs,n_states = prop_norm(end_point,states,sd,fix,fix_at)
+
+      # Pre-check new proposal
+      rejection = pre_lln_fn(n_j, end_point, n_state_durs, n_states, fix, fix_at)
+
+      # Calculate complete data likelihood under new state and current parameters
+      if not rejection:
+         # Start with re-building model-matrix for this series according to the proposed state.
+         model_mat_s = build_sparse_matrix_from_formula(terms,has_intercept,False,
+                                                        ltx,irstx,stx,rtx,var_types,var_map,
+                                                        var_mins,var_maxs,factor_levels,
+                                                        cov,[cov],n_j,None,[n_states])
+         model_mat_s = model_mat_s[NOT_NAs,]
+
+         # Re-collect observation probabilities under new state sequence
+         log_o_probs_n = np.zeros(len(series))
+
+         mu = (model_mat_s @ coef).reshape(-1,1)
+
+         if not isinstance(family,Gaussian):
+            mu = family.link.fi(mu)
+
+         if not family.twopar:
+            log_o_probs_n[NOT_NAs] = np.ndarray.flatten(family.lp(series[NOT_NAs],mu))
+         else:
+            log_o_probs_n[NOT_NAs] = np.ndarray.flatten(family.lp(series[NOT_NAs],mu,scale))
+         log_o_probs_n[NOT_NAs == False] = np.nan
+
+         # Now finally calculate complete data likelihood under new states.
+         n_llk = ll_sms_dc_gamm(n_j,pds,cov,var_map,n_state_durs,log_o_probs_n,fix)
+
+         # Simulated Annealing/Metropolis acceptance (Kirkpatrick, Gelatt and Vecchi, 1983)
+         # Kirkpatrick et al.: accept new candidate if delta_E <= 0 or otherwise with prob exp(-delta_E / T) where T = temp.
+         # We want to accept new candidate if delta_llk >= 0 or otherwise with prob exp(delta_llk / T):
+         # For fixed T and the case where n_llk < c_llk, delta_llk and exp(delta_llk / T) increase/approache 1
+         # the closer n_llk gets to c_llk.
+         # For fixed delta_llk and the case where n_llk < c_llk, as T increases > 1, exp(delta_llk / T) increases
+         # (higher probability of accepting new state). As T decreases < 1, exp(delta_llk / T) decreases
+         # (lower probability of accepting new state).
+         delta_llk = n_llk - c_llk # delta E in Kirkpatrick et al.
+         if (delta_llk >= 0) or (np.exp(delta_llk/temp) >= cutoffs[i]):
+            states = n_states[:]
+            state_durs = n_state_durs[:]
+            c_llk = n_llk
+      
+      # Update onset distribution estimate
+      state_dist[i,:] = states[:]
+      states_durs_dist.append(state_durs[:])
+      state_llks.append(c_llk)
+    
+    # Sample new onset according to ~ P(onset | series, current parameters). The latter only
+    # holds with n_prop = LARGE.
+    sample = np.random.randint(n_prop,size=n_cand)[0]
+    
+    return states_durs_dist[sample],state_dist[sample,:],state_llks[sample]

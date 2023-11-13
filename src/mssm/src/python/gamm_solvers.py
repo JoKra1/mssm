@@ -17,7 +17,7 @@ def cpp_solve_am(y,X,S):
 def cpp_solve_coef(y,X,S):
    return cpp_solvers.solve_coef(y,X,S)
 
-def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,scale,verbose=True):
+def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,scale,verbose=False):
   # Compute a generalized Fellner Schall update step for a lambda term. This update rule is
   # discussed in Wood & Fasiolo (2016) and used here because of it's efficiency.
   

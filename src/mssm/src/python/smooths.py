@@ -58,10 +58,10 @@ def B_spline_basis(i, cov, state_est, nk, drop_outer_k=False, convolve=False, mi
   xr = max(cov)
 
   if not max_c is None:
-     xr = max_c
+    xr = max_c
 
   if not min_c is None:
-     xl = min_c
+    xl = min_c
 
   rg = xr - xl
 

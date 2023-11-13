@@ -9,7 +9,6 @@ from matplotlib import pyplot as plt
 import re
 from copy import deepcopy
 from collections.abc import Callable
-from .utils import map_unwrap_args_kwargs
 from .src.python.formula import *
 from .src.python.terms import *
 from .src.python.penalties import *
@@ -46,61 +45,11 @@ class MSSM:
 
         self.cpus=cpus
 
-        # Temperature schedule
-        self.__temp = None
-
-        # History containers
-        self.__coef_hist = None
-        self.__state_dur_hist = None
-        self.__state_hist = None
-        self.__phi_hist = None
-        self.__scale_hist = None
-        self.__TR_hist = None
-        self.__pi_hist = None
-
         # Current estimates
         self.__coef = None
-        self.__state_dur = None
-        self.__state = None
-        self.__phi = None
         self.__scale = None
         self.__TR = None
         self.__pi = None
-
-        # Function storage
-        self.__sample_fun = None
-        self.__sample_fun_kwargs = None
-        self.m_pi = None
-        self.m_TR = None
-        self.m_ps = None
-        self.par_ps = None
-        self.e_bs = None
-        self.__e_bs_kwargs = None
-
-    ##################################### Setters #####################################
-
-    def set_sample_fun(self,fun,**kwargs):
-        self.__sample_fun = fun
-        self.__sample_fun_kwargs = kwargs
-    
-    def set_par_ps(self,fun):
-        self.par_ps = fun
-    
-    def set_e_bs(self,fun, **kwargs):
-        self.e_bs = fun
-        self.__e_bs_kwargs = kwargs
-
-    def set_m_pi(self,fun):
-        self.m_pi = fun
-
-    def set_m_TR(self,fun):
-        self.m_TR = fun
-
-    def set_m_ps(self,fun):
-        self.m_ps = fun
-
-    def set_temp(self,fun,iter=500,**kwargs):
-        self.__temp = fun(iter,**kwargs)
     
     ##################################### Getters #####################################
     
@@ -110,15 +59,6 @@ class MSSM:
     def get_llk(self):
         pass
     
-    def get_coef_hist(self):
-        return self.__coef_hist
-    
-    def get_state_hist(self):
-        return self.__state_hist
-    
-    def get_phi_hist(self):
-        return self.__phi_hist
-    
     ##################################### Fitting #####################################
 
     def fit(self):
@@ -127,14 +67,6 @@ class MSSM:
     ##################################### Prediction #####################################
 
     def predict(self,terms,n_dat):
-        pass
-
-    ##################################### Plotting #####################################
-
-    def plot(self):
-        pass
-
-    def val_plot(self):
         pass
 
 ##################################### GAMM class #####################################
@@ -429,7 +361,7 @@ class sMsGAMM(MSSM):
         state_durs_new, states_new, llks = zip(*pool.starmap(se_step_sms_gamm,args))
         return list(state_durs_new),list(states_new),list(llks)
     
-    def fit(self,maxiter_outer=100,maxiter_inner=30,max_no_improv=15,conv_tol=1e-4,extend_lambda=True,control_lambda=True,init_scale=100,b=0.25):
+    def fit(self,maxiter_outer=100,maxiter_inner=30,max_no_improv=15,conv_tol=1e-4,extend_lambda=True,control_lambda=True,init_scale=100,t0=0.25,r=0.925):
         # Performs Stochastic Expectation maiximization based on Nielsen (2002) see also the sem.py file for
         # more details.
         
@@ -493,7 +425,7 @@ class sMsGAMM(MSSM):
         # further reduce the chance of ending up with a local maximum. Of course, if we set sd=temp_schedule[iter]
         # too extreme, we will not get anywhere since the noise dominates the smoothed probabilities. So this
         # likely requires some tuning.
-        temp_schedule = anneal_temps_zero(maxiter_outer,b)
+        temp_schedule = anneal_temps_zero(maxiter_outer,t0,r)
 
         max_states_flat = None
         no_improv_iter = 0
@@ -757,213 +689,307 @@ class sMsGAMM(MSSM):
         return pred,predi_mat,None
 
 
-class sMsDCGAMM(MSSM):
+class sMsIRGAMM(sMsGAMM):
 
-    def __init__(self, n_j, series, time,
-                 end_points, llk_fun, pre_llk_fun,
-                 covariates=None, is_DC=True,
-                 sep_per_j=None, split_p_by_cov = None,
-                 estimate_pi=False,
-                 estimate_TR=False, cpus=1):
-        super().__init__(n_j, series, time,
-                         end_points, llk_fun, pre_llk_fun,
-                         covariates, is_DC, sep_per_j,
-                         split_p_by_cov,estimate_pi,
-                         estimate_TR, cpus)
+    def __init__(self,
+                 formula: Formula,
+                 family: Family,
+                 p_formula: PFormula,
+                 end_points: list,
+                 fix:None or list[list[int,int]] = None,
+                 pre_llk_fun=pre_ll_sms_IR_gamm,
+                 cpus: int = 1):
 
-        self.set_e_bs(utils.get_log_o_prob_mat)
-        self.set_m_ps(utils.m_gamma2s_sms_dc_gamm)
-        self.set_par_ps(utils.par_gamma2s)
-        self.set_sample_fun(utils.se_step_sms_dc_gamm)
-    
-    ##################################### MP handlers #####################################
-    
-    def __propose_all_states(self,pool,temp,pi,TR,state_durs_est,state_est,ps,coef,scale):
-        args = zip(repeat(self.n_j),repeat(temp),self.series,self.end_points,self.time,
-                   self.covariates,repeat(pi),repeat(TR),state_durs_est,state_est,repeat(ps),
-                   repeat(coef),repeat(scale),repeat(self.__build_mat_fun), repeat(self.pre_llk_fun),
-                   repeat(self.llk_fun),repeat(self.e_bs),repeat(self.sep_per_j is not None),
-                   repeat(self.split_p_by_cov),repeat(self.__build_mat_kwargs),
-                   repeat(self.__e_bs_kwargs))
+        super().__init__(formula,
+                         family,
+                         p_formula,
+                         end_points,
+                         pre_llk_fun,
+                         False,
+                         False,
+                         np.zeros(formula.get_nj()),
+                         np.zeros((formula.get_nj(),
+                                   formula.get_nj())),
+                         cpus)
         
-        mapping = zip(repeat(self.__sample_fun),args,repeat(self.__sample_fun_kwargs))
+        # Define which events should be fixed and at which sample.
+        if not fix is None:
+            self.fix = [event[0] for event in fix]
+            self.fix_at = [event[1] for event in fix]
+        else:
+            self.fix = None
+            self.fix_at = None
 
-        state_durs_new, states_new = zip(*pool.starmap(utils.map_unwrap_args_kwargs,mapping))
+        self.__coef = None
+        self.__scale = None
+
+    ##################################### Getters #####################################
+
+    def get_pars(self):
+        return self.__coef,self.__scale
+    
+    ##################################### Fitting #####################################
+
+    def __init_all_states(self,pool):
+
+        # MP code to propose initial state for every series
+        args = zip(self.end_points,repeat(self.n_j),repeat(self.pre_llk_fun),
+                   repeat(self.fix),repeat(self.fix_at))
+        
+        state_durs_new, states_new = zip(*pool.starmap(init_states_IR,args))
         return list(state_durs_new),list(states_new)
     
-    def __calc_llk_all_events(self,pool,pi,TR,state_dur_est,state_est,ps,logprobs):
-        args = zip(repeat(self.n_j),repeat(pi),repeat(TR),state_dur_est,state_est,repeat(ps),logprobs,self.covariates,repeat(self.split_p_by_cov))
-        llks = pool.starmap(self.llk_fun,args)
-        return llks
+    def __propose_all_states(self,pool,temp,y,NOT_NAs,cov,state_durs,states,coef,scale,
+                        log_o_probs,var_map,terms,has_intercept,ltx,irstx,
+                        stx,rtx,var_types,var_mins,var_maxs,factor_levels,
+                        prop_sd,n_prop):
+        
+        # MP code to propose states for every series
+        args = zip(repeat(self.n_j),repeat(temp),y,NOT_NAs,self.end_points,cov,state_durs,states,
+                   repeat(coef),repeat(scale),log_o_probs,repeat(self.pds),
+                   repeat(self.pre_llk_fun),repeat(var_map),repeat(self.family),repeat(terms),
+                   repeat(has_intercept),repeat(ltx),repeat(irstx),repeat(stx),
+                   repeat(rtx),repeat(var_types),repeat(var_mins),repeat(var_maxs),
+                   repeat(factor_levels),repeat(self.fix),repeat(self.fix_at),repeat(prop_sd),
+                   repeat(n_prop))
+        
+        state_durs_new, states_new, llks = zip(*pool.starmap(se_step_sms_dc_gamm,args))
+        return list(state_durs_new),list(states_new), list(llks)
     
-    ##################################### SEM - Estimation #####################################
-
-    def __advance_chain(self,chain,pool,temp,c_pi,c_TR,c_p_pars,c_coef,c_scale,c_state_durs_est,c_state_est):
-        # Performs One Stochastic Expectation maiximization iteration (or something quite like it if is_DC=True).
-        # See utils.py for details but also Nielsen (2002).
-
-        # Propose new candidates
-
-        ## Parameterize duration distributions based on current/previous parameters
-        ps = self.par_ps(c_p_pars)
+    def fit(self,maxiter_outer=100,maxiter_inner=30,conv_tol=1e-6,extend_lambda=True,control_lambda=True,t0=1,r=0.925,schedule="anneal",n_prop=None,prop_sd=2):
+        # Performs something like Stochastic Expectation maiximization (e.g., Nielsen, 2002) see the sem.py file for
+        # more details.
         
-        ## Sample next latent state estimate (Stochastic E-step)
-        n_state_dur_est, n_state_est = self.__propose_all_states(pool,temp,c_pi,c_TR,
-                                                                 c_state_durs_est,
-                                                                 c_state_est,ps,
-                                                                 c_coef,c_scale)
-
-        # Calculate M-steps based on new latent state estimate
-
-        ## First calculate design matrix for every series and combine.
-        n_mat = self.__build_all_mod_mat(pool,n_state_est)
-
-        ## Now actually update coefficients based on proposal
-        if self.sep_per_j is not None and not self.is_DC:
-            ### If we have truely separate models per latent state, we update the coefs and scales separately
-            n_logprobs = np.zeros(len(self.series_fl))
-            
-            n_state_est_fl = np.array([st for s in n_state_est for st in s],dtype=int)
-            y_split, x_split = self.sep_per_j(self.n_j,n_state_est_fl,self.series_fl, n_mat)
-            
-            n_coef, self.__penalties[chain][0], n_scale, j_embS = utils.solve_am(x_split[0],
-                                                                                 y_split[0],
-                                                                                 self.__penalties[chain][0],
-                                                                                 0,maxiter=10)
-            n_scale = [n_scale]
-            
-
-            ### Get probabilities of observing series under new model for this state
-            n_logprobs[n_state_est_fl == 0] = self.e_bs(self.n_j,y_split[0], x_split[0], n_coef,
-                                                        n_scale[0], False, **self.__e_bs_kwargs)
-
-            tot_penalty = n_coef.T @ j_embS @ n_coef
-            
-            #### Repeat for remaining states
-            for j in range(1,self.n_j):
-                nj_coef, self.__penalties[chain][j], nj_scale, j_embS = utils.solve_am(x_split[j],
-                                                                                       y_split[j],
-                                                                                       self.__penalties[chain][j],
-                                                                                       0,maxiter=10)
-                n_coef = np.concatenate((n_coef,nj_coef))
-                
-                n_scale.append(nj_scale)
-                tot_penalty += nj_coef.T @ j_embS @ nj_coef
-                
-                n_logprobs[n_state_est_fl == j] = self.e_bs(self.n_j,y_split[j], x_split[j],
-                                                            nj_coef, nj_scale, False,
-                                                            **self.__e_bs_kwargs)
-
-            n_scale = np.array(n_scale)
-
-        else:
-            ### Otherwise we can fit a shared model.
-            n_coef, self.__penalties[chain], n_scale, embS = utils.solve_am(n_mat,self.series_fl,
-                                                                            self.__penalties[chain],
-                                                                            0,maxiter=10)
-            tot_penalty = n_coef.T @ embS @ n_coef
-
-            ### Get probabilities of observing series under new model for all states at once.
-            n_logprobs = self.e_bs(self.n_j,self.series_fl,n_mat, n_coef,n_scale, False, mask_by_j=None)
-
-
-        ## M-step sojourn distributions (see utils)
-        n_p_pars = self.m_ps(self.n_j,self.end_points,c_p_pars,n_state_dur_est,n_state_est,self.covariates,self.split_p_by_cov)
-
-        ## M-steps for initial and transition distributions can be completed optionally (see utils)
-        if self.estimate_pi:
-            n_pi = self.m_pi(self.n_j,c_pi,n_state_dur_est,self.covariates)
-        else:
-            n_pi = np.copy(c_pi)
+        # Penalties need to be initialized
+        self.formula.build_penalties()
         
-        if self.estimate_TR:
-            n_TR = self.m_TR(self.n_j,c_TR,n_state_dur_est,self.covariates)
-        else:
-            n_TR = np.copy(c_TR)
+        penalties = self.formula.penalties
 
-        # Now calculate likelihood of new model
-
-        ## Parameterize the sojourn distributions using current parameters
-        ps = self.par_ps(n_p_pars)
-
-        ## Then calculate log likelihood of new model
-        llks_new = self.__calc_llk_all_events(pool,n_pi,n_TR,n_state_dur_est,n_state_est,ps,n_logprobs)
-
-        return np.sum(llks_new) - tot_penalty, n_state_dur_est, n_state_est, n_coef, n_p_pars,n_pi, n_TR,n_scale
-
-    def fit(self,i_pi,i_TR,i_coef,i_scale,i_p_pars,i_state_durs,i_states,n_chains=10,collect_hist=False):
-        
-        ### Initialize
-        iter = len(self.__temp)
-        self.__state_dur = deepcopy(i_state_durs)
-        self.__state = deepcopy(i_states)
-
-        self.__phi = deepcopy(i_p_pars)
-        self.__coef = deepcopy(i_coef)
-        self.__scale = deepcopy(i_scale)
-        
-        self.__pi = deepcopy(i_pi)
-        self.__TR = deepcopy(i_TR)
-        
-        # Deepcopy penalties to multiple chains
-        self.__penalties = [deepcopy(self.__penalties) for _ in range(n_chains)]
-
-        if collect_hist:
-            self.__state_dur_hist = [[deepcopy(i_state_dur)] for i_state_dur in i_state_durs]
-            self.__state_hist = [[deepcopy(i_st)] for i_st in i_states]
-
-            self.__phi_hist = [[deepcopy(i_pp)] for i_pp in i_p_pars]
-            self.__coef_hist = [[deepcopy(i_cf)] for i_cf in i_coef]
-            self.__scale_hist = [[deepcopy(i_sig)] for i_sig in i_scale]
-            
-            self.__pi_hist = [[deepcopy(i_pii)] for i_pii in i_pi] 
-            self.__TR_hist = [[deepcopy(i_tr)] for i_tr in i_TR] 
-        
-        # Always collect llk changes
-        self.__llk_hist = np.zeros((n_chains,iter+1))
-        self.__llk_hist[:,0] = - np.Inf
-
+        # Propose an initial set of states and state_durs for every series.
         with mp.Pool(processes=self.cpus) as pool:
-            for i in tqdm(range(iter)):
+            durs,states = self.__init_all_states(pool)
 
-                for ic in range(n_chains):
+        # Model matrix parameters that remain constant are specified.
+        # And then we need to build the model matrix for the start estimates to get start coefficients.
+        terms = self.formula.get_terms()
+        has_intercept = self.formula.has_intercept()
+        ltx = self.formula.get_linear_term_idx()
+        irstx = self.formula.get_ir_smooth_term_idx()
+        stx = self.formula.get_smooth_term_idx()
+        rtx = self.formula.get_random_term_idx()
+        var_types = self.formula.get_var_types()
+        var_map = self.formula.get_var_map()
+        var_mins = self.formula.get_var_mins()
+        var_maxs = self.formula.get_var_maxs()
+        factor_levels = self.formula.get_factor_levels()
+        NOT_NA_flat = self.formula.NOT_NA_flat
+        cov_flat = self.formula.cov_flat
+        y_flat = self.formula.y_flat
+        n_series = len(self.formula.y)
+        n_obs = len(y_flat)
 
-                    # Perform SEM step for current chain.
-                    llk, n_states_dur, n_states, \
-                    n_coef, n_p_pars, n_pi, \
-                    n_TR, n_scale  = self.__advance_chain(ic,pool,
-                                                          self.__temp[i],
-                                                          self.__pi[ic],
-                                                          self.__TR[ic],
-                                                          self.__phi[ic],
-                                                          self.__coef[ic],
-                                                          self.__scale[ic],
-                                                          self.__state_dur[ic],
-                                                          self.__state[ic])
-                    
-                    self.__pi[ic] = n_pi
-                    self.__TR[ic] = n_TR
-                    self.__phi[ic] = n_p_pars
-                    self.__coef[ic] = n_coef
-                    self.__scale[ic] = n_scale
-                    self.__state_dur[ic] = n_states_dur
-                    self.__state[ic] = n_states
-                    
-                    # Store new parameters
-                    if collect_hist:
-                        self.__state_dur_hist[ic].append(deepcopy(n_states_dur))
-                        self.__state_hist[ic].append(deepcopy(n_states))
+        # We use a heuristic to determine the number of samples that should be drawn when proposing new states.
+        if n_prop is None:
+            n_prop = int(n_series*0.05)
 
-                        self.__coef_hist[ic].append(deepcopy(n_coef))
-                        self.__scale_hist[ic].append(deepcopy(n_scale))
+        # For the IR GAMM we need the cov object split by series id
+        # Importantly, we must not exclude any rows for with the dependent variable is
+        # NA at this point, to make sure that the convolution is calculated accurately.
+        cov = self.formula.cov
 
-                        self.__phi_hist[ic].append(deepcopy(n_p_pars))
+        model_mat_full = build_sparse_matrix_from_formula(terms,has_intercept,False,
+                                                          ltx,irstx,stx,rtx,var_types,var_map,
+                                                          var_mins,var_maxs,factor_levels,
+                                                          cov_flat,cov,None,
+                                                          None,states)
+        
+        # Only now can we remove the NAs
+        model_mat_full = model_mat_full[NOT_NA_flat,]
+        
+        # And estimate the model
 
-                        self.__pi_hist[ic].append(deepcopy(n_pi))
-                        self.__TR_hist[ic].append(deepcopy(n_TR))
-                    self.__llk_hist[ic,i+1] = llk
-                    
-        # Plot log-likelihood for all chains
-        for ic in range(n_chains):
-            plt.plot(self.__llk_hist[ic,:])
-        plt.show()
+        # Get initial estimate of mu based on family:
+        init_mu_flat = self.family.init_mu(y_flat[NOT_NA_flat])
+
+        coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,y_flat[NOT_NA_flat],
+                                                                        model_mat_full,penalties,self.formula.n_coef,
+                                                                        self.family,maxiter_inner,"svd",
+                                                                        conv_tol,extend_lambda,control_lambda)
+
+        # For state proposals we can utilize a temparature schedule. See sMsGamm.fit().
+        if schedule == "anneal":
+            temp_schedule = anneal_temps_zero(maxiter_outer,t0,r)
+        else:
+            temp_schedule = const_temps(maxiter_outer)
+
+        last_llk = None
+        llk_hist = []
+        for iter in range(maxiter_outer):
+            ### Stochastic Expectation ###
+
+            # Propose new states based on all updated parameters.
+
+            # For IR GAMM we only need the probability of observing every
+            # series under the model.
+            log_o_probs = np.zeros(n_obs)
+
+            
+            # Handle observation probabilities
+            mu = (model_mat_full @ coef).reshape(-1,1)
+
+            if not isinstance(self.family,Gaussian):
+                mu = self.family.link.fi(mu)
+
+            if not self.family.twopar:
+                log_o_probs[NOT_NA_flat] = np.ndarray.flatten(self.family.lp(y_flat[NOT_NA_flat],mu))
+            else:
+                log_o_probs[NOT_NA_flat] = np.ndarray.flatten(self.family.lp(y_flat[NOT_NA_flat],mu,scale))
+            log_o_probs[NOT_NA_flat == False] = np.nan
+
+            # We need to split the observation probabilities by series
+            s_log_o_probs = np.split(log_o_probs,self.formula.sid[1:],axis=0)
+            
+            # Now we can propose a new set of states and state_durs for every series.
+            with mp.Pool(processes=self.cpus) as pool:
+                durs,states,llks = self.__propose_all_states(pool,temp_schedule[iter],self.formula.y,
+                                                             self.formula.NOT_NA,cov,durs,states,coef,scale,
+                                                             s_log_o_probs,var_map,terms,has_intercept,ltx,
+                                                             irstx,stx,rtx,var_types,var_mins,var_maxs,
+                                                             factor_levels,prop_sd,n_prop)
+            
+            ### Convergence control ###
+
+            # Convergence control is based on the change in penalized complete data likelihood
+            if iter > 0:
+                pen_llk = np.sum(llks) - penalty
+
+                if iter > 1:
+                    # Also check convergence
+                    if abs(pen_llk - last_llk) < conv_tol*abs(pen_llk):
+                        print("Converged",iter)
+                        break
+
+                last_llk = pen_llk
+                llk_hist.append(pen_llk)
+
+            ### Maximization ###
+
+            # First update all GAMM parameters
+            model_mat_full = build_sparse_matrix_from_formula(terms,has_intercept,False,
+                                                              ltx,irstx,stx,rtx,var_types,var_map,
+                                                              var_mins,var_maxs,factor_levels,
+                                                              cov_flat,cov,None,
+                                                              None,states)
+            model_mat_full = model_mat_full[NOT_NA_flat,]
+
+            # Use last coefficient set for mu estimate. Penalties carry over as well.
+            if isinstance(self.family,Gaussian):
+                init_mu_flat = model_mat_full @ coef
+            else: 
+                init_mu_flat = self.family.link.fi(model_mat_full @ coef)
+
+            # Now fit the model again.
+            coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,y_flat[NOT_NA_flat],
+                                                                             model_mat_full,penalties,self.formula.n_coef,
+                                                                             self.family,maxiter_inner,"svd",
+                                                                             conv_tol,extend_lambda,control_lambda)
+
+            # Next update all sojourn time distribution parameters
+
+            # Iterate over every series to get the durations from every state in that series
+            j_dur = [[] for j in range(self.n_j)]
+            j_cov = [[] for j in range(self.n_j)]
+            for s in range(n_series):
+
+                # Durations for every state put in a list
+                sd = durs[s]
+                s_durs = [sd[sd[:,0] == j,1] for j in range(self.n_j)]
+                for j in range(self.n_j):
+                    j_dur[j].extend(s_durs[j])
+                    pd_split = self.pds[j].split_by
+                    if pd_split is not None:
+                        c_s = cov[s] # Encoded variables from this series
+                        c_s_j = c_s[0,var_map[pd_split]] # Factor variables are assumed constant so we can take first element.
+                        j_cov[j].extend([c_s_j for _ in s_durs[j]])
+
+            # Maximize sojourn time distribution parameters by obtaining MLE
+            # for the proposed stage durations.
+            for j in range(self.n_j):
+
+                # We do not need to maximize for states that have a fixed event.
+                if not self.fix is None and j in self.fix:
+                    continue
+                j_dur[j] = np.array(j_dur[j])
+                pd_j = self.pds[j]
+
+                if pd_j.split_by is not None:
+                    j_cov[j] = np.array(j_cov[j])
+                    for ci in range(pd_j.n_by):
+                        pd_j.fit(j_dur[j][j_cov[j] == ci],ci)
+                else:
+                    pd_j.fit(j_dur[j])
+        
+        # Collect final state sequence in the same format returned by sMsGamm
+        # and in trial-level format needed for prediction.
+        states_flat = []
+        for s in range(n_series):
+            sd = durs[s]
+            for st in range(sd.shape[0]):
+                if sd[st,1] != 0:
+                    for d in range(sd[st,1]):
+                        states_flat.append(st)
+
+        # Save final coefficients
+        self.__scale = scale
+        self.__coef = coef
+        self.lvi = LVI
+
+        return llk_hist,states_flat,states
+
+    def predict(self, states, use_terms, n_dat,alpha=0.05,ci=False):
+        # Basically GAMM.predict() but with states.
+        var_map = self.formula.get_var_map()
+        var_keys = var_map.keys()
+
+        for k in var_keys:
+            if k not in n_dat.columns:
+                raise IndexError(f"Variable {k} is missing in new data.")
+        
+        # Encode test data
+        _,pred_cov_flat,_,_,pred_cov,_,_ = self.formula.encode_data(n_dat,prediction=True)
+
+        # Then, we need to build the model matrix - but only for the terms which should
+        # be included in the prediction!
+        terms = self.formula.get_terms()
+        has_intercept = self.formula.has_intercept()
+        has_scale_split = False
+        ltx = self.formula.get_linear_term_idx()
+        irstx = self.formula.get_ir_smooth_term_idx()
+        stx = self.formula.get_smooth_term_idx()
+        rtx = self.formula.get_random_term_idx()
+        var_types = self.formula.get_var_types()
+        var_mins = self.formula.get_var_mins()
+        var_maxs = self.formula.get_var_maxs()
+        factor_levels = self.formula.get_factor_levels()
+        n_j = None
+        state_est_flat = None
+
+        # So we pass the desired terms to the use_only argument
+        predi_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
+                                                     ltx,irstx,stx,rtx,var_types,var_map,
+                                                     var_mins,var_maxs,factor_levels,
+                                                     pred_cov_flat,pred_cov,n_j,state_est_flat,
+                                                     [states],use_only=use_terms)
+        
+        # Now we calculate the prediction
+        pred = predi_mat @ self.__coef
+
+        # Optionally calculate the boundary for a 1-alpha CI
+        if ci:
+            # Wood (2017) 6.10
+            c = predi_mat @ self.lvi.T @ self.lvi * self.__scale @ predi_mat.T
+            c = c.diagonal()
+            b = scp.stats.norm.ppf(1-(alpha/2)) * np.sqrt(c)
+            return pred,predi_mat,b
+
+        return pred,predi_mat,None

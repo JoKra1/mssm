@@ -97,8 +97,8 @@ class fs(f): # Approximates bs='fs' in mgcv
                        True, True, penalty, pen_kwargs)
         
 class irf(GammTerm):
-    def __init__(self,variable:str,
-                state:int,
+    def __init__(self,variables:[str],
+                event:int,
                 by:str=None,
                 id:int=None,
                 nk:int=10,
@@ -114,10 +114,10 @@ class irf(GammTerm):
            pen_kwargs = [{"m":2}]
         
         # Initialization: ToDo: the deepcopy can be dropped now.
-        super().__init__([variable], TermType.LSMOOTH, is_penalized, copy.deepcopy(penalty), copy.deepcopy(pen_kwargs))
+        super().__init__(variables, TermType.LSMOOTH, is_penalized, copy.deepcopy(penalty), copy.deepcopy(pen_kwargs))
         self.basis = basis
         self.basis_kwargs = basis_kwargs
-        self.state = state
+        self.event = event
         self.by = by
         self.id = id
         self.nk = nk

@@ -363,7 +363,7 @@ class Formula():
                self.__smooth_terms.append(ti)
 
             if isinstance(term,irf):
-               if len(term.variables > 1):
+               if len(term.variables) > 1:
                   raise NotImplementedError("Multiple variables for impulse response terms have not been implemented yet.")
                
                self.__ir_smooth_terms.append(ti)
@@ -524,10 +524,10 @@ class Formula():
             n_coef *= len(by_levels)
 
             for by_level in by_levels:
-               self.coef_names.extend([f"irf_{irsterm.state}_{ink}_{by_level}" for ink in range(irsterm.nk)])
+               self.coef_names.extend([f"irf_{irsterm.event}_{ink}_{by_level}" for ink in range(irsterm.nk)])
          
          else:
-            self.coef_names.extend([f"irf_{irsterm.state}_{ink}" for ink in range(irsterm.nk)])
+            self.coef_names.extend([f"irf_{irsterm.event}_{ink}" for ink in range(irsterm.nk)])
          
          self.n_coef += n_coef
          self.ordered_coef_per_term.append(n_coef)
@@ -951,6 +951,10 @@ class Formula():
        return(copy.deepcopy(self.__random_terms))
     
     def get_nj(self) -> int:
+       if self.__has_irf:
+          # Every event has an irf and there are always
+          # n_event + 1 states.
+          return self.__n_irf + 1
        return self.__n_j
     
     def has_intercept(self) -> bool:
@@ -1084,7 +1088,7 @@ def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,factor_levels,ridx,cov,
    new_cols = []
    new_ci = 0
 
-   # Calculate Coef names
+   # Calculate number of coefficients
    n_coef = irsterm.nk
 
    if irsterm.by is not None:
@@ -1095,7 +1099,10 @@ def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,factor_levels,ridx,cov,
       for s_cov,s_state in zip(cov,state_est):
          
          # Create matrix for state corresponding to term.
-         matrix_term = irsterm.basis(irsterm.state,s_cov[:,var_map[var]],s_state, irsterm.nk, **irsterm.basis_kwargs)
+         # ToDo: For Multivariate case, the matrix term needs to be build iteratively for
+         # every level of the multivariate factor to make sure that the convolution operation
+         # works as intended. The splitting can happen later via by.
+         matrix_term = irsterm.basis(irsterm.event,s_cov[:,var_map[var]],s_state, irsterm.nk, **irsterm.basis_kwargs)
          m_rows,m_cols = matrix_term.shape
 
          # Handle optional by keyword
@@ -1105,6 +1112,7 @@ def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,factor_levels,ridx,cov,
 
             by_cov = s_cov[:,var_map[irsterm.by]]
 
+            # ToDo: For MV case this check will be true.
             if len(np.unique(by_cov)) > 1:
                raise ValueError(f"By-variable {irsterm.by} has varying levels on series level. This should not be the case.")
             
@@ -1124,24 +1132,25 @@ def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,factor_levels,ridx,cov,
          # Find basis elements > 0
          if len(term_idx) < 1:
             for m_coli in range(m_cols):
-               final_col = final_term[:,m_coli]
-               term_elements.append(final_col[abs(final_col) > tol])
-               term_idx.append(abs(final_col) > tol)
-         else:
-            for m_coli in range(m_cols):
-               final_col = final_term[:,m_coli]
-               term_elements[m_coli] = np.append(term_elements[m_coli],final_col[abs(final_col) > tol])
-               term_idx[m_coli] = np.append(term_idx[m_coli], abs(final_col) > tol)
+               term_elements.append([])
+               term_idx.append([])
+
+         for m_coli in range(m_cols):
+            final_col = final_term[:,m_coli]
+            cidx = abs(final_col) > tol
+            term_elements[m_coli].extend(final_col[cidx])
+            term_idx[m_coli].extend(cidx)
 
       if n_coef != len(term_elements):
          raise KeyError("Not all model matrix columns were created.")
       
       # Now collect actual row indices
       for m_coli in range(len(term_elements)):
+
          if use_only is None or irsti in use_only:
-            new_elements.extend(term_elements[:,m_coli])
+            new_elements.extend(term_elements[m_coli])
             new_rows.extend(ridx[term_idx[m_coli]])
-            new_cols.extend([ci for _ in range(len(term_elements[:,m_coli]))])
+            new_cols.extend([ci for _ in range(len(term_elements[m_coli]))])
          ci += 1
          new_ci += 1
 
