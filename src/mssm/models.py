@@ -348,7 +348,7 @@ class sMsGAMM(MSSM):
                     raise KeyError(f"Variable {pTerm.split_by} used as split_by argument does not exist in data.")
                 if var_types[pTerm.split_by] != VarType.FACTOR:
                     raise ValueError(f"Variable {pTerm.split_by} used as split_by argument is not a factor variable.")
-                pTerm.n_by = var_levels[pTerm.split_by]
+                pTerm.n_by = len(var_levels[pTerm.split_by])
 
     ##################################### Fitting #####################################
     
@@ -413,8 +413,8 @@ class sMsGAMM(MSSM):
         state_LVIs = []
         llk_hist = []
 
-        n_pi = self.__pi[:]
-        n_TR = self.__TR[:]
+        n_pi = self.__pi
+        n_TR = self.__TR
         
         # For state proposals we utilize a temparature schedule. This is similar to the idea of simulated annealing proposed
         # by Kirkpatrick, Gelatt and Vecchi (1983). However, the mechanism here is closer to simulated
@@ -507,12 +507,12 @@ class sMsGAMM(MSSM):
                 if iter > 1:
 
                     if pen_llk >= max_pen_llk: # Collect new best parameters
-                        self.__TR = n_TR[:]
-                        self.__pi = n_pi[:]
-                        self.__scale = state_scales[:]
-                        self.__coef = state_coef[:]
-                        self.lvi = state_LVIs[:]
-                        max_states_flat = states_flat[:]
+                        self.__TR = n_TR
+                        self.__pi = n_pi
+                        self.__scale = state_scales
+                        self.__coef = state_coef
+                        self.lvi = state_LVIs
+                        max_states_flat = states_flat
                         
                         # Also check convergence
                         if (pen_llk - max_pen_llk) < conv_tol*abs(pen_llk):
@@ -569,7 +569,7 @@ class sMsGAMM(MSSM):
                         state_penalties[j] = penalty
                         state_LVIs[j] = LVI
 
-                    state_coef[j] = coef[:]
+                    state_coef[j] = coef
                     state_scales[j] = scale
             else:
                 raise NotImplementedError("has_scale_split==False is not yet implemented.")
@@ -722,6 +722,7 @@ class sMsIRGAMM(sMsGAMM):
 
         self.__coef = None
         self.__scale = None
+        self.penalty = 0
 
     ##################################### Getters #####################################
 
@@ -730,28 +731,28 @@ class sMsIRGAMM(sMsGAMM):
     
     ##################################### Fitting #####################################
 
-    def __init_all_states(self,pool):
+    def __init_all_states(self,pool,end_points):
 
         # MP code to propose initial state for every series
-        args = zip(self.end_points,repeat(self.n_j),repeat(self.pre_llk_fun),
+        args = zip(end_points,repeat(self.n_j),repeat(self.pre_llk_fun),
                    repeat(self.fix),repeat(self.fix_at))
         
         state_durs_new, states_new = zip(*pool.starmap(init_states_IR,args))
         return list(state_durs_new),list(states_new)
     
-    def __propose_all_states(self,pool,temp,y,NOT_NAs,cov,state_durs,states,coef,scale,
+    def __propose_all_states(self,pool,temp,y,NOT_NAs,end_points,cov,state_durs,states,coef,scale,
                         log_o_probs,var_map,terms,has_intercept,ltx,irstx,
                         stx,rtx,var_types,var_mins,var_maxs,factor_levels,
-                        prop_sd,n_prop):
+                        prop_sd,n_prop,use_only):
         
         # MP code to propose states for every series
-        args = zip(repeat(self.n_j),repeat(temp),y,NOT_NAs,self.end_points,cov,state_durs,states,
+        args = zip(repeat(self.n_j),repeat(temp),y,NOT_NAs,end_points,cov,state_durs,states,
                    repeat(coef),repeat(scale),log_o_probs,repeat(self.pds),
                    repeat(self.pre_llk_fun),repeat(var_map),repeat(self.family),repeat(terms),
                    repeat(has_intercept),repeat(ltx),repeat(irstx),repeat(stx),
                    repeat(rtx),repeat(var_types),repeat(var_mins),repeat(var_maxs),
                    repeat(factor_levels),repeat(self.fix),repeat(self.fix_at),repeat(prop_sd),
-                   repeat(n_prop))
+                   repeat(n_prop),repeat(use_only))
         
         state_durs_new, states_new, llks = zip(*pool.starmap(se_step_sms_dc_gamm,args))
         return list(state_durs_new),list(states_new), list(llks)
@@ -767,7 +768,7 @@ class sMsIRGAMM(sMsGAMM):
 
         # Propose an initial set of states and state_durs for every series.
         with mp.Pool(processes=self.cpus) as pool:
-            durs,states = self.__init_all_states(pool)
+            durs,states = self.__init_all_states(pool,self.end_points)
 
         # Model matrix parameters that remain constant are specified.
         # And then we need to build the model matrix for the start estimates to get start coefficients.
@@ -852,10 +853,11 @@ class sMsIRGAMM(sMsGAMM):
             # Now we can propose a new set of states and state_durs for every series.
             with mp.Pool(processes=self.cpus) as pool:
                 durs,states,llks = self.__propose_all_states(pool,temp_schedule[iter],self.formula.y,
-                                                             self.formula.NOT_NA,cov,durs,states,coef,scale,
-                                                             s_log_o_probs,var_map,terms,has_intercept,ltx,
-                                                             irstx,stx,rtx,var_types,var_mins,var_maxs,
-                                                             factor_levels,prop_sd,n_prop)
+                                                             self.formula.NOT_NA,self.end_points,
+                                                             cov,durs,states,coef,scale,s_log_o_probs,
+                                                             var_map,terms,has_intercept,ltx,irstx,
+                                                             stx,rtx,var_types,var_mins,var_maxs,
+                                                             factor_levels,prop_sd,n_prop,None)
             
             ### Convergence control ###
 
@@ -934,15 +936,18 @@ class sMsIRGAMM(sMsGAMM):
         states_flat = []
         for s in range(n_series):
             sd = durs[s]
+            s_states_flat = []
             for st in range(sd.shape[0]):
                 if sd[st,1] != 0:
                     for d in range(sd[st,1]):
-                        states_flat.append(st)
+                        s_states_flat.append(st)
+            states_flat.append(s_states_flat)
 
         # Save final coefficients
         self.__scale = scale
         self.__coef = coef
         self.lvi = LVI
+        self.penalty = penalty
 
         return llk_hist,states_flat,states
 
@@ -993,3 +998,102 @@ class sMsIRGAMM(sMsGAMM):
             return pred,predi_mat,b
 
         return pred,predi_mat,None
+    
+    def predict_llk(self, use_terms, n_dat, n_endpoints,conv_tol=1e-6,t0=1,r=0.925,n_prop=500,prop_sd=2):
+        # Estimates best state sequence given model for new data and returns the CDL under this
+        # state sequence, the model, and given the new data.
+        var_map = self.formula.get_var_map()
+        var_keys = var_map.keys()
+
+        for k in var_keys:
+            if k not in n_dat.columns:
+                raise IndexError(f"Variable {k} is missing in new data.")
+        
+        # Encode test data
+        pred_y_flat,pred_cov_flat,pred_NOT_NAs_flat,pred_y,pred_cov,pred_NOT_NAs,pred_sid = self.formula.encode_data(n_dat,prediction=False)
+
+        # Propose an initial set of states and state_durs for every new series.
+        with mp.Pool(processes=self.cpus) as pool:
+            durs,states = self.__init_all_states(pool,n_endpoints)
+
+
+        # Then, we need to build the model matrix - but only for the terms which should
+        # be included in the prediction!
+        terms = self.formula.get_terms()
+        has_intercept = self.formula.has_intercept()
+        has_scale_split = False
+        ltx = self.formula.get_linear_term_idx()
+        irstx = self.formula.get_ir_smooth_term_idx()
+        stx = self.formula.get_smooth_term_idx()
+        rtx = self.formula.get_random_term_idx()
+        var_types = self.formula.get_var_types()
+        var_mins = self.formula.get_var_mins()
+        var_maxs = self.formula.get_var_maxs()
+        factor_levels = self.formula.get_factor_levels()
+        n_j = None
+        state_est_flat = None
+        n_obs = len(pred_y_flat)
+
+        # Setup temp schedule.
+        temp_schedule = anneal_temps_zero(n_prop,t0,r)
+        
+        last_llk = None
+        llk_hist = []
+        for iter in range(n_prop):
+
+            # We pass the desired terms to the use_only argument
+            predi_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
+                                                        ltx,irstx,stx,rtx,var_types,var_map,
+                                                        var_mins,var_maxs,factor_levels,
+                                                        pred_cov_flat,pred_cov,n_j,state_est_flat,
+                                                        states,use_only=use_terms)
+            
+            # Only now can we remove the NAs
+            predi_mat = predi_mat[pred_NOT_NAs_flat,]
+
+            # Propose new states, basically copied from IR GAMM.fit()
+
+            # Handle observation probabilities
+            log_o_probs = np.zeros(n_obs)
+            
+            mu = (predi_mat @ self.__coef).reshape(-1,1)
+
+            if not isinstance(self.family,Gaussian):
+                mu = self.family.link.fi(mu)
+
+            if not self.family.twopar:
+                log_o_probs[pred_NOT_NAs_flat] = np.ndarray.flatten(self.family.lp(pred_y_flat[pred_NOT_NAs_flat],mu))
+            else:
+                log_o_probs[pred_NOT_NAs_flat] = np.ndarray.flatten(self.family.lp(pred_y_flat[pred_NOT_NAs_flat],mu,self.__scale))
+            log_o_probs[pred_NOT_NAs_flat == False] = np.nan
+
+            # We need to split the observation probabilities by the predicted series
+            s_log_o_probs = np.split(log_o_probs,pred_sid[1:],axis=0)
+            
+            # Now we can propose a new set of states and state_durs for every series.
+            # Basically - we propose only one new candidate, which is either accepted or not.
+            # In the long run we should find the best state sequence for the new data given the
+            # models parameters. We return the CDL of these sequences.
+            with mp.Pool(processes=self.cpus) as pool:
+                durs,states,llks = self.__propose_all_states(pool,temp_schedule[iter],pred_y,
+                                                                pred_NOT_NAs,n_endpoints,
+                                                                pred_cov,durs,states,self.__coef,self.__scale,s_log_o_probs,
+                                                                var_map,terms,has_intercept,ltx,irstx,
+                                                                stx,rtx,var_types,var_mins,var_maxs,
+                                                                factor_levels,prop_sd,1,use_terms)
+            
+            # Held-out LLK
+            LO_llk = sum(llks)
+            if iter > 0:
+                # Also check convergence
+                if abs(LO_llk - last_llk) < conv_tol*abs(LO_llk):
+                    print("Converged",iter)
+                    break
+
+            last_llk = LO_llk
+            llk_hist.append(LO_llk)
+
+        plt.plot(llk_hist)
+        plt.show()
+        return LO_llk
+

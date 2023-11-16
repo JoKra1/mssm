@@ -357,7 +357,8 @@ def ll_sms_dc_gamm(n_j,pds,cov,var_map,state_dur_est,log_o_probs,fix):
          # the new proposal we might have a new max duration. So we have to do that here.
          pd_j = pds[j]
          if pd_j.split_by is not None:
-            alpha += pd_j.log_prob(state_dur_est[j,1],cov[0,var_map[pd_j.split_by]])
+            # Cast to int is necessary since we index by cov and valid since factor codings are always free of decimals.
+            alpha += pd_j.log_prob(state_dur_est[j,1],int(cov[0,var_map[pd_j.split_by]]))
          else:
             alpha += pd_j.log_prob(state_dur_est[j,1])
 
@@ -374,7 +375,7 @@ def se_step_sms_dc_gamm(n_j,temp,series,NOT_NAs,end_point,cov,
                         stx,rtx,var_types,var_mins,
                         var_maxs,factor_levels,
                         fix,fix_at,sd,
-                        n_prop):
+                        n_prop,use_only):
     
     # Proposes a new candidate solution for a left-right Impulse response Gamm via a random walk step. The proposed
     # state is accepted according to a modified Metropolis Hastings acceptance ratio used for simulated annealing
@@ -419,7 +420,9 @@ def se_step_sms_dc_gamm(n_j,temp,series,NOT_NAs,end_point,cov,
          model_mat_s = build_sparse_matrix_from_formula(terms,has_intercept,False,
                                                         ltx,irstx,stx,rtx,var_types,var_map,
                                                         var_mins,var_maxs,factor_levels,
-                                                        cov,[cov],n_j,None,[n_states])
+                                                        cov,[cov],n_j,None,[n_states],
+                                                        use_only=use_only)
+         
          model_mat_s = model_mat_s[NOT_NAs,]
 
          # Re-collect observation probabilities under new state sequence
@@ -449,13 +452,13 @@ def se_step_sms_dc_gamm(n_j,temp,series,NOT_NAs,end_point,cov,
          # (lower probability of accepting new state).
          delta_llk = n_llk - c_llk # delta E in Kirkpatrick et al.
          if (delta_llk >= 0) or (np.exp(delta_llk/temp) >= cutoffs[i]):
-            states = n_states[:]
-            state_durs = n_state_durs[:]
+            states = n_states
+            state_durs = n_state_durs
             c_llk = n_llk
       
       # Update onset distribution estimate
-      state_dist[i,:] = states[:]
-      states_durs_dist.append(state_durs[:])
+      state_dist[i,:] = states
+      states_durs_dist.append(state_durs)
       state_llks.append(c_llk)
     
     # Sample new onset according to ~ P(onset | series, current parameters). The latter only

@@ -1121,7 +1121,7 @@ def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,factor_levels,ridx,cov,
             for by_level in range(len(by_levels)):
                if by_level == by_cov[0]:
                   by_matrix_term[:,cByIndex:cByIndex+m_cols] = matrix_term
-                  cByIndex += m_cols
+               cByIndex += m_cols # Update column range associated with current level.
             
             final_term = by_matrix_term
          else:
