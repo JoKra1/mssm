@@ -202,14 +202,18 @@ def se_step_sms_gamm(n_j,temp,series,cov,end_point,pi,TR,
     # this series!
     s_log_dur_probs = np.zeros((n_j,log_dur_probs.shape[1]))
     j = 0
+    j_split = 0
     while j < n_j:
        pd_j = pds[j]
        if pd_j.split_by is not None:
-          s_log_dur_probs[j,:] = log_dur_probs[j+cov[0,var_map[pd_j.split_by]],:]
-          j += cov[0,var_map[pd_j.split_by]] + 1
+          #print(j,j_split+int(cov[0,var_map[pd_j.split_by]]),cov[0,var_map[pd_j.split_by]])
+          s_log_dur_probs[j,:] = log_dur_probs[j_split+int(cov[0,var_map[pd_j.split_by]]),:]
+          j_split += pd_j.n_by
        else:
-          s_log_dur_probs[j,:] =log_dur_probs[j,:]
-          j += 1
+          #print(j,j_split)
+          s_log_dur_probs[j,:] =log_dur_probs[j_split,:]
+          j_split += 1
+       j += 1
     
     # Now we can perform the regular forward and backward pass + some additional calculations...
     llk_fwd, etas_c, u = forward_eta(n_j,series.shape[0],pi,TR,s_log_dur_probs,log_o_probs)
