@@ -278,6 +278,7 @@ class sMsGAMM(MSSM):
                  estimate_TR: bool = True,
                  pi=None,
                  TR=None,
+                 mvar_by=None,
                  cpus: int = 1):
         
         super().__init__(formula,
@@ -287,6 +288,14 @@ class sMsGAMM(MSSM):
                          estimate_pi,
                          estimate_TR,
                          cpus)
+        
+        # Multivariate indicator factor.
+        self.mvar_by = mvar_by
+        if not self.mvar_by is None:
+            if not self.mvar_by in self.formula.get_var_types():
+                raise KeyError(f"Multivariate factor {self.mvar_by} does not exist in the data.")
+            if self.formula.get_var_types()[self.mvar_by] != VarType.FACTOR:
+                raise ValueError(f"Multivariate variable {self.mvar_by} is not a factor.")
         
         self.end_points= end_points
         self.n_j = formula.get_nj()
@@ -352,9 +361,9 @@ class sMsGAMM(MSSM):
 
     ##################################### Fitting #####################################
     
-    def __propose_all_states(self,pool,y,cov,temp,pi,TR,log_o_probs,log_dur_probs,var_map):
+    def __propose_all_states(self,pool,cov,temp,pi,TR,log_o_probs,log_dur_probs,var_map):
         # MP code to propose states for every series
-        args = zip(repeat(self.n_j),repeat(temp),y,cov,self.end_points,repeat(pi),
+        args = zip(repeat(self.n_j),repeat(temp),cov,self.end_points,repeat(pi),
                    repeat(TR),log_o_probs,repeat(log_dur_probs),repeat(self.pds),
                    repeat(self.pre_llk_fun),repeat(var_map))
         
@@ -488,10 +497,16 @@ class sMsGAMM(MSSM):
             
             # We need to split the observation probabilities by series
             s_log_o_probs = np.split(log_o_probs,self.formula.sid[1:],axis=1)
+
+            if not self.mvar_by is None:
+                # We need to split the s_log_o_probs from every series by the multivariate factor
+                # and then sum the log-probs together. This is a strong independence assumption (see Langrock, DATE)
+                n_by_mvar = factor_levels[self.mvar_by]
+                s_log_o_probs = [s_prob.reshape(self.n_j,n_by_mvar,-1).sum(axis=1) for s_prob in s_log_o_probs]
             
             # Now we can propose a new set of states and state_durs for every series.
             with mp.Pool(processes=self.cpus) as pool:
-                durs,states,llks = self.__propose_all_states(pool,self.formula.y,cov,temp_schedule[iter],n_pi,n_TR,s_log_o_probs,dur_log_probs,var_map)
+                durs,states,llks = self.__propose_all_states(pool,cov,temp_schedule[iter],n_pi,n_TR,s_log_o_probs,dur_log_probs,var_map)
                 states_flat = np.array([st for s in states for st in s],dtype=int)
             
             ### Convergence control ###
@@ -710,6 +725,7 @@ class sMsIRGAMM(sMsGAMM):
                          np.zeros(formula.get_nj()),
                          np.zeros((formula.get_nj(),
                                    formula.get_nj())),
+                         None,
                          cpus)
         
         # Define which events should be fixed and at which sample.

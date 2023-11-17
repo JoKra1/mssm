@@ -191,7 +191,7 @@ def pre_ll_sms_gamm(n_j, end_point, state_dur_est, state_est):
 
    return False
 
-def se_step_sms_gamm(n_j,temp,series,cov,end_point,pi,TR,
+def se_step_sms_gamm(n_j,temp,cov,end_point,pi,TR,
                      log_o_probs,log_dur_probs,pds,
                      pre_lln_fn,var_map):
     # Proposes next set of latent states - see Nielsen (2002).
@@ -214,10 +214,10 @@ def se_step_sms_gamm(n_j,temp,series,cov,end_point,pi,TR,
           s_log_dur_probs[j,:] =log_dur_probs[j_split,:]
           j_split += 1
        j += 1
-    
+
     # Now we can perform the regular forward and backward pass + some additional calculations...
-    llk_fwd, etas_c, u = forward_eta(n_j,series.shape[0],pi,TR,s_log_dur_probs,log_o_probs)
-    etas_c, gammas_c = backward_eta(n_j,series.shape[0],TR,s_log_dur_probs,etas_c,u)
+    llk_fwd, etas_c, u = forward_eta(n_j,log_o_probs.shape[1],pi,TR,s_log_dur_probs,log_o_probs)
+    etas_c, gammas_c = backward_eta(n_j,log_o_probs.shape[1],TR,s_log_dur_probs,etas_c,u)
 
     # Now the gammas_c are log-probs. We could convert them to probs
     # via exp() but that is not going to guarantee that every columns sums
@@ -233,7 +233,7 @@ def se_step_sms_gamm(n_j,temp,series,cov,end_point,pi,TR,
     while rejected:
       
       # Propose new state sequence
-      n_state_durs_est,n_state_est = prop_smoothed(n_j,series.shape[0],smoothed)
+      n_state_durs_est,n_state_est = prop_smoothed(n_j,log_o_probs.shape[1],smoothed)
 
       # Pre-check new proposal
       rejected = pre_lln_fn(n_j, end_point, n_state_durs_est, n_state_est)
