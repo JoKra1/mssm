@@ -370,6 +370,14 @@ class sMsGAMM(MSSM):
         state_durs_new, states_new, llks = zip(*pool.starmap(se_step_sms_gamm,args))
         return list(state_durs_new),list(states_new),list(llks)
     
+    def __decode_all_states(self,pool,cov,pi,TR,log_o_probs,log_dur_probs,var_map):
+        # MP code to decode final states for every series
+        args = zip(repeat(self.n_j),cov,repeat(pi),repeat(TR),log_o_probs,
+                   repeat(log_dur_probs),repeat(self.pds),repeat(var_map))
+        
+        state_durs_decoded, states_decoded, llks_decoded = zip(*pool.starmap(decode_local,args))
+        return list(state_durs_decoded),list(states_decoded),list(llks_decoded)
+    
     def fit(self,maxiter_outer=100,maxiter_inner=30,max_no_improv=15,conv_tol=1e-4,extend_lambda=True,control_lambda=True,init_scale=100,t0=0.25,r=0.925):
         # Performs Stochastic Expectation maiximization based on Nielsen (2002) see also the sem.py file for
         # more details.
@@ -436,7 +444,6 @@ class sMsGAMM(MSSM):
         # likely requires some tuning.
         temp_schedule = anneal_temps_zero(maxiter_outer,t0,r)
 
-        max_states_flat = None
         no_improv_iter = 0
         
         for iter in range(maxiter_outer):
@@ -527,7 +534,6 @@ class sMsGAMM(MSSM):
                         self.__scale = state_scales
                         self.__coef = state_coef
                         self.lvi = state_LVIs
-                        max_states_flat = states_flat
                         
                         # Also check convergence
                         if (pen_llk - max_pen_llk) < conv_tol*abs(pen_llk):
@@ -648,6 +654,64 @@ class sMsGAMM(MSSM):
             if self.estimate_TR:
                 for j in range(self.n_j):
                     n_TR[j,:] /= np.sum(n_TR[j,:])
+        
+
+        # We need to compute the log observation and duration probs one last time for decoding.
+        # This time we use the max parameters we obtained for calculation stored in self.
+        max_dur = int(max([round(pd.max_ppf(0.99)) for pd in self.pds]))
+
+        c_durs = np.arange(1,max_dur)
+
+        # So we need to collect the log-probabilities of state j lasting for duration d according to
+        # state j's sojourn time distribution(s).
+        dur_log_probs = []
+
+        # For the forward and backward probabilities computed in the sem step
+        # we also need for every time point the probability of observing the
+        # series at that time-point according to the GAMM from EVERY state.
+        log_o_probs = np.zeros((self.n_j,n_obs))
+
+        for j in range(self.n_j):
+            # Handle duration probabilities
+            pd_j = self.pds[j]
+
+            if pd_j.split_by is not None:
+                for ci in range(pd_j.n_by):
+                    dur_log_probs.append(pd_j.log_prob(c_durs,ci))
+            else:
+                dur_log_probs.append(pd_j.log_prob(c_durs))
+            
+            if has_scale_split:
+                # Handle observation probabilities
+                j_mu = (model_mat_full @ self.__coef[j]).reshape(-1,1)
+
+                if not isinstance(self.family,Gaussian):
+                    j_mu = self.family.link.fi(j_mu)
+
+                if not self.family.twopar:
+                    log_o_probs[j,NOT_NA_flat] = np.ndarray.flatten(self.family.lp(y_flat[NOT_NA_flat],j_mu))
+                else:
+                    log_o_probs[j,NOT_NA_flat] = np.ndarray.flatten(self.family.lp(y_flat[NOT_NA_flat],j_mu,self.__scale[j]))
+                log_o_probs[j,NOT_NA_flat == False] = np.nan
+
+            else:
+                raise NotImplementedError("has_scale_split==False is not yet implemented.")
+            
+        dur_log_probs = np.array(dur_log_probs)
+        
+        # We need to split the observation probabilities by series
+        s_log_o_probs = np.split(log_o_probs,self.formula.sid[1:],axis=1)
+
+        if not self.mvar_by is None:
+            # We need to split the s_log_o_probs from every series by the multivariate factor
+            # and then sum the log-probs together. This is a strong independence assumption (see Langrock, 2021)
+            n_by_mvar = factor_levels[self.mvar_by]
+            s_log_o_probs = [s_prob.reshape(self.n_j,n_by_mvar,-1).sum(axis=1) for s_prob in s_log_o_probs]
+        
+        # Now we can decode.
+        with mp.Pool(processes=self.cpus) as pool:
+            _,states_max,_ = self.__decode_all_states(pool,cov,self.__pi,self.__TR,s_log_o_probs,dur_log_probs,var_map)
+            max_states_flat = np.array([st for s in states_max for st in s],dtype=int)
         
         return llk_hist,max_states_flat
             

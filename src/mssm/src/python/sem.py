@@ -240,6 +240,50 @@ def se_step_sms_gamm(n_j,temp,cov,end_point,pi,TR,
     
     return n_state_durs_est,n_state_est,llk_fwd
 
+def decode_local(n_j,cov,pi,TR,log_o_probs,log_dur_probs,pds,var_map):
+    # Decoding from the smoothed probabilities - selecting j according to argmax(smoothed,axis=0)
+    # See, Langrock (2021)
+    s_log_dur_probs = np.zeros((n_j,log_dur_probs.shape[1]))
+    j = 0
+    j_split = 0
+    while j < n_j:
+       pd_j = pds[j]
+       if pd_j.split_by is not None:
+          #print(j,j_split+int(cov[0,var_map[pd_j.split_by]]),cov[0,var_map[pd_j.split_by]])
+          s_log_dur_probs[j,:] = log_dur_probs[j_split+int(cov[0,var_map[pd_j.split_by]]),:]
+          j_split += pd_j.n_by
+       else:
+          #print(j,j_split)
+          s_log_dur_probs[j,:] =log_dur_probs[j_split,:]
+          j_split += 1
+       j += 1
+
+    # Now we can perform the regular forward and backward pass + some additional calculations...
+    llk_fwd, etas_c, u = forward_eta(n_j,log_o_probs.shape[1],pi,TR,s_log_dur_probs,log_o_probs)
+    etas_c, gammas_c = backward_eta(n_j,log_o_probs.shape[1],TR,s_log_dur_probs,etas_c,u)
+
+    # Now the gammas_c are log-probs. We could convert them to probs
+    # via exp() but that is not going to guarantee that every columns sums
+    # up to 1 because of numerical precision (or lack of). So we use a softmax
+    # to ensure this.
+    smoothed = gammas_c - llk_fwd
+    smoothed = scp.special.softmax(smoothed ,axis=1).T
+
+    # Up until here this was just like setting up for sampling, but now we select more optimally to decode!
+    states_est = np.argmax(smoothed,axis=0)
+
+    state_dur_est = []
+    c_state = states_est[0]
+    c_dur = 1
+    for s in range(1,len(states_est)):
+      if states_est[s] != c_state:
+         state_dur_est.append([c_state,c_dur])
+         c_state = states_est[s]
+         c_dur = 1
+      c_dur += 1
+    
+    return np.array(state_dur_est,dtype=int), states_est, llk_fwd
+
 ##################################### sMs IR GAMM SEM functions #####################################
 
 def prop_norm(end_point,c_state_est,sd,fix,fix_at):
