@@ -378,7 +378,7 @@ class sMsGAMM(MSSM):
         state_durs_decoded, states_decoded, llks_decoded = zip(*pool.starmap(decode_local,args))
         return list(state_durs_decoded),list(states_decoded),list(llks_decoded)
     
-    def fit(self,maxiter_outer=100,maxiter_inner=30,max_no_improv=15,conv_tol=1e-4,extend_lambda=True,control_lambda=True,init_scale=100,t0=0.25,r=0.925):
+    def fit(self,burn_in=100,maxiter_inner=30,m_avg=15,conv_tol=1e-7,extend_lambda=True,control_lambda=True,init_scale=100,t0=0.25,r=0.925):
         # Performs Stochastic Expectation maiximization based on Nielsen (2002) see also the sem.py file for
         # more details.
         
@@ -442,11 +442,9 @@ class sMsGAMM(MSSM):
         # further reduce the chance of ending up with a local maximum. Of course, if we set sd=temp_schedule[iter]
         # too extreme, we will not get anywhere since the noise dominates the smoothed probabilities. So this
         # likely requires some tuning.
-        temp_schedule = anneal_temps_zero(maxiter_outer,t0,r)
-
-        no_improv_iter = 0
+        temp_schedule = anneal_temps_zero(burn_in,t0,r)
         
-        for iter in range(maxiter_outer):
+        for iter in range(burn_in + m_avg):
 
             ### Stochastic Expectation ###
 
@@ -461,42 +459,21 @@ class sMsGAMM(MSSM):
             
             # Now we can propose a new set of states and state_durs for every series.
             with mp.Pool(processes=self.cpus) as pool:
-                durs,states,llks = self.__propose_all_states(pool,cov,temp_schedule[iter],n_pi,n_TR,s_log_o_probs,dur_log_probs,var_map)
+                # After the burn-in period, we do not add noise to the state probabilities, since
+                # we no longer want to explore unnecessarily.
+                temp = 0
+                if iter < burn_in:
+                    temp = temp_schedule[iter]
+
+                durs,states,llks = self.__propose_all_states(pool,cov,temp,n_pi,n_TR,s_log_o_probs,dur_log_probs,var_map)
                 states_flat = np.array([st for s in states for st in s],dtype=int)
             
             ### Convergence control ###
 
-            # Convergence control is based on the change in penalized likelihood between
-            # two subsequent local maxima or the inability to find a new maximum for
-            # a long time.
+            # Convergence control is best based on plotting the change in penalized likelihood over iterations.
+            # Once we start oscillating around a constant value the chain has likely converged ~ see Nielsen (2002).
             if iter > 0:
                 pen_llk = np.sum(llks) - np.sum(state_penalties)
-
-                if iter == 1: # Initialize max pen llk
-                    max_pen_llk = pen_llk
-                if iter > 1:
-
-                    if pen_llk >= max_pen_llk: # Collect new best parameters
-                        self.__TR = n_TR
-                        self.__pi = n_pi
-                        self.__scale = state_scales
-                        self.__coef = state_coef
-                        self.lvi = state_LVIs
-                        
-                        # Also check convergence
-                        if (pen_llk - max_pen_llk) < conv_tol*abs(pen_llk):
-                            print("Converged",iter)
-                            break
-
-                        max_pen_llk = pen_llk
-                        no_improv_iter = -1 # reset!
-
-                    no_improv_iter += 1
-
-                    if no_improv_iter >= max_no_improv:
-                        print("Converged",iter)
-                        break
-
                 llk_hist.append(pen_llk)
 
             ### Maximization ###
@@ -602,7 +579,42 @@ class sMsGAMM(MSSM):
             if self.estimate_TR:
                 for j in range(self.n_j):
                     n_TR[j,:] /= np.sum(n_TR[j,:])
-        
+            
+            # We average over the last m parameter sets after convergence to
+            # get the final estimate (Nielsen, 2002).
+            if iter == burn_in:
+                self.__TR = n_TR
+                self.__pi = n_pi
+                self.__scale = [state_scales[j] for j in range(self.n_j)]
+                self.__coef = [state_coef[j] for j in range(self.n_j)]
+                pd_params = [np.array(pd_j.params) for pd_j in self.pds]
+                self.lvi = [state_LVIs[j] for j in range(self.n_j)]
+
+            elif iter > burn_in:
+                self.__TR += n_TR
+                self.__pi += n_pi
+                for j in range(self.n_j):
+                    self.__scale[j] += state_scales[j]
+                    self.__coef[j] += state_coef[j]
+                    self.lvi[j] += state_LVIs[j]
+                    pd_params[j] += self.pds[j].params
+
+        # Now we have to finalize the average over the last m parameters and to decode
+        # the state sequence given those parameters.
+        self.__TR /= m_avg
+        self.__pi /= m_avg
+
+        # We have to normalize since the rows will not necessarily sum to one after averaging
+        self.__TR /= np.sum(self.__TR,axis=1)
+        self.__pi /= np.sum(self.__pi)
+
+        for j in range(self.n_j):
+            self.__scale[j] /= m_avg
+            self.__coef[j] /= m_avg
+            self.lvi[j] /= m_avg
+            pd_params[j] /= m_avg
+            # Overwrite duration dist. parameters with average ones
+            self.pds[j].params = pd_params[j]
 
         # We need to compute the log observation and duration probs one last time for decoding.
         # This time we use the max parameters we obtained for calculation stored in self.
