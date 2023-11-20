@@ -452,64 +452,12 @@ class sMsGAMM(MSSM):
 
             # Propose new states based on all updated parameters.
             # First we need the probability of stage durations for every stage (i.e., under every sojourn dist.).
-            # Since we usually care only about a small number of states, we
-            # can neglect their impact on the forward and backward time complexity.
-            # However, even ignoring this both algorithms still take at least number_of_obs*
-            # maximum_duration steps (for n_j=1). Now in principle, a state could take as long as the
-            # series lasts. But that would lead to an n_t*n_t complexity, which is
-            # just not feasible. One way to constrain this is to just consider the
-            # most likely durations under the current parameter set. We use the quantile
-            # function to determine the highest 99% cut-off (only 1% of duration values are more
-            # extreme than this one), across states which we then set as the max_dur to be considered.
-            max_dur = int(max([round(pd.max_ppf(0.99)) for pd in self.pds]))
-
-            c_durs = np.arange(1,max_dur)
-
-            # So we need to collect the log-probabilities of state j lasting for duration d according to
-            # state j's sojourn time distribution(s).
-            dur_log_probs = []
-
-            # For the forward and backward probabilities computed in the sem step
-            # we also need for every time point the probability of observing the
-            # series at that time-point according to the GAMM from EVERY state.
-            log_o_probs = np.zeros((self.n_j,n_obs))
-
-            for j in range(self.n_j):
-                # Handle duration probabilities
-                pd_j = self.pds[j]
-
-                if pd_j.split_by is not None:
-                    for ci in range(pd_j.n_by):
-                        dur_log_probs.append(pd_j.log_prob(c_durs,ci))
-                else:
-                    dur_log_probs.append(pd_j.log_prob(c_durs))
-                
-                if has_scale_split:
-                    # Handle observation probabilities
-                    j_mu = (model_mat_full @ state_coef[j]).reshape(-1,1)
-
-                    if not isinstance(self.family,Gaussian):
-                        j_mu = self.family.link.fi(j_mu)
-
-                    if not self.family.twopar:
-                        log_o_probs[j,NOT_NA_flat] = np.ndarray.flatten(self.family.lp(y_flat[NOT_NA_flat],j_mu))
-                    else:
-                        log_o_probs[j,NOT_NA_flat] = np.ndarray.flatten(self.family.lp(y_flat[NOT_NA_flat],j_mu,state_scales[j]))
-                    log_o_probs[j,NOT_NA_flat == False] = np.nan
-
-                else:
-                    raise NotImplementedError("has_scale_split==False is not yet implemented.")
-                
-            dur_log_probs = np.array(dur_log_probs)
-            
-            # We need to split the observation probabilities by series
-            s_log_o_probs = np.split(log_o_probs,self.formula.sid[1:],axis=1)
-
-            if not self.mvar_by is None:
-                # We need to split the s_log_o_probs from every series by the multivariate factor
-                # and then sum the log-probs together. This is a strong independence assumption (see Langrock, DATE)
-                n_by_mvar = factor_levels[self.mvar_by]
-                s_log_o_probs = [s_prob.reshape(self.n_j,n_by_mvar,-1).sum(axis=1) for s_prob in s_log_o_probs]
+            s_log_o_probs,dur_log_probs = compute_log_probs(self.n_j,n_obs,has_scale_split,
+                                                            model_mat_full,state_coef,
+                                                            state_scales,self.pds,y_flat,
+                                                            NOT_NA_flat,self.formula.sid,
+                                                            self.family,factor_levels,
+                                                            self.mvar_by)
             
             # Now we can propose a new set of states and state_durs for every series.
             with mp.Pool(processes=self.cpus) as pool:
@@ -658,55 +606,12 @@ class sMsGAMM(MSSM):
 
         # We need to compute the log observation and duration probs one last time for decoding.
         # This time we use the max parameters we obtained for calculation stored in self.
-        max_dur = int(max([round(pd.max_ppf(0.99)) for pd in self.pds]))
-
-        c_durs = np.arange(1,max_dur)
-
-        # So we need to collect the log-probabilities of state j lasting for duration d according to
-        # state j's sojourn time distribution(s).
-        dur_log_probs = []
-
-        # For the forward and backward probabilities computed in the sem step
-        # we also need for every time point the probability of observing the
-        # series at that time-point according to the GAMM from EVERY state.
-        log_o_probs = np.zeros((self.n_j,n_obs))
-
-        for j in range(self.n_j):
-            # Handle duration probabilities
-            pd_j = self.pds[j]
-
-            if pd_j.split_by is not None:
-                for ci in range(pd_j.n_by):
-                    dur_log_probs.append(pd_j.log_prob(c_durs,ci))
-            else:
-                dur_log_probs.append(pd_j.log_prob(c_durs))
-            
-            if has_scale_split:
-                # Handle observation probabilities
-                j_mu = (model_mat_full @ self.__coef[j]).reshape(-1,1)
-
-                if not isinstance(self.family,Gaussian):
-                    j_mu = self.family.link.fi(j_mu)
-
-                if not self.family.twopar:
-                    log_o_probs[j,NOT_NA_flat] = np.ndarray.flatten(self.family.lp(y_flat[NOT_NA_flat],j_mu))
-                else:
-                    log_o_probs[j,NOT_NA_flat] = np.ndarray.flatten(self.family.lp(y_flat[NOT_NA_flat],j_mu,self.__scale[j]))
-                log_o_probs[j,NOT_NA_flat == False] = np.nan
-
-            else:
-                raise NotImplementedError("has_scale_split==False is not yet implemented.")
-            
-        dur_log_probs = np.array(dur_log_probs)
-        
-        # We need to split the observation probabilities by series
-        s_log_o_probs = np.split(log_o_probs,self.formula.sid[1:],axis=1)
-
-        if not self.mvar_by is None:
-            # We need to split the s_log_o_probs from every series by the multivariate factor
-            # and then sum the log-probs together. This is a strong independence assumption (see Langrock, 2021)
-            n_by_mvar = factor_levels[self.mvar_by]
-            s_log_o_probs = [s_prob.reshape(self.n_j,n_by_mvar,-1).sum(axis=1) for s_prob in s_log_o_probs]
+        s_log_o_probs,dur_log_probs = compute_log_probs(self.n_j,n_obs,has_scale_split,
+                                                            model_mat_full,self.__coef,
+                                                            self.__scale,self.pds,y_flat,
+                                                            NOT_NA_flat,self.formula.sid,
+                                                            self.family,factor_levels,
+                                                            self.mvar_by)
         
         # Now we can decode.
         with mp.Pool(processes=self.cpus) as pool:

@@ -152,6 +152,75 @@ def backward_eta(n_j,n_t,TR,log_dur_mat,etas,u):
 
 ##################################### sms GAMM SEM functions #####################################
 
+def compute_log_probs(n_j,n_obs,has_scale_split,
+                      model_mat,state_coef,
+                      state_scales,pds,y_flat,
+                      NOT_NA_flat,series_id,
+                      family,factor_levels,
+                      mvar_by):
+   # We need the probability of stage durations for every stage (i.e., under every sojourn dist.).
+   # Since we usually care only about a small number of states, we
+   # can neglect their impact on the forward and backward time complexity.
+   # However, even ignoring this both algorithms still take at least number_of_obs*
+   # maximum_duration steps (for n_j=1). Now in principle, a state could take as long as the
+   # series lasts. But that would lead to an n_t*n_t complexity, which is
+   # just not feasible. One way to constrain this is to just consider the
+   # most likely durations under the current parameter set. We use the quantile
+   # function to determine the highest 99% cut-off (only 1% of duration values are expected more
+   # extreme than this one), across states which we then set as the max_dur to be considered.
+   max_dur = int(max([round(pd.max_ppf(0.99)) for pd in pds]))
+   
+   c_durs = np.arange(1,max_dur)
+
+   # So we need to collect the log-probabilities of state j lasting for duration d according to
+   # state j's sojourn time distribution(s).
+   dur_log_probs = []
+
+   # For the forward and backward probabilities computed in the sem step
+   # we also need for every time point the probability of observing the
+   # series at that time-point according to the GAMM from EVERY state.
+   log_o_probs = np.zeros((n_j,n_obs))
+
+   for j in range(n_j):
+      # Handle duration probabilities
+      pd_j = pds[j]
+
+      if pd_j.split_by is not None:
+         for ci in range(pd_j.n_by):
+            dur_log_probs.append(pd_j.log_prob(c_durs,ci))
+      else:
+         dur_log_probs.append(pd_j.log_prob(c_durs))
+      
+      if has_scale_split:
+         # Handle observation probabilities
+         j_mu = (model_mat @ state_coef[j]).reshape(-1,1)
+
+         if not isinstance(family,Gaussian):
+            j_mu = family.link.fi(j_mu)
+
+         # Prediction for y series according to state specific GAMM
+         if not family.twopar:
+            log_o_probs[j,NOT_NA_flat] = np.ndarray.flatten(family.lp(y_flat[NOT_NA_flat],j_mu))
+         else:
+            log_o_probs[j,NOT_NA_flat] = np.ndarray.flatten(family.lp(y_flat[NOT_NA_flat],j_mu,state_scales[j]))
+         log_o_probs[j,NOT_NA_flat == False] = np.nan
+
+      else:
+            raise NotImplementedError("has_scale_split==False is not yet implemented.")
+      
+   dur_log_probs = np.array(dur_log_probs)
+   
+   # We need to split the observation probabilities by series
+   s_log_o_probs = np.split(log_o_probs,series_id[1:],axis=1)
+
+   if not mvar_by is None:
+      # We need to split the s_log_o_probs from every series by the multivariate factor
+      # and then sum the log-probs together. This is a strong independence assumption (see Langrock, 2021)
+      n_by_mvar = factor_levels[mvar_by]
+      s_log_o_probs = [s_prob.reshape(n_j,n_by_mvar,-1).sum(axis=1) for s_prob in s_log_o_probs]
+   
+   return s_log_o_probs,dur_log_probs
+
 def prop_smoothed(n_j,n_t,smoothed):
    # Simple proposal for sMs-GAMM with state re-entries, based on
    # the smoothed probabilities P(State_t == j|parameters).
