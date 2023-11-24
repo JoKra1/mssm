@@ -771,7 +771,8 @@ class Formula():
                raise KeyError(f"Smooth {sti} is not penalized and placed in the formula after penalized terms. Unpenalized terms should be moved to the beginning of the formula, ideally behind any linear terms.")
          
          else:
-            
+            S_j_TP_last = None
+            TP_last_n = 0
             for penid,pen in enumerate(sterm.penalty):
             
                # Smooth terms can have multiple penalties.
@@ -787,8 +788,6 @@ class Formula():
                                                               by_levels,n_coef,col_S)
 
                if sterm.has_null_penalty:
-                  # ToDo: Distinguish between smooths of multiple variables and
-                  # single variable smooths.
 
                   n_pen = len(penalties)
                   # Optionally include a Null-space penalty - an extra penalty on the
@@ -796,6 +795,31 @@ class Formula():
 
                   S_j_last = penalties[-1].S_J.toarray()
                   last_pen_rep = penalties[-1].rep_sj
+
+                  if len(vars) > 1:
+                     # Distinguish between TP smooths of multiple variables and
+                     # single variable smooths. For TP smooths Marra & Wood (2011) suggest to first
+                     # sum over the penalties for individual variables and then computing the null-space
+                     # for that summed penalty.
+
+                     # First sum over the first len(vars) penalties that were recently added. If there
+                     # are more then these are identical - just corresponding to different by levels.
+                     # Therefore, last_pen_rep also does not have to be updated.
+
+                     if penid == 0:
+                        S_j_TP_last =  S_j_last
+                     else:
+                        S_j_TP_last +=  S_j_last
+                     
+                     TP_last_n += (n_pen - prev_n_pen)
+
+                     if penid < (len(sterm.penalty) - 1):
+                        continue
+
+                     # In the end update the number of new penalties based on the number of variables
+                     # involed in the TP.
+                     S_j_last = S_j_TP_last
+                     n_pen = prev_n_pen + int(TP_last_n / len(vars))
                   
                   # Based on: Marra & Wood (2011) and: https://rdrr.io/cran/mgcv/man/gam.selection.html
                   # and: https://eric-pedersen.github.io/mgcv-esa-workshop/slides/03-model-selection.pdf

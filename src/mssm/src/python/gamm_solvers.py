@@ -191,9 +191,47 @@ def calculate_edf(InvCholXXS,penalties,colsX):
       pen_params = lTerm.lam * Bps
       total_edf -= pen_params
       Bs.append(Bps)
-      term_edfs.append(lTerm.S_J.shape[1] - pen_params)
+      term_edfs.append(pen_params) # Not actually edf yet - rather the amount of parameters penalized away by individual penalties.
    
    return total_edf,term_edfs,Bs
+
+def calculate_term_edf(penalties,param_penalized):
+   # We need to correclty subtract all parameters penalized by
+   # individual penalties from the number of coefficients of each term
+   # to get the term-wise edf.
+   term_pen_params = []
+   term_n_coef = []
+   term_idx = []
+   SJ_idx_max = 0
+   SJ_idx_len = 0
+
+   for lti,lTerm in enumerate(penalties):
+
+      # Collect the n_coef for this term, the n_pen_coef and the idx
+      if lti == 0 or lTerm.start_index > SJ_idx_max:
+         term_n_coef.append(lTerm.S_J.shape[1]*lTerm.rep_sj)
+         term_pen_params.append(param_penalized[lti])
+         term_idx.append(lTerm.start_index)
+         SJ_idx_max = lTerm.start_index
+         SJ_idx_len += 1
+
+      else: # A term with the same starting index exists already - so sum the pen_params
+         idx_match = [idx for idx in range(SJ_idx_len) if term_idx[idx] == lTerm.start_index]
+         #print(idx_match,lTerm.start_index)
+         if len(idx_match) > 1:
+            raise ValueError("Penalty index matches multiple previous locations.")
+         
+         if term_n_coef[idx_match[0]] != lTerm.S_J.shape[1]*lTerm.rep_sj:
+            raise ValueError("Penalty dimensions do not match!")
+         
+         term_pen_params[idx_match[0]] += param_penalized[lti]
+   
+   # Now we can compute the final term-wise edf.
+   term_edf = []
+   for lti in range(SJ_idx_len):
+      term_edf.append(term_n_coef[lti] - term_pen_params[lti])
+   
+   return term_edf
 
 def update_scale_edf(y,z,eta,Wr,rowsX,colsX,InvCholXXSP,Pr,family,penalties):
    # Updates the scale of the model. For this the edf
@@ -457,5 +495,9 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
       penalty = coef.T @ S_emb @ coef
    else:
       penalty = 0
+
+   # Final term edf
+   if not term_edfs is None:
+      term_edfs = calculate_term_edf(penalties,term_edfs)
 
    return coef,eta,wres,scale,InvCholXXS,total_edf,term_edfs,penalty
