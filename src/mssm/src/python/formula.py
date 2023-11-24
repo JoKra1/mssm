@@ -105,6 +105,9 @@ def get_coef_info_smooth(has_scale_split,n_j,sterm,factor_levels):
     var_label = vars[0]
     if len(vars) > 1:
         var_label = "_".join(vars)
+   
+    if sterm.binary is not None:
+        var_label += sterm.binary[0]
 
     if sterm.by is not None:
         by_levels = factor_levels[sterm.by]
@@ -424,34 +427,42 @@ class Formula():
                 
             # by-variables must be categorical
             if isinstance(term, f) or isinstance(term, irf) or isinstance(term, rs):
-                if not term.by is None:
-                    if not term.by in self.__data.columns:
-                        raise KeyError(f"By-variable '{term.by}' attributed to term {ti} does not exist in dataframe.")
+                if not term.by is None or not term.binary is None:
                     
-                    if data[term.by].dtype in ['float64','int64']:
-                        raise KeyError(f"Data-type of By-variable '{term.by}' attributed to term {ti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'.")
+                    t_by = term.by
+                    if t_by is None:
+                       t_by = term.binary[0]
+
+                    if not t_by in self.__data.columns:
+                        raise KeyError(f"By-variable '{t_by}' attributed to term {ti} does not exist in dataframe.")
+                    
+                    if data[t_by].dtype in ['float64','int64']:
+                        raise KeyError(f"Data-type of By-variable '{t_by}' attributed to term {ti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'.")
                     
                      # Store information for by variables as well.
-                    if not term.by in self.__var_to_cov:
-                        self.__var_to_cov[term.by] = cvi
+                    if not t_by in self.__var_to_cov:
+                        self.__var_to_cov[t_by] = cvi
 
                         # Assign vartype enum
-                        self.__var_types[term.by] = VarType.FACTOR
-                        self.__var_mins[term.by] = None
-                        self.__var_maxs[term.by] = None
+                        self.__var_types[t_by] = VarType.FACTOR
+                        self.__var_mins[t_by] = None
+                        self.__var_maxs[t_by] = None
 
                         # Code factor variables into integers for example for easy dummy coding
-                        levels = np.unique(self.__data[term.by])
+                        levels = np.unique(self.__data[t_by])
 
-                        self.__factor_codings[term.by] = {}
-                        self.__coding_factors[term.by] = {}
-                        self.__factor_levels[term.by] = levels
+                        self.__factor_codings[t_by] = {}
+                        self.__coding_factors[t_by] = {}
+                        self.__factor_levels[t_by] = levels
                            
                         for ci,c in enumerate(levels):
-                              self.__factor_codings[term.by][c] = ci
-                              self.__coding_factors[term.by][ci] = c
+                              self.__factor_codings[t_by][c] = ci
+                              self.__coding_factors[t_by][ci] = c
 
                         cvi += 1
+
+                    if not term.binary is None:
+                        term.binary_level = self.__factor_codings[t_by][term.binary[1]]
             
         if self.__n_irf > 0:
            self.__has_irf = True
@@ -1251,6 +1262,18 @@ def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,v
 
       term_ridx = new_term_ridx
    
+   # Handle optional binary keyword
+   if sterm.binary is not None:
+      new_term_ridx = []
+
+      by_cov = cov_flat[:,var_map[sterm.binary[0]]]
+      by_cidx = by_cov == sterm.binary_level
+
+      for m_coli in range(m_cols):
+         new_term_ridx.append(term_ridx[m_coli][by_cidx,])
+
+      term_ridx = new_term_ridx
+
    # Handle split by latent variable if a shared scale term across latent stages is assumed.
    if sterm.by_latent is not False and has_scale_split is False:
       new_term_ridx = []

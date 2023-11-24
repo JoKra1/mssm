@@ -34,6 +34,7 @@ class i(GammTerm):
 class f(GammTerm):
     def __init__(self,variables:list,
                 by:str=None,
+                binary:list[str,str] or None = None,
                 id:int=None,
                 nk:int or list[int] = 9,
                 identifiable:bool=True,
@@ -45,6 +46,15 @@ class f(GammTerm):
                 penalty:list[penalties.PenType] or None = None,
                 pen_kwargs:list[dict] or None = None) -> None:
         
+        if not binary is None and not by is None:
+           raise ValueError("Binary smooths cannot also have a by-keyword.")
+        
+        if not binary is None and identifiable:
+           # Remove identifiability constrain for
+           # binary difference smooths.
+           identifiable = False
+           nk = nk + 1
+
         # Default penalty setup
         if penalty is None:
            penalty = [penalties.PenType.DIFFERENCE]
@@ -70,6 +80,8 @@ class f(GammTerm):
         self.basis = basis
         self.basis_kwargs = basis_kwargs
         self.by = by
+        self.binary = binary
+        self.binary_level = None
         self.id = id
         self.has_null_penalty = penalize_null
 
