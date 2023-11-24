@@ -161,3 +161,8 @@ cython_debug/
 
 
 .DS_Store
+tests.*
+.vscode/*
+*.Rproj*
+.Rproj.user
+.Rhistory
