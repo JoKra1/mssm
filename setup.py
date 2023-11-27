@@ -11,7 +11,9 @@ if "CONDA_PREFIX" in os.environ:
         eigen_path = os.environ["CONDA_PREFIX"] + "/include/eigen3"
 
 if os.getenv('CI') is not None:
-
+    print("CI")
+    eigen_path = "usr/local/miniconda/include/eigen3/Eigen"
+    
 if eigen_path is None:
     eigen_path = "usr/local/" + "/include/eigen3"
 
