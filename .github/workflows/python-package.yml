@@ -32,7 +32,7 @@ jobs:
         
     - name: set CONDA_PREFIX
       run: |
-       echo $CONDA >> $CONDA_PREFIX
+       echo "{CONDA_PREFIX}={$CONDA}" >> "$GITHUB_ENV"
 
     - name: verify conda_prefix
       run: |
