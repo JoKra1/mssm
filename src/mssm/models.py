@@ -1,9 +1,7 @@
 import numpy as np
 import scipy as scp
-import warnings
 import multiprocessing as mp
 from itertools import repeat
-from matplotlib import pyplot as plt
 import copy
 from collections.abc import Callable
 from .src.python.formula import Formula,PFormula,PTerm,build_sparse_matrix_from_formula,VarType,lhs
@@ -1086,7 +1084,5 @@ class sMsIRGAMM(sMsGAMM):
             last_llk = LO_llk
             llk_hist.append(LO_llk)
 
-        plt.plot(llk_hist)
-        plt.show()
         return LO_llk
 
