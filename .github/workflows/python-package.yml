@@ -6,11 +6,7 @@
 
 name: Python package
 
-on:
-  push:
-    branches: [ "stable" ]
-  pull_request:
-    branches: [ "stable" ]
+on: workflow_dispatch
 
 jobs:
   build:
