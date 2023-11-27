@@ -70,7 +70,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           gh release create
-          '${{ github.ref_name }}_${{ GITHUB_SHA }}'
+          '${{ github.ref_name }}_${{ github.sha }}'
           --repo '${{ github.repository }}'
           --notes ""
           
@@ -79,5 +79,5 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           gh release upload
-          '${{ github.ref_name }}_${{ GITHUB_SHA }}' ./wheelhouse/*.whl
+          '${{ github.ref_name }}_${{ github.sha }}' ./wheelhouse/*.whl
           --repo '${{ github.repository }}'
