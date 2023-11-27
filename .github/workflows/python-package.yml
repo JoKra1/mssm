@@ -25,13 +25,8 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
 
-    - name: Clone eigen
-      run: |
-         git clone https://gitlab.com/libeigen/eigen.git --branch 3.4.0
-    
     - name: Install build
       run: |
-        python -m pip install "pybind11[global]"
         python -m pip install --upgrade build
 
     - name: Build wheels
