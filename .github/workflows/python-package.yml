@@ -17,6 +17,9 @@ jobs:
       matrix:
         python-version: ["3.10", "3.11"]
         os: [macos-latest,ubuntu-latest,windows-latest]
+
+    permissions:
+      contents: write  # Necessary for creating releases apparently.
         
     steps:
     - uses: actions/checkout@v4
