@@ -15,7 +15,7 @@ if os.getenv('CI') is not None:
     print("CI")
     c_path = os.getcwd()
     if "eigen" not in os.listdir(c_path):
-        print("Cloning into Eigen.)
+        print("Cloning into Eigen.")
         git.Repo.clone_from("https://gitlab.com/libeigen/eigen.git",c_path+"/eigen",branch="3.4.0")
     print(os.listdir(c_path))
     eigen_path = c_path + "/eigen/Eigen"
