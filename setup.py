@@ -26,18 +26,20 @@ class get_eigen_include(object):
         if target_dir.exists():
             return target_dir.name
 
-        download_target_dir = SETUP_DIRECTORY / "eigen3.zip"
-        import zipfile
+        #download_target_dir = SETUP_DIRECTORY / "eigen3.zip"
+        #import zipfile
 
-        import requests
+        #import requests
 
-        response = requests.get(self.EIGEN3_URL, stream=True)
-        with download_target_dir.open("wb") as ofs:
-            for chunk in response.iter_content(chunk_size=1024):
-                ofs.write(chunk)
+        #response = requests.get(self.EIGEN3_URL, stream=True)
+        #with download_target_dir.open("wb") as ofs:
+        #    for chunk in response.iter_content(chunk_size=1024):
+        #        ofs.write(chunk)
 
-        with zipfile.ZipFile(download_target_dir) as ifs:
-            ifs.extractall()
+        #with zipfile.ZipFile(download_target_dir) as ifs:
+        #    ifs.extractall()
+
+        git.Repo.clone_from("https://gitlab.com/libeigen/eigen.git",target_dir,branch="3.4.0")
 
         return target_dir.name
 
