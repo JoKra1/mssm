@@ -13,6 +13,7 @@ if "CONDA_PREFIX" in os.environ:
 
 if os.getenv('CI') is not None:
     print("CI")
+    print(os.listdir(pathlib.Path(__file__).resolve().parent.name))
     eigen_path = pathlib.Path(__file__).resolve().parent.name + "/eigen/Eigen"
     eigen_path = eigen_path
     print(eigen_path)
@@ -23,9 +24,7 @@ if eigen_path is None:
 # Create Pybind setuptools extension
 ext = Pybind11Extension(name='cpp_solvers',
                         sources=['src/mssm/src/cpp/cpp_solvers.cpp'],
+                        include_dirs=[eigen_path],
                         cxx_std=14)
-
-# Add path to Eigen for compiler
-ext.include_dirs.append(eigen_path)
 
 setup(ext_modules=[ext])
