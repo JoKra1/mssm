@@ -25,10 +25,14 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
 
+    - name: Add conda to system path
+      run: |
+         # $CONDA is an environment variable pointing to the root of the miniconda directory
+         echo $CONDA/bin >> $GITHUB_PATH
+             
     - name: Install eigen
       run: |
-        sudo apt-get update
-        sudo apt-get install libeigen3-dev
+        conda update -n base -c conda-forge eigen
     
     - name: Install build
       run: python -m pip install --upgrade build
