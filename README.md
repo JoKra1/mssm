@@ -1,7 +1,7 @@
 # mssm: Markov-switching Spline Models
 
 ## Description
-``mssm`` is a toolbox to estimate Generalized Additive Mixed Models (GAMMs) semi Markov-switching GAMMs (sMs-GAMMs) and sMs Impulse respopnse GAMMs (sMs-IR-GAMMs).
+``mssm`` is a toolbox to estimate Generalized Additive Mixed Models (GAMMs) semi Markov-switching GAMMs (sMs-GAMMs) and sMs Impulse Response GAMMs (sMs-IR-GAMMs).
 The ``main`` branch is updated frequently to reflect new developments. The ``stable`` branch should reflect the latest releases. if you don't need the latest functionality, you
 should install from the ``stable`` branch.
 
