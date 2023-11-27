@@ -25,14 +25,9 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
 
-    - name: Add conda to system path
+    - name: Clone eigen
       run: |
-         # $CONDA is an environment variable pointing to the root of the miniconda directory
-         echo $CONDA/bin >> $GITHUB_PATH
-             
-    - name: Install eigen
-      run: |
-        conda install -n base -c conda-forge eigen
+         git clone https://gitlab.com/libeigen/eigen.git --branch 3.4.0
     
     - name: Install build
       run: python -m pip install --upgrade build
