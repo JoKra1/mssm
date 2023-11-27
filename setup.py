@@ -14,10 +14,6 @@ class get_eigen_include(object):
     # I made some changes to stream-line the cloning into Eigen a bit.
 
     def __str__(self) -> str:
-        eigen_include_dir = os.environ.get("EIGEN3_INCLUDE_DIR", None)
-
-        if eigen_include_dir is not None:
-            return eigen_include_dir
 
         # Local build based on conda
         if "CONDA_PREFIX" in os.environ:
@@ -32,6 +28,7 @@ class get_eigen_include(object):
         if target_dir.exists():
             return target_dir.name
 
+        # If we cannot find an eigen installation in the current step we have to download it first.
         # See: https://gist.github.com/plembo/a786ce2851cec61ac3a051fcaf3ccdab
         git.Repo.clone_from("https://gitlab.com/libeigen/eigen.git",target_dir,branch="3.4.0")
 
