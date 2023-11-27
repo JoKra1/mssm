@@ -7,6 +7,7 @@ import os
 # Eigen can either be provided by conda or needs to be in "usr/include/eigen3"
 # ToDo: The latter might break under windows.
 
+SETUP_DIRECTORY = Path(__file__).resolve().parent
 
 class get_eigen_include(object):
     # Copied from: https://github.com/MatPiq/RlassoModels/blob/master/setup.py
