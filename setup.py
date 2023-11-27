@@ -10,6 +10,8 @@ if "CONDA_PREFIX" in os.environ:
     if os.path.isdir(os.environ["CONDA_PREFIX"] + "/include/eigen3"):
         eigen_path = os.environ["CONDA_PREFIX"] + "/include/eigen3"
 
+if os.getenv('CI') is not None:
+
 if eigen_path is None:
     eigen_path = "usr/local/" + "/include/eigen3"
 
