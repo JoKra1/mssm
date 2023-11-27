@@ -14,6 +14,8 @@ if "CONDA_PREFIX" in os.environ:
 if os.getenv('CI') is not None:
     print("CI")
     eigen_path = pathlib.Path(__file__).resolve().parent / "eigen/Eigen"
+    eigen_path = eigen_path.name
+    print(eigen_path)
     
 if eigen_path is None:
     eigen_path = "usr/local/" + "/include/eigen3"
