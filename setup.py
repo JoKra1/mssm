@@ -1,5 +1,5 @@
 from setuptools import setup
-import pathlib
+import git
 from pybind11.setup_helpers import Pybind11Extension
 import os
 
@@ -14,9 +14,9 @@ if "CONDA_PREFIX" in os.environ:
 if os.getenv('CI') is not None:
     print("CI")
     c_path = os.getcwd()
+    git.Repo.clone_from("https://gitlab.com/libeigen/eigen.git",c_path+"/eigen",branch="3.4.0")
     print(os.listdir(c_path))
     eigen_path = c_path + "/eigen/Eigen"
-    eigen_path = eigen_path
     print(eigen_path)
     
 if eigen_path is None:
