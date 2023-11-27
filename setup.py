@@ -11,10 +11,8 @@ if "CONDA_PREFIX" in os.environ:
         eigen_path = os.environ["CONDA_PREFIX"] + "/include/eigen3"
 
 # Get github env
-ev = os.getenv('GITHUB_ENV')
-print(ev)
-if not ev is None:
-    eigen_path = ev.CONDA_PREFIX + "/include/eigen3"
+if os.path.isdir("usr/local/miniconda/include/eigen3"):
+    eigen_path = "usr/local/miniconda/include/eigen3"
 
 if eigen_path is None:
     eigen_path = "usr" + "/include/eigen3"
