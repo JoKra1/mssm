@@ -32,7 +32,7 @@ jobs:
              
     - name: Install eigen
       run: |
-        conda update -n base -c conda-forge eigen
+        conda install -n base -c conda-forge eigen
     
     - name: Install build
       run: python -m pip install --upgrade build
