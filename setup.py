@@ -13,7 +13,7 @@ if "CONDA_PREFIX" in os.environ:
 
 if os.getenv('CI') is not None:
     print("CI")
-    eigen_path = pathlib.Path(__file__).resolve().parent + "eigen/Eigen"
+    eigen_path = pathlib.Path(__file__).resolve().parent.name + "eigen/Eigen"
     eigen_path = eigen_path
     print(eigen_path)
     
