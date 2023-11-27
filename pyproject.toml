@@ -1,0 +1,23 @@
+[build-system]
+requires = [
+    "setuptools>=60",
+    "pybind11>=2.10.0",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+dependencies=["numpy >= 1.24.1",
+              "pandas >= 1.5.3",
+              "scipy >= 1.10.0"]
+name = "mssm"
+version = "0.1.0"
+authors = [
+  { name="Joshua Krause", email="jokra001@proton.me" }
+]
+description = "Toolbox for estimating Generalized additive mixed models (GAMMs), semi-Markov-switching (sms) GAMMs, and Impulse response sms GAMMs."
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]

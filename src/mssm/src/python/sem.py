@@ -8,6 +8,7 @@ from .exp_fam import Gaussian
 
 def anneal_temps_zero(iter,t0=0.25,ratio=0.925):
    # Annealing schedule as proposed by Kirkpatrick, Gelatt and Vecchi (1983).
+   # see Kirkpatrick, S., Gelatt, C. D., & Vecchi, M. P. (1983). Optimization by Simulated Annealing. https://doi.org/10.1126/science.220.4598.671
    ts = np.array(list(range(iter)))
 
    temp = np.array([t0*ratio**t for t in ts])
@@ -24,6 +25,7 @@ def const_temps(iter):
 def forward_eta(n_j,n_t,pi,TR,log_dur_mat,log_obs_mat):
    # Forward pass for HsMM based on math in Yu (2011) and inspired by
    # implementation in edhsmm (https://github.com/poypoyan/edhsmm).
+   # see: Yu, S.-Z. (2010). Hidden semi-Markov models. https://doi.org/10.1016/j.artint.2009.11.011
 
    # Our sampler requires the probabilities P(S_t = j| obs, pars).
    # So we need only compute eta(t,j,d) to ultimately compute gamma(t,j).
@@ -228,7 +230,12 @@ def prop_smoothed(n_j,n_t,smoothed):
    # probabilities.
    # This is different from previous MCMC sampling approaches in the HsMM
    # literature (see Guedon, 2003; Guedon, 2005; Guedon, 2007 for alternative approaches)
-   # but seems to work quite well. 
+   # but seems to work quite well.
+   # Ref:
+   # Guédon, Y. (2003). Estimating Hidden Semi-Markov Chains From Discrete Sequences https://doi.org/10.1198/1061860032030
+   # Guédon, Y. (2005). Hidden hybrid Markov/semi-Markov chains. https://doi.org/10.1016/j.csda.2004.05.033
+   # Guédon, Y. (2007). Exploring the state sequence space for hidden Markov and semi-Markov chains. https://doi.org/10.1016/j.csda.2006.03.015
+
    js = np.arange(n_j)
 
    n_state_est = np.zeros(n_t)
@@ -263,7 +270,7 @@ def pre_ll_sms_gamm(n_j, end_point, state_dur_est, state_est):
 def se_step_sms_gamm(n_j,temp,cov,end_point,pi,TR,
                      log_o_probs,log_dur_probs,pds,
                      pre_lln_fn,var_map):
-    # Proposes next set of latent states - see Nielsen (2002).
+    # Proposes next set of latent states - see Nielsen, S. F. (2000). The stochastic EM algorithm: Estimation and asymptotic results. Bernoulli, 6(3), 457–489.
     
     # We need to pick the correct state duration distributions
     # for this particular trial - i.e., in case of a by_split we need

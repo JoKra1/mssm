@@ -1,24 +1,23 @@
 import numpy as np
 import scipy as scp
-from tqdm import tqdm
-import warnings
-import warnings
 import multiprocessing as mp
 from itertools import repeat
-from matplotlib import pyplot as plt
-import re
-from copy import deepcopy
+import copy
 from collections.abc import Callable
-from .src.python.formula import *
-from .src.python.terms import *
-from .src.python.penalties import *
-from .src.python.exp_fam import *
-from .src.python.sem import *
+from .src.python.formula import Formula,PFormula,PTerm,build_sparse_matrix_from_formula,VarType,lhs
+from .src.python.exp_fam import Link,Logit,Family,Binomial,Gaussian
+from .src.python.sem import anneal_temps_zero,const_temps,compute_log_probs,pre_ll_sms_gamm,se_step_sms_gamm,decode_local,se_step_sms_dc_gamm,pre_ll_sms_IR_gamm,init_states_IR
 from .src.python.gamm_solvers import solve_gamm_sparse
+from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,ri,rs
 
 ##################################### Base Class #####################################
 
 class MSSM:
+    # Class to fit Generalized Additive Mixed Models.
+    # See:
+    # Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
+    # Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models. https://doi.org/10.1111/j.1467-9868.2010.00749.x
+    # Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
     def __init__(self,
                  formula:Formula,
@@ -267,6 +266,10 @@ class GAMM(MSSM):
         return diff,b
 
 class sMsGAMM(MSSM):
+    # Class to fit semi-Markov-switching Generalized Additive Mixed Models.
+    # see: Langrock, R., Kneib, T., Glennie, R., & Michelot, T. (2017). Markov-switching generalized additive models. https://doi.org/10.1007/s11222-015-9620-3
+    # and: Haji-Maghsoudi, S., Bulla, J., Sadeghifar, M., Roshanaei, G., & Mahjub, H. (2021). Generalized linear mixed hidden semi-Markov models in longitudinal settings: A Bayesian approach. https://doi.org/10.1002/sim.8908
+    # for an introduction to similar models.
 
     def __init__(self,
                  formula: Formula,
@@ -380,7 +383,11 @@ class sMsGAMM(MSSM):
     
     def fit(self,burn_in=100,maxiter_inner=30,m_avg=15,conv_tol=1e-7,extend_lambda=True,control_lambda=True,init_scale=100,t0=0.25,r=0.925):
         # Performs Stochastic Expectation maiximization based on Nielsen (2002) see also the sem.py file for
-        # more details.
+        # more details as well as:
+        # Ref:
+        # 1. Allassonnière, S., & Chevallier, J. (2021). A new class of stochastic EM algorithms. Escaping local maxima and handling intractable sampling. https://doi.org/10.1016/j.csda.2020.107159
+        # 2. Celeux, G., Chauveau, D., & Diebolt, J. (1992). On Stochastic Versions of the EM Algorithm. https://doi.org/10.1177/075910639203700105
+        # 3. Delyon, B., Lavielle, M., & Moulines, E. (1999). Convergence of a stochastic approximation version of the EM algorithm. https://doi.org/10.1214/aos/1018031103
         
         has_scale_split = self.formula.has_scale_split()
         
@@ -442,6 +449,7 @@ class sMsGAMM(MSSM):
         # further reduce the chance of ending up with a local maximum. Of course, if we set sd=temp_schedule[iter]
         # too extreme, we will not get anywhere since the noise dominates the smoothed probabilities. So this
         # likely requires some tuning.
+        # see: Marinari, E., & Parisi, G. (1992). Simulated Tempering: A New Monte Carlo Scheme. https://doi.org/10.1209/0295-5075/19/6/002
         temp_schedule = anneal_temps_zero(burn_in,t0,r)
         
         for iter in range(burn_in + m_avg):
@@ -1090,7 +1098,5 @@ class sMsIRGAMM(sMsGAMM):
             last_llk = LO_llk
             llk_hist.append(LO_llk)
 
-        plt.plot(llk_hist)
-        plt.show()
         return LO_llk
 

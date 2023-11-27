@@ -104,7 +104,7 @@ class fs(f): # Approximates bs='fs' in mgcv
 
       penalty = [penalties.PenType.DIFFERENCE]
       pen_kwargs = [{"m":1}]
-      super().__init__(variables, rf, 99, nk+1, False,
+      super().__init__(variables, rf, None, 99, nk+1, False,
                        basis, basis_kwargs, by_latent,
                        True, True, penalty, pen_kwargs)
         

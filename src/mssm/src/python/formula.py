@@ -427,7 +427,7 @@ class Formula():
                 
             # by-variables must be categorical
             if isinstance(term, f) or isinstance(term, irf) or isinstance(term, rs):
-                if not term.by is None or not term.binary is None:
+                if not term.by is None or (isinstance(term, f) and not term.binary is None):
                     
                     t_by = term.by
                     if t_by is None:
@@ -461,7 +461,7 @@ class Formula():
 
                         cvi += 1
 
-                    if not term.binary is None:
+                    if isinstance(term, f) and not term.binary is None:
                         term.binary_level = self.__factor_codings[t_by][term.binary[1]]
             
         if self.__n_irf > 0:
