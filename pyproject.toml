@@ -1,6 +1,7 @@
 [build-system]
 requires = [
     "setuptools>=60",
+    "setuptools-scm>=8.0",
     "GitPython>=3.1.4",
     "pybind11>=2.10.0",
 ]
@@ -11,7 +12,6 @@ dependencies=["numpy >= 1.24.1",
               "pandas >= 1.5.3",
               "scipy >= 1.10.0"]
 name = "mssm"
-version = "0.1.1"
 authors = [
   { name="Joshua Krause", email="jokra001@proton.me" }
 ]
@@ -22,3 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
+# https://pypi.org/project/setuptools-scm/ - automatic version number based on tag
+dynamic = ["version"]
+
+[tool.setuptools_scm]
