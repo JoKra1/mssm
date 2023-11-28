@@ -3,15 +3,26 @@
 ## Description
 ``mssm`` is a toolbox to estimate Generalized Additive Mixed Models (GAMMs) semi Markov-switching GAMMs (sMs-GAMMs) and sMs Impulse Response GAMMs (sMs-IR-GAMMs).
 The ``main`` branch is updated frequently to reflect new developments. The ``stable`` branch should reflect the latest releases. if you don't need the latest functionality, you
-should install from the ``stable`` branch.
+should install from the ``stable`` branch (see below for instructions).
 
 ## Installation
-There are two options!
 
-Option 1 is to build directly from source. This requires ``conda`` or an installation of [eigen](https://eigen.tuxfamily.org/index.php?title=Main_Page)(``setup.py`` then expects ``eigen`` in "usr/include/eigen3"). If you have ``conda`` installed
+The easiest option is to install from pypi via ``pip``.
+
+1) Setup a conda environment with python > 3.10
+2) Install mssm via ``pip``
+
+Currently, mssm can only be installed from [test.pypi](https://test.pypi.org/project/mssm/#description) because sign-ups are disabled for pypi. So to install ``mssm`` run:
+
+```
+conda create -n mssm_env python=3.10
+pip install -i https://test.pypi.org/simple/ mssm
+```
+
+Once ``mssm`` can be published to pypi, you can replace the second line with ``pip install mssm``. Note: pypi will only reflect releases on the ``stable`` branch. Pushes to main will however continue to be distributed to test.pypi, so if you need the latest changes you can get them from there.
+
+You can also build directly from source. This requires ``conda`` or an installation of [eigen](https://eigen.tuxfamily.org/index.php?title=Main_Page)(``setup.py`` then expects ``eigen`` in "usr/local/include/eigen3". This will probably not work on windows.). Once you have ``conda`` installed,
 [install eigen from conda-forge](https://anaconda.org/conda-forge/eigen). After cloning and navigating into the downloaded repository you can then install via ``pip install . ``.
-
-Option 2 (currently being worked on) is to install one of the releases from the ``stable`` branch.
 
 ## To get started
 

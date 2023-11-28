@@ -3,7 +3,7 @@ import scipy as scp
 import warnings
 from .exp_fam import Family,Gaussian
 from .penalties import PenType,id_dist_pen,translate_sparse
-from ..cpp import cpp_solvers
+import cpp_solvers
 
 def cpp_chol(A):
    return cpp_solvers.chol(A)
@@ -23,6 +23,12 @@ def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,scale,verbose=False):
   
   num = max(0,(gInv @ emb_SJ).trace() - Bps)
   denom = max(0,cCoef.T @ emb_SJ @ cCoef)
+
+  # Especially when using Null-penalties denom can realisitically become
+  # equal to zero: every coefficient of a term is penalized away. In that
+  # case num /denom is not defined so we return directly.
+  if denom <= 0: # Prevent overflow
+     return 1e+7
   nLam = scale * (num / denom) * cLam
   nLam = max(nLam,1e-7) # Prevent Lambda going to zero
   nLam = min(nLam,1e+7) # Prevent overflow
