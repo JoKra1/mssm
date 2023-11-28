@@ -93,7 +93,7 @@ jobs:
   publish-test:
     # https://packaging.python.org/en/latest/guides/publishing-package-distribution-releases-using-github-actions-ci-cd-workflows/
     needs:
-      - release
+      - build
     runs-on: ubuntu-latest
 
     environment:
