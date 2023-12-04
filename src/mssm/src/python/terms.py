@@ -189,9 +189,9 @@ class f(GammTerm):
         # Term name
         self.name = f"f({variables}"
         if by is not None:
-           self.name += ",by={by})"
+           self.name += f",by={by})"
         elif binary is not None:
-           self.name += ",by={binary[1]})"
+           self.name += f",by={binary[1]})"
 
 class fs(f):
    """
@@ -279,7 +279,7 @@ class irf(GammTerm):
         # Term name
         self.name = f"f({variables}"
         if by is not None:
-           self.name += ",by={by})"
+           self.name += f",by={by})"
 
 class l(GammTerm):
     """

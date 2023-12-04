@@ -13,11 +13,6 @@ from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 ##################################### Base Class #####################################
 
 class MSSM:
-    # Class to fit Generalized Additive Mixed Models.
-    # See:
-    # Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
-    # Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models. https://doi.org/10.1111/j.1467-9868.2010.00749.x
-    # Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
     def __init__(self,
                  formula:Formula,
@@ -71,6 +66,32 @@ class MSSM:
 ##################################### GAMM class #####################################
 
 class GAMM(MSSM):
+    """
+    Class to fit Generalized Additive Mixed Models.
+
+    References:
+    - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
+    - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models. https://doi.org/10.1111/j.1467-9868.2010.00749.x
+    - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+    Parameters:
+    :param formula: A formula for the GAMM model
+    :type variables: Formula
+    :param family: An exponential family. Currently only ``Gaussian`` or ``Binomial`` are implemented.
+    :type Family
+    :param pred: A np.array holding the model prediction for the training data. Of the same dimension as ``self.formula.__lhs``.
+    :type pred: np.array,optional
+    :param res: A np.array holding the working residuals for the training data. Of the same dimension as ``self.formula.__lhs``.
+    :type res: np.array,optional
+    :param edf: The model estimated degrees of freedom.
+    :type edf: float,optional
+    :param term_edf: The estimated degrees of freedom per smooth term.
+    :type term_edf: list[float],optional
+    :param lvi: The inverse of the Cholesky factor of the model coefficient covariance matrix. 
+    :type lvi: scipy.sparse.csc_array,optional
+    :param penalty: The total penalty applied to the model deviance after fitting.
+    :type penalty: float,optional
+    """
 
     def __init__(self,
                  formula: Formula,
@@ -88,10 +109,12 @@ class GAMM(MSSM):
     ##################################### Getters #####################################
 
     def get_pars(self):
+        """ Returns a tuple. The first entry is a np.array with all estimated coefficients. The second entry is the estimated scale parameter. Will contain Nones before fitting."""
         return self.__coef,self.__scale
     
-    def get_llk(self,penalized=True):
-        # Get (Penalized) log-likelihood of estimated model.
+    def get_llk(self,penalized:bool=True):
+        """Get the (penalized) log-likelihood of the estimated model given the trainings data."""
+
         pen = 0
         if penalized:
             pen = self.penalty
@@ -105,8 +128,10 @@ class GAMM(MSSM):
                 return self.family.llk(self.formula.y_flat,mu) - pen
         return None
 
-    def get_mmat(self,):
-        # Returns the model-matrix used for fitting.
+    def get_mmat(self):
+        """
+        Returns exaclty the model matrix used for fitting as a scipy.sparse.csc_array.
+        """
         if self.formula.penalties is None:
             raise ValueError("Model matrix cannot be returned if penalties have not been initialized. Call model.fit() first.")
         else:
@@ -136,11 +161,59 @@ class GAMM(MSSM):
                                                         cov_flat,cov,n_j,state_est_flat,state_est)
             
             return model_mat
+    
+    def print_smooth_terms(self):
+        """Prints the name of the smooth terms included in the model. After fitting, the estimated degrees of freedom per term are printed as well."""
+        term_names = np.array(self.formula.get_term_names())
+        smooth_names = [*term_names[self.formula.get_smooth_term_idx()],
+                        *term_names[self.formula.get_random_term_idx()]]
+        
+        if self.term_edf is None:
+            for term in smooth_names:
+                print(term)
+        else:
+            terms = self.formula.get_terms()
+            coding_factors = self.formula.get_coding_factors()
+            name_idx = 0
+            edf_idx = 0
+            for sti in self.formula.get_smooth_term_idx():
+                sterm = terms[sti]
+                if not sterm.by is None and sterm.id is None:
+                    for li in range(len(self.formula.get_factor_levels()[sterm.by])):
+                        print(smooth_names[name_idx] + f": {coding_factors[sterm.by][li]}; edf: {self.term_edf[edf_idx]}")
+                        edf_idx += 1
+                else:
+                    print(smooth_names[name_idx] + f"; edf: {self.term_edf[edf_idx]}")
+                    edf_idx += 1
+                
+                name_idx += 1
+            
+            for _ in self.formula.get_random_term_idx():
+                print(smooth_names[name_idx] + f"; edf: {self.term_edf[edf_idx]}")
+                edf_idx += 1
+                name_idx += 1
+                        
 
+                
     ##################################### Fitting #####################################
     
     def fit(self,maxiter=30,conv_tol=1e-7,extend_lambda=True,control_lambda=True,restart=False):
+        """
+        Fit the specified model.
 
+        Parameters:
+
+        :param maxiter: The maximum number of fitting iterations.
+        :type maxiter: int,optional
+        :param conv_tol: The relative (change in penalized deviance is compared against ``conv_tol`` * previous penalized deviance) criterion used to determine convergence.
+        :type conv_tol: float,optional
+        :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the number of new smoothing penalty proposals necessary. Enabled by default.
+        :type extend_lambda: bool,optional
+        :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for actually improving the Restricted maximum likelihood of the model. Can lower the number of new smoothing penalty proposals necessary. Enabled by default.
+        :type extend_lambda: bool,optional
+        :param restart: Whether fitting should be resumed. Only possible if the same model has previously completed at least one fitting iteration.
+        :type restart: bool,optional
+        """
         # We need to initialize penalties
         if not restart:
             self.formula.build_penalties()
@@ -201,6 +274,34 @@ class GAMM(MSSM):
     ##################################### Prediction #####################################
 
     def predict(self, use_terms, n_dat,alpha=0.05,ci=False):
+        """
+        Make a prediction using the fitted model for new data ``n_dat`` using only the terms indexed by ``use_terms``.
+
+        References:
+        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+        Parameters:
+
+        :param use_terms: The indices corresponding to the terms that should be used to obtain the prediction or ``None``
+        in which case all terms will be used.
+        :type use_terms: list[int] or None
+        :param n_dat: A pandas DataFrame containing new data for which to make the prediction. Importantly, all variables present in
+        the data used to fit the model also need to be present in this DataFrame. Additionally, factor variables must only include levels
+        also present in the data used to fit the model. If you want to exclude a specific factor from the prediction (for example the factor
+        subject) don't include the terms that involve it in the ``use_terms`` argument.
+        :type n_dat: pd.DataFrame
+        :param alpha: The alpha level to use for the standard error calculation. Specifically, 1 - (``alpha``/2) will be used to determine the critical cut-off value according to a N(0,1).
+        :type alpha: float, optional
+        :param ci: Whether the standard error ``se`` for credible interval (CI; see  Wood, 2017) calculation should be returned. The CI is then [``pred`` - ``se``, ``pred`` + ``se``]
+        :type alpha: bool, optional
+
+        Returns:
+        :return: A tuple with 3 entries. The first entry is the prediction ``pred`` based on the new data ``n_dat``. The second entry is the model
+        matrix built for ``n_dat`` that was post-multiplied with the model coefficients to obtain ``pred``. The third entry is ``None`` if ``ci``==``False`` else
+        the standard error ``se`` in the prediction.
+        :rtype: tuple
+        
+        """
         var_map = self.formula.get_var_map()
         var_keys = var_map.keys()
 
@@ -249,7 +350,34 @@ class GAMM(MSSM):
         return pred,predi_mat,None
     
     def predict_diff(self,dat1,dat2,use_terms,alpha=0.05):
-        # Based on itsadug get_difference function
+        """
+        Get the difference in the predictions for two datasets. Useful to compare a smooth estimated for
+        one level of a factor to the smooth estimated for another level of a factor. In that case, ``dat1`` and
+        ``dat2`` should only differ in the level of said factor.
+
+        References:
+        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+        - ``get_difference`` function from ``itsadug`` R-package: https://rdrr.io/cran/itsadug/man/get_difference.html
+
+        Parameters:
+
+        :param dat1: A pandas DataFrame containing new data for which to make the prediction. Importantly, all variables present in
+        the data used to fit the model also need to be present in this DataFrame. Additionally, factor variables must only include levels
+        also present in the data used to fit the model. If you want to exclude a specific factor from the prediction (for example the factor
+        subject) don't include the terms that involve it in the ``use_terms`` argument.
+        :type n_dat: pd.DataFrame
+        :param dat2: A second pandas DataFrame for which to also make a prediction. The difference in the prediction between this ``dat1`` will be returned.
+        :type dat2: pd.DataFrame
+        :param use_terms: The indices corresponding to the terms that should be used to obtain the prediction or ``None``
+        in which case all terms will be used.
+        :type use_terms: list[int] or None
+        :param alpha: The alpha level to use for the standard error calculation. Specifically, 1 - (``alpha``/2) will be used to determine the critical cut-off value according to a N(0,1).
+        :type alpha: float, optional
+
+        Returns:
+        :return: A tuple with 2 entries. The first entry is the predicted difference (between the two data sets ``dat1`` & ``dat2``) ``pred``. The second entry is the standard error ``se`` of the predicted difference..
+        :rtype: tuple
+        """
         _,pmat1,_ = self.predict(use_terms,dat1)
         _,pmat2,_ = self.predict(use_terms,dat2)
 
