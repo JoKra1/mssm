@@ -11,16 +11,20 @@ The easiest option is to install from pypi via ``pip``.
 1) Setup a conda environment with python > 3.10
 2) Install mssm via ``pip``
 
-Currently, mssm can only be installed from [test.pypi](https://test.pypi.org/project/mssm/#description) because sign-ups are disabled for pypi. So to install ``mssm`` run:
+The latest release of mssm can be installed from [pypi](https://pypi.org/project/mssm/#description). So to install ``mssm`` simply run:
 
 ```
 conda create -n mssm_env python=3.10
 conda activate mssm_env
-pip install -i https://test.pypi.org/simple/ mssm
+pip install mssm
 pip install matplotlib # Only needed for tutorials
 ```
 
-Once ``mssm`` can be published to pypi, you can replace the third line with ``pip install mssm``. The fourth line, installing ``matplotlib`` is only necessary if you want to run the tutorials. Note: pypi will only reflect releases on the ``stable`` branch. Tagged pushes to main will however continue to be distributed to test.pypi, so if you need the latest changes you can get them from there.
+The fourth line, installing ``matplotlib`` is only necessary if you want to run the tutorials. Note: pypi will only reflect releases on the ``stable`` branch. Tagged pushes to main continue to be distributed to test.pypi, so if you need the latest changes you can get them from [test.pypi](https://test.pypi.org/project/mssm/#description). In that case, you need to replace the third line in the code above with:
+
+```
+pip install -i https://test.pypi.org/simple/ mssm
+```
 
 ### Building from source
 
