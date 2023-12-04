@@ -52,7 +52,9 @@ jobs:
 
     # https://docs.github.com/en/actions/learn-github-actions/variables#default-environment-variables
     # Only create release if pull-target was 'stable' or work-flow was triggered on 'stable'
-    if: github.ref_name == 'stable' || github.base_ref == 'stable'
+    # if: github.ref_name == 'stable' || github.base_ref == 'stable'
+    # Changed this, because the above did not work - instead simply release on new tags.
+    if: startsWith(github.ref, 'refs/tags/')
     needs:
       - build
     runs-on: ubuntu-latest
@@ -89,7 +91,8 @@ jobs:
 
   publish-test:
     # https://packaging.python.org/en/latest/guides/publishing-package-distribution-releases-using-github-actions-ci-cd-workflows/
-    if: startsWith(github.ref, 'refs/tags/')
+    # test pypi now gets all un-tagged pushes
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     needs:
       - build
     runs-on: ubuntu-latest
