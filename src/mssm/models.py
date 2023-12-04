@@ -8,7 +8,7 @@ from .src.python.formula import Formula,PFormula,PTerm,build_sparse_matrix_from_
 from .src.python.exp_fam import Link,Logit,Family,Binomial,Gaussian
 from .src.python.sem import anneal_temps_zero,const_temps,compute_log_probs,pre_ll_sms_gamm,se_step_sms_gamm,decode_local,se_step_sms_dc_gamm,pre_ll_sms_IR_gamm,init_states_IR
 from .src.python.gamm_solvers import solve_gamm_sparse
-from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,ri,rs
+from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 
 ##################################### Base Class #####################################
 

@@ -908,8 +908,12 @@ class Formula():
          else:
             if rterm.var_coef is None:
                raise ValueError("Number of coefficients for random slope were not initialized.")
-            if len(vars) > 1:
-               # Separate penalties for every level of interactions
+            if len(vars) > 1 and rterm.var_coef > 1:
+               # Separate penalties for interactions involving at least one categorical factor.
+               # In that case, a separate penalty will describe the random coefficients for the random factor (rterm.by)
+               # per level of the (interaction of) categorical factor(s) involved in the interaction.
+               # For interactions involving only continuous variables this condition will be false and a single
+               # penalty will be estimated.
                pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = id_dist_pen(len(factor_levels[rterm.by]))
                for _ in range(rterm.var_coef):
                   lTerm = LambdaTerm(start_index=cur_pen_idx,
@@ -921,7 +925,8 @@ class Formula():
                   penalties.append(lTerm)
 
             else:
-               # Single penalty for main effects
+               # Single penalty for random coefficients of a single variable (categorical or continuous) or an
+               # interaction of only continuous variables.
                pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = id_dist_pen(len(factor_levels[rterm.by])*rterm.var_coef)
 
 
@@ -1335,7 +1340,8 @@ def build_rs_term_matrix(ci,n_y,rti,rterm,var_types,var_map,factor_levels,ridx,c
    by_levels = factor_levels[rterm.by]
    old_ci = ci
 
-   # First get all interaction columns
+   # First get all columns for all linear predictors associated with this
+   # term - might involve interactions!
    lin_elements,\
    lin_rows,\
    lin_cols,\
@@ -1353,9 +1359,9 @@ def build_rs_term_matrix(ci,n_y,rti,rterm,var_types,var_map,factor_levels,ridx,c
    new_cols = []
    new_ci = 0
    
-   # For every interaction column
+   # For every column
    for coef_i in range(lin_ci): 
-      # Collect the interaction column and row index
+      # Collect the coefficinet column and row index
       inter_i = lin_elements[lin_cols == old_ci]
       rdx_i = lin_rows[lin_cols == old_ci]
       # split the column over len(by_levels) columns for every level of the random factor
@@ -1372,6 +1378,9 @@ def build_rs_term_matrix(ci,n_y,rti,rterm,var_types,var_map,factor_levels,ridx,c
          new_ci += 1
          ci += 1
       old_ci += 1
+
+   # Matrix returned here holds for every linear coefficient one column for every level of the random
+   # factor. So: coef1_1, coef_1_2, coef1_3, ... coef_n_1, coef_n,2, coef_n_3
 
    return new_elements,new_rows,new_cols,new_ci
 

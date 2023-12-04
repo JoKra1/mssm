@@ -8,9 +8,6 @@ name: Python package
 
 on:
   push:
-    branches:
-      - stable
-      - main
   workflow_dispatch:
 
 jobs:

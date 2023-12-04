@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from enum import Enum
+from itertools import combinations
 import copy
 from . import smooths
 from . import penalties
@@ -98,7 +99,7 @@ class f(GammTerm):
     :type basis: Callable, optional
     :param basis_kwargs: A list containing one or multiple dictionaries specifying how the basis should be computed.
     For the B-spline basis the following arguments (with default values) are available: ``convolve``=``False``,
-    ``min_c``=``None``, ``max_c``=``None``, ``deg``=``3``. See ``src.smooths.B_spline_basis`` for details.
+    ``min_c``=``None``, ``max_c``=``None``, ``deg``=``3``. See ``src.smooths.B_spline_basis`` for details, but the default should work for most cases.
     :type basis_kwargs: dict, optional
     :param by_latent: Should an overall f(``variables``) be added or one "by_latent" stage
     :type by_latent: bool, optional
@@ -267,6 +268,39 @@ class irf(GammTerm):
         self.nk = nk
 
 class l(GammTerm):
+    """
+    Adds a parametric (linear) term to the model formula. The model y = a + b*x can for example be achieved
+    by adding [i(), l(['x'])] to the ``term`` argument of a ``Formula``. The coefficient "b" estimated for
+    the term will then correspond to the slope of "x". This class can also be used to add predictors for
+    categorical variables. If the formula includes an intercept, binary coding will be utilized for to
+    add reference-level adjustment coefficients for the remaining k-1 levels of the factor variable.
+
+    If more than variable is included in ``variables`` the model will only add the the len(``variables``)-interaction
+    to the model! Lower order interactions and main effects will not be included by default (see li() function instead, which
+    automatically includes all lower-order interactions and main effects).
+
+    Example: The interaction effect of factor variable "cond", with two levels "1" and "2", and acontinuous variable "x"
+    on the dependent variable "y" are of interest. To estimate such a model, the following formula can be used:
+         formula = Formula(lhs("y),terms=[i(),l(["cond"]),l(["x"]),l(["cond","x"])])
+   
+    This formula will estimate the following model:
+         y_hat = a + b1*c + b2*x + b3*c*x
+         with: c = binary predictor variable created so that it is 1 if "cond"=2 else 0
+         b3 is the coefficient that is added because l(["cond","x"]) is included in the terms.
+
+    To get a model with only main effects for "cond" and "x", the following formula could be used:
+         formula = Formula(lhs("y),terms=[i(),l(["cond"]),l(["x"])])
+
+    This formula will estimate:
+         y_hat = a + b1*c + b2*x
+
+    Parameters:
+
+    :param variables: A list of the variables (strings) for which linear predictors should be included
+    :type variables: list[str]
+    :param by_latent: Should linear terms be added separately "by_latent" stage or not
+    :type by_latent: bool, optional
+    """
     def __init__(self,
                  variables:list,
                  by_latent:bool=False) -> None:
@@ -275,7 +309,61 @@ class l(GammTerm):
         super().__init__(variables, TermType.LINEAR, False, [], [])
         self.by_latent = by_latent
 
+def li(variables:list[str],by_latent:bool=False):
+   """
+    Behaves like the l() class but li() automatically includes all lower-order interactions and main effects.
+
+    Example: The interaction effect of factor variable "cond", with two levels "1" and "2", and acontinuous variable "x"
+    on the dependent variable "y" are of interest. To estimate such a model, the following formula can be used:
+         formula = Formula(lhs("y),terms=[i(),*li(["cond","x"])])
+
+    Note, the use of the "*" operator to unpack the individual terms returned from li!
+   
+    This formula will still estimate the following model:
+         y_hat = a + b1*c + b2*x + b3*c*x
+         with: c = binary predictor variable created so that it is 1 if "cond"=2 else 0
+
+    To get a model with only main effects for "cond" and "x" ``li()`` cannot be used and ``l()`` needs to be used instead:
+         formula = Formula(lhs("y),terms=[i(),l(["cond"]),l(["x"])])
+
+    This formula will estimate:
+         y_hat = a + b1*c + b2*x
+
+    Parameters:
+
+    :param variables: A list of the variables (strings) for which linear predictors should be included
+    :type variables: list[str]
+    :param by_latent: Should linear terms be added separately "by_latent" stage or not
+    :type by_latent: bool, optional
+    """
+   
+   # Create len(variables)-way interaction, all lower
+   # order interactions and main effects (order=1)
+   full_order = []
+   for order in range(1,len(variables)+1):
+      full_order.extend(combinations(variables,order))
+   
+   order_terms = [l(term,by_latent) for term in full_order]
+
+   return order_terms
+
 class ri(GammTerm):
+    """
+    Adds a random intercept for the factor ``variable`` to the model. The random intercepts "b" are assumed
+    to be "b ~ N(0,sigma_b)" i.e., normally distributed around zero - the simplest random effect supported by ``mssm``.
+
+    The ``variable`` needs to identify a factor-variable in the data (dat[''variable''].dtype == 'O'). If you want to
+    add more complex random effects to the model (e.g., random slopes for continuous variable "x" per level of factor
+    ``variable``) use the ``rs()`` class.
+
+    Parameters:
+
+    :param variable: A factor variable. For every level of this factor a random intercept will be estimated. The random
+    intercepts are assumed to follow a normal distribution centered around zero.
+    :type variable: str
+    :param by_latent: Should random intercepts be added separately "by_latent" stage or not
+    :type by_latent: bool, optional
+    """
     def __init__(self,
                  variable:str,
                  by_latent:bool=False) -> None:
@@ -285,8 +373,95 @@ class ri(GammTerm):
         self.by_latent = by_latent
 
 class rs(GammTerm):
+    """
+    Adds random slopes for the effects of the term encoded by the ``variables`` for each level of the
+    random factor ``rf``. The type of random slope created depends on the ``variables``.
+    
+    If len(``variables``)==1, and the str in ``variables`` identifies a categorical variable in the data, then
+    a random offset adjustment (for every level of the categorical variable, so without binary coding!) will be
+    estimated for every level of the random factor ``rf``.
+
+    Example: The factor variable "cond", with two levels "1" and "2" is assumed to have a general effect on the DV "y".
+    However, data was collected from multiple subjects (random factor ``rf``="subject") and it is reasonable to assume
+    that the effect of "cond" is slightly different for every subject (it is also assumed that all subjects took part
+    in both conditions identified by "cond"). A model that accounts for this is estimated via:
+      formula = Formula(lhs("y),terms=[i(),l(["cond"]),rs(["cond"],rf="subject")])
+   
+    This formula will estimate the following model:
+         y^hat_i = a + b1*c_i + a_{j(i),cc(i)}
+         with: c = binary predictor variable created so that it is 1 if "cond"=2 for observation i else 0
+         and:  cc(i) corresponding to the level of "cond" at observation i
+         and:  j(i) corresponding to the level of "subject" at observation i
+         and:  a_{j,cc(i)} identifying the random offset estimated for subject j and the level of "cond"
+               indicated by cc(i). The a_{j,cc(i)} are assumed to be from a **single** normal distribution N(0,sigma_a)
+   
+    Note that the fixed effect sturcture uses binary coding but the random effect structure does not.
+
+    If all the str in ``variables`` identify continuous variables in the data, then a random slope for the
+    len(``variables``)-way interaction (will simplify to a slope for a single continuous variable if len(``variables``) == 1)
+    will be estimated for every level of the random factor ``rf``.
+
+    Example: The continuous variable "x" is assumed to have a general effect on the DV "y".
+    However, data was collected from multiple subjects (random factor ``rf``="subject") and it is reasonable to assume
+    that the effect of "x" is slightly different for every subject. A model that accounts for this is estimated via:
+      formula = Formula(lhs("y),terms=[i(),l(["x"]),rs(["x"],rf="subject")])
+   
+    This formula will estimate the following model:
+         y^hat_i = a + b*x_i + b_j(i) * x_i
+         with: j(i) corresponding to the level of "subject" at observation i
+         and:  b_j(i) identifying the random slope (the subject-specific slope adjustment for "b") for variable "x" estimated
+         for subject j. The b_j(i) are assumed to be from a **single** normal distribution N(0,sigma_b)
+   
+    Note, lower-order interaction slopes (as well as main effects) are not pulled in by default! Consider the following formula:
+      formula = Formula(lhs("y),terms=[i(),*li(["x","z"]),rs(["x","z"],rf="subject")])
+      with: another continuous variable "z"
+    
+    This corresponds to the model:
+      y^hat_i = a + b1*x_i + b2*z_i + b3*x_i*z_i + b_j(i)*x_i*z_i
+      with: j(i) corresponding to the level of "subject" at observation i
+      and:  b_j(i) identifying the random slope (the subject-specific slope adjustment for "b3") for the interaction of
+      variables "x" and "z" estimated for subject j. The b_j(i) are assumed to be from a **single** normal distribution N(0,sigma_b)
+    
+    To add random slopes for the main effects of either "x" or "z" as well as an additional random intercept, additional ``rs``
+    and a ``ri`` would have to be added to the formula:
+      formula = Formula(lhs("y),terms=[i(),*li(["x","z"]),
+                                       ri("subject"),
+                                       rs(["x"],rf="subject"),
+                                       rs(["z"],rf="subject"),
+                                       rs(["x","z"],rf="subject")])
+
+    If len(``variables``) > 1 and at least one str in ``variables`` identifies a categorical variable in the data then random slopes for the
+    len(``variables``)-way interaction will be estimated for every level of the random factor ``rf``. Separate distribution parameters (the sigma of
+    the Normal) will be estimated for every level of the resulting interaction.
+
+    Example: The continuous variable "x" and the factor variable "cond", with two levels "1" and "2" are assumed to have a general interaction effect
+    on the DV "y". However, data was collected from multiple subjects (random factor ``rf``="subject") and it is reasonable to assume
+    that the interaction effect is slightly different for every subject. A model that accounts for this is estimated via:
+      formula = Formula(lhs("y),terms=[i(),*li(["x","cond"]),rs(["x","cond"],rf="subject")])
+
+    This formula will estimate the following model:
+         y^hat_i = a + b1*c_i + b2*x_i + b3*x_i*c_i + b_{j(i),cc(i)}*x_i
+         with: c = binary predictor variable created so that it is 1 if "cond"=2 for observation i else 0
+         and:  cc(i) corresponding to the level of "cond" at observation i
+         and:  j(i) corresponding to the level of "subject" at observation i
+         and:  b_{j(i),cc(i)} identifying the random slope for variable "x" and "cond"=cc(i) estimated for subject j.
+         The b_{j,cc(i)} where cc(i)=1 are assumed to be from a normal distribution N(0,sigma_b1) and the b_{j,cc(i)} where cc(i)=2
+         are assumed to be from a separate normal distribution N(0,sigma_b2).
+
+    
+    Correlations between random effects cannot be taken into account by means of parameters (this is possible for example in lme4).
+
+    Parameters:
+
+    :param variables: A list of variables. Can point to continuous and categorical variables.
+    :type variables: list[str]
+    :param rf: A factor variable. Identifies the random factor in the data.
+    :type rf: str
+    :param by_latent: Should random slopes be added separately "by_latent" stage or not
+    :type by_latent: bool, optional
+    """
     def __init__(self,
-                 variables:list,
+                 variables:list[str],
                  rf:str,
                  by_latent:bool=False) -> None:
         
