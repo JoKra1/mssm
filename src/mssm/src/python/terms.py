@@ -24,7 +24,8 @@ class GammTerm():
         self.type = type
         self.is_penalized = is_penalized
         self.penalty = penalty
-        self.pen_kwargs = pen_kwargs     
+        self.pen_kwargs = pen_kwargs
+        self.name = None     
 
 class i(GammTerm):
     """
@@ -40,6 +41,7 @@ class i(GammTerm):
                  by_latent:bool=False) -> None:
         super().__init__(["1"], TermType.LINEAR, False, [], [])
         self.by_latent = by_latent
+        self.name = "Intercept"
 
 class f(GammTerm):
     """
@@ -184,6 +186,13 @@ class f(GammTerm):
               
         self.by_latent = by_latent
 
+        # Term name
+        self.name = f"f({variables}"
+        if by is not None:
+           self.name += ",by={by})"
+        elif binary is not None:
+           self.name += ",by={binary[1]})"
+
 class fs(f):
    """
     Essentially a ``f()`` term with ``by``=``rf``, ``id`` != None, ``penalize_null`` = True, and ``pen_kwargs`` = ``[{"m":1}]``.
@@ -267,6 +276,11 @@ class irf(GammTerm):
         self.id = id
         self.nk = nk
 
+        # Term name
+        self.name = f"f({variables}"
+        if by is not None:
+           self.name += ",by={by})"
+
 class l(GammTerm):
     """
     Adds a parametric (linear) term to the model formula. The model y = a + b*x can for example be achieved
@@ -309,6 +323,9 @@ class l(GammTerm):
         super().__init__(variables, TermType.LINEAR, False, [], [])
         self.by_latent = by_latent
 
+        # Term name
+        self.name = f"l({variables})"
+
 def li(variables:list[str],by_latent:bool=False):
    """
     Behaves like the l() class but li() automatically includes all lower-order interactions and main effects.
@@ -343,7 +360,7 @@ def li(variables:list[str],by_latent:bool=False):
    for order in range(1,len(variables)+1):
       full_order.extend(combinations(variables,order))
    
-   order_terms = [l(term,by_latent) for term in full_order]
+   order_terms = [l(list(term),by_latent) for term in full_order]
 
    return order_terms
 
@@ -371,6 +388,9 @@ class ri(GammTerm):
         # Initialization
         super().__init__([variable], TermType.RANDINT, True, [penalties.PenType.IDENTITY], [{}])
         self.by_latent = by_latent
+
+        # Term name
+        self.name = f"ri({variable})"
 
 class rs(GammTerm):
     """
@@ -470,3 +490,6 @@ class rs(GammTerm):
         self.var_coef = None
         self.by = rf
         self.by_latent = by_latent
+
+        # Term name
+        self.name = f"rs({variables},{rf})"

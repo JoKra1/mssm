@@ -209,7 +209,7 @@ class GAMM(MSSM):
                 raise IndexError(f"Variable {k} is missing in new data.")
         
         # Encode test data
-        _,pred_cov_flat,_,_,pred_cov,_,_ = self.formula.encode_data(n_dat,prediction=True)
+        _,pred_cov_flat,_,_,_,_,_ = self.formula.encode_data(n_dat,prediction=True)
 
         # Then, we need to build the model matrix - but only for the terms which should
         # be included in the prediction!
@@ -232,7 +232,7 @@ class GAMM(MSSM):
         predi_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
                                                      ltx,irstx,stx,rtx,var_types,var_map,
                                                      var_mins,var_maxs,factor_levels,
-                                                     pred_cov_flat,pred_cov,n_j,state_est_flat,
+                                                     pred_cov_flat,None,n_j,state_est_flat,
                                                      state_est,use_only=use_terms)
         
         # Now we calculate the prediction

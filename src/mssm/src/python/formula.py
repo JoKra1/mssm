@@ -14,6 +14,17 @@ class VarType(Enum):
     FACTOR = 2
 
 class lhs():
+    """
+    The Left-hand side of a regression equation.
+
+    Parameters:
+
+    :param variable: The dependent variable. Can point to continuous and categorical variables.
+    :type variable: str
+    :param f: A function that will be applied to the ``variable`` before fitting. For example: np.log().
+    By default no function is applied to the ``variable``.
+    :type f: Callable, optional
+    """
     def __init__(self,variable:str,f:Callable=None) -> None:
         self.variable = variable
         self.f=f
@@ -296,11 +307,32 @@ def build_irf_penalties(penalties,cur_pen_idx,
     return penalties,cur_pen_idx
 
 class Formula():
+    """
+    The formula of a regression equation.
+
+    Parameters:
+
+    :param lhs: The lhs object defining the dependent variable.
+    :type variable: lhs
+    :param terms: A list of the terms which should be added to the model. See ``mssm.src.python.terms`` for info on which terms can be added.
+    :type terms: list[GammTerm]
+    :param data: A pandas dataframe (with header!) of the data which should be used to estimate the model. The variable specified for ``lhs`` as
+    well as all variables included for a ``term`` in ``terms`` need to be present in the data, otherwise the call to Formula will throw an error.
+    :type data: pd.DataFrame
+    :param series_id: A tring identifying the individual experimental units. Usually a unique trial identifier. Can only be ignored if a
+   ``mssm.models.GAMM`` is to be estimated.
+    :type series_id: str, optional
+    :param split_scale: Whether or not a separate Gamm (including sseparate scale parameters) should be estimated per latent state. Only relevant
+    if a ``mssm.models.sMsGAMM`` is to be estimated.
+    :type split_scale: bool, optional
+    :param n_j: Number of latent states to estimate. Only relevant if a ``mssm.models.sMsGAMM`` is to be estimated.
+    :type n_j: int, optional
+    """
     def __init__(self,
                  lhs:lhs,
                  terms:list[GammTerm],
                  data:pd.DataFrame,
-                 series_id:str,
+                 series_id:str or None=None,
                  split_scale:bool=False,
                  n_j:int=3) -> None:
         
@@ -319,6 +351,7 @@ class Formula():
         self.__var_types = {}
         self.__var_mins = {}
         self.__var_maxs = {}
+        self.__term_names = []
         self.__linear_terms = []
         self.__smooth_terms = []
         self.__ir_smooth_terms = []
@@ -353,6 +386,9 @@ class Formula():
         # penalties are built.
         for ti, term in enumerate(self.__terms):
             
+            # Collect term name
+            self.__term_names.append(term.name)
+
             # Term allocation.
             if isinstance(term,i):
                 self.__has_intercept = True
@@ -593,7 +629,25 @@ class Formula():
                
     
     def encode_data(self,data,prediction=False):
+      """
+      Encodes ``data``, which needs to be a ``pd.DataFrame`` and by default (if ``prediction==False``) builds an index
+      of which rows in ``data`` are NA in the column of the dependent variable described by ``self.lhs``.
 
+      Parameters:
+
+      :param data: The data to encode.
+      :type data: pd.DataFrame
+      :param prediction: Whether or not a NA index and a column for the dependent variable should be generated.
+      :type prediction: bool, optional
+
+      Returns:
+      :return: A tuple with 7 entries: a ``np.array`` of the dependent variable described by ``self.__lhs`` or ``None``, a ``np.array`` with as many columns
+      as there are predictor variables specified in ``self.__terms``, holding the encoded predictor variables (number of rows matches the number of rows of the first entry returned),
+      either a ``np.array`` indicating for each row whether the dependent variable described by ``self.__lhs`` is NA or ``None``, either like the first entry but split into a list of lists by ``self.series_id`` or ``None``,
+      either like the second entry but split into a list of lists by ``self.series_id`` or ``None``, either like the third entry but split into a list of lists by ``self.series_id`` or ``None``, either a
+      ``np.array`` indicating the start and end point for the splits used to split the previous three elements (identifying the start and end point of every level of ``self.series_id``) or ``None``.
+      :rtype: tuple
+      """
       # Build NA index
       if prediction:
          NAs = None
@@ -606,7 +660,10 @@ class Formula():
 
       n_y = data.shape[0]
 
-      id_col = np.array(data[self.series_id])
+      id_col = None
+      if not self.series_id is None:
+         id_col = np.array(data[self.series_id])
+
       var_map = self.get_var_map()
       n_var = len(var_map)
       var_keys = var_map.keys()
@@ -616,8 +673,10 @@ class Formula():
       # Collect every series from data frame, make sure to maintain the
       # order of the data frame.
       # Based on: https://stackoverflow.com/questions/12926898
-      _, id = np.unique(id_col,return_index=True)
-      sid = np.sort(id)
+      sid = None
+      if not self.series_id is None:
+         _, id = np.unique(id_col,return_index=True)
+         sid = np.sort(id)
 
       if prediction: # For encoding new data
          y_flat = None
@@ -627,10 +686,13 @@ class Formula():
          y_flat = np.array(data[self.get_lhs().variable]).reshape(-1,1)
          
          # Then split by seried id
-         y = np.split(y_flat,sid[1:])
+         y = None
+         NAs = None
+         if not self.series_id is None:
+            y = np.split(y_flat,sid[1:])
 
-         # Also split NA index
-         NAs = np.split(NAs_flat,sid[1:])
+            # Also split NA index
+            NAs = np.split(NAs_flat,sid[1:])
 
       # Now all predictor variables
       cov_flat = np.zeros((n_y,n_var),dtype=float) # Treating all predictors as floats has important implications for factors and requires special care!
@@ -651,7 +713,9 @@ class Formula():
             cov_flat[:,var_map[c]] = c_raw
       
       # Now split cov by series id as well
-      cov = np.split(cov_flat,sid[1:],axis=0)
+      cov = None
+      if not self.series_id is None:
+         cov = np.split(cov_flat,sid[1:],axis=0)
 
       return y_flat,cov_flat,NAs_flat,y,cov,NAs,sid
 
@@ -687,6 +751,7 @@ class Formula():
             sterm.Z.append(Q[:,1:])
 
     def build_penalties(self):
+      """Builds the penalties required by ``self.__terms``. Called automatically whenever needed. Call manually only for testing."""
 
       if self.penalties is not None:
          warnings.warn("Penalties were already initialized. Resetting them.")
@@ -946,67 +1011,107 @@ class Formula():
     #### Getters ####
 
     def get_lhs(self) -> lhs:
+       """Get a copy of the ``lhs`` specified for this formula."""
        return copy.deepcopy(self.__lhs)
     
     def get_terms(self) -> list[GammTerm]:
+       """Get a copy of the ``terms`` specified for this formula."""
        return copy.deepcopy(self.__terms)
     
     def get_data(self) -> pd.DataFrame:
+       """Get a copy of the ``data`` specified for this formula."""
        return copy.deepcopy(self.__data)
 
     def get_factor_codings(self) -> dict:
+        """Get a copy of the factor coding dictionary. Keys are factor variables in the data, values are dictionaries, where the keys correspond to the levels (str) of the factor and the values to their encoded levels (int)."""
         return copy.deepcopy(self.__factor_codings)
     
     def get_coding_factors(self) -> dict:
+        """Get a copy of the factor coding dictionary. Keys are factor variables in the data, values are dictionaries, where the keys correspond to the encoded levels (int) of the factor and the values to their levels (str)."""
         return copy.deepcopy(self.__coding_factors)
     
     def get_var_map(self) -> dict:
+        """Get a copy of the var map dictionary. Keys are variables in the data, values their column index in the encoded predictor matrix returned by ``self.encode_data``."""
         return copy.deepcopy(self.__var_to_cov)
     
     def get_factor_levels(self) -> dict:
+       """Get a copy of the factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor."""
        return copy.deepcopy(self.__factor_levels)
     
     def get_var_types(self) -> dict:
+       """Get a copy of the var types dictionary. Keys are variables in the data, values are either ``VarType.NUMERIC`` for continuous variables or ``VarType.FACTOR`` for categorical variables."""
        return copy.deepcopy(self.__var_types)
     
     def get_var_mins(self) -> dict:
+       """Get a copy of the var mins dictionary. Keys are variables in the data, values are either the minimum value the variable takes on in ``self.__data`` for continuous variables or ``None` for categorical variables."""
        return copy.deepcopy(self.__var_mins)
     
     def get_var_maxs(self) -> dict:
+       """Get a copy of the var maxs dictionary. Keys are variables in the data, values are either the maximum value the variable takes on in ``self.__data`` for continuous variables or ``None` for categorical variables."""
        return copy.deepcopy(self.__var_maxs)
     
     def get_var_mins_maxs(self) -> (dict,dict):
+       """Get a tuple containing copies of both the mins and maxs directory. See ``self.get_var_mins`` and ``self.get_var_maxs``."""
        return (copy.deepcopy(self.__var_mins),copy.deepcopy(self.__var_maxs))
     
     def get_linear_term_idx(self) -> list[int]:
+       """Get a copy of the list of indices that identify linear terms in ``self.__terms``."""
        return(copy.deepcopy(self.__linear_terms))
     
     def get_smooth_term_idx(self) -> list[int]:
+       """Get a copy of the list of indices that identify smooth terms in ``self.__terms``."""
        return(copy.deepcopy(self.__smooth_terms))
     
     def get_ir_smooth_term_idx(self) -> list[int]:
+       """Get a copy of the list of indices that identify impulse response terms in ``self.__terms``."""
        return(copy.deepcopy(self.__ir_smooth_terms))
     
     def get_random_term_idx(self) -> list[int]:
+       """Get a copy of the list of indices that identify random terms in ``self.__terms``."""
        return(copy.deepcopy(self.__random_terms))
     
     def get_nj(self) -> int:
+       """Get the number of latent states assumed by this formula."""
        if self.__has_irf:
           # Every event has an irf and there are always
           # n_event + 1 states.
           return self.__n_irf + 1
        return self.__n_j
     
+    def get_n_coef(self) -> int:
+       """Get the number of coefficients that are implied by the formula."""
+       return self.n_coef
+    
+    def get_penalties(self) -> list:
+       """Get a copy of the penalties implied by the formula. Will be None if the penalties have not been initizlized yet."""
+       return copy.deepcopy(self.penalties)
+    
+    def get_depvar(self) -> list:
+       """Get a copy of the encoded dependent variable (defined via ``self.__lhs``)."""
+       return copy.deepcopy(self.y_flat)
+    
+    def get_notNA(self) -> list:
+       """Get a copy of the encoded 'not a NA' vector for the dependent variable (defined via ``self.__lhs``)."""
+       return copy.deepcopy(self.NOT_NA_flat)
+    
     def has_intercept(self) -> bool:
+       """Does this formula include an intercept or not."""
        return self.__has_intercept
     
     def has_ir_terms(self) -> bool:
+       """Does this formula include impulse response terms or not."""
        return self.__has_irf
     
     def has_scale_split(self) -> bool:
+       """Does this formula include a scale split or not."""
        return self.__split_scale
+    
+    def get_term_names(self) -> list:
+       """Returns a copy of the list with the names of the terms specified for this formula."""
+       return copy.deepcopy(self.__term_names)
 
 def embed_in_S_sparse(pen_data,pen_rows,pen_cols,S_emb,S_col,cIndex):
+   """Embed a term-specific penalty matrix (provided as elements, row and col indices) into the across-term penalty matrix (see Wood, 2017) """
 
    embedding = np.array(pen_data)
    r_embedding = np.array(pen_rows) + cIndex
@@ -1020,7 +1125,7 @@ def embed_in_S_sparse(pen_data,pen_rows,pen_cols,S_emb,S_col,cIndex):
    return S_emb,cIndex+(pen_cols[-1]+1)
 
 def embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,Sj):
-
+   """Parameterize a term-specific penalty matrix (provided as elements, row and col indices)"""
    embedding = np.array(pen_data)
    pen_col = pen_cols[-1]+1
 
@@ -1033,6 +1138,7 @@ def embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,Sj):
 
 
 def build_linear_term_matrix(ci,n_y,has_intercept,lti,lterm,var_types,var_map,factor_levels,ridx,cov_flat,use_only):
+   """Parameterize model matrix for a linear term."""
    new_elements = []
    new_rows = []
    new_cols = []
@@ -1119,6 +1225,7 @@ def build_linear_term_matrix(ci,n_y,has_intercept,lti,lterm,var_types,var_map,fa
    return new_elements,new_rows,new_cols,new_ci
 
 def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,factor_levels,ridx,cov,state_est,use_only,pool,tol):
+   """Parameterize model matrix for an impulse response term."""
    var = irsterm.variables[0]
    term_elements = []
    term_idx = []
@@ -1200,6 +1307,7 @@ def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,factor_levels,ridx,cov,
    return new_elements,new_rows,new_cols,new_ci
 
 def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,var_maxs,factor_levels,ridx,cov_flat,state_est_flat,use_only,tol):
+   """Parameterize model matrix for a smooth term."""
    vars = sterm.variables
    term_ridx = []
 
@@ -1314,6 +1422,7 @@ def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,v
    return new_elements,new_rows,new_cols,new_ci
 
 def build_ri_term_matrix(ci,n_y,rti,rterm,var_map,factor_levels,ridx,cov_flat,use_only):
+   """Parameterize model matrix for a random intercept term."""
    vars = rterm.variables
    offset = np.ones(n_y)
    by_cov = cov_flat[:,var_map[vars[0]]]
@@ -1335,6 +1444,7 @@ def build_ri_term_matrix(ci,n_y,rti,rterm,var_map,factor_levels,ridx,cov_flat,us
    return new_elements,new_rows,new_cols,new_ci
 
 def build_rs_term_matrix(ci,n_y,rti,rterm,var_types,var_map,factor_levels,ridx,cov_flat,use_only):
+   """Parameterize model matrix for a random slope term."""
 
    by_cov = cov_flat[:,var_map[rterm.by]]
    by_levels = factor_levels[rterm.by]
@@ -1394,7 +1504,8 @@ def build_sparse_matrix_from_formula(terms,has_intercept,
                                      cov,n_j,state_est_flat,
                                      state_est,pool=None,
                                      use_only=None,tol=1e-10):
-
+   
+   """Builds the entire model-matrix specified by a formula."""
    n_y = cov_flat.shape[0]
    elements = []
    rows = []
