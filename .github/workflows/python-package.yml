@@ -112,3 +112,28 @@ jobs:
         with:
           packages-dir: ./wheelhouse/artifact
           repository-url: https://test.pypi.org/legacy/
+  
+  publish-release:
+    # https://packaging.python.org/en/latest/guides/publishing-package-distribution-releases-using-github-actions-ci-cd-workflows/
+    # Publish to pypi stable - only if release is triggered.
+    needs:
+      - release
+    runs-on: ubuntu-latest
+
+    environment:
+      name: pypi
+      url: https://pypi.org/p/mssm
+
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: ./wheelhouse/
+          
+      - name: Publish wheels to test-pypi
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: ./wheelhouse/artifact
