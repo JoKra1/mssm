@@ -602,7 +602,11 @@ class sMsGAMM(MSSM):
                     temp = temp_schedule[iter]
 
                 durs,states,llks = self.__propose_all_states(pool,cov,temp,n_pi,n_TR,s_log_o_probs,dur_log_probs,var_map)
-                states_flat = np.array([st for s in states for st in s],dtype=int)
+
+                if not self.mvar_by is None:
+                    states_flat = np.array([st for s in states for _ in range(len(factor_levels[self.mvar_by])) for st in s],dtype=int)
+                else:
+                    states_flat = np.array([st for s in states for st in s],dtype=int)
             
             ### Convergence control ###
 

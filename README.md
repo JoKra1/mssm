@@ -2,7 +2,7 @@
 
 ## Description
 
-``mssm`` is a toolbox to estimate Generalized Additive Mixed Models (GAMMs) semi Markov-switching GAMMs (sMs-GAMMs) and sMs Impulse Response GAMMs (sMs-IR-GAMMs). The ``main`` branch is updated frequently to reflect new developments. The ``stable`` branch should reflect the latest releases. if you don't need the newest functionality, you should install from the ``stable`` branch (see below for instructions).
+``mssm`` is a toolbox to estimate Generalized Additive Mixed Models (GAMMs) semi Markov-switching GAMMs (sMs-GAMMs) and sMs Impulse Response GAMMs (sMs-IR-GAMMs). The ``main`` branch is updated frequently to reflect new developments. The ``stable`` branch should reflect the latest releases. If you don't need the newest functionality, you should install from the ``stable`` branch (see below for instructions).
 
 ## Installation
 
@@ -28,8 +28,12 @@ pip install -i https://test.pypi.org/simple/ mssm
 
 ### Building from source
 
-You can also build directly from source. This requires ``conda`` or an installation of [eigen](https://eigen.tuxfamily.org/index.php?title=Main_Page)(``setup.py`` then expects ``eigen`` in "usr/local/include/eigen3". This will probably not work on windows.). Once you have ``conda`` installed,
-[install eigen from conda-forge](https://anaconda.org/conda-forge/eigen). After cloning and navigating into the downloaded repository you can then install via ``pip install . ``.
+You can also build directly from source. This requires ``conda`` or an installation of [eigen](https://eigen.tuxfamily.org/index.php?title=Main_Page) (``setup.py`` then expects ``eigen`` in "usr/local/include/eigen3". This will probably not work on windows - the ``conda`` strategy should.). Once you have ``conda`` installed,
+[install eigen from conda-forge](https://anaconda.org/conda-forge/eigen). After cloning and navigating into the downloaded repository you can then install via:
+
+```
+pip install .
+```
 
 ## To get started
 

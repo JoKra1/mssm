@@ -26,3 +26,5 @@ classifiers = [
 dynamic = ["version"]
 
 [tool.setuptools_scm]
+# https://github.com/pypa/setuptools_scm/issues/342
+local_scheme = "no-local-version" 

@@ -218,7 +218,7 @@ def compute_log_probs(n_j,n_obs,has_scale_split,
    if not mvar_by is None:
       # We need to split the s_log_o_probs from every series by the multivariate factor
       # and then sum the log-probs together. This is a strong independence assumption (see Langrock, 2021)
-      n_by_mvar = factor_levels[mvar_by]
+      n_by_mvar = len(factor_levels[mvar_by])
       s_log_o_probs = [s_prob.reshape(n_j,n_by_mvar,-1).sum(axis=1) for s_prob in s_log_o_probs]
    
    return s_log_o_probs,dur_log_probs

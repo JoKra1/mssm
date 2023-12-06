@@ -53,7 +53,6 @@ def B_spline_basis(i, cov, state_est, nk, drop_outer_k=False, convolve=False, mi
   # Setup basis with even knot locations.
   # Code based on Eilers, P., & Marx, B. (2010). Splines, knots, and penalties. https://doi.org/10.1002/WICS.125
   # See also: Eilers, P. H. C., & Marx, B. D. (1996). Flexible smoothing with B-splines and penalties. https://doi.org/10.1214/ss/1038425655
-  # However, knot location calculation was adapted to match mgcv (Wood, 2017)
 
   xl = min(cov)
   xr = max(cov)
@@ -63,12 +62,6 @@ def B_spline_basis(i, cov, state_est, nk, drop_outer_k=False, convolve=False, mi
 
   if not min_c is None:
     xl = min_c
-
-  rg = xr - xl
-
-  # MGCV adjustment.
-  xr += 0.001*rg
-  xl -= 0.001*rg
 
   # ndx is equal to n in Eilers & Marx (2011)
   # So there will be n-1 knots (without expansion)
