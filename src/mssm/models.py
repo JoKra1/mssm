@@ -602,7 +602,11 @@ class sMsGAMM(MSSM):
                     temp = temp_schedule[iter]
 
                 durs,states,llks = self.__propose_all_states(pool,cov,temp,n_pi,n_TR,s_log_o_probs,dur_log_probs,var_map)
-                states_flat = np.array([st for s in states for st in s],dtype=int)
+
+                if not self.mvar_by is None:
+                    states_flat = np.array([st for s in states for _ in range(len(factor_levels[self.mvar_by])) for st in s],dtype=int)
+                else:
+                    states_flat = np.array([st for s in states for st in s],dtype=int)
             
             ### Convergence control ###
 
@@ -764,7 +768,11 @@ class sMsGAMM(MSSM):
         # Now we can decode.
         with mp.Pool(processes=self.cpus) as pool:
             _,states_max,_ = self.__decode_all_states(pool,cov,self.__pi,self.__TR,s_log_o_probs,dur_log_probs,var_map)
-            max_states_flat = np.array([st for s in states_max for st in s],dtype=int)
+
+            if not self.mvar_by is None:
+                max_states_flat = np.array([st for s in states_max for _ in range(len(factor_levels[self.mvar_by])) for st in s],dtype=int)
+            else:
+                max_states_flat = np.array([st for s in states_max for st in s],dtype=int)
         
         return llk_hist,max_states_flat
             
