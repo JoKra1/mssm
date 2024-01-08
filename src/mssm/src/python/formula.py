@@ -7,7 +7,7 @@ import pandas as pd
 from enum import Enum
 from .smooths import TP_basis_calc
 from .terms import GammTerm,i,l,f,irf,ri,rs
-from .penalties import PenType,id_dist_pen,diff_pen,TP_pen,LambdaTerm,translate_sparse
+from .penalties import PenType,id_dist_pen,diff_pen,TP_pen,LambdaTerm,translate_sparse,ConstType,Constraint
 
 class VarType(Enum):
     NUMERIC = 1
@@ -162,17 +162,18 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
     pen_kwargs = sterm.pen_kwargs[penid]
     
     # Determine penalty generator
+    constraint = None
     if pen == PenType.DIFFERENCE:
         pen_generator = diff_pen
         if sterm.is_identifiable:
-            id_k += 1
-            pen_kwargs["Z"] = sterm.Z[penid % len(vars)]
-
+            if sterm.te == False:
+               id_k += 1
+               constraint = sterm.Z[penid % len(vars)]
     else:
         pen_generator = id_dist_pen
 
     # Again get penalty elements used by this term.
-    pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = pen_generator(id_k,**pen_kwargs)
+    pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = pen_generator(id_k,constraint,**pen_kwargs)
 
     # Create lambda term
     lTerm = LambdaTerm(start_index=cur_pen_idx,
@@ -183,6 +184,12 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
     # Then they can just be embedded via the calls below.
 
     if len(vars) > 1:
+        # Absorb the identifiability constraint for te terms only after the tensor basis has been computed.
+        if sterm.te and sterm.is_identifiable:
+           constraint = sterm.Z[0] # Zero-index because a single set of identifiability constraints exists: one for the entire Tp basis.
+        else:
+           constraint = None
+
         pen_data,\
         pen_rows,\
         pen_cols,\
@@ -190,7 +197,7 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
         chol_rows,\
         chol_cols = TP_pen(scp.sparse.csc_array((pen_data,(pen_rows,pen_cols)),shape=(pen_cols[-1]+1,pen_cols[-1]+1)),
                            scp.sparse.csc_array((chol_data,(chol_rows,chol_cols)),shape=(pen_cols[-1]+1,pen_cols[-1]+1)),
-                           penid % len(vars),sterm.nk)
+                           penid % len(vars),sterm.nk,constraint)
 
     # Embed first penalty - if the term has a by-keyword more are added below.
     lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
@@ -265,7 +272,7 @@ def build_irf_penalties(penalties,cur_pen_idx,
         pen_generator = id_dist_pen
 
     # Get non-zero elements and indices for the penalty used by this term.
-    pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = pen_generator(n_coef,**irsterm.pen_kwargs[penid])
+    pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = pen_generator(n_coef,None,**irsterm.pen_kwargs[penid])
 
     # Create lambda term
     lTerm = LambdaTerm(start_index=cur_pen_idx,
@@ -327,6 +334,9 @@ class Formula():
     :type split_scale: bool, optional
     :param n_j: Number of latent states to estimate. Only relevant if a ``mssm.models.sMsGAMM`` is to be estimated.
     :type n_j: int, optional
+    :param constraint: What kind of identifiability constraints should be absorbed by the terms (if they are to be identifiable). Either QR-based
+    constraints (default, well-behaved, expensive infill) or by means of column-dropping (no infill, not so well-behaved).
+    :type constraint: mssm.src.constraints.ConstType, optional
     """
     def __init__(self,
                  lhs:lhs,
@@ -334,7 +344,8 @@ class Formula():
                  data:pd.DataFrame,
                  series_id:str or None=None,
                  split_scale:bool=False,
-                 n_j:int=3) -> None:
+                 n_j:int=3,
+                 constraint:ConstType=ConstType.DROP) -> None:
         
         self.__lhs = lhs
         self.__terms = terms
@@ -377,6 +388,8 @@ class Formula():
         self.sid = None
         # Penalties
         self.penalties = None
+        # Constraints
+        self.constraint = constraint
         
         # Perform input checks first for LHS/Dependent variable.
         if self.__lhs.variable not in self.__data.columns:
@@ -731,7 +744,7 @@ class Formula():
          
          sterm.Z = []
          vars = sterm.variables
-
+         matrix_term = None
          for vi in range(len(vars)):
             # If a smooth term needs to be identifiable I act as if you would have asked for nk+1!
             # so that the identifiable term is of the dimension expected.
@@ -741,14 +754,33 @@ class Formula():
             else:
                id_nk = sterm.nk + 1
 
-            matrix_term = sterm.basis(None,self.cov_flat[self.NOT_NA_flat,var_map[vars[vi]]],
+            matrix_term_v = sterm.basis(None,self.cov_flat[self.NOT_NA_flat,var_map[vars[vi]]],
                                       None,id_nk,min_c=self.__var_mins[vars[vi]],
                                       max_c=self.__var_maxs[vars[vi]], **sterm.basis_kwargs)
 
-            # Wood (2017) 5.4.1 Identifiability constraints via QR. ToDo: Replace with cheaper reflection method.
-            C = np.sum(matrix_term,axis=0).reshape(-1,1)
-            Q,_ = scp.linalg.qr(C,pivoting=False,mode='full')
-            sterm.Z.append(Q[:,1:])
+            if sterm.te == False:
+
+               if self.constraint == ConstType.QR:
+                  # Wood (2017) 5.4.1 Identifiability constraints via QR. ToDo: Replace with cheaper reflection method.
+                  C = np.sum(matrix_term_v,axis=0).reshape(-1,1)
+                  Q,_ = scp.linalg.qr(C,pivoting=False,mode='full')
+                  sterm.Z.append(Constraint(Q[:,1:],ConstType.QR))
+               elif self.constraint == ConstType.DROP:
+                  sterm.Z.append(Constraint(int(matrix_term_v.shape[1]/2),ConstType.DROP))
+            else:
+               if vi == 0:
+                  matrix_term = matrix_term_v
+               else:
+                  matrix_term = TP_basis_calc(matrix_term,matrix_term_v)
+         
+         # Now deal with te basis
+         if sterm.te:
+            if self.constraint == ConstType.QR:
+               C = np.sum(matrix_term,axis=0).reshape(-1,1)
+               Q,_ = scp.linalg.qr(C,pivoting=False,mode='full')
+               sterm.Z.append(Constraint(Q[:,1:],ConstType.QR))
+            elif self.constraint == ConstType.DROP:
+                  sterm.Z.append(Constraint(int(matrix_term.shape[1]/2),ConstType.DROP))
 
     def build_penalties(self):
       """Builds the penalties required by ``self.__terms``. Called automatically whenever needed. Call manually only for testing."""
@@ -960,7 +992,7 @@ class Formula():
          vars = rterm.variables
 
          if isinstance(rterm,ri):
-            pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = id_dist_pen(len(factor_levels[vars[0]]))
+            pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = id_dist_pen(len(factor_levels[vars[0]]),None)
 
             lTerm = LambdaTerm(start_index=cur_pen_idx,
                                              type = PenType.IDENTITY)
@@ -979,7 +1011,7 @@ class Formula():
                # per level of the (interaction of) categorical factor(s) involved in the interaction.
                # For interactions involving only continuous variables this condition will be false and a single
                # penalty will be estimated.
-               pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = id_dist_pen(len(factor_levels[rterm.by]))
+               pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = id_dist_pen(len(factor_levels[rterm.by]),None)
                for _ in range(rterm.var_coef):
                   lTerm = LambdaTerm(start_index=cur_pen_idx,
                                              type = PenType.IDENTITY)
@@ -992,7 +1024,7 @@ class Formula():
             else:
                # Single penalty for random coefficients of a single variable (categorical or continuous) or an
                # interaction of only continuous variables.
-               pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = id_dist_pen(len(factor_levels[rterm.by])*rterm.var_coef)
+               pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = id_dist_pen(len(factor_levels[rterm.by])*rterm.var_coef,None)
 
 
                lTerm = LambdaTerm(start_index=cur_pen_idx,
@@ -1349,13 +1381,22 @@ def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,v
                                   None, id_nk, min_c=var_mins[vars[vi]],
                                   max_c=var_maxs[vars[vi]], **sterm.basis_kwargs)
 
-      if sterm.is_identifiable:
-         matrix_term_v = matrix_term_v @ sterm.Z[vi]
+      if sterm.is_identifiable and sterm.te == False:
+         if sterm.Z[vi].type == ConstType.QR:
+            matrix_term_v = matrix_term_v @ sterm.Z[vi].Z
+         elif sterm.Z[vi].type == ConstType.DROP:
+            matrix_term_v = np.delete(matrix_term_v,sterm.Z[vi].Z,axis=1)
       
       if vi == 0:
          matrix_term = matrix_term_v
       else:
          matrix_term = TP_basis_calc(matrix_term,matrix_term_v)
+   
+   if sterm.is_identifiable and sterm.te:
+      if sterm.Z[0].type == ConstType.QR:
+         matrix_term = matrix_term @ sterm.Z[0].Z
+      elif sterm.Z[0].type == ConstType.DROP:
+         matrix_term = np.delete(matrix_term,sterm.Z[0].Z,axis=1)
 
    m_rows, m_cols = matrix_term.shape
    #print(m_cols)

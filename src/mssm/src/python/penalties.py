@@ -3,6 +3,7 @@ import numpy as np
 import scipy as scp
 from dataclasses import dataclass
 from enum import Enum
+from .constraints import Constraint,ConstType
 
 class PenType(Enum):
     IDENTITY = 1
@@ -33,7 +34,7 @@ def translate_sparse(mat):
 
   return data, rows, cols
 
-def diff_pen(n,m=2,Z=None):
+def diff_pen(n,constraint,m=2):
   # Creates difference (order=m) n*n penalty matrix
   # Based on code in Eilers & Marx (1996) and Wood (2017)
 
@@ -47,9 +48,14 @@ def diff_pen(n,m=2,Z=None):
   #D = D / FS**0.5
 
   # Absorb any identifiability constraints
-  if Z is not None:
-     S = Z.T @ S @ Z
-     D = Z.T @ D
+  if constraint is not None:
+     Z = constraint.Z
+     if constraint.type == ConstType.QR:
+       S = Z.T @ S @ Z
+       D = Z.T @ D
+     elif constraint.type == ConstType.DROP:
+        S = np.delete(np.delete(S,Z,axis=1),Z,axis=0)
+        D = np.delete(D,Z,axis=0)
   
   S = scp.sparse.csc_array(S)
   D = scp.sparse.csc_array(D)
@@ -60,7 +66,7 @@ def diff_pen(n,m=2,Z=None):
 
   return pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols
 
-def id_dist_pen(n,f=None):
+def id_dist_pen(n,constraint,f=None):
   # Creates identity matrix penalty in case f(i) = 1
   # Can be used to create event-distance weighted penalty matrices for deconvolving sms GAMMs
   elements = [0.0 for _ in range(n)]
@@ -75,7 +81,7 @@ def id_dist_pen(n,f=None):
 
   return elements,idx,idx,elements,idx,idx # I' @ I = I
 
-def TP_pen(S_j,D_j,j,ks):
+def TP_pen(S_j,D_j,j,ks,constraint):
    # Tensor smooth penalty - not including the reparameterization of Wood (2017) 5.6.2
    # but reflecting Eilers & Marx (2003) instead
    if j == 0:
@@ -93,6 +99,17 @@ def TP_pen(S_j,D_j,j,ks):
          S_TP = scp.sparse.kron(S_TP,scp.sparse.identity(ks[i]),format='csc')
          D_TP = scp.sparse.kron(D_TP,scp.sparse.identity(ks[i]),format='csc')
    
+   if constraint is not None:
+     Z = constraint.Z
+     if constraint.type == ConstType.QR:
+       S_TP = Z.T @ S_TP @ Z
+       D_TP = Z.T @ D_TP
+       S_TP = scp.sparse.csc_array(S_TP)
+       D_TP = scp.sparse.csc_array(D_TP)
+     elif constraint.type == ConstType.DROP:
+        S_TP = scp.sparse.csc_array(np.delete(np.delete(S_TP.toarray(),Z,axis=1),Z,axis=0))
+        D_TP = scp.sparse.csc_array(np.delete(D_TP.toarray(),Z,axis=0))
+
    pen_data,pen_rows,pen_cols = translate_sparse(S_TP)
    chol_data,chol_rows,chol_cols = translate_sparse(D_TP)
       
