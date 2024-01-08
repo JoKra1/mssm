@@ -66,7 +66,7 @@ class Family:
       # Log-probability of observing every value in y under this family with mean=mu
       pass
 
-   def deviance(self,u,mu):
+   def deviance(self,y,mu):
       # Deviance: 2 * (llk_max - llk_c) * scale (Wood, 2017; Faraway, 2016)
       pass
 

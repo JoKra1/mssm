@@ -106,6 +106,13 @@ def get_coef_info_smooth(has_scale_split,n_j,sterm,factor_levels):
     # Calculate Coef names
     if len(vars) > 1:
         term_n_coef = np.prod(sterm.nk)
+        if sterm.te and sterm.is_identifiable:
+           # identifiable te() terms loose one coefficient since the identifiability constraint
+           # is computed after the tensor product calculation. So this term behaves
+           # different than all other terms in mssm, which is a bit annoying. But there is
+           # no easy solution - we could add 1 coefficient to the marginal basis for one variable
+           # but then we will always favor one direction.
+           term_n_coef -= 1        
     else:
         term_n_coef = sterm.nk
 
@@ -744,15 +751,18 @@ class Formula():
          
          sterm.Z = []
          vars = sterm.variables
-         matrix_term = None
+         matrix_term = None # for Te basis
          for vi in range(len(vars)):
             # If a smooth term needs to be identifiable I act as if you would have asked for nk+1!
             # so that the identifiable term is of the dimension expected.
             
             if len(vars) > 1:
-               id_nk = sterm.nk[vi] + 1
+               id_nk = sterm.nk[vi]
             else:
-               id_nk = sterm.nk + 1
+               id_nk = sterm.nk
+            
+            if sterm.te == False:
+               id_nk += 1
 
             matrix_term_v = sterm.basis(None,self.cov_flat[self.NOT_NA_flat,var_map[vars[vi]]],
                                       None,id_nk,min_c=self.__var_mins[vars[vi]],
@@ -1351,6 +1361,8 @@ def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,v
    # Calculate Coef number for control checks
    if len(vars) > 1:
       n_coef = np.prod(sterm.nk)
+      if sterm.te and sterm.is_identifiable:
+         n_coef -= 1
    else:
       n_coef = sterm.nk
    #print(n_coef)
@@ -1373,7 +1385,7 @@ def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,v
       else:
          id_nk = sterm.nk
 
-      if sterm.is_identifiable:
+      if sterm.is_identifiable and sterm.te == False:
          id_nk += 1
 
       #print(var_mins[vars[0]],var_maxs[vars[0]])

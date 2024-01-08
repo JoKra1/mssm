@@ -20,13 +20,13 @@ def cpp_solve_coef(y,X,S):
 def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,scale,verbose=False):
   # Compute a generalized Fellner Schall update step for a lambda term. This update rule is
   # discussed in Wood & Fasiolo (2016) and used here because of it's efficiency.
-  
+  # ToDo: (gInv @ emb_SJ).trace() should be equal to rank(S_J)/cLam for single penalty terms (Wood, 2020)
   num = max(0,(gInv @ emb_SJ).trace() - Bps)
   denom = max(0,cCoef.T @ emb_SJ @ cCoef)
 
   # Especially when using Null-penalties denom can realisitically become
   # equal to zero: every coefficient of a term is penalized away. In that
-  # case num /denom is not defined so we return directly.
+  # case num /denom is not defined so we set nLam to nLam_max.
   if denom <= 0: # Prevent overflow
      nLam = 1e+7
   else:
