@@ -348,7 +348,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    if len(penalties) > 0:
       pen_dev += coef.T @ S_emb @ coef
 
-   # Now we propose a lambda extension vial the Fellner Schall method
+   # Now we propose a lambda extension via the Fellner Schall method
    # by Wood & Fasiolo (2016)
    # We also consider an extension term as reccomended by Wood & Fasiolo (2016)
    extend_by = 2
@@ -454,20 +454,23 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
             lam_grad = [grad_lambda(S_pinv,penalties[lti].S_J_emb,Bs[lti],n_coef,scale) for lti in range(len(penalties))]
             lam_grad = np.array(lam_grad).reshape(-1,1) 
             check = lam_grad.T @ lam_delta
-            #print(lam_grad,lam_delta,check)
 
             if check[0,0] < 0 and control_lambda: # because of minimization in Wood (2017) they use a different check.
-               # Cut the step taken in half
+               # Reset extension or cut the step taken in half
                for lti,lTerm in enumerate(penalties):
                   if extend_lambda and extend_by > 1:
+                     # I experimented with just iteratively reducing the step-size but it just takes too many
+                     # wasted iterations then. Thus, I now just reset the extension factor below. It can then build up again
+                     # if needed.
                      lTerm.lam -= lam_delta[lti][0]
-                     lam_delta[lti] *= (1 - 0.5/extend_by)
+                     lam_delta[lti] /= extend_by
                      lTerm.lam += lam_delta[lti][0]
                   else: # If the step size extension is already at the minimum, fall back to the strategy by Wood (2017) to just half the step
                      lam_delta[lti] = lam_delta[lti]/2
                      lTerm.lam -= lam_delta[lti][0]
+
                if extend_lambda and extend_by > 1:
-                  extend_by -= 0.5 # Try shorter step next time.
+                  extend_by = 1
             else:
                if extend_lambda and lam_checks == 0: # Try longer step next time.
                   extend_by += 0.5
