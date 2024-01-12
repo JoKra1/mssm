@@ -97,6 +97,10 @@ class f(GammTerm):
     :param te: For tensor interaction terms only. If set to false, the term mimics the behavior of ti() in mgcv (Wood, 2017).
     Otherwise, the term behaves like a te() term in mgcv - i.e., the marginal basis functions are not removed from the interaction.
     :type te: bool, optional
+    :param constraint: What kind of identifiability constraints should be absorbed by the terms (if they are to be identifiable). Either QR-based
+    constraints (default, well-behaved, expensive infill), by means of column-dropping (no infill, not so well-behaved for large k), or by means of
+    difference re-coding (little infill, not so well behaved for small k).
+    :type constraint: mssm.src.constraints.ConstType, optional
     :param identifiable: Whether or not the constant should be removed from the space of functions this term can
     fit. Achieved by enforcing that 1.T @ X = 0 (X here is the spline matrix computed for the observed data;
     see Wood, 2017 for details). Necessary in most cases to keep the model identifiable.
@@ -136,6 +140,7 @@ class f(GammTerm):
                 id:int=None,
                 nk:int or list[int] = 9,
                 te: bool = False,
+                constraint:penalties.ConstType=penalties.ConstType.DROP,
                 identifiable:bool=True,
                 basis:Callable=smooths.B_spline_basis,
                 basis_kwargs:dict={"convolve":False},
@@ -182,7 +187,7 @@ class f(GammTerm):
         # Initialization: ToDo: the deepcopy can be dropped now.
         super().__init__(variables, TermType.SMOOTH, is_penalized, copy.deepcopy(penalty), copy.deepcopy(pen_kwargs))
         self.is_identifiable = identifiable
-        self.Z = None
+        self.Z = constraint
         self.basis = basis
         self.basis_kwargs = basis_kwargs
         self.by = by
@@ -240,6 +245,10 @@ class fs(f):
     identifiability constraints. This is the opposite to how this is handled in mgcv: specifying nk=10 for "fixed" univariate smooths
     results in 9 basis functions being available. However, for a smooth in mgcv with basis='fs', 10 basis functions will remain available.
     :type nk: int or list[int], optional
+    :param constraint: What kind of identifiability constraints should be absorbed by the terms (if they are to be identifiable). Either QR-based
+    constraints (default, well-behaved, expensive infill), by means of column-dropping (no infill, not so well-behaved for large k), or by means of
+    difference re-coding (little infill, not so well behaved for small k).
+    :type constraint: mssm.src.constraints.ConstType, optional
     :param basis: The basis functions to use to construct the spline matrix. By default a B-spline basis
     (Eilers & Marx, 2010) implemented in ``src.smooths.B_spline_basis``.
     :type basis: Callable, optional
@@ -255,13 +264,14 @@ class fs(f):
                 variables: list,
                 rf: str = None,
                 nk: int = 9,
+                constraint:penalties.ConstType=penalties.ConstType.DROP,
                 basis: Callable = smooths.B_spline_basis,
                 basis_kwargs: dict = {},
                 by_latent: bool = False):
 
       penalty = [penalties.PenType.DIFFERENCE]
       pen_kwargs = [{"m":1}]
-      super().__init__(variables, rf, None, 99, nk+1, False, False,
+      super().__init__(variables, rf, None, 99, nk+1, False, constraint, False,
                        basis, basis_kwargs, by_latent,
                        True, True, penalty, pen_kwargs)
         

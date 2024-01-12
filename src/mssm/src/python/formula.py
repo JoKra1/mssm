@@ -341,9 +341,6 @@ class Formula():
     :type split_scale: bool, optional
     :param n_j: Number of latent states to estimate. Only relevant if a ``mssm.models.sMsGAMM`` is to be estimated.
     :type n_j: int, optional
-    :param constraint: What kind of identifiability constraints should be absorbed by the terms (if they are to be identifiable). Either QR-based
-    constraints (default, well-behaved, expensive infill) or by means of column-dropping (no infill, not so well-behaved).
-    :type constraint: mssm.src.constraints.ConstType, optional
     """
     def __init__(self,
                  lhs:lhs,
@@ -351,8 +348,7 @@ class Formula():
                  data:pd.DataFrame,
                  series_id:str or None=None,
                  split_scale:bool=False,
-                 n_j:int=3,
-                 constraint:ConstType=ConstType.DROP) -> None:
+                 n_j:int=3) -> None:
         
         self.__lhs = lhs
         self.__terms = terms
@@ -395,8 +391,6 @@ class Formula():
         self.sid = None
         # Penalties
         self.penalties = None
-        # Constraints
-        self.constraint = constraint
         
         # Perform input checks first for LHS/Dependent variable.
         if self.__lhs.variable not in self.__data.columns:
@@ -748,7 +742,8 @@ class Formula():
 
          if not sterm.is_identifiable:
             continue
-         
+
+         term_constraint = sterm.Z
          sterm.Z = []
          vars = sterm.variables
          matrix_term = None # for Te basis
@@ -770,13 +765,15 @@ class Formula():
 
             if sterm.te == False:
 
-               if self.constraint == ConstType.QR:
+               if term_constraint == ConstType.QR:
                   # Wood (2017) 5.4.1 Identifiability constraints via QR. ToDo: Replace with cheaper reflection method.
                   C = np.sum(matrix_term_v,axis=0).reshape(-1,1)
                   Q,_ = scp.linalg.qr(C,pivoting=False,mode='full')
                   sterm.Z.append(Constraint(Q[:,1:],ConstType.QR))
-               elif self.constraint == ConstType.DROP:
+               elif term_constraint == ConstType.DROP:
                   sterm.Z.append(Constraint(int(matrix_term_v.shape[1]/2),ConstType.DROP))
+               elif term_constraint == ConstType.DIFF:
+                  sterm.Z.append(Constraint(None,ConstType.DIFF))
             else:
                if vi == 0:
                   matrix_term = matrix_term_v
@@ -785,12 +782,14 @@ class Formula():
          
          # Now deal with te basis
          if sterm.te:
-            if self.constraint == ConstType.QR:
+            if term_constraint == ConstType.QR:
                C = np.sum(matrix_term,axis=0).reshape(-1,1)
                Q,_ = scp.linalg.qr(C,pivoting=False,mode='full')
                sterm.Z.append(Constraint(Q[:,1:],ConstType.QR))
-            elif self.constraint == ConstType.DROP:
-                  sterm.Z.append(Constraint(int(matrix_term.shape[1]/2),ConstType.DROP))
+            elif term_constraint == ConstType.DROP:
+               sterm.Z.append(Constraint(int(matrix_term.shape[1]/2),ConstType.DROP))
+            elif term_constraint == ConstType.DIFF:
+                  sterm.Z.append(Constraint(None,ConstType.DIFF))
 
     def build_penalties(self):
       """Builds the penalties required by ``self.__terms``. Called automatically whenever needed. Call manually only for testing."""
@@ -1398,6 +1397,11 @@ def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,v
             matrix_term_v = matrix_term_v @ sterm.Z[vi].Z
          elif sterm.Z[vi].type == ConstType.DROP:
             matrix_term_v = np.delete(matrix_term_v,sterm.Z[vi].Z,axis=1)
+         elif sterm.Z[vi].type == ConstType.DIFF:
+            # Applies difference re-coding for sum-to-zero coefficients.
+            # Based on smoothCon in mgcv(2017). See constraints.py
+            # for more details.
+            matrix_term_v = np.diff(matrix_term_v)
       
       if vi == 0:
          matrix_term = matrix_term_v
@@ -1409,14 +1413,15 @@ def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,v
          matrix_term = matrix_term @ sterm.Z[0].Z
       elif sterm.Z[0].type == ConstType.DROP:
          matrix_term = np.delete(matrix_term,sterm.Z[0].Z,axis=1)
+      elif sterm.Z[0].type == ConstType.DIFF:
+         matrix_term = np.diff(matrix_term)
 
    m_rows, m_cols = matrix_term.shape
    #print(m_cols)
-   term_ridx = [ridx[:] for _ in range(m_cols)]
-
+   
    # Handle optional by keyword
    if sterm.by is not None:
-      new_term_ridx = []
+      term_ridx = []
 
       by_cov = cov_flat[:,var_map[sterm.by]]
       
@@ -1424,21 +1429,21 @@ def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,v
       for by_level in range(len(by_levels)):
          by_cidx = by_cov == by_level
          for m_coli in range(m_cols):
-            new_term_ridx.append(term_ridx[m_coli][by_cidx,])
-
-      term_ridx = new_term_ridx
+            term_ridx.append(ridx[by_cidx,])
    
    # Handle optional binary keyword
-   if sterm.binary is not None:
-      new_term_ridx = []
+   elif sterm.binary is not None:
+      term_ridx = []
 
       by_cov = cov_flat[:,var_map[sterm.binary[0]]]
       by_cidx = by_cov == sterm.binary_level
 
       for m_coli in range(m_cols):
-         new_term_ridx.append(term_ridx[m_coli][by_cidx,])
+         term_ridx.append(ridx[by_cidx,])
 
-      term_ridx = new_term_ridx
+   # No by or binary just use rows/cols as they are
+   else:
+      term_ridx = [ridx[:] for _ in range(m_cols)]
 
    # Handle split by latent variable if a shared scale term across latent stages is assumed.
    if sterm.by_latent is not False and has_scale_split is False:
@@ -1471,6 +1476,7 @@ def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,v
          new_cols.extend([ci for _ in range(len(final_ridx[cidx]))])
       new_ci += 1
       ci += 1
+      term_ridx[m_coli] = None
    
    return new_elements,new_rows,new_cols,new_ci
 

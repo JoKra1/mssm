@@ -56,7 +56,10 @@ def diff_pen(n,constraint,m=2):
      elif constraint.type == ConstType.DROP:
         S = np.delete(np.delete(S,Z,axis=1),Z,axis=0)
         D = np.delete(D,Z,axis=0)
-  
+     elif constraint.type == ConstType.DIFF:
+        D = np.diff(D,axis=0) # Correct for column differencing applied to X! See smoothCon help for mgcv (Wood, 2017)
+        S = D @ D.T
+        
   S = scp.sparse.csc_array(S)
   D = scp.sparse.csc_array(D)
 
@@ -109,6 +112,11 @@ def TP_pen(S_j,D_j,j,ks,constraint):
      elif constraint.type == ConstType.DROP:
         S_TP = scp.sparse.csc_array(np.delete(np.delete(S_TP.toarray(),Z,axis=1),Z,axis=0))
         D_TP = scp.sparse.csc_array(np.delete(D_TP.toarray(),Z,axis=0))
+     elif constraint.type == ConstType.DIFF:
+        D_TP = np.diff(D_TP.toarray(),axis=0) # Correct for column differencing applied to X! See smoothCon help for mgcv (Wood, 2017)
+        S_TP = D_TP @ D_TP.T
+        S_TP = scp.sparse.csc_array(S_TP)
+        D_TP = scp.sparse.csc_array(D_TP)
 
    pen_data,pen_rows,pen_cols = translate_sparse(S_TP)
    chol_data,chol_rows,chol_cols = translate_sparse(D_TP)
