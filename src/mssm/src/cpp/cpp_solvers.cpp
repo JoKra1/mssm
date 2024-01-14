@@ -59,6 +59,58 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::SparseMatrix<double>,Eigen::Vector
     
 }
 
+std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solve_am(Eigen::VectorXd y, Eigen::SparseMatrix<double> X, Eigen::SparseMatrix<double> S){
+    // Permuted Cholesky:
+    // P * A * P' = L * L'
+    // A = P' * L * L' * P
+    // U = P' * L
+    // U' = L' * P
+    // A = U * U'
+    // Inverse:
+    // inv(A) = P' * Inv(L)' * inv(L) * Perm
+
+    int Xcols = X.cols();
+
+    // Prepare and compute Cholesky factor of X' * X + S
+    Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver;
+    solver.compute(X.transpose() * X + S);
+
+    // Initialize coef vector
+    Eigen::VectorXd coef;
+    coef.setZero(Xcols);
+
+    // Also setup identity target for inverse of L' (see below)
+    Eigen::SparseMatrix<double> id(Xcols,Xcols);
+    id.setIdentity();
+
+    // We also need inv(L) * P from P * X' * X + S * P' = L * L'
+    // so the inverse of the lower matrix from the solver times the
+    // permutation matrix created for us by eigen.
+
+    // First get the permutation
+    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic> P(solver.permutationP());
+
+    if (solver.info()!=Eigen::Success)
+    {
+
+        return std::make_tuple(std::move(id),P.indices(),std::move(coef),1);
+    }
+
+    // Solve for coef
+    coef = solver.solve(X.transpose() * y);
+
+    if (solver.info()!=Eigen::Success)
+    {
+
+        return std::make_tuple(std::move(id),P.indices(),std::move(coef),2);
+    }
+
+    // Now get inv(L)
+    solver.matrixL().solveInPlace(id);
+
+    return std::make_tuple(std::move(id),P.indices(),std::move(coef),0);
+}
+
 std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> solve_L(Eigen::SparseMatrix<double> X, Eigen::SparseMatrix<double> S){
     // Permuted Cholesky:
     // P * A * P' = L * L'
@@ -93,7 +145,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> solve_L(Eigen::Spars
     // permutation matrix created for us by eigen (last part is done in Python).
     solver.matrixL().solveInPlace(id);
 
-    return std::make_tuple(std::move(id),P.indices(),0);;
+    return std::make_tuple(std::move(id),P.indices(),0);
 }
 
 std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solve_coef(Eigen::VectorXd y, Eigen::SparseMatrix<double> X, Eigen::SparseMatrix<double> S){
@@ -154,6 +206,7 @@ PYBIND11_MODULE(cpp_solvers, m) {
 
     m.def("chol", &chol, "Compute cholesky factor L of A");
     m.def("pqr", &pqr, "Perform column pivoted QR decomposition of A");
+    m.def("solve_am", &solve_am, "Solve additive model, return coefficient vector and inverse");
     m.def("solve_L", &solve_L, "Solve cholesky of XX+S");
     m.def("solve_coef", &solve_coef, "Solve additive model coefficients");
     m.def("solve_tr",&solve_tr,"Solve for trace matrix required for lambda update.");

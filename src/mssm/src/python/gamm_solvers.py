@@ -11,6 +11,9 @@ def cpp_chol(A):
 def cpp_qr(A):
    return cpp_solvers.pqr(A)
 
+def cpp_solve_am(y,X,S):
+   return cpp_solvers.solve_am(y,X,S)
+
 def cpp_solve_coef(y,X,S):
    return cpp_solvers.solve_coef(y,X,S)
 
@@ -193,13 +196,18 @@ def compute_eigen_perm(Pr):
    Perm = scp.sparse.csc_array((P,(Pr,Pc)),shape=(nP,nP))
    return Perm
 
-def calculate_edf(L,Perm,penalties,colsX):
+def apply_eigen_perm(Pr,InvCholXXSP):
+   Perm = compute_eigen_perm(Pr)
+   InvCholXXS = InvCholXXSP @ Perm
+   return InvCholXXS
+
+def calculate_edf(InvCholXXS,penalties,colsX):
    total_edf = colsX
    Bs = []
    term_edfs = []
 
    for lTerm in penalties:
-      B = cpp_solve_tr(L,Perm,lTerm.D_J_emb) # Needed for Fellner Schall update (Wood & Fasiolo, 2016)
+      B = InvCholXXS @ lTerm.D_J_emb # Needed for Fellner Schall update (Wood & Fasiolo, 2016)
       Bps = B.power(2).sum()
       pen_params = lTerm.lam * Bps
       total_edf -= pen_params
@@ -246,7 +254,7 @@ def calculate_term_edf(penalties,param_penalized):
    
    return term_edf
 
-def update_scale_edf(y,z,eta,Wr,rowsX,colsX,L,Pr,family,penalties):
+def update_scale_edf(y,z,eta,Wr,rowsX,colsX,InvCholXXSP,Pr,family,penalties):
    # Updates the scale of the model. For this the edf
    # are computed as well - they are returned because they are needed for the
    # lambda step proposal anyway.
@@ -259,11 +267,11 @@ def update_scale_edf(y,z,eta,Wr,rowsX,colsX,L,Pr,family,penalties):
       wres = y - eta
 
    # Calculate total and term wise edf
-   Perm = compute_eigen_perm(Pr)
+   InvCholXXS = apply_eigen_perm(Pr,InvCholXXSP)
 
    # If there are penalized terms we need to adjust the total_edf
    if len(penalties) > 0:
-      total_edf, term_edfs, Bs = calculate_edf(L,Perm,penalties,colsX)
+      total_edf, term_edfs, Bs = calculate_edf(InvCholXXS,penalties,colsX)
    else:
       total_edf = colsX
       term_edfs = None
@@ -275,11 +283,11 @@ def update_scale_edf(y,z,eta,Wr,rowsX,colsX,L,Pr,family,penalties):
    else:
       scale = family.scale
    
-   return wres,total_edf,term_edfs,Bs,scale
+   return wres,InvCholXXS,total_edf,term_edfs,Bs,scale
 
 def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,penalties):
    # Solves the additive model for a given set of weights and penalty
-   L, Pr, coef, code = cpp_solve_coef(yb,Xb,S_emb)
+   InvCholXXSP, Pr, coef, code = cpp_solve_am(yb,Xb,S_emb)
 
    if code != 0:
       raise ArithmeticError(f"Solving for coef failed with code {code}. Model is likely unidentifiable.")
@@ -292,8 +300,8 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,penalties):
       mu = family.link.fi(eta)
 
    # Update scale parameter
-   wres,total_edf,term_edfs,Bs,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,L,Pr,family,penalties)
-   return eta,mu,coef,total_edf,term_edfs,Bs,scale,wres
+   wres,InvCholXXS,total_edf,term_edfs,Bs,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,InvCholXXSP,Pr,family,penalties)
+   return eta,mu,coef,InvCholXXS,total_edf,term_edfs,Bs,scale,wres
    
 def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
                       maxiter=10,pinv="svd",conv_tol=1e-7,
@@ -335,6 +343,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    
    # Solve additive model
    eta,mu,coef,\
+   InvCholXXS,\
    total_edf,\
    term_edfs,\
    Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
@@ -444,6 +453,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
 
             # Update coefficients
             eta,mu,n_coef,\
+            InvCholXXS,\
             total_edf,\
             term_edfs,\
             Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
@@ -495,6 +505,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
          # If there are no penalties simply perform a newton step
          # for the coefficients only
          eta,mu,n_coef,\
+         InvCholXXS,\
          total_edf,\
          term_edfs,\
          Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
@@ -512,14 +523,5 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    # Final term edf
    if not term_edfs is None:
       term_edfs = calculate_term_edf(penalties,term_edfs)
-
-   # Compute inverse of cholesky factor L of X.T @ X + S for CI computation.
-   InvCholXXSP,P,code = cpp_solve_L(Xb,S_emb)
-
-   if code != 0:
-      raise ArithmeticError(f"Solving for L failed with code {code}.")
-
-   Perm = compute_eigen_perm(P)
-   InvCholXXS = InvCholXXSP @ Perm
 
    return coef,eta,wres,scale,InvCholXXS,total_edf,term_edfs,penalty

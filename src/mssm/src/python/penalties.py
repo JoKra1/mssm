@@ -137,3 +137,4 @@ class LambdaTerm:
   start_index:int = None
   frozen:bool = False
   type:PenType = None
+  rank:int or None = None
