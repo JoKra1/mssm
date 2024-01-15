@@ -20,11 +20,7 @@ pip install mssm
 pip install matplotlib # Only needed for tutorials
 ```
 
-The fourth line, installing ``matplotlib`` is only necessary if you want to run the tutorials. Note: pypi will only reflect releases (Basically, the state of the stable branch). Pushes to main continue to be distributed to test.pypi, so if you need the latest changes you can get them from [test.pypi](https://test.pypi.org/project/mssm/#description). In that case, you need to replace the third line in the code above with:
-
-```
-pip install -i https://test.pypi.org/simple/ mssm
-```
+The fourth line, installing ``matplotlib`` is only necessary if you want to run the tutorials. Note: pypi will only reflect releases (Basically, the state of the stable branch). If you urgently need a feature currently only available on the main branch, consider building from source.
 
 ### Building from source
 
@@ -43,4 +39,9 @@ pip install .
 
 ## Contributing
 
-Contributions are welcome! Feel free to open issues or make pull-requests to main.
+Contributions are welcome! Feel free to open issues or make pull-requests to main. Some problems that could use work are listed below.
+
+ - Tensor smooth term setup is not very efficient and takes quite a lot of time.
+ - Spline bases are always first evaluated as dense matrices followed by pruning zeros away afterwards. This is quite wasteful.
+ - Fellner-Schall update computes generalized inverse for every term. This works but is not necessary. For univariate terms with a single penalty this could be based on the pre-computed rank (see Wood, 2020: *Inference and computation with generalized additive models and their extensions*) of the penalty matrix (for B-splines this is super easy to obtain).
+ - Constraints. Sum-to-zero constraints (1.T @ f(x) = 0) are not so attractive from a sparse model perspective. However, that alternatives result in wider CIs is well documented (see Wood, 2017 for example). Finding a good trade-off is still high on my list, the alternatives implemented so far perform okayish.

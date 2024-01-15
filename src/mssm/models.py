@@ -163,7 +163,7 @@ class GAMM(MSSM):
             
             return model_mat
     
-    def print_smooth_terms(self):
+    def print_smooth_terms(self,pen_cutoff=0.2):
         """Prints the name of the smooth terms included in the model. After fitting, the estimated degrees of freedom per term are printed as well."""
         term_names = np.array(self.formula.get_term_names())
         smooth_names = [*term_names[self.formula.get_smooth_term_idx()],
@@ -177,14 +177,27 @@ class GAMM(MSSM):
             coding_factors = self.formula.get_coding_factors()
             name_idx = 0
             edf_idx = 0
+            pen_out = 0
             for sti in self.formula.get_smooth_term_idx():
                 sterm = terms[sti]
                 if not sterm.by is None and sterm.id is None:
                     for li in range(len(self.formula.get_factor_levels()[sterm.by])):
-                        print(smooth_names[name_idx] + f": {coding_factors[sterm.by][li]}; edf: {self.term_edf[edf_idx]}")
+                        t_edf = round(self.term_edf[edf_idx],ndigits=3)
+                        e_str = smooth_names[name_idx] + f": {coding_factors[sterm.by][li]}; edf: {t_edf}"
+                        if t_edf < pen_cutoff:
+                            # Term has effectively been removed from the model
+                            e_str += " *"
+                            pen_out += 1
+                        print(e_str)
                         edf_idx += 1
                 else:
-                    print(smooth_names[name_idx] + f"; edf: {self.term_edf[edf_idx]}")
+                    t_edf = round(self.term_edf[edf_idx],ndigits=3)
+                    e_str = smooth_names[name_idx] + f"; edf: {t_edf}"
+                    if t_edf < pen_cutoff:
+                        # Term has effectively been removed from the model
+                        e_str += " *"
+                        pen_out += 1
+                    print(e_str)
                     edf_idx += 1
                 
                 name_idx += 1
@@ -193,6 +206,11 @@ class GAMM(MSSM):
                 print(smooth_names[name_idx] + f"; edf: {self.term_edf[edf_idx]}")
                 edf_idx += 1
                 name_idx += 1
+            
+            if pen_out == 1:
+                print(f"\n{pen_out} term has been effectively penalized to zero and is marked with a '*'")
+            elif pen_out > 1:
+                print(f"\n{pen_out} terms have been effectively penalized to zero and are marked with a '*'")
                         
 
                 
