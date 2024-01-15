@@ -17,16 +17,22 @@ def cpp_solve_am(y,X,S):
 def cpp_solve_coef(y,X,S):
    return cpp_solvers.solve_coef(y,X,S)
 
+def cpp_solve_L(X,S):
+   return cpp_solvers.solve_L(X,S)
+
+def cpp_solve_tr(L,P,D):
+   return cpp_solvers.solve_tr(L,P,D)
+
 def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,scale,verbose=False):
   # Compute a generalized Fellner Schall update step for a lambda term. This update rule is
   # discussed in Wood & Fasiolo (2016) and used here because of it's efficiency.
-  
+  # ToDo: (gInv @ emb_SJ).trace() should be equal to rank(S_J)/cLam for single penalty terms (Wood, 2020)
   num = max(0,(gInv @ emb_SJ).trace() - Bps)
   denom = max(0,cCoef.T @ emb_SJ @ cCoef)
 
   # Especially when using Null-penalties denom can realisitically become
   # equal to zero: every coefficient of a term is penalized away. In that
-  # case num /denom is not defined so we return directly.
+  # case num /denom is not defined so we set nLam to nLam_max.
   if denom <= 0: # Prevent overflow
      nLam = 1e+7
   else:
@@ -183,11 +189,15 @@ def update_PIRLS(y,yb,mu,eta,X,Xb,family):
    
    return yb,Xb,z,Wr
 
-def apply_eigen_perm(Pr,InvCholXXSP):
+def compute_eigen_perm(Pr):
    nP = len(Pr)
    P = [1 for _ in range(nP)]
    Pc = [c for c in range(nP)]
    Perm = scp.sparse.csc_array((P,(Pr,Pc)),shape=(nP,nP))
+   return Perm
+
+def apply_eigen_perm(Pr,InvCholXXSP):
+   Perm = compute_eigen_perm(Pr)
    InvCholXXS = InvCholXXSP @ Perm
    return InvCholXXS
 
@@ -347,7 +357,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    if len(penalties) > 0:
       pen_dev += coef.T @ S_emb @ coef
 
-   # Now we propose a lambda extension vial the Fellner Schall method
+   # Now we propose a lambda extension via the Fellner Schall method
    # by Wood & Fasiolo (2016)
    # We also consider an extension term as reccomended by Wood & Fasiolo (2016)
    extend_by = 2
@@ -454,20 +464,23 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
             lam_grad = [grad_lambda(S_pinv,penalties[lti].S_J_emb,Bs[lti],n_coef,scale) for lti in range(len(penalties))]
             lam_grad = np.array(lam_grad).reshape(-1,1) 
             check = lam_grad.T @ lam_delta
-            #print(lam_grad,lam_delta,check)
 
             if check[0,0] < 0 and control_lambda: # because of minimization in Wood (2017) they use a different check.
-               # Cut the step taken in half
+               # Reset extension or cut the step taken in half
                for lti,lTerm in enumerate(penalties):
                   if extend_lambda and extend_by > 1:
+                     # I experimented with just iteratively reducing the step-size but it just takes too many
+                     # wasted iterations then. Thus, I now just reset the extension factor below. It can then build up again
+                     # if needed.
                      lTerm.lam -= lam_delta[lti][0]
-                     lam_delta[lti] *= (1 - 0.5/extend_by)
+                     lam_delta[lti] /= extend_by
                      lTerm.lam += lam_delta[lti][0]
                   else: # If the step size extension is already at the minimum, fall back to the strategy by Wood (2017) to just half the step
                      lam_delta[lti] = lam_delta[lti]/2
                      lTerm.lam -= lam_delta[lti][0]
+
                if extend_lambda and extend_by > 1:
-                  extend_by -= 0.5 # Try shorter step next time.
+                  extend_by = 1
             else:
                if extend_lambda and lam_checks == 0: # Try longer step next time.
                   extend_by += 0.5

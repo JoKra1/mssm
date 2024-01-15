@@ -47,10 +47,12 @@ class f(GammTerm):
     """
     A univariate or tensor interaction smooth term. If ``variables`` only contains a
     single variable 'x', this term will represent a univariate f(x) in a model y = a + f(x). If
-    ``variables`` contains two variables 'x' and 'y', then this term will represent
-    the tensor interaction f(x,y) in a model a + f(x) + f(y) + f(x,y). In that case it is thus necessary
-    to add 'main effect' ``f()`` terms for 'x' and 'y'. In other words, the behavior for multiple
-    variables here mimicks the ``ti()`` term available in mgcv (Wood, 2017).
+    ``variables`` contains two variables 'x' and 'y', then this term will either represent
+    the tensor interaction f(x,y) in a model a + f(x) + f(y) + f(x,y) or in a model a + f(x,y).
+    The first behavior is achieved by setting ``te=False``. In that case it is thus necessary
+    to add 'main effect' ``f()`` terms for 'x' and 'y'. In other words, the behavior then mimicks
+    the ``ti()`` term available in mgcv (Wood, 2017). If ``te=True``, the term instead behaves like
+    a ``te()`` term in mgcv, so no separate smooth effects for the main effects need to be included.
 
     By default a B-spline basis is used with ``nk``=9 basis functions (after removing identifiability
     constrains). This is equivalent to mgcv's default behavior of using 10 basis functions
@@ -92,6 +94,13 @@ class f(GammTerm):
     final number of basis functions for this term (i.e., mssm acts like you would have asked for 10 basis
     functions if ``nk``=9 and identifiable=True; the default).
     :type nk: int or list[int], optional
+    :param te: For tensor interaction terms only. If set to false, the term mimics the behavior of ti() in mgcv (Wood, 2017).
+    Otherwise, the term behaves like a te() term in mgcv - i.e., the marginal basis functions are not removed from the interaction.
+    :type te: bool, optional
+    :param constraint: What kind of identifiability constraints should be absorbed by the terms (if they are to be identifiable). Either QR-based
+    constraints (default, well-behaved, expensive infill), by means of column-dropping (no infill, not so well-behaved for large k), or by means of
+    difference re-coding (little infill, not so well behaved for small k).
+    :type constraint: mssm.src.constraints.ConstType, optional
     :param identifiable: Whether or not the constant should be removed from the space of functions this term can
     fit. Achieved by enforcing that 1.T @ X = 0 (X here is the spline matrix computed for the observed data;
     see Wood, 2017 for details). Necessary in most cases to keep the model identifiable.
@@ -130,6 +139,8 @@ class f(GammTerm):
                 binary:list[str,str] or None = None,
                 id:int=None,
                 nk:int or list[int] = 9,
+                te: bool = False,
+                constraint:penalties.ConstType=penalties.ConstType.DROP,
                 identifiable:bool=True,
                 basis:Callable=smooths.B_spline_basis,
                 basis_kwargs:dict={"convolve":False},
@@ -142,11 +153,18 @@ class f(GammTerm):
         if not binary is None and not by is None:
            raise ValueError("Binary smooths cannot also have a by-keyword.")
         
+        if te==True and len(variables) == 1:
+           raise ValueError("``te`` can only be set to true in case multiple variables are provided via ``variables``.")
+        
         if not binary is None and identifiable:
            # Remove identifiability constrain for
            # binary difference smooths.
            identifiable = False
-           nk = nk + 1
+           # For te terms this can be skipped for these one coef is simply
+           # subtracted after identifiability constraints have been observed,
+           # while for all other terms mssm acts as if one additional coef was requested.
+           if te is False:
+            nk = nk + 1
 
         # Default penalty setup
         if penalty is None:
@@ -169,7 +187,7 @@ class f(GammTerm):
         # Initialization: ToDo: the deepcopy can be dropped now.
         super().__init__(variables, TermType.SMOOTH, is_penalized, copy.deepcopy(penalty), copy.deepcopy(pen_kwargs))
         self.is_identifiable = identifiable
-        self.Z = None
+        self.Z = constraint
         self.basis = basis
         self.basis_kwargs = basis_kwargs
         self.by = by
@@ -183,6 +201,8 @@ class f(GammTerm):
          self.nk = nk
         else:
          self.nk = [nk for _ in range(len(variables))]
+
+        self.te = te
               
         self.by_latent = by_latent
 
@@ -225,6 +245,10 @@ class fs(f):
     identifiability constraints. This is the opposite to how this is handled in mgcv: specifying nk=10 for "fixed" univariate smooths
     results in 9 basis functions being available. However, for a smooth in mgcv with basis='fs', 10 basis functions will remain available.
     :type nk: int or list[int], optional
+    :param constraint: What kind of identifiability constraints should be absorbed by the terms (if they are to be identifiable). Either QR-based
+    constraints (default, well-behaved, expensive infill), by means of column-dropping (no infill, not so well-behaved for large k), or by means of
+    difference re-coding (little infill, not so well behaved for small k).
+    :type constraint: mssm.src.constraints.ConstType, optional
     :param basis: The basis functions to use to construct the spline matrix. By default a B-spline basis
     (Eilers & Marx, 2010) implemented in ``src.smooths.B_spline_basis``.
     :type basis: Callable, optional
@@ -240,13 +264,14 @@ class fs(f):
                 variables: list,
                 rf: str = None,
                 nk: int = 9,
+                constraint:penalties.ConstType=penalties.ConstType.DROP,
                 basis: Callable = smooths.B_spline_basis,
                 basis_kwargs: dict = {},
                 by_latent: bool = False):
 
       penalty = [penalties.PenType.DIFFERENCE]
       pen_kwargs = [{"m":1}]
-      super().__init__(variables, rf, None, 99, nk+1, False,
+      super().__init__(variables, rf, None, 99, nk+1, False, constraint, False,
                        basis, basis_kwargs, by_latent,
                        True, True, penalty, pen_kwargs)
         
