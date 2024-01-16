@@ -216,7 +216,7 @@ class GAMM(MSSM):
                 
     ##################################### Fitting #####################################
     
-    def fit(self,maxiter=30,conv_tol=1e-7,extend_lambda=True,control_lambda=True,restart=False):
+    def fit(self,maxiter=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,restart=False,progress_bar=True):
         """
         Fit the specified model.
 
@@ -278,7 +278,8 @@ class GAMM(MSSM):
         coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,y_flat,
                                                                          model_mat,penalties,self.formula.n_coef,
                                                                          self.family,maxiter,"svd",
-                                                                         conv_tol,extend_lambda,control_lambda)
+                                                                         conv_tol,extend_lambda,control_lambda,
+                                                                         progress_bar)
         
         self.__coef = coef
         self.__scale = scale # ToDo: scale name is used in another context for more general mssm..
@@ -662,7 +663,7 @@ class sMsGAMM(MSSM):
                     coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,state_y,
                                                                                     model_mat,penalties[j],self.formula.n_coef,
                                                                                     self.family,maxiter_inner,"svd",
-                                                                                    conv_tol,extend_lambda,control_lambda)
+                                                                                    conv_tol,extend_lambda,control_lambda,False)
                     
                     
                     
@@ -975,7 +976,7 @@ class sMsIRGAMM(sMsGAMM):
         coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,y_flat[NOT_NA_flat],
                                                                         model_mat_full,penalties,self.formula.n_coef,
                                                                         self.family,maxiter_inner,"svd",
-                                                                        conv_tol,extend_lambda,control_lambda)
+                                                                        conv_tol,extend_lambda,control_lambda,False)
 
         # For state proposals we can utilize a temparature schedule. See sMsGamm.fit().
         if schedule == "anneal":
@@ -1054,7 +1055,7 @@ class sMsIRGAMM(sMsGAMM):
             coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,y_flat[NOT_NA_flat],
                                                                              model_mat_full,penalties,self.formula.n_coef,
                                                                              self.family,maxiter_inner,"svd",
-                                                                             conv_tol,extend_lambda,control_lambda)
+                                                                             conv_tol,extend_lambda,control_lambda,False)
 
             # Next update all sojourn time distribution parameters
 

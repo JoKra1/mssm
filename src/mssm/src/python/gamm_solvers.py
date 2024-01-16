@@ -4,6 +4,7 @@ import warnings
 from .exp_fam import Family,Gaussian
 from .penalties import PenType,id_dist_pen,translate_sparse
 import cpp_solvers
+from tqdm import tqdm
 
 def cpp_chol(A):
    return cpp_solvers.chol(A)
@@ -305,7 +306,7 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,penalties):
    
 def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
                       maxiter=10,pinv="svd",conv_tol=1e-7,
-                      extend_lambda=True,control_lambda=True):
+                      extend_lambda=True,control_lambda=True,progress_bar=False):
    # Estimates a penalized Generalized additive mixed model, following the steps outlined in Wood (2017)
    # "Generalized Additive Models for Gigadata"
 
@@ -375,9 +376,11 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
       lam_delta = np.array(lam_delta).reshape(-1,1)
    
    # Loop to optimize smoothing parameter (see Wood, 2017)
-   converged = False
-   o_iter = 0
-   while o_iter < maxiter and not converged:
+   iterator = range(maxiter)
+   if progress_bar:
+      iterator = tqdm(iterator,desc="Fitting",leave=False)
+
+   for o_iter in iterator:
 
       # We need the previous deviance and penalized deviance
       # for step control and convergence control respectively
@@ -430,7 +433,8 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
 
          # Test for convergence (Step 2 in Wood, 2017)
          if abs(pen_dev - prev_pen_dev) < conv_tol*pen_dev:
-            converged = True
+            if progress_bar:
+               iterator.close()
             break
 
       # Update pseudo-dat weights for next coefficient step
@@ -510,9 +514,6 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
          term_edfs,\
          Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
                                                X,Xb,family,S_emb,penalties)
-
-      # Update number of iterations completed
-      o_iter += 1
 
    # Final penalty
    if len(penalties) > 0:
