@@ -38,7 +38,8 @@ class Constraint:
   Line 3 shows how the constraint can be absorbed for model fitting by first computing new bases (f_i(x) - f_{i-1}(x)) and then estimating
   the coefficients based on those (this is implemented in mgcv's ``smoothCon`` function when setting ``sparse.cons=2``). Note that the constrained
   model, just like when using the QR-based or dropping approach, requires dropping one of the k original coefficients for estimation since only k-1
-  coefficients are allowed to vary.
+  coefficients are allowed to vary. The same sum-to-zero constraint can be achieved by fixing one of the central bases in the original model to it's neighbor (e.g., setting b_2 = -b_3) or
+  by setting b_1= -b_2 - b_3 - b_4 - b_5. mssm fixes one of the central bases to it's neighbor.
 
   With a B-splines basis, it would be necessary that b_1 = b_2 = b_3 = b_4 = b_5 for the model to fit a constant f(x) over all values of x (Eilers & Marx, 1996).
   In the constrained model this is no longer possible due to b_1 = -b_2, effectively removing the constant from the space of functions that f(x) can approximate.

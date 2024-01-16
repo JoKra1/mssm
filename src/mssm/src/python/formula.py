@@ -773,7 +773,7 @@ class Formula():
                elif term_constraint == ConstType.DROP:
                   sterm.Z.append(Constraint(int(matrix_term_v.shape[1]/2),ConstType.DROP))
                elif term_constraint == ConstType.DIFF:
-                  sterm.Z.append(Constraint(None,ConstType.DIFF))
+                  sterm.Z.append(Constraint(int(matrix_term_v.shape[1]/2),ConstType.DIFF))
             else:
                if vi == 0:
                   matrix_term = matrix_term_v
@@ -789,7 +789,7 @@ class Formula():
             elif term_constraint == ConstType.DROP:
                sterm.Z.append(Constraint(int(matrix_term.shape[1]/2),ConstType.DROP))
             elif term_constraint == ConstType.DIFF:
-                  sterm.Z.append(Constraint(None,ConstType.DIFF))
+               sterm.Z.append(Constraint(int(matrix_term.shape[1]/2),ConstType.DIFF))
 
     def build_penalties(self):
       """Builds the penalties required by ``self.__terms``. Called automatically whenever needed. Call manually only for testing."""
@@ -1401,8 +1401,9 @@ def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,v
             # Applies difference re-coding for sum-to-zero coefficients.
             # Based on smoothCon in mgcv(2017). See constraints.py
             # for more details.
-            matrix_term_v = np.diff(matrix_term_v)
-      
+            matrix_term_v = np.diff(np.concatenate((matrix_term_v[:,sterm.Z[vi].Z:matrix_term_v.shape[1]],matrix_term_v[:,:sterm.Z[vi].Z]),axis=1))
+            matrix_term_v = np.concatenate((matrix_term_v[:,matrix_term_v.shape[1]-sterm.Z[vi].Z:],matrix_term_v[:,:matrix_term_v.shape[1]-sterm.Z[vi].Z]),axis=1)
+
       if vi == 0:
          matrix_term = matrix_term_v
       else:
@@ -1414,7 +1415,8 @@ def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,v
       elif sterm.Z[0].type == ConstType.DROP:
          matrix_term = np.delete(matrix_term,sterm.Z[0].Z,axis=1)
       elif sterm.Z[0].type == ConstType.DIFF:
-         matrix_term = np.diff(matrix_term)
+         matrix_term = np.diff(np.concatenate((matrix_term[:,sterm.Z[0].Z:matrix_term.shape[1]],matrix_term[:,:sterm.Z[0].Z]),axis=1))
+         matrix_term = np.concatenate((matrix_term[:,matrix_term.shape[1]-sterm.Z[0].Z:],matrix_term[:,:matrix_term.shape[1]-sterm.Z[0].Z]),axis=1)
 
    m_rows, m_cols = matrix_term.shape
    #print(m_cols)
