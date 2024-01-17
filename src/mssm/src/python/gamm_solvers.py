@@ -361,7 +361,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    # Now we propose a lambda extension via the Fellner Schall method
    # by Wood & Fasiolo (2016)
    # We also consider an extension term as reccomended by Wood & Fasiolo (2016)
-   extend_by = 2
+   extend_by = 1
    if len(penalties) > 0:
       lam_delta = []
       for lti,lTerm in enumerate(penalties):
@@ -378,7 +378,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    # Loop to optimize smoothing parameter (see Wood, 2017)
    iterator = range(maxiter)
    if progress_bar:
-      iterator = tqdm(iterator,desc="Fitting",leave=False)
+      iterator = tqdm(iterator,desc="Fitting",leave=True)
 
    for o_iter in iterator:
 
@@ -432,8 +432,14 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
          coef = n_coef[:]
 
          # Test for convergence (Step 2 in Wood, 2017)
-         if abs(pen_dev - prev_pen_dev) < conv_tol*pen_dev:
+         dev_diff = abs(pen_dev - prev_pen_dev)
+
+         if progress_bar:
+            iterator.set_description_str(desc="Fitting - Conv.: " + "{:.2e}".format(dev_diff - conv_tol*pen_dev), refresh=True)
+            
+         if dev_diff < conv_tol*pen_dev:
             if progress_bar:
+               iterator.set_description_str(desc="Converged!", refresh=True)
                iterator.close()
             break
 
@@ -486,19 +492,24 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
                if extend_lambda and extend_by > 1:
                   extend_by = 1
             else:
-               if extend_lambda and lam_checks == 0: # Try longer step next time.
+               if extend_lambda and lam_checks == 0 and extend_by < 2: # Try longer step next time.
                   extend_by += 0.5
 
                # Accept the step and propose a new one as well!
                lam_accepted = True
                lam_delta = []
-               for lti,lTerm in enumerate(penalties):
-                  dLam = step_fellner_schall_sparse(S_pinv,lTerm.S_J_emb,Bs[lti],n_coef,lTerm.lam,scale)
+               for lti,(lGrad,lTerm) in enumerate(zip(lam_grad,penalties)):
+                  
+                  if np.abs(lGrad[0]) >= 1e-8*np.sum(np.abs(lam_grad)):
+                     dLam = step_fellner_schall_sparse(S_pinv,lTerm.S_J_emb,Bs[lti],n_coef,lTerm.lam,scale)
 
-                  if extend_lambda:
-                     extension = lTerm.lam  + dLam*extend_by
-                     if extension < 1e7 and extension > 1e-7:
-                        dLam *= extend_by
+                     if extend_lambda:
+                        extension = lTerm.lam  + dLam*extend_by
+                        if extension < 1e7 and extension > 1e-7:
+                           dLam *= extend_by
+                  else: # ReLikelihood is insensitive to further changes in this smoothing penalty, so set change to 0.
+                     dLam = 0
+
                   lam_delta.append(dLam)
 
                lam_delta = np.array(lam_delta).reshape(-1,1)
