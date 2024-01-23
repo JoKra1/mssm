@@ -40,6 +40,7 @@ def diff_pen(n,constraint,m=2):
 
   D = np.diff(np.identity(n),m)
   S = D @ D.T
+  rank = n - m
 
   # ToDo: mgcv scales penalties - I wanted to do something
   # similar, but the approach below does not work.
@@ -60,6 +61,7 @@ def diff_pen(n,constraint,m=2):
         D = np.diff(np.concatenate((D[Z:D.shape[0],:],D[:Z,:]),axis=0),axis=0) # Correct for column differencing applied to X! See smoothCon help for mgcv (Wood, 2017)
         D = np.concatenate((D[D.shape[0]-Z:,:],D[:D.shape[0]-Z,:]),axis=0) 
         S = D @ D.T
+
         
   S = scp.sparse.csc_array(S)
   D = scp.sparse.csc_array(D)
@@ -68,7 +70,7 @@ def diff_pen(n,constraint,m=2):
   pen_data,pen_rows,pen_cols = translate_sparse(S)
   chol_data,chol_rows,chol_cols = translate_sparse(D)
 
-  return pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols
+  return pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank
 
 def id_dist_pen(n,constraint,f=None):
   # Creates identity matrix penalty in case f(i) = 1
@@ -83,9 +85,9 @@ def id_dist_pen(n,constraint,f=None):
       elements[i] = f(i+1)
     idx[i] = i
 
-  return elements,idx,idx,elements,idx,idx # I' @ I = I
+  return elements,idx,idx,elements,idx,idx,n # I' @ I = I
 
-def TP_pen(S_j,D_j,j,ks,constraint):
+def TP_pen(S_j,D_j,j,ks,constraint,m_rank):
    # Tensor smooth penalty - not including the reparameterization of Wood (2017) 5.6.2
    # but reflecting Eilers & Marx (2003) instead
    if j == 0:
@@ -94,6 +96,7 @@ def TP_pen(S_j,D_j,j,ks,constraint):
    else:
       S_TP = scp.sparse.identity(ks[0])
       D_TP = scp.sparse.identity(ks[0])
+      m_rank *= ks[0] # Modify rank of marginal
    
    for i in range(1,len(ks)):
       if j == i:
@@ -102,6 +105,7 @@ def TP_pen(S_j,D_j,j,ks,constraint):
       else:
          S_TP = scp.sparse.kron(S_TP,scp.sparse.identity(ks[i]),format='csc')
          D_TP = scp.sparse.kron(D_TP,scp.sparse.identity(ks[i]),format='csc')
+         m_rank *= ks[i]
    
    if constraint is not None:
      Z = constraint.Z
@@ -123,8 +127,7 @@ def TP_pen(S_j,D_j,j,ks,constraint):
 
    pen_data,pen_rows,pen_cols = translate_sparse(S_TP)
    chol_data,chol_rows,chol_cols = translate_sparse(D_TP)
-      
-   return pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols
+   return pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,m_rank
 
 @dataclass
 class LambdaTerm:

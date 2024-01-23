@@ -180,7 +180,7 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
         pen_generator = id_dist_pen
 
     # Again get penalty elements used by this term.
-    pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = pen_generator(id_k,constraint,**pen_kwargs)
+    pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = pen_generator(id_k,constraint,**pen_kwargs)
 
     # Create lambda term
     lTerm = LambdaTerm(start_index=cur_pen_idx,
@@ -202,14 +202,15 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
         pen_cols,\
         chol_data,\
         chol_rows,\
-        chol_cols = TP_pen(scp.sparse.csc_array((pen_data,(pen_rows,pen_cols)),shape=(pen_cols[-1]+1,pen_cols[-1]+1)),
-                           scp.sparse.csc_array((chol_data,(chol_rows,chol_cols)),shape=(pen_cols[-1]+1,pen_cols[-1]+1)),
-                           penid % len(vars),sterm.nk,constraint)
+        chol_cols,rank = TP_pen(scp.sparse.csc_array((pen_data,(pen_rows,pen_cols)),shape=(pen_cols[-1]+1,pen_cols[-1]+1)),
+                                scp.sparse.csc_array((chol_data,(chol_rows,chol_cols)),shape=(pen_cols[-1]+1,pen_cols[-1]+1)),
+                                penid % len(vars),sterm.nk,constraint,rank)
 
     # Embed first penalty - if the term has a by-keyword more are added below.
     lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
     lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
     lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
+    lTerm.rank = rank
         
     if sterm.by is not None:
         
@@ -226,6 +227,7 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
 
             # For pinv calculation during model fitting.
             lTerm.rep_sj = pen_iter + 1
+            lTerm.rank = rank * (pen_iter + 1)
             penalties.append(lTerm)
 
         else:
@@ -248,6 +250,7 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
                 lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
                 lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
                 lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
+                lTerm.rank = rank
                 penalties.append(lTerm)
 
     else:
@@ -264,6 +267,7 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
                 lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
                 lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
                 lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
+                lTerm.rank = rank
                 penalties.append(lTerm)
         else:
             penalties.append(lTerm)
@@ -279,7 +283,7 @@ def build_irf_penalties(penalties,cur_pen_idx,
         pen_generator = id_dist_pen
 
     # Get non-zero elements and indices for the penalty used by this term.
-    pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = pen_generator(n_coef,None,**irsterm.pen_kwargs[penid])
+    pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = pen_generator(n_coef,None,**irsterm.pen_kwargs[penid])
 
     # Create lambda term
     lTerm = LambdaTerm(start_index=cur_pen_idx,
@@ -289,6 +293,7 @@ def build_irf_penalties(penalties,cur_pen_idx,
     lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
     lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
     lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
+    lTerm.rank = rank
         
     if irsterm.by is not None:
         if irsterm.id is not None:
@@ -299,6 +304,7 @@ def build_irf_penalties(penalties,cur_pen_idx,
 
             # For pinv calculation during model fitting.
             lTerm.rep_sj = len(by_levels)
+            lTerm.rank = rank * len(by_levels)
             penalties.append(lTerm)
         else:
             # In case all levels get their own smoothing penalty - append first lterm then create new ones for
@@ -314,6 +320,7 @@ def build_irf_penalties(penalties,cur_pen_idx,
                 lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
                 lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
                 lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
+                lTerm.rank = rank
                 penalties.append(lTerm)
     else:
         penalties.append(lTerm)
@@ -942,12 +949,14 @@ class Formula():
                   # and: https://eric-pedersen.github.io/mgcv-esa-workshop/slides/03-model-selection.pdf
                   s, U =scp.linalg.eigh(S_j_last)
                   DNULL = U[:,s <= 1e-7]
+                  rank = DNULL.shape[1] # Null-space dimension
                   DNULL = DNULL.reshape(S_j_last.shape[1],-1)
 
                   SNULL = DNULL @ DNULL.T
 
                   SNULL = scp.sparse.csc_array(SNULL)
                   DNULL = scp.sparse.csc_array(DNULL)
+                  
 
                   # Data in S and D is in canonical format, for competability this is translated to data, rows, columns
                   pen_data,pen_rows,pen_cols = translate_sparse(SNULL)
@@ -962,6 +971,7 @@ class Formula():
                   lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
                   lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
                   lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
+                  lTerm.rank = rank
                   
                   # Single penalty added - but could involve by keyword
                   if (n_pen - prev_n_pen) == 1:
@@ -975,6 +985,7 @@ class Formula():
                         lTerm.rep_sj = last_pen_rep
 
                      # In any case, term can be appended here.
+                     lTerm.rank = rank*last_pen_rep
                      penalties.append(lTerm)
                   else:
                      # Independent penalties via by
@@ -990,6 +1001,7 @@ class Formula():
                         lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
                         lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
                         lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
+                        lTerm.rank = rank
                         penalties.append(lTerm)
 
          # Keep track of previous penalty starting index
@@ -1001,7 +1013,7 @@ class Formula():
          vars = rterm.variables
 
          if isinstance(rterm,ri):
-            pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = id_dist_pen(len(factor_levels[vars[0]]),None)
+            pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = id_dist_pen(len(factor_levels[vars[0]]),None)
 
             lTerm = LambdaTerm(start_index=cur_pen_idx,
                                              type = PenType.IDENTITY)
@@ -1009,6 +1021,7 @@ class Formula():
             lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
             lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
             lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
+            lTerm.rank = rank
             penalties.append(lTerm)
 
          else:
@@ -1020,7 +1033,7 @@ class Formula():
                # per level of the (interaction of) categorical factor(s) involved in the interaction.
                # For interactions involving only continuous variables this condition will be false and a single
                # penalty will be estimated.
-               pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = id_dist_pen(len(factor_levels[rterm.by]),None)
+               pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = id_dist_pen(len(factor_levels[rterm.by]),None)
                for _ in range(rterm.var_coef):
                   lTerm = LambdaTerm(start_index=cur_pen_idx,
                                              type = PenType.IDENTITY)
@@ -1028,12 +1041,13 @@ class Formula():
                   lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
                   lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
                   lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
+                  lTerm.rank = rank
                   penalties.append(lTerm)
 
             else:
                # Single penalty for random coefficients of a single variable (categorical or continuous) or an
                # interaction of only continuous variables.
-               pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols = id_dist_pen(len(factor_levels[rterm.by])*rterm.var_coef,None)
+               pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = id_dist_pen(len(factor_levels[rterm.by])*rterm.var_coef,None)
 
 
                lTerm = LambdaTerm(start_index=cur_pen_idx,
@@ -1042,6 +1056,7 @@ class Formula():
                lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,cur_pen_idx)
                lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,cur_pen_idx)
                lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J)
+               lTerm.rank = rank
                penalties.append(lTerm)
             
       if cur_pen_idx != col_S:
