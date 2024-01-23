@@ -1,13 +1,11 @@
 import numpy as np
 import scipy as scp
-import multiprocessing as mp
-from itertools import repeat
 import copy
 from collections.abc import Callable
 from .src.python.formula import Formula,PFormula,PTerm,build_sparse_matrix_from_formula,VarType,lhs,ConstType,Constraint
 from .src.python.exp_fam import Link,Logit,Family,Binomial,Gaussian
 from .src.python.sem import anneal_temps_zero,const_temps,compute_log_probs,pre_ll_sms_gamm,se_step_sms_gamm,decode_local,se_step_sms_dc_gamm,pre_ll_sms_IR_gamm,init_states_IR
-from .src.python.gamm_solvers import solve_gamm_sparse
+from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 from .src.python.penalties import PenType
 
@@ -216,7 +214,7 @@ class GAMM(MSSM):
                 
     ##################################### Fitting #####################################
     
-    def fit(self,maxiter=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,restart=False,progress_bar=True):
+    def fit(self,maxiter=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,restart=False,progress_bar=True,n_cores=10):
         """
         Fit the specified model.
 
@@ -279,7 +277,7 @@ class GAMM(MSSM):
                                                                          model_mat,penalties,self.formula.n_coef,
                                                                          self.family,maxiter,"svd",
                                                                          conv_tol,extend_lambda,control_lambda,
-                                                                         progress_bar)
+                                                                         progress_bar,n_cores)
         
         self.__coef = coef
         self.__scale = scale # ToDo: scale name is used in another context for more general mssm..
@@ -663,7 +661,8 @@ class sMsGAMM(MSSM):
                     coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,state_y,
                                                                                     model_mat,penalties[j],self.formula.n_coef,
                                                                                     self.family,maxiter_inner,"svd",
-                                                                                    conv_tol,extend_lambda,control_lambda,False)
+                                                                                    conv_tol,extend_lambda,control_lambda,
+                                                                                    False,self.cpus)
                     
                     
                     
@@ -976,7 +975,8 @@ class sMsIRGAMM(sMsGAMM):
         coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,y_flat[NOT_NA_flat],
                                                                         model_mat_full,penalties,self.formula.n_coef,
                                                                         self.family,maxiter_inner,"svd",
-                                                                        conv_tol,extend_lambda,control_lambda,False)
+                                                                        conv_tol,extend_lambda,control_lambda,
+                                                                        False,self.cpus)
 
         # For state proposals we can utilize a temparature schedule. See sMsGamm.fit().
         if schedule == "anneal":
@@ -1055,7 +1055,8 @@ class sMsIRGAMM(sMsGAMM):
             coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,y_flat[NOT_NA_flat],
                                                                              model_mat_full,penalties,self.formula.n_coef,
                                                                              self.family,maxiter_inner,"svd",
-                                                                             conv_tol,extend_lambda,control_lambda,False)
+                                                                             conv_tol,extend_lambda,control_lambda,
+                                                                             False,self.cpus)
 
             # Next update all sojourn time distribution parameters
 

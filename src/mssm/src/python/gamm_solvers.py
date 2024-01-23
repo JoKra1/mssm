@@ -1,5 +1,7 @@
 import numpy as np
 import scipy as scp
+import multiprocessing as mp
+from itertools import repeat
 import warnings
 from .exp_fam import Family,Gaussian
 from .penalties import PenType,id_dist_pen,translate_sparse
@@ -21,8 +23,8 @@ def cpp_solve_coef(y,X,S):
 def cpp_solve_L(X,S):
    return cpp_solvers.solve_L(X,S)
 
-def cpp_solve_tr(L,P,D):
-   return cpp_solvers.solve_tr(L,P,D)
+def cpp_solve_tr(A,B):
+   return cpp_solvers.solve_tr(A,B)
 
 def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,scale,verbose=False):
   # Compute a generalized Fellner Schall update step for a lambda term. This update rule is
@@ -202,6 +204,63 @@ def apply_eigen_perm(Pr,InvCholXXSP):
    InvCholXXS = InvCholXXSP @ Perm
    return InvCholXXS
 
+def compute_B_mp(L,PD):
+   B = cpp_solve_tr(L,PD)
+   return B.power(2).sum()
+   
+def compute_B(L,P,lTerm,n_c=10):
+   # Solves L @ B = P @ D for B, parallelizing over column
+   # blocks of D if int(D.shape[1]/1000) > 1
+
+   # D is extremely sparse and P only shuffles rows, so we
+   # can take only the columns which we know contain non-zero elements
+   D_start = lTerm.start_index
+   D_len = lTerm.rep_sj * lTerm.S_J.shape[1]
+   D_end = lTerm.start_index + D_len
+
+   D_r = int(D_len/1000)
+   if D_r > 1 and n_c > 1:
+      # Parallelize
+      n_c = min(D_r,n_c)
+      split = np.array_split(range(D_start,D_end),n_c)
+      PD = P @ lTerm.D_J_emb
+      PDs = [PD[:,split[i]] for i in range(n_c)]
+
+      with mp.Pool(processes=n_c) as pool:
+         args = zip(repeat(L),PDs)
+        
+         pow_sums = pool.starmap(compute_B_mp,args)
+      return sum(pow_sums)
+
+   B = cpp_solve_tr(L,P @ lTerm.D_J_emb[:,D_start:D_end])
+   return B.power(2).sum()
+
+def compute_Linv(L,n_c=10):
+   # Solves L @ inv(L) = I for Binv(L) parallelizing over column
+   # blocks of I if int(I.shape[1]/10000) > 1
+   
+   n_col = L.shape[1]
+   r = int(n_col/10000)
+   T = scp.sparse.eye(n_col,format='csc')
+   if r > 1 and n_c > 1:
+      # Parallelize over column blocks of I
+      # Can speed up computations considerably and is feasible memory-wise
+      # since L itself is super sparse.
+      
+      n_c = min(r,n_c)
+      split = np.array_split(range(n_col),n_c)
+      LBs = [T[:,split[i]] for i in range(n_c)]
+
+      with mp.Pool(processes=n_c) as pool:
+         args = zip(repeat(L),LBs)
+        
+         LBinvs = pool.starmap(cpp_solve_tr,args)
+      
+      return scp.sparse.hstack(LBinvs)
+
+   return cpp_solve_tr(L,T)
+
+
 def calculate_edf(InvCholXXS,penalties,colsX):
    total_edf = colsX
    Bs = []
@@ -286,12 +345,15 @@ def update_scale_edf(y,z,eta,Wr,rowsX,colsX,InvCholXXSP,Pr,family,penalties):
    
    return wres,InvCholXXS,total_edf,term_edfs,Bs,scale
 
-def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,penalties):
+def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,penalties,n_c):
    # Solves the additive model for a given set of weights and penalty
-   InvCholXXSP, Pr, coef, code = cpp_solve_am(yb,Xb,S_emb)
+   LP, Pr, coef, code = cpp_solve_coef(yb,Xb,S_emb)
 
    if code != 0:
       raise ArithmeticError(f"Solving for coef failed with code {code}. Model is likely unidentifiable.")
+   
+   # Solve for inverse of Chol factor of XX+S
+   InvCholXXSP = compute_Linv(LP,n_c)
    
    # Update mu & eta
    eta = (X @ coef).reshape(-1,1)
@@ -306,10 +368,12 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,penalties):
    
 def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
                       maxiter=10,pinv="svd",conv_tol=1e-7,
-                      extend_lambda=True,control_lambda=True,progress_bar=False):
+                      extend_lambda=True,control_lambda=True,
+                      progress_bar=False,n_c=10):
    # Estimates a penalized Generalized additive mixed model, following the steps outlined in Wood (2017)
    # "Generalized Additive Models for Gigadata"
 
+   n_c = min(mp.cpu_count(),n_c)
    rowsX,colsX = X.shape
    coef = None
    n_coef = None
@@ -348,7 +412,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    total_edf,\
    term_edfs,\
    Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
-                                         X,Xb,family,S_emb,penalties)
+                                         X,Xb,family,S_emb,penalties,n_c)
    
    # Deviance under these starting coefficients
    # As well as penalized deviance
@@ -467,7 +531,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
             total_edf,\
             term_edfs,\
             Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
-                                                  X,Xb,family,S_emb,penalties)
+                                                  X,Xb,family,S_emb,penalties,n_c)
             
             # Compute gradient of REML with respect to lambda
             # to check if step size needs to be reduced.
@@ -524,7 +588,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
          total_edf,\
          term_edfs,\
          Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
-                                               X,Xb,family,S_emb,penalties)
+                                               X,Xb,family,S_emb,penalties,n_c)
 
    # Final penalty
    if len(penalties) > 0:

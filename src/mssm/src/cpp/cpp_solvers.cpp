@@ -191,13 +191,12 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
     return std::make_tuple(solver.matrixL(),P.indices(),std::move(coef),0);
 }
 
-Eigen::SparseMatrix<double> solve_tr(Eigen::SparseMatrix<double> L,Eigen::SparseMatrix<double> P,Eigen::SparseMatrix<double> D){
-    // Solves L * B = P * D for B.
-    // The sum of squares over B corresponds to the trace necessary for the edf/scale parameter computation (Wood & Fasiolo, 2017).
-    // This computation needs to be repeated for all smooth terms (i.e., all D) but can be completely parallelized. This will however
-    // only be worth it if the individual solves take time - big models.
-    Eigen::SparseMatrix<double> B = P * D;
-    L.triangularView<Eigen::Lower>().solveInPlace(B);
+Eigen::SparseMatrix<double> solve_tr(Eigen::SparseMatrix<double> A,Eigen::SparseMatrix<double> B){
+    // Solves A*B=C, where B is lower triangular. This can be utilized to obtain B = inv(A), when C is
+    // the identity. Importantly, when A is a n*n matrix then C can also be specified as a n*m block of
+    // the identity. In that case, inv(A) can be obtained in parallel. 
+
+    A.triangularView<Eigen::Lower>().solveInPlace(B);
     return B;
 }
 
@@ -209,5 +208,5 @@ PYBIND11_MODULE(cpp_solvers, m) {
     m.def("solve_am", &solve_am, "Solve additive model, return coefficient vector and inverse");
     m.def("solve_L", &solve_L, "Solve cholesky of XX+S");
     m.def("solve_coef", &solve_coef, "Solve additive model coefficients");
-    m.def("solve_tr",&solve_tr,"Solve for trace matrix required for lambda update.");
+    m.def("solve_tr",&solve_tr,"Solve A*B = C, where A is lower triangular.");
 }
