@@ -595,7 +595,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
                if extend_lambda and extend_by > 1:
                   extend_by = 1
             else:
-               if extend_lambda and lam_checks == 0 and extend_by < 2: # Try longer step next time.
+               if extend_lambda and lam_checks == 0 and extend_by < 2 and o_iter > 0 and dev_diff < 1e-3*pen_dev: # Try longer step next time.
                   extend_by += 0.5
 
                # Accept the step and propose a new one as well!

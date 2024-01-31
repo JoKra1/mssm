@@ -40,7 +40,7 @@ def diff_pen(n,constraint,m=2):
 
   D = np.diff(np.identity(n),m)
   S = D @ D.T
-  rank = n - m
+  rank = n - m # Eilers & Marx (1996): P-spline penalties consider m-degree polynomial as smooth, i.e., un-penalized!
 
   # ToDo: mgcv scales penalties - I wanted to do something
   # similar, but the approach below does not work.
@@ -85,7 +85,7 @@ def id_dist_pen(n,constraint,f=None):
       elements[i] = f(i+1)
     idx[i] = i
 
-  return elements,idx,idx,elements,idx,idx,n # I' @ I = I
+  return elements,idx,idx,elements,idx,idx,n # I' @ I = I; also identity is full rank
 
 def TP_pen(S_j,D_j,j,ks,constraint,m_rank):
    # Tensor smooth penalty - not including the reparameterization of Wood (2017) 5.6.2
@@ -96,7 +96,7 @@ def TP_pen(S_j,D_j,j,ks,constraint,m_rank):
    else:
       S_TP = scp.sparse.identity(ks[0])
       D_TP = scp.sparse.identity(ks[0])
-      m_rank *= ks[0] # Modify rank of marginal
+      m_rank *= ks[0] # Modify rank of marginal - identities are full-rank.
    
    for i in range(1,len(ks)):
       if j == i:

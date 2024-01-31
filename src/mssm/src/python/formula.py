@@ -355,7 +355,8 @@ class Formula():
                  data:pd.DataFrame,
                  series_id:str or None=None,
                  split_scale:bool=False,
-                 n_j:int=3) -> None:
+                 n_j:int=3,
+                 print_warn=True) -> None:
         
         self.__lhs = lhs
         self.__terms = terms
@@ -363,7 +364,8 @@ class Formula():
         self.series_id = series_id
         self.__split_scale = split_scale # Separate scale parameters per state, if true then formula counts for individual state.
         self.__n_j = n_j # Number of latent states to estimate - not for irf terms but for f terms!
-        if self.__split_scale:
+        self.print_warn = print_warn
+        if self.__split_scale and self.print_warn:
            warnings.warn("split_scale==True! All terms will be estimted per latent stage, independent of terms' by_latent status.")
         self.__factor_codings = {}
         self.__coding_factors = {}
@@ -676,7 +678,7 @@ class Formula():
       else:
          NAs_flat = np.isnan(data[self.get_lhs().variable]) == False
 
-      if not prediction and data.shape[0] != data[NAs_flat].shape[0]:
+      if not prediction and data.shape[0] != data[NAs_flat].shape[0] and self.print_warn:
          warnings.warn(f"{data.shape[0] - data[NAs_flat].shape[0]} {self.get_lhs().variable} values ({round((data.shape[0] - data[NAs_flat].shape[0]) / data.shape[0] * 100,ndigits=2)}%) are NA.")
 
       n_y = data.shape[0]
@@ -839,7 +841,8 @@ class Formula():
                self.unpenalized_coef += added_not_penalized
                cur_pen_idx = start_idx
 
-               warnings.warn(f"Impulse response smooth {irsti} is not penalized. Smoothing terms should generally be penalized.")
+               if self.print_warn:
+                  warnings.warn(f"Impulse response smooth {irsti} is not penalized. Smoothing terms should generally be penalized.")
 
             else:
                raise KeyError(f"Impulse response smooth {irsti} is not penalized and placed in the formula after penalized terms. Unpenalized terms should be moved to the beginning of the formula, ideally behind any linear terms.")
@@ -889,7 +892,8 @@ class Formula():
                start_idx += added_not_penalized
                self.unpenalized_coef += added_not_penalized
 
-               warnings.warn(f"Smooth {sti} is not penalized. Smoothing terms should generally be penalized.")
+               if self.print_warn:
+                  warnings.warn(f"Smooth {sti} is not penalized. Smoothing terms should generally be penalized.")
 
             else:
                raise KeyError(f"Smooth {sti} is not penalized and placed in the formula after penalized terms. Unpenalized terms should be moved to the beginning of the formula, ideally behind any linear terms.")

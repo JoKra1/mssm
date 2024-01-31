@@ -255,7 +255,7 @@ class GAMM(MSSM):
         cov_flat = self.formula.cov_flat[self.formula.NOT_NA_flat]
         y_flat = self.formula.y_flat[self.formula.NOT_NA_flat]
 
-        if y_flat.shape[0] != self.formula.y_flat.shape[0]:
+        if y_flat.shape[0] != self.formula.y_flat.shape[0] and progress_bar:
             print("NAs were excluded for fitting.")
 
         cov = None
