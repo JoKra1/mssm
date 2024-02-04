@@ -389,6 +389,7 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,penalties,n_c)
 def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
                       maxiter=10,pinv="svd",conv_tol=1e-7,
                       extend_lambda=True,control_lambda=True,
+                      exclude_lambda=False,
                       progress_bar=False,n_c=10):
    # Estimates a penalized Generalized additive mixed model, following the steps outlined in Wood (2017)
    # "Generalized Additive Models for Gigadata"
@@ -603,7 +604,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
                lam_delta = []
                for lti,(lGrad,lTerm) in enumerate(zip(lam_grad,penalties)):
                   
-                  if np.abs(lGrad[0]) >= 1e-8*np.sum(np.abs(lam_grad)):
+                  if np.abs(lGrad[0]) >= 1e-8*np.sum(np.abs(lam_grad)) or exclude_lambda == False:
 
                      dLam = step_fellner_schall_sparse(lgdetDs[lti],Bs[lti],bsbs[lti],lTerm.lam,scale)
 

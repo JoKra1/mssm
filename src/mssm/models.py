@@ -214,7 +214,7 @@ class GAMM(MSSM):
                 
     ##################################### Fitting #####################################
     
-    def fit(self,maxiter=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,restart=False,progress_bar=True,n_cores=10):
+    def fit(self,maxiter=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=True,restart=False,progress_bar=True,n_cores=10):
         """
         Fit the specified model.
 
@@ -277,7 +277,7 @@ class GAMM(MSSM):
                                                                          model_mat,penalties,self.formula.n_coef,
                                                                          self.family,maxiter,"svd",
                                                                          conv_tol,extend_lambda,control_lambda,
-                                                                         progress_bar,n_cores)
+                                                                         exclude_lambda,progress_bar,n_cores)
         
         self.__coef = coef
         self.__scale = scale # ToDo: scale name is used in another context for more general mssm..
@@ -527,7 +527,7 @@ class sMsGAMM(MSSM):
         state_durs_decoded, states_decoded, llks_decoded = zip(*pool.starmap(decode_local,args))
         return list(state_durs_decoded),list(states_decoded),list(llks_decoded)
     
-    def fit(self,burn_in=100,maxiter_inner=30,m_avg=15,conv_tol=1e-7,extend_lambda=True,control_lambda=True,init_scale=100,t0=0.25,r=0.925):
+    def fit(self,burn_in=100,maxiter_inner=30,m_avg=15,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=False,init_scale=100,t0=0.25,r=0.925):
         # Performs Stochastic Expectation maiximization based on Nielsen (2002) see also the sem.py file for
         # more details as well as:
         # Ref:
@@ -662,7 +662,7 @@ class sMsGAMM(MSSM):
                                                                                     model_mat,penalties[j],self.formula.n_coef,
                                                                                     self.family,maxiter_inner,"svd",
                                                                                     conv_tol,extend_lambda,control_lambda,
-                                                                                    False,self.cpus)
+                                                                                    exclude_lambda,False,self.cpus)
                     
                     
                     
@@ -917,7 +917,7 @@ class sMsIRGAMM(sMsGAMM):
         state_durs_new, states_new, llks = zip(*pool.starmap(se_step_sms_dc_gamm,args))
         return list(state_durs_new),list(states_new), list(llks)
     
-    def fit(self,maxiter_outer=100,maxiter_inner=30,conv_tol=1e-6,extend_lambda=True,control_lambda=True,t0=1,r=0.925,schedule="anneal",n_prop=None,prop_sd=2):
+    def fit(self,maxiter_outer=100,maxiter_inner=30,conv_tol=1e-6,extend_lambda=True,control_lambda=True,exclude_lambda=True,t0=1,r=0.925,schedule="anneal",n_prop=None,prop_sd=2):
         # Performs something like Stochastic Expectation maiximization (e.g., Nielsen, 2002) see the sem.py file for
         # more details.
         
@@ -976,7 +976,7 @@ class sMsIRGAMM(sMsGAMM):
                                                                         model_mat_full,penalties,self.formula.n_coef,
                                                                         self.family,maxiter_inner,"svd",
                                                                         conv_tol,extend_lambda,control_lambda,
-                                                                        False,self.cpus)
+                                                                        exclude_lambda,False,self.cpus)
 
         # For state proposals we can utilize a temparature schedule. See sMsGamm.fit().
         if schedule == "anneal":
@@ -1056,7 +1056,7 @@ class sMsIRGAMM(sMsGAMM):
                                                                              model_mat_full,penalties,self.formula.n_coef,
                                                                              self.family,maxiter_inner,"svd",
                                                                              conv_tol,extend_lambda,control_lambda,
-                                                                             False,self.cpus)
+                                                                             exclude_lambda,False,self.cpus)
 
             # Next update all sojourn time distribution parameters
 
