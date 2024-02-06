@@ -200,6 +200,15 @@ Eigen::SparseMatrix<double> solve_tr(Eigen::SparseMatrix<double> A,Eigen::Sparse
     return B;
 }
 
+Eigen::SparseMatrix<double> backsolve_tr(Eigen::SparseMatrix<double> A,Eigen::SparseMatrix<double> B){
+    // Solves A*B=C, where B is UPPER triangular. This can be utilized to obtain B = inv(A), when C is
+    // the identity. Importantly, when A is a n*n matrix then C can also be specified as a n*m block of
+    // the identity. In that case, inv(A) can be obtained in parallel. 
+
+    A.triangularView<Eigen::Upper>().solveInPlace(B);
+    return B;
+}
+
 PYBIND11_MODULE(cpp_solvers, m) {
     m.doc() = "cpp solvers for sms (DC) GAMM estimation";
 
@@ -209,4 +218,5 @@ PYBIND11_MODULE(cpp_solvers, m) {
     m.def("solve_L", &solve_L, "Solve cholesky of XX+S");
     m.def("solve_coef", &solve_coef, "Solve additive model coefficients");
     m.def("solve_tr",&solve_tr,"Solve A*B = C, where A is lower triangular.");
+    m.def("backsolve_tr",&backsolve_tr,"Solve A*B = C, where A is upper triangular.");
 }

@@ -140,6 +140,7 @@ class f(GammTerm):
                 id:int=None,
                 nk:int or list[int] = 9,
                 te: bool = False,
+                rp:int = 0,
                 constraint:penalties.ConstType=penalties.ConstType.DROP,
                 identifiable:bool=True,
                 basis:Callable=smooths.B_spline_basis,
@@ -188,6 +189,8 @@ class f(GammTerm):
         super().__init__(variables, TermType.SMOOTH, is_penalized, copy.deepcopy(penalty), copy.deepcopy(pen_kwargs))
         self.is_identifiable = identifiable
         self.Z = constraint
+        self.should_rp = rp
+        self.RP = []
         self.basis = basis
         self.basis_kwargs = basis_kwargs
         self.by = by
@@ -264,14 +267,16 @@ class fs(f):
                 variables: list,
                 rf: str = None,
                 nk: int = 9,
+                m: int = 1,
+                rp:int = 1,
                 constraint:penalties.ConstType=penalties.ConstType.DROP,
                 basis: Callable = smooths.B_spline_basis,
                 basis_kwargs: dict = {},
                 by_latent: bool = False):
 
       penalty = [penalties.PenType.DIFFERENCE]
-      pen_kwargs = [{"m":1}]
-      super().__init__(variables, rf, None, 99, nk+1, False, constraint, False,
+      pen_kwargs = [{"m":m}]
+      super().__init__(variables, rf, None, 99, nk+1, False, rp, constraint, False,
                        basis, basis_kwargs, by_latent,
                        True, True, penalty, pen_kwargs)
         

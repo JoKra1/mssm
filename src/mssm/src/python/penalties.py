@@ -9,6 +9,8 @@ class PenType(Enum):
     IDENTITY = 1
     DIFFERENCE = 2
     DISTANCE = 3
+    REPARAM = 4
+    NULL = 5
 
 ##################################### Penalty functions #####################################
 
@@ -144,3 +146,15 @@ class LambdaTerm:
   frozen:bool = False
   type:PenType = None
   rank:int or None = None
+
+@dataclass
+class Reparameterization:
+   # Holds all information necessary to transform model matrix & penalty via various re-parameterization strategies as discussed in Wood (2017).
+   X:scp.sparse.csc_array = None
+   cov:np.ndarray = None
+   C:scp.sparse.csc_array= None
+   scale:float = None
+   IRrp:scp.sparse.csc_array = None
+   rms1:float = None
+   rms2:float = None
+   rank:int = None
