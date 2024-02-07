@@ -200,6 +200,7 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
          rp_idx = 0
       
       
+      #C, Srp, Drp, IRrp, rms1, rms2, rp_rank = reparam(sterm.RP[rp_idx].X,S_J,sterm.RP[rp_idx].cov,QR=True,option=sterm.should_rp,scale=False,identity=False)
       C, Srp, Drp, IRrp, rms1, rms2, rp_rank = reparam(sterm.RP[rp_idx].X,S_J,sterm.RP[rp_idx].cov,QR=False,option=sterm.should_rp,scale=True,identity=True)
 
       sterm.RP[rp_idx].C = C
@@ -851,7 +852,19 @@ class Formula():
             if sterm.should_rp > 0:
                # Reparameterization of marginals was requested - but can only be evaluated once penalties are
                # computed, so we need to store X and the covariate used to create it.
-               sterm.RP.append(Reparameterization(scp.sparse.csc_array(matrix_term_v),self.cov_flat[self.NOT_NA_flat,var_map[vars[vi]]]))
+
+               if sterm.Z[vi].type == ConstType.QR:
+                  XPb = matrix_term_v @ sterm.Z[vi].Z
+               elif sterm.Z[vi].type == ConstType.DROP:
+                  XPb = np.delete(matrix_term_v,sterm.Z[vi].Z,axis=1)
+               elif sterm.Z[vi].type == ConstType.DIFF:
+                  # Applies difference re-coding for sum-to-zero coefficients.
+                  # Based on smoothCon in mgcv(2017). See constraints.py
+                  # for more details.
+                  XPb = np.diff(np.concatenate((matrix_term_v[:,sterm.Z[vi].Z:matrix_term_v.shape[1]],matrix_term_v[:,:sterm.Z[vi].Z]),axis=1))
+                  XPb = np.concatenate((XPb[:,XPb.shape[1]-sterm.Z[vi].Z:],XPb[:,:XPb.shape[1]-sterm.Z[vi].Z]),axis=1)
+
+               sterm.RP.append(Reparameterization(scp.sparse.csc_array(XPb),self.cov_flat[self.NOT_NA_flat,var_map[vars[vi]]]))
 
             if sterm.te:
                if vi == 0:
