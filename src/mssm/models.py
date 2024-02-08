@@ -132,7 +132,7 @@ class GAMM(MSSM):
         Returns exaclty the model matrix used for fitting as a scipy.sparse.csc_array.
         """
         if self.formula.penalties is None:
-            raise ValueError("Model matrix cannot be returned if penalties have not been initialized. Call model.fit() first.")
+            raise ValueError("Model matrix cannot be returned if penalties have not been initialized. Call model.fit() or model.formula.build_penalties() first.")
         else:
             terms = self.formula.get_terms()
             has_intercept = self.formula.has_intercept()
@@ -206,7 +206,7 @@ class GAMM(MSSM):
                 name_idx += 1
             
             if pen_out == 1:
-                print(f"\n{pen_out} term has been effectively penalized to zero and is marked with a '*'")
+                print("\nOne term has been effectively penalized to zero and is marked with a '*'")
             elif pen_out > 1:
                 print(f"\n{pen_out} terms have been effectively penalized to zero and are marked with a '*'")
                         

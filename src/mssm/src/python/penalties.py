@@ -146,6 +146,7 @@ class LambdaTerm:
   frozen:bool = False
   type:PenType = None
   rank:int or None = None
+  term:int or None = None
 
 @dataclass
 class Reparameterization:

@@ -410,10 +410,10 @@ def compute_B(L,P,lTerm,n_c=10):
 
 def compute_Linv(L,n_c=10):
    # Solves L @ inv(L) = I for Binv(L) parallelizing over column
-   # blocks of I if int(I.shape[1]/10000) > 1
+   # blocks of I if int(I.shape[1]/2000) > 1
    
    n_col = L.shape[1]
-   r = int(n_col/10000)
+   r = int(n_col/2000)
    T = scp.sparse.eye(n_col,format='csc')
    if r > 1 and n_c > 1:
       # Parallelize over column blocks of I
