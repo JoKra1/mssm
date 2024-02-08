@@ -122,9 +122,9 @@ class GAMM(MSSM):
             if isinstance(self.family,Gaussian) == False:
                 mu = self.family.link.fi(self.pred)
             if self.family.twopar:
-                return self.family.llk(self.formula.y_flat,mu,self.__scale) - pen
+                return self.family.llk(self.formula.y_flat[self.formula.NOT_NA_flat],mu,self.__scale) - pen
             else:
-                return self.family.llk(self.formula.y_flat,mu) - pen
+                return self.family.llk(self.formula.y_flat[self.formula.NOT_NA_flat],mu) - pen
         return None
 
     def get_mmat(self):

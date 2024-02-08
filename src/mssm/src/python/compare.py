@@ -1,7 +1,8 @@
 import numpy as np
 import scipy as scp
 import math
-from models import GAMM
+from ...models import GAMM
+import warnings
 
 def GLRT_CDL(model1:GAMM,
             model2:GAMM,
@@ -21,7 +22,7 @@ def GLRT_CDL(model1:GAMM,
      - ``compareML`` function from ``itsadug`` R-package: https://rdrr.io/cran/itsadug/man/compareML.html
     """
 
-    if model1.family != model2.family:
+    if type(model1.family) != type(model2.family):
         raise ValueError("Both models should be estimated using the same family.")
     
     # Collect total DOF
@@ -43,9 +44,13 @@ def GLRT_CDL(model1:GAMM,
 
     # Compute Chi-square statistic
     stat = 2 * (llk1 - llk2)
+
+    if DOF1-DOF2 < 1:
+        warnings.warn("Difference in EDF is extremely small. Enforcing a minimum of 1 for the DOF of the CHI^2 distribution...")
     
-    # Compute p-value under reference distribution
-    p = 1 - scp.stats.chi2.cdf(stat,DOF1-DOF2)
+    # Compute p-value under reference distribution.
+    # scipy seems to handle non-integer DOF quite well, so I won't bother rounding here.
+    p = 1 - scp.stats.chi2.cdf(stat,max(DOF1-DOF2,1))
 
     # Reject NULL?
     H1 = p <= alpha
