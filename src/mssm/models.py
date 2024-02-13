@@ -4,8 +4,8 @@ import copy
 from collections.abc import Callable
 from .src.python.formula import Formula,PFormula,PTerm,build_sparse_matrix_from_formula,VarType,lhs,ConstType,Constraint
 from .src.python.exp_fam import Link,Logit,Family,Binomial,Gaussian
-from .src.python.sem import anneal_temps_zero,const_temps,compute_log_probs,pre_ll_sms_gamm,se_step_sms_gamm,decode_local,se_step_sms_dc_gamm,pre_ll_sms_IR_gamm,init_states_IR
-from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat
+from .src.python.sem import anneal_temps_zero,const_temps,compute_log_probs,pre_ll_sms_gamm,se_step_sms_gamm,decode_local,se_step_sms_dc_gamm,pre_ll_sms_IR_gamm,init_states_IR,compute_hsmm_probabilities
+from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 from .src.python.penalties import PenType
 
@@ -507,6 +507,41 @@ class sMsGAMM(MSSM):
                 if var_types[pTerm.split_by] != VarType.FACTOR:
                     raise ValueError(f"Variable {pTerm.split_by} used as split_by argument is not a factor variable.")
                 pTerm.n_by = len(var_levels[pTerm.split_by])
+    
+    def get_mmat_full(self):
+        """
+        Returns the full model matrix for all collected observations as a scipy.sparse.csc_array.
+        """
+        has_scale_split = self.formula.has_scale_split()
+
+        if self.formula.penalties is None:
+            raise ValueError("Model matrix cannot be returned if penalties have not been initialized. Call model.fit() or model.formula.build_penalties() first.")
+        else:
+            # Model matrix parameters that remain constant are specified.
+            # And then we need to build the model matrix once for the entire
+            # data so that we can later get observation probabilities for the
+            # entire data.
+            terms = self.formula.get_terms()
+            has_intercept = self.formula.has_intercept()
+            ltx = self.formula.get_linear_term_idx()
+            irstx = []
+            stx = self.formula.get_smooth_term_idx()
+            rtx = self.formula.get_random_term_idx()
+            var_types = self.formula.get_var_types()
+            var_map = self.formula.get_var_map()
+            var_mins = self.formula.get_var_mins()
+            var_maxs = self.formula.get_var_maxs()
+            factor_levels = self.formula.get_factor_levels()
+            NOT_NA_flat = self.formula.NOT_NA_flat
+            cov_flat = self.formula.cov_flat
+
+            model_mat_full = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
+                                                            ltx,irstx,stx,rtx,var_types,var_map,
+                                                            var_mins,var_maxs,factor_levels,
+                                                            cov_flat[NOT_NA_flat],None,self.n_j,
+                                                            None,None)
+            
+            return model_mat_full
 
     ##################################### Fitting #####################################
     
@@ -527,7 +562,15 @@ class sMsGAMM(MSSM):
         state_durs_decoded, states_decoded, llks_decoded = zip(*pool.starmap(decode_local,args))
         return list(state_durs_decoded),list(states_decoded),list(llks_decoded)
     
-    def fit(self,burn_in=100,maxiter_inner=30,m_avg=15,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=False,init_scale=100,t0=0.25,r=0.925):
+    def compute_all_probs(self,pool,cov,pi,TR,log_o_probs,log_dur_probs,var_map):
+        # MP code to decode final states for every series
+        args = zip(repeat(self.n_j),cov,repeat(pi),repeat(TR),log_o_probs,
+                   repeat(log_dur_probs),repeat(self.pds),repeat(var_map),repeat(True))
+        
+        llks_decoded, etas, gammas, smoothed = zip(*pool.starmap(compute_hsmm_probabilities,args))
+        return list(etas),list(gammas),list(smoothed),list(llks_decoded)
+    
+    def fit(self,burn_in=100,maxiter_inner=30,m_avg=15,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=False,init_scale=100,t0=0.25,r=0.925,progress_bar=True):
         # Performs Stochastic Expectation maiximization based on Nielsen (2002) see also the sem.py file for
         # more details as well as:
         # Ref:
@@ -544,6 +587,8 @@ class sMsGAMM(MSSM):
             penalties = [copy.deepcopy(self.formula.penalties) for j in range(self.n_j)]
         else:
             penalties = self.formula.penalties
+
+        self.state_penalties = penalties
 
         # Model matrix parameters that remain constant are specified.
         # And then we need to build the model matrix once for the entire
@@ -597,8 +642,12 @@ class sMsGAMM(MSSM):
         # likely requires some tuning.
         # see: Marinari, E., & Parisi, G. (1992). Simulated Tempering: A New Monte Carlo Scheme. https://doi.org/10.1209/0295-5075/19/6/002
         temp_schedule = anneal_temps_zero(burn_in,t0,r)
+
+        iterator = range(burn_in + m_avg)
+        if progress_bar:
+            iterator = tqdm(iterator,desc="Fitting",leave=True)
         
-        for iter in range(burn_in + m_avg):
+        for iter in iterator:
 
             ### Stochastic Expectation ###
 
