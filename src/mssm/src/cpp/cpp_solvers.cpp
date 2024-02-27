@@ -27,6 +27,26 @@ std::tuple<Eigen::SparseMatrix<double>,int> chol(Eigen::SparseMatrix<double> A){
     return std::make_tuple(std::move(L),0);
 }
 
+std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> cholP(Eigen::SparseMatrix<double> A){
+    // Like chol() but with sparsity preserving pivoting
+    Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver;
+    solver.compute(A);
+
+    // Also get the permutation
+    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic> P(solver.permutationP());
+
+    if (solver.info()!=Eigen::Success)
+    {
+        Eigen::SparseMatrix<double> id(A.rows(),A.cols());
+        id.setIdentity();
+        return std::make_tuple(std::move(id),P.indices(),1);
+    }
+
+    Eigen::SparseMatrix<double> L = solver.matrixL();
+    
+    return std::make_tuple(std::move(L),P.indices(),0);
+}
+
 std::tuple<Eigen::SparseMatrix<double>,Eigen::SparseMatrix<double>,Eigen::VectorXi, int> pqr(Eigen::SparseMatrix<double> A) {
     // Computed column-pivoted QR factorization of A.
     Eigen::SparseQR<Eigen::SparseMatrix<double>,Eigen::COLAMDOrdering<int>> solver;
@@ -148,6 +168,43 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> solve_L(Eigen::Spars
     return std::make_tuple(std::move(id),P.indices(),0);
 }
 
+std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> solve_LXX(Eigen::SparseMatrix<double> XX){
+    // Permuted Cholesky:
+    // P * A * P' = L * L'
+    // A = P' * L * L' * P
+    // U = P' * L
+    // U' = L' * P
+    // A = U * U'
+    // Inverse:
+    // inv(A) = P' * Inv(L)' * inv(L) * Perm
+
+    int Xcols = XX.cols();
+
+    // Prepare and compute Cholesky factor of X' * X + S or X' * X 
+    Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver;
+    solver.compute(XX);
+
+    // Setup identity target for inverse of L' (see below)
+    Eigen::SparseMatrix<double> id(Xcols,Xcols);
+    id.setIdentity();
+
+    // Also get the permutation
+    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic> P(solver.permutationP());
+
+    if (solver.info()!=Eigen::Success)
+    {
+
+        return std::make_tuple(std::move(id),P.indices(),1);
+    }
+
+    // We need inv(L) * P from P * X' * X + S * P' = L * L'
+    // so the inverse of the lower matrix from the solver times the
+    // permutation matrix created for us by eigen (last part is done in Python).
+    solver.matrixL().solveInPlace(id);
+
+    return std::make_tuple(std::move(id),P.indices(),0);
+}
+
 std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solve_coef(Eigen::VectorXd y, Eigen::SparseMatrix<double> X, Eigen::SparseMatrix<double> S){
     // Permuted Cholesky:
     // P * A * P' = L * L'
@@ -191,6 +248,49 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
     return std::make_tuple(solver.matrixL(),P.indices(),std::move(coef),0);
 }
 
+std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solve_coefXX(Eigen::VectorXd Xy, Eigen::SparseMatrix<double> XXS){
+    // Permuted Cholesky:
+    // P * A * P' = L * L'
+    // A = P' * L * L' * P
+    // U = P' * L
+    // U' = L' * P
+    // A = U * U'
+    // Inverse:
+    // inv(A) = P' * Inv(L)' * inv(L) * Perm
+
+    int Xcols = XXS.cols();
+
+    // Prepare and compute Cholesky factor of X' * X + S
+    Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver;
+    solver.compute(XXS);
+
+    // Initialize coef vector
+    Eigen::VectorXd coef;
+    coef.setZero(Xcols);
+
+    // First get the permutation
+    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic> P(solver.permutationP());
+
+    if (solver.info()!=Eigen::Success)
+    {
+        Eigen::SparseMatrix<double> id(Xcols,Xcols);
+        id.setIdentity();
+        return std::make_tuple(std::move(id),P.indices(),std::move(coef),1);
+    }
+
+    // Solve for coef (see Wood & Fasiolo, 2017)
+    coef = solver.solve(Xy);
+
+    if (solver.info()!=Eigen::Success)
+    {
+        Eigen::SparseMatrix<double> id(Xcols,Xcols);
+        id.setIdentity();
+        return std::make_tuple(std::move(id),P.indices(),std::move(coef),2);
+    }
+
+    return std::make_tuple(solver.matrixL(),P.indices(),std::move(coef),0);
+}
+
 Eigen::SparseMatrix<double> solve_tr(Eigen::SparseMatrix<double> A,Eigen::SparseMatrix<double> B){
     // Solves A*B=C, where B is lower triangular. This can be utilized to obtain B = inv(A), when C is
     // the identity. Importantly, when A is a n*n matrix then C can also be specified as a n*m block of
@@ -213,10 +313,13 @@ PYBIND11_MODULE(cpp_solvers, m) {
     m.doc() = "cpp solvers for sms (DC) GAMM estimation";
 
     m.def("chol", &chol, "Compute cholesky factor L of A");
+    m.def("cholP", &cholP, "Compute cholesky factor L of A after applying a sparsity enhancing permutation to A");
     m.def("pqr", &pqr, "Perform column pivoted QR decomposition of A");
     m.def("solve_am", &solve_am, "Solve additive model, return coefficient vector and inverse");
     m.def("solve_L", &solve_L, "Solve cholesky of XX+S");
+    m.def("solve_LXX", &solve_LXX, "Solve cholesky of XX+S, but with XX + S pre-computed.");
     m.def("solve_coef", &solve_coef, "Solve additive model coefficients");
+    m.def("solve_coefXX", &solve_coefXX, "Solve additive model coefficients, but with XX + S and Xy pre-computed.");
     m.def("solve_tr",&solve_tr,"Solve A*B = C, where A is lower triangular.");
     m.def("backsolve_tr",&backsolve_tr,"Solve A*B = C, where A is upper triangular.");
 }

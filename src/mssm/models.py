@@ -2,10 +2,10 @@ import numpy as np
 import scipy as scp
 import copy
 from collections.abc import Callable
-from .src.python.formula import Formula,PFormula,PTerm,build_sparse_matrix_from_formula,VarType,lhs,ConstType,Constraint
+from .src.python.formula import Formula,PFormula,PTerm,build_sparse_matrix_from_formula,VarType,lhs,ConstType,Constraint,pd
 from .src.python.exp_fam import Link,Logit,Family,Binomial,Gaussian
 from .src.python.sem import anneal_temps_zero,const_temps,compute_log_probs,pre_ll_sms_gamm,se_step_sms_gamm,decode_local,se_step_sms_dc_gamm,pre_ll_sms_IR_gamm,init_states_IR,compute_hsmm_probabilities
-from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm
+from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 from .src.python.penalties import PenType
 
@@ -252,25 +252,27 @@ class GAMM(MSSM):
         var_mins = self.formula.get_var_mins()
         var_maxs = self.formula.get_var_maxs()
         factor_levels = self.formula.get_factor_levels()
-        cov_flat = self.formula.cov_flat[self.formula.NOT_NA_flat]
-        y_flat = self.formula.y_flat[self.formula.NOT_NA_flat]
-
-        if y_flat.shape[0] != self.formula.y_flat.shape[0] and progress_bar:
-            print("NAs were excluded for fitting.")
 
         cov = None
         n_j = None
         state_est_flat = None
         state_est = None
 
-        # Build the model matrix with all information from the formula
-        model_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
-                                                     ltx,irstx,stx,rtx,var_types,var_map,
-                                                     var_mins,var_maxs,factor_levels,
-                                                     cov_flat,cov,n_j,state_est_flat,state_est)
-        
-        # Get initial estimate of mu based on family:
-        init_mu_flat = self.family.init_mu(y_flat)
+        if len(self.formula.file_paths) == 0:
+            cov_flat = self.formula.cov_flat[self.formula.NOT_NA_flat]
+            y_flat = self.formula.y_flat[self.formula.NOT_NA_flat]
+
+            if y_flat.shape[0] != self.formula.y_flat.shape[0] and progress_bar:
+                print("NAs were excluded for fitting.")
+
+            # Build the model matrix with all information from the formula
+            model_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
+                                                         ltx,irstx,stx,rtx,var_types,var_map,
+                                                         var_mins,var_maxs,factor_levels,
+                                                         cov_flat,cov,n_j,state_est_flat,state_est)
+
+            # Get initial estimate of mu based on family:
+            init_mu_flat = self.family.init_mu(y_flat)
 
         # Now we have to estimate the model
         coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,y_flat,

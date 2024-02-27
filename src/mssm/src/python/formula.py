@@ -9,6 +9,7 @@ from .smooths import TP_basis_calc
 from .terms import GammTerm,i,l,f,irf,ri,rs
 from .penalties import PenType,id_dist_pen,diff_pen,TP_pen,LambdaTerm,translate_sparse,ConstType,Constraint,Reparameterization
 from .gamm_solvers import reparam
+from .file_loading import read_cov, read_min_max, read_unique,read_dtype
 
 class VarType(Enum):
     NUMERIC = 1
@@ -410,7 +411,8 @@ class Formula():
                  series_id:str or None=None,
                  split_scale:bool=False,
                  n_j:int=3,
-                 print_warn=True) -> None:
+                 print_warn=True,
+                 file_paths = []) -> None:
         
         self.__lhs = lhs
         self.__terms = terms
@@ -421,6 +423,7 @@ class Formula():
         self.print_warn = print_warn
         if self.__split_scale and self.print_warn:
            warnings.warn("split_scale==True! All terms will be estimted per latent stage, independent of terms' by_latent status.")
+        self.file_paths = file_paths # If this will not be empty, we accumulate t(X)@X directly without forming X. Only useful if model is normal.
         self.__factor_codings = {}
         self.__coding_factors = {}
         self.__factor_levels = {}
@@ -456,7 +459,7 @@ class Formula():
         self.penalties = None
         
         # Perform input checks first for LHS/Dependent variable.
-        if self.__lhs.variable not in self.__data.columns:
+        if len(self.file_paths) == 0 and self.__lhs.variable not in self.__data.columns:
             raise IndexError(f"Column '{self.__lhs.variable}' does not exist in Dataframe.")
 
         # Now some checks on the terms - some problems might only be caught later when the 
@@ -495,10 +498,13 @@ class Formula():
             # All variables must exist in data
             for var in term.variables:
 
-                if not var in self.__data.columns:
+                if len(self.file_paths) == 0 and not var in self.__data.columns:
                     raise KeyError(f"Variable '{var}' of term {ti} does not exist in dataframe.")
                 
-                vartype = data[var].dtype
+                if len(self.file_paths) == 0:
+                     vartype = data[var].dtype
+                else:
+                     vartype = read_dtype(var,self.file_paths)
 
                 # Store information for all variables once.
                 if not var in self.__var_to_cov:
@@ -508,15 +514,23 @@ class Formula():
                     if vartype in ['float64','int64']:
                         # ToDo: these can be properties of the formula.
                         self.__var_types[var] = VarType.NUMERIC
-                        self.__var_mins[var] = np.min(self.__data[var])
-                        self.__var_maxs[var] = np.max(self.__data[var])
+                        if len(self.file_paths) == 0:
+                           self.__var_mins[var] = np.min(self.__data[var])
+                           self.__var_maxs[var] = np.max(self.__data[var])
+                        else:
+                           min_read,max_read = read_min_max(var,self.file_paths)
+                           self.__var_mins[var] = min_read
+                           self.__var_maxs[var] = max_read
                     else:
                         self.__var_types[var] = VarType.FACTOR
                         self.__var_mins[var] = None
                         self.__var_maxs[var] = None
 
                         # Code factor variables into integers for example for easy dummy coding
-                        levels = np.unique(self.__data[var])
+                        if len(self.file_paths) == 0:
+                           levels = np.unique(self.__data[var])
+                        else:
+                           levels = read_unique(var,self.file_paths)
 
                         self.__factor_codings[var] = {}
                         self.__coding_factors[var] = {}
@@ -546,10 +560,13 @@ class Formula():
                     if t_by is None:
                        t_by = term.binary[0]
 
-                    if not t_by in self.__data.columns:
+                    if len(self.file_paths) == 0 and not t_by in self.__data.columns:
                         raise KeyError(f"By-variable '{t_by}' attributed to term {ti} does not exist in dataframe.")
                     
-                    if data[t_by].dtype in ['float64','int64']:
+                    if len(self.file_paths) == 0 and data[t_by].dtype in ['float64','int64']:
+                        raise KeyError(f"Data-type of By-variable '{t_by}' attributed to term {ti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'.")
+                    
+                    if len(self.file_paths) > 0 and read_dtype(t_by,self.file_paths) in ['float64','int64']:
                         raise KeyError(f"Data-type of By-variable '{t_by}' attributed to term {ti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'.")
                     
                      # Store information for by variables as well.
@@ -562,7 +579,10 @@ class Formula():
                         self.__var_maxs[t_by] = None
 
                         # Code factor variables into integers for example for easy dummy coding
-                        levels = np.unique(self.__data[t_by])
+                        if len(self.file_paths) == 0:
+                           levels = np.unique(self.__data[t_by])
+                        else:
+                           levels = read_unique(t_by,self.file_paths)
 
                         self.__factor_codings[t_by] = {}
                         self.__coding_factors[t_by] = {}
@@ -588,16 +608,20 @@ class Formula():
         
         # Compute number of coef and coef names
         self.__get_coef_info()
+        
         # Encode data into columns usable by the model
-        y_flat,cov_flat,NAs_flat,y,cov,NAs,sid = self.encode_data(self.__data)
-        # Store encoding
-        self.y_flat = y_flat
-        self.cov_flat = cov_flat
-        self.NOT_NA_flat = NAs_flat
-        self.y = y
-        self.cov = cov
-        self.NOT_NA = NAs
-        self.sid = sid
+        if len(self.file_paths) == 0:
+            y_flat,cov_flat,NAs_flat,y,cov,NAs,sid = self.encode_data(self.__data)
+
+            # Store encoding
+            self.y_flat = y_flat
+            self.cov_flat = cov_flat
+            self.NOT_NA_flat = NAs_flat
+            self.y = y
+            self.cov = cov
+            self.NOT_NA = NAs
+            self.sid = sid
+
         # Absorb any constraints for model terms
         self.__absorb_constraints()
 
@@ -815,11 +839,16 @@ class Formula():
                   else:
                      id_nk = sterm.nk
                   
-                  matrix_term_v = sterm.basis(None,self.cov_flat[self.NOT_NA_flat,var_map[vars[vi]]],
+                  if len(self.file_paths) == 0:
+                     var_cov_flat = self.cov_flat[self.NOT_NA_flat,var_map[vars[vi]]]
+                  else:
+                     var_cov_flat = read_cov(self.__lhs.variable,vars[vi],self.file_paths)
+
+                  matrix_term_v = sterm.basis(None,var_cov_flat,
                                               None,id_nk,min_c=self.__var_mins[vars[vi]],
                                               max_c=self.__var_maxs[vars[vi]], **sterm.basis_kwargs)
 
-                  sterm.RP.append(Reparameterization(scp.sparse.csc_array(matrix_term_v),self.cov_flat[self.NOT_NA_flat,var_map[vars[vi]]]))
+                  sterm.RP.append(Reparameterization(scp.sparse.csc_array(matrix_term_v),var_cov_flat))
 
             continue
 
@@ -838,7 +867,12 @@ class Formula():
             if sterm.te == False:
                id_nk += 1
 
-            matrix_term_v = sterm.basis(None,self.cov_flat[self.NOT_NA_flat,var_map[vars[vi]]],
+            if len(self.file_paths) == 0:
+               var_cov_flat = self.cov_flat[self.NOT_NA_flat,var_map[vars[vi]]]
+            else:
+               var_cov_flat = read_cov(self.__lhs.variable,vars[vi],self.file_paths)
+
+            matrix_term_v = sterm.basis(None,var_cov_flat,
                                       None,id_nk,min_c=self.__var_mins[vars[vi]],
                                       max_c=self.__var_maxs[vars[vi]], **sterm.basis_kwargs)
 

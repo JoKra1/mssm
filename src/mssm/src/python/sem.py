@@ -139,9 +139,12 @@ def backward_eta(n_j,n_t,TR,log_dur_mat,etas,u):
       for j in range(n_j):
         if t > 0:
          for i in range(n_j):
+            if i == j:
+               continue # No self transitions in hsmms
+
             betas[t-1,j] = np.logaddexp(betas[t-1,j],log_TR[j,i] + beta_stars_t[i])
 
-            # Now we can update etas as well - eq 6!
+         # Now we can update etas as well - eq 6!
          etas[t-1,j,:] +=  betas[t-1,j]
 
         # Finally, we can calculate gammas, according to eq 8.

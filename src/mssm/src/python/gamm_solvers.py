@@ -3,7 +3,7 @@ import scipy as scp
 import multiprocessing as mp
 from itertools import repeat
 import warnings
-from .exp_fam import Family,Gaussian
+from .exp_fam import Family,Gaussian,est_scale
 from .penalties import PenType,id_dist_pen,translate_sparse
 import cpp_solvers
 from tqdm import tqdm
@@ -12,6 +12,9 @@ import copy
 
 def cpp_chol(A):
    return cpp_solvers.chol(A)
+
+def cpp_cholP(A):
+   return cpp_solvers.cholP(A)
 
 def cpp_qr(A):
    return cpp_solvers.pqr(A)
@@ -22,8 +25,14 @@ def cpp_solve_am(y,X,S):
 def cpp_solve_coef(y,X,S):
    return cpp_solvers.solve_coef(y,X,S)
 
+def cpp_solve_coefXX(Xy,XXS):
+   return cpp_solvers.solve_coefXX(Xy,XXS)
+
 def cpp_solve_L(X,S):
    return cpp_solvers.solve_L(X,S)
+
+def cpp_solve_LXX(XXS):
+   return cpp_solvers.solve_L(XXS)
 
 def cpp_solve_tr(A,B):
    return cpp_solvers.solve_tr(A,B)
@@ -512,7 +521,7 @@ def update_scale_edf(y,z,eta,Wr,rowsX,colsX,InvCholXXSP,Pr,family,penalties):
 
    # Optionally estimate scale parameter
    if family.scale is None:
-      scale = family.est_scale(wres,rowsX,total_edf)
+      scale = est_scale(wres,rowsX,total_edf)
    else:
       scale = family.scale
    
@@ -538,33 +547,11 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,penalties,n_c)
    # Update scale parameter
    wres,InvCholXXS,total_edf,term_edfs,Bs,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,InvCholXXSP,Pr,family,penalties)
    return eta,mu,coef,InvCholXXS,total_edf,term_edfs,Bs,scale,wres
-   
-def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
-                      maxiter=10,pinv="svd",conv_tol=1e-7,
-                      extend_lambda=True,control_lambda=True,
-                      exclude_lambda=False,
-                      progress_bar=False,n_c=10):
-   # Estimates a penalized Generalized additive mixed model, following the steps outlined in Wood (2017)
-   # "Generalized Additive Models for Gigadata"
 
-   n_c = min(mp.cpu_count(),n_c)
-   rowsX,colsX = X.shape
-   coef = None
-   n_coef = None
-
-   # Additive mixed model can simply be fit on y and X
-   # Generalized mixed model needs to be fit on weighted X and pseudo-dat
-   # but the same routine can be used (Wood, 2017) so both should end
-   # up in the same variables passed down:
-   yb = y
-   Xb = X
-
-   # mu and eta (start estimates in case the family is not Gaussian)
-   mu = mu_init
-   eta = mu
-
-   if isinstance(family,Gaussian) == False:
-      eta = family.link.f(mu)
+def init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
+                  family,col_S,penalties,
+                  pinv,n_c):
+   # Initial fitting iteration without step-length control for gam.
 
    # Compute starting estimate S_emb and S_pinv
    if len(penalties) > 0:
@@ -596,12 +583,11 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    if len(penalties) > 0:
       pen_dev += coef.T @ S_emb @ coef
 
-   # Now we propose a lambda extension via the Fellner Schall method
-   # by Wood & Fasiolo (2016)
-   # We also consider an extension term as reccomended by Wood & Fasiolo (2016)
-   extend_by = 1
+   # Now propose first lambda extension via the Fellner Schall method
+   # by Wood & Fasiolo (2016). Simply don't use an extension term (see Wood & Fasiolo; 2016) for
+   # this first update.
+   lam_delta = []
    if len(penalties) > 0:
-      lam_delta = []
       for lti,lTerm in enumerate(penalties):
 
          lt_rank = None
@@ -610,15 +596,162 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
          
          lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
          dLam = step_fellner_schall_sparse(lgdetD,Bs[lti],bsb,lTerm.lam,scale)
-
-         if extend_lambda:
-            extension = lTerm.lam  + dLam*extend_by
-            if extension < 1e7 and extension > 1e-7: # Keep lambda in correct space
-               dLam *= extend_by
-
          lam_delta.append(dLam)
 
       lam_delta = np.array(lam_delta).reshape(-1,1)
+   
+   return dev,pen_dev,eta,mu,coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,S_emb
+
+
+def correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,n_pen,S_emb):
+   # Perform step-length control for the coefficients (Step 3 in Wood, 2017)
+   corrections = 0
+   while pen_dev > c_dev_prev:
+      # Coefficient step did not improve deviance - so correction
+      # is necessary.
+
+      if corrections > 30:
+         # If we could not find a better coefficient set simply accept
+         # previous coefficient
+         n_coef = coef
+
+      n_coef = (coef + n_coef)/2
+
+      # Update mu & eta for correction
+      eta = (X @ n_coef).reshape(-1,1)
+      mu = eta
+
+      if isinstance(family,Gaussian) == False:
+         mu = family.link.fi(eta)
+      
+      # Update deviance
+      dev = family.deviance(y,mu)
+
+      # And penalized deviance term
+      if n_pen > 0:
+         pen_dev = dev + n_coef.T @ S_emb @ n_coef
+      corrections += 1
+   
+   # Collect accepted coefficient
+   coef = n_coef
+   return dev,pen_dev,mu,eta,coef
+
+def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
+                        family,col_S,S_emb,penalties,
+                        pinv,lam_delta,extend_by,o_iter,
+                        dev_check,n_c,control_lambda,
+                        extend_lambda,exclude_lambda):
+   # Propose & perform step-length control for the lambda parameters via the Fellner Schall method
+   # by Wood & Fasiolo (2016)
+   lam_accepted = False
+   lam_checks = 0
+   while not lam_accepted:
+
+      # Re-compute S_emb and S_pinv
+      S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(col_S,penalties,pinv)
+
+      # Update coefficients
+      eta,mu,n_coef,\
+      InvCholXXS,\
+      total_edf,\
+      term_edfs,\
+      Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
+                                             X,Xb,family,S_emb,penalties,n_c)
+      
+      # Compute gradient of REML with respect to lambda
+      # to check if step size needs to be reduced.
+      lgdetDs = []
+      bsbs = []
+      for lti,lTerm in enumerate(penalties):
+
+         lt_rank = None
+         if FS_use_rank[lti]:
+            lt_rank = lTerm.rank
+
+         lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,n_coef)
+         lgdetDs.append(lgdetD)
+         bsbs.append(bsb)
+
+      lam_grad = [grad_lambda(lgdetDs[lti],Bs[lti],bsbs[lti],scale) for lti in range(len(penalties))]
+      lam_grad = np.array(lam_grad).reshape(-1,1) 
+      check = lam_grad.T @ lam_delta
+
+      if check[0,0] < 0 and control_lambda: # because of minimization in Wood (2017) they use a different check.
+         # Reset extension or cut the step taken in half
+         for lti,lTerm in enumerate(penalties):
+            if extend_lambda and extend_by > 1:
+               # I experimented with just iteratively reducing the step-size but it just takes too many
+               # wasted iterations then. Thus, I now just reset the extension factor below. It can then build up again
+               # if needed.
+               lTerm.lam -= lam_delta[lti][0]
+               lam_delta[lti] /= extend_by
+               lTerm.lam += lam_delta[lti][0]
+            else: # If the step size extension is already at the minimum, fall back to the strategy by Wood (2017) to just half the step
+               lam_delta[lti] = lam_delta[lti]/2
+               lTerm.lam -= lam_delta[lti][0]
+
+         if extend_lambda and extend_by > 1:
+            extend_by = 1
+      else:
+         if extend_lambda and lam_checks == 0 and extend_by < 2 and o_iter > 0 and dev_check: # Try longer step next time.
+            extend_by += 0.5
+
+         # Accept the step and propose a new one as well!
+         lam_accepted = True
+         lam_delta = []
+         for lti,(lGrad,lTerm) in enumerate(zip(lam_grad,penalties)):
+            
+            if np.abs(lGrad[0]) >= 1e-8*np.sum(np.abs(lam_grad)) or exclude_lambda == False:
+
+               dLam = step_fellner_schall_sparse(lgdetDs[lti],Bs[lti],bsbs[lti],lTerm.lam,scale)
+
+               if extend_lambda:
+                  extension = lTerm.lam  + dLam*extend_by
+                  if extension < 1e7 and extension > 1e-7:
+                     dLam *= extend_by
+            else: # ReLikelihood is insensitive to further changes in this smoothing penalty, so set change to 0.
+               dLam = 0
+
+            lam_delta.append(dLam)
+
+         lam_delta = np.array(lam_delta).reshape(-1,1)
+
+      lam_checks += 1
+
+   return eta,mu,n_coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,S_emb
+   
+def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
+                      maxiter=10,pinv="svd",conv_tol=1e-7,
+                      extend_lambda=True,control_lambda=True,
+                      exclude_lambda=False,
+                      progress_bar=False,n_c=10):
+   # Estimates a penalized Generalized additive mixed model, following the steps outlined in Wood (2017)
+   # "Generalized Additive Models for Gigadata"
+
+   n_c = min(mp.cpu_count(),n_c)
+   rowsX,colsX = X.shape
+   coef = None
+   n_coef = None
+   extend_by = 1 # Extension factor for lambda update for the Fellner Schall method by Wood & Fasiolo (2016)
+
+   # Additive mixed model can simply be fit on y and X
+   # Generalized mixed model needs to be fit on weighted X and pseudo-dat
+   # but the same routine can be used (Wood, 2017) so both should end
+   # up in the same variables passed down:
+   yb = y
+   Xb = X
+
+   # mu and eta (start estimates in case the family is not Gaussian)
+   mu = mu_init
+   eta = mu
+
+   if isinstance(family,Gaussian) == False:
+      eta = family.link.f(mu)
+
+   # Compute starting estimates
+   dev,pen_dev,eta,mu,coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,S_emb = init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
+                                                                                                     family,col_S,penalties,
+                                                                                                     pinv,n_c)
    
    # Loop to optimize smoothing parameter (see Wood, 2017)
    iterator = range(maxiter)
@@ -646,35 +779,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
             c_dev_prev += coef.T @ S_emb @ coef
 
          # Perform step-length control for the coefficients (Step 3 in Wood, 2017)
-         corrections = 0
-         while pen_dev > c_dev_prev:
-            # Newton step did not improve deviance - so correction
-            # is necessary.
-
-            if corrections > 30:
-               # If we could not find a better coefficient set simply accept
-               # previous coefficient
-               n_coef = coef[:]
-         
-            n_coef = (coef + n_coef)/2
-
-            # Update mu & eta for correction
-            eta = (X @ n_coef).reshape(-1,1)
-            mu = eta
-
-            if isinstance(family,Gaussian) == False:
-               mu = family.link.fi(eta)
-            
-            # Update deviance
-            dev = family.deviance(y,mu)
-
-            # And penalized deviance term
-            if len(penalties) > 0:
-               pen_dev = dev + n_coef.T @ S_emb @ n_coef
-            corrections += 1
-         
-         # Collect accepted coefficient
-         coef = n_coef[:]
+         dev,pen_dev,mu,eta,coef = correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,len(penalties),S_emb)
 
          # Test for convergence (Step 2 in Wood, 2017)
          dev_diff = abs(pen_dev - prev_pen_dev)
@@ -699,80 +804,16 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
             lTerm.lam += lam_delta[lti][0]
             #print(lTerm.lam,lam_delta[lti][0])
 
-         lam_accepted = False
-         lam_checks = 0
-         while not lam_accepted:
+         # Now check step length and compute lambda + coef update.
+         dev_check = None
+         if o_iter > 0:
+            dev_check = dev_diff < 1e-3*pen_dev
 
-            # Re-compute S_emb and S_pinv
-            S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(col_S,penalties,pinv)
-
-            # Update coefficients
-            eta,mu,n_coef,\
-            InvCholXXS,\
-            total_edf,\
-            term_edfs,\
-            Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
-                                                  X,Xb,family,S_emb,penalties,n_c)
-            
-            # Compute gradient of REML with respect to lambda
-            # to check if step size needs to be reduced.
-            lgdetDs = []
-            bsbs = []
-            for lti,lTerm in enumerate(penalties):
-
-               lt_rank = None
-               if FS_use_rank[lti]:
-                  lt_rank = lTerm.rank
-
-               lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,n_coef)
-               lgdetDs.append(lgdetD)
-               bsbs.append(bsb)
-
-            lam_grad = [grad_lambda(lgdetDs[lti],Bs[lti],bsbs[lti],scale) for lti in range(len(penalties))]
-            lam_grad = np.array(lam_grad).reshape(-1,1) 
-            check = lam_grad.T @ lam_delta
-
-            if check[0,0] < 0 and control_lambda: # because of minimization in Wood (2017) they use a different check.
-               # Reset extension or cut the step taken in half
-               for lti,lTerm in enumerate(penalties):
-                  if extend_lambda and extend_by > 1:
-                     # I experimented with just iteratively reducing the step-size but it just takes too many
-                     # wasted iterations then. Thus, I now just reset the extension factor below. It can then build up again
-                     # if needed.
-                     lTerm.lam -= lam_delta[lti][0]
-                     lam_delta[lti] /= extend_by
-                     lTerm.lam += lam_delta[lti][0]
-                  else: # If the step size extension is already at the minimum, fall back to the strategy by Wood (2017) to just half the step
-                     lam_delta[lti] = lam_delta[lti]/2
-                     lTerm.lam -= lam_delta[lti][0]
-
-               if extend_lambda and extend_by > 1:
-                  extend_by = 1
-            else:
-               if extend_lambda and lam_checks == 0 and extend_by < 2 and o_iter > 0 and dev_diff < 1e-3*pen_dev: # Try longer step next time.
-                  extend_by += 0.5
-
-               # Accept the step and propose a new one as well!
-               lam_accepted = True
-               lam_delta = []
-               for lti,(lGrad,lTerm) in enumerate(zip(lam_grad,penalties)):
-                  
-                  if np.abs(lGrad[0]) >= 1e-8*np.sum(np.abs(lam_grad)) or exclude_lambda == False:
-
-                     dLam = step_fellner_schall_sparse(lgdetDs[lti],Bs[lti],bsbs[lti],lTerm.lam,scale)
-
-                     if extend_lambda:
-                        extension = lTerm.lam  + dLam*extend_by
-                        if extension < 1e7 and extension > 1e-7:
-                           dLam *= extend_by
-                  else: # ReLikelihood is insensitive to further changes in this smoothing penalty, so set change to 0.
-                     dLam = 0
-
-                  lam_delta.append(dLam)
-
-               lam_delta = np.array(lam_delta).reshape(-1,1)
-
-            lam_checks += 1
+         eta,mu,n_coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,S_emb = correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
+                                                                                                                           family,col_S,S_emb,penalties,
+                                                                                                                           pinv,lam_delta,extend_by,o_iter,
+                                                                                                                           dev_check,n_c,control_lambda,
+                                                                                                                           extend_lambda,exclude_lambda)
       
       else:
          # If there are no penalties simply perform a newton step
@@ -781,8 +822,8 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
          InvCholXXS,\
          total_edf,\
          term_edfs,\
-         Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
-                                               X,Xb,family,S_emb,penalties,n_c)
+         _,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
+                                              X,Xb,family,S_emb,penalties,n_c)
 
    # Final penalty
    if len(penalties) > 0:
