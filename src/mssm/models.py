@@ -5,7 +5,7 @@ from collections.abc import Callable
 from .src.python.formula import Formula,PFormula,PTerm,build_sparse_matrix_from_formula,VarType,lhs,ConstType,Constraint,pd
 from .src.python.exp_fam import Link,Logit,Family,Binomial,Gaussian
 from .src.python.sem import anneal_temps_zero,const_temps,compute_log_probs,pre_ll_sms_gamm,se_step_sms_gamm,decode_local,se_step_sms_dc_gamm,pre_ll_sms_IR_gamm,init_states_IR,compute_hsmm_probabilities
-from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv
+from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 from .src.python.penalties import PenType
 
@@ -239,26 +239,25 @@ class GAMM(MSSM):
         if penalties is None and restart:
             raise ValueError("Penalties were not initialized. Restart must be set to False.")
 
-        # And then we need to build the model matrix once
-        terms = self.formula.get_terms()
-        has_intercept = self.formula.has_intercept()
-        has_scale_split = False
-        ltx = self.formula.get_linear_term_idx()
-        irstx = []
-        stx = self.formula.get_smooth_term_idx()
-        rtx = self.formula.get_random_term_idx()
-        var_types = self.formula.get_var_types()
-        var_map = self.formula.get_var_map()
-        var_mins = self.formula.get_var_mins()
-        var_maxs = self.formula.get_var_maxs()
-        factor_levels = self.formula.get_factor_levels()
-
-        cov = None
-        n_j = None
-        state_est_flat = None
-        state_est = None
-
         if len(self.formula.file_paths) == 0:
+            # We need to build the model matrix once
+            terms = self.formula.get_terms()
+            has_intercept = self.formula.has_intercept()
+            has_scale_split = False
+            ltx = self.formula.get_linear_term_idx()
+            irstx = []
+            stx = self.formula.get_smooth_term_idx()
+            rtx = self.formula.get_random_term_idx()
+            var_types = self.formula.get_var_types()
+            var_map = self.formula.get_var_map()
+            var_mins = self.formula.get_var_mins()
+            var_maxs = self.formula.get_var_maxs()
+            factor_levels = self.formula.get_factor_levels()
+
+            cov = None
+            n_j = None
+            state_est_flat = None
+            state_est = None
             cov_flat = self.formula.cov_flat[self.formula.NOT_NA_flat]
             y_flat = self.formula.y_flat[self.formula.NOT_NA_flat]
 
@@ -274,12 +273,23 @@ class GAMM(MSSM):
             # Get initial estimate of mu based on family:
             init_mu_flat = self.family.init_mu(y_flat)
 
-        # Now we have to estimate the model
-        coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,y_flat,
-                                                                         model_mat,penalties,self.formula.n_coef,
-                                                                         self.family,maxiter,"svd",
-                                                                         conv_tol,extend_lambda,control_lambda,
-                                                                         exclude_lambda,progress_bar,n_cores)
+            # Now we have to estimate the model
+            coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,y_flat,
+                                                                             model_mat,penalties,self.formula.n_coef,
+                                                                             self.family,maxiter,"svd",
+                                                                             conv_tol,extend_lambda,control_lambda,
+                                                                             exclude_lambda,progress_bar,n_cores)
+        
+        else:
+            # Iteratively build model matrix.
+            # Follows steps in "Generalized additive models for large data sets" (2015) by Wood, Goude, and Shaw
+            if isinstance(self.family,Gaussian) == False:
+                raise ValueError("Iteratively building the model matrix is currently only supported for Normal models.")
+            
+            coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse2(self.formula,penalties,self.formula.n_coef,
+                                                                              self.family,maxiter,"svd",
+                                                                              conv_tol,extend_lambda,control_lambda,
+                                                                              exclude_lambda,progress_bar,n_cores)
         
         self.__coef = coef
         self.__scale = scale # ToDo: scale name is used in another context for more general mssm..

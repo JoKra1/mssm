@@ -1,6 +1,10 @@
 import pandas as pd
 import numpy as np
+import scipy as scp
+import os
+import warnings
 
+CACHE_DIR = './.db'
 
 # Functions to load & read data used to accumulate cross product of model matrix iteratively
 
@@ -65,3 +69,44 @@ def read_dtype(column,files,header=0,row_index=False):
                 raise TypeError("Column data type varies between different files.")
     
     return dtype
+
+def setup_cache(cache_dir:str):
+    """
+    Set up cache for row-subsets of model matrix.
+    """
+    # Check if cache directory exists
+    if not os.path.isdir(cache_dir):
+        warnings.warn(f"Creating cache directory {cache_dir}")
+        os.makedirs(cache_dir)
+    else:
+        raise ValueError(f"Cache directory {cache_dir} already exists. That either means it was not properly removed (maybe fitting crashed?) or a directory with the name already exists. Please delete/remove the directory '{cache_dir}' manually.")
+
+def clear_cache(cache_dir:str):
+    """
+    Clear up cache for row-subsets of model matrix.
+    """
+    warnings.warn(f"Removing cache directory {cache_dir}")
+    for file in os.listdir(cache_dir):
+        os.remove(f"{cache_dir}/" + file)
+    os.removedirs(cache_dir)
+
+def cache_mmat(cache_dir:str):
+    """
+    Cache row-subsets of model matrix.
+    """
+    def decorator(u_mmat_func):
+        
+        def n_mmat_func(*args):
+            # Check if matrix has been created
+            target = args[0].split("/")[-1].split(".csv")[0] + ".npz"
+            if target not in os.listdir(cache_dir):
+                mmat = u_mmat_func(*args)
+                scp.sparse.save_npz(f"{cache_dir}/" + target,mmat)
+            else:
+                mmat = scp.sparse.load_npz(f"{cache_dir}/" + target)
+            
+            return mmat
+        
+        return n_mmat_func
+    
+    return decorator
