@@ -978,7 +978,7 @@ class sMsIRGAMM(sMsGAMM):
         state_durs_new, states_new, llks = zip(*pool.starmap(se_step_sms_dc_gamm,args))
         return list(state_durs_new),list(states_new), list(llks)
     
-    def fit(self,maxiter_outer=100,maxiter_inner=30,conv_tol=1e-6,extend_lambda=True,control_lambda=True,exclude_lambda=True,t0=1,r=0.925,schedule="anneal",n_prop=None,prop_sd=2):
+    def fit(self,maxiter_outer=100,maxiter_inner=30,conv_tol=1e-6,extend_lambda=True,control_lambda=True,exclude_lambda=True,t0=1,r=0.925,schedule="anneal",n_prop=None,prop_sd=2,progress_bar=True):
         # Performs something like Stochastic Expectation maiximization (e.g., Nielsen, 2002) see the sem.py file for
         # more details.
         
@@ -1047,7 +1047,12 @@ class sMsIRGAMM(sMsGAMM):
 
         last_llk = None
         llk_hist = []
-        for iter in range(maxiter_outer):
+
+        iterator = range(maxiter_outer)
+        if progress_bar:
+            iterator = tqdm(iterator,desc="Fitting",leave=True)
+
+        for iter in iterator:
             ### Stochastic Expectation ###
 
             # Propose new states based on all updated parameters.
@@ -1089,8 +1094,15 @@ class sMsIRGAMM(sMsGAMM):
 
                 if iter > 1:
                     # Also check convergence
-                    if abs(pen_llk - last_llk) < conv_tol*abs(pen_llk):
-                        print("Converged",iter)
+                    llk_diff = abs(pen_llk - last_llk)
+
+                    if progress_bar:
+                        iterator.set_description_str(desc="Fitting - Conv.: " + "{:.2e}".format(llk_diff - conv_tol*abs(pen_llk)), refresh=True)
+
+                    if llk_diff < conv_tol*abs(pen_llk):
+                        if progress_bar:
+                            iterator.set_description_str(desc="Converged!", refresh=True)
+                            iterator.close()
                         break
 
                 last_llk = pen_llk
@@ -1171,6 +1183,10 @@ class sMsIRGAMM(sMsGAMM):
         self.__coef = coef
         self.lvi = LVI
         self.penalty = penalty
+        self.pred = eta
+        self.res = wres
+        self.edf = edf
+        self.term_edf = term_edf
 
         return llk_hist,states_flat,states
 
