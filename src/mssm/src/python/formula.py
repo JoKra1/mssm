@@ -476,7 +476,14 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
     return penalties,cur_pen_idx
 
 def build_irf_penalties(penalties,cur_pen_idx,
-                        pen,penid,irsti,irsterm,by_levels,n_coef,col_S):
+                        pen,penid,irsti,irsterm,
+                        vars,by_levels,n_coef,col_S):
+    
+    if len(vars) > 1:
+        id_k = irsterm.nk[penid % len(vars)]
+    else:
+        id_k = n_coef
+
     # Determine penalty generator
     if pen == PenType.DIFFERENCE:
         pen_generator = diff_pen
@@ -484,7 +491,26 @@ def build_irf_penalties(penalties,cur_pen_idx,
         pen_generator = id_dist_pen
 
     # Get non-zero elements and indices for the penalty used by this term.
-    pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = pen_generator(n_coef,None,**irsterm.pen_kwargs[penid])
+    pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = pen_generator(id_k,None,**irsterm.pen_kwargs[penid])
+
+    # For tensor product smooths we first have to recalculate:
+    # pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols via TP_pen()
+    # Then they can just be embedded via the calls below.
+
+    if len(vars) > 1:
+        constraint = None
+        
+        pen_data,\
+        pen_rows,\
+        pen_cols,\
+        chol_data,\
+        chol_rows,\
+        chol_cols,rank = TP_pen(scp.sparse.csc_array((pen_data,(pen_rows,pen_cols)),shape=(id_k,id_k)),
+                                scp.sparse.csc_array((chol_data,(chol_rows,chol_cols)),shape=(id_k,id_k)),
+                                penid % len(vars),irsterm.nk,constraint,rank)
+        
+        # For te terms, penalty dim are nk_1 * nk_2 * ... * nk_j over all j variables
+        id_k = np.prod(irsterm.nk)
 
     # Create lambda term
     lTerm = LambdaTerm(start_index=cur_pen_idx,
@@ -492,17 +518,17 @@ def build_irf_penalties(penalties,cur_pen_idx,
                         term=irsti)
 
     # Embed first penalty - if the term has a by-keyword more are added below.
-    lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,n_coef,cur_pen_idx)
-    lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,n_coef,cur_pen_idx)
-    lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,n_coef)
+    lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,id_k,cur_pen_idx)
+    lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,id_k,cur_pen_idx)
+    lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,id_k)
     lTerm.rank = rank
         
     if irsterm.by is not None:
         if irsterm.id is not None:
 
             for _ in range(len(by_levels)-1):
-                lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,n_coef,cur_pen_idx)
-                lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,n_coef,cur_pen_idx)
+                lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,id_k,cur_pen_idx)
+                lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,id_k,cur_pen_idx)
 
             # For pinv calculation during model fitting.
             lTerm.rep_sj = len(by_levels)
@@ -520,9 +546,9 @@ def build_irf_penalties(penalties,cur_pen_idx,
                                 term=irsti)
 
                 # Embed penalties
-                lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,n_coef,cur_pen_idx)
-                lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,n_coef,cur_pen_idx)
-                lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,n_coef)
+                lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,id_k,cur_pen_idx)
+                lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,id_k,cur_pen_idx)
+                lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,id_k)
                 lTerm.rank = rank
                 penalties.append(lTerm)
     else:
@@ -630,9 +656,6 @@ class Formula():
                self.__smooth_terms.append(ti)
 
             if isinstance(term,irf):
-               if len(term.variables) > 1:
-                  raise NotImplementedError("Multiple variables for impulse response terms have not been implemented yet.")
-               
                self.__ir_smooth_terms.append(ti)
                self.__n_irf += 1
             
@@ -815,18 +838,26 @@ class Formula():
       for irsti in self.get_ir_smooth_term_idx():
          # Calculate Coef names for impulse response terms
          irsterm = terms[irsti]
-         var = irsterm.variables[0]
+         vars = irsterm.variables
          n_coef = irsterm.nk
+
+         if len(vars) > 1:
+            n_coef = np.prod(irsterm.nk)
+
+         # var label
+         var_label = vars[0]
+         if len(vars) > 1:
+            var_label = "_".join(vars)
 
          if irsterm.by is not None:
             by_levels = factor_levels[irsterm.by]
             n_coef *= len(by_levels)
 
             for by_level in by_levels:
-               self.coef_names.extend([f"irf_{irsterm.event}_{ink}_{by_level}" for ink in range(irsterm.nk)])
+               self.coef_names.extend([f"irf_{irsterm.event}_{var_label}_{ink}_{by_level}" for ink in range(n_coef)])
          
          else:
-            self.coef_names.extend([f"irf_{irsterm.event}_{ink}" for ink in range(irsterm.nk)])
+            self.coef_names.extend([f"irf_{irsterm.event}_{var_label}_{ink}" for ink in range(n_coef)])
          
          self.n_coef += n_coef
          self.ordered_coef_per_term.append(n_coef)
@@ -1176,9 +1207,13 @@ class Formula():
       for irsti in self.get_ir_smooth_term_idx():
 
          irsterm = terms[irsti]
+         vars = irsterm.variables
 
          # Calculate nCoef 
          n_coef = irsterm.nk
+
+         if len(vars) > 1:
+            n_coef = np.prod(irsterm.nk)
          
          by_levels = None
          if irsterm.by is not None:
@@ -1212,7 +1247,8 @@ class Formula():
 
                penalties,cur_pen_idx = build_irf_penalties(penalties,cur_pen_idx,
                                                            pen,penid,irsti,irsterm,
-                                                           by_levels,n_coef,col_S)
+                                                           vars,by_levels,n_coef,
+                                                           col_S)
          
          # Keep track of previous penalty starting index
          prev_pen_idx = cur_pen_idx
@@ -1678,9 +1714,9 @@ def build_linear_term_matrix(ci,n_y,has_intercept,lti,lterm,var_types,var_map,fa
    
    return new_elements,new_rows,new_cols,new_ci
 
-def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,factor_levels,ridx,cov,state_est,use_only,pool,tol):
+def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,var_mins,var_maxs,factor_levels,ridx,cov,state_est,use_only,pool,tol):
    """Parameterize model matrix for an impulse response term."""
-   var = irsterm.variables[0]
+   vars = irsterm.variables
    term_elements = []
    term_idx = []
 
@@ -1692,6 +1728,9 @@ def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,factor_levels,ridx,cov,
    # Calculate number of coefficients
    n_coef = irsterm.nk
 
+   if len(vars) > 1:
+      n_coef = np.prod(irsterm.nk)
+
    if irsterm.by is not None:
       by_levels = factor_levels[irsterm.by]
       n_coef *= len(by_levels)
@@ -1699,11 +1738,30 @@ def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,factor_levels,ridx,cov,
    if pool is None:
       for s_cov,s_state in zip(cov,state_est):
          
-         # Create matrix for state corresponding to term.
-         # ToDo: For Multivariate case, the matrix term needs to be build iteratively for
-         # every level of the multivariate factor to make sure that the convolution operation
-         # works as intended. The splitting can happen later via by.
-         matrix_term = irsterm.basis(irsterm.event,s_cov[:,var_map[var]],s_state, irsterm.nk, **irsterm.basis_kwargs)
+         for vi in range(len(vars)):
+
+            if len(vars) > 1:
+               id_nk = irsterm.nk[vi]
+            else:
+               id_nk = irsterm.nk
+
+            # Create matrix for state corresponding to term.
+            # ToDo: For Multivariate case, the matrix term needs to be build iteratively for
+            # every level of the multivariate factor to make sure that the convolution operation
+            # works as intended. The splitting can happen later via by.
+            basis_kwargs_v = irsterm.basis_kwargs[vi]
+
+            if "max_c" in basis_kwargs_v and "min_c" in basis_kwargs_v:
+               matrix_term_v = irsterm.basis(irsterm.event,s_cov[:,var_map[vars[vi]]],s_state, id_nk, **basis_kwargs_v)
+            else:
+               matrix_term_v = irsterm.basis(irsterm.event,s_cov[:,var_map[vars[vi]]],s_state, id_nk,min_c=var_mins[vars[vi]],max_c=var_maxs[vars[vi]], **basis_kwargs_v)
+
+            if vi == 0:
+               matrix_term = matrix_term_v
+            else:
+               matrix_term = TP_basis_calc(matrix_term,matrix_term_v)
+         
+         
          m_rows,m_cols = matrix_term.shape
 
          # Handle optional by keyword
@@ -2061,6 +2119,7 @@ def build_sparse_matrix_from_formula(terms,has_intercept,
       new_rows,\
       new_cols,\
       new_ci = build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,
+                                           var_mins,var_maxs,
                                            factor_levels,ridx,cov,
                                            state_est,use_only,pool,tol)
       elements.extend(new_elements)

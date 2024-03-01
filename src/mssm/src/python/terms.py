@@ -283,11 +283,11 @@ class fs(f):
 class irf(GammTerm):
     def __init__(self,variables:[str],
                 event:int,
+                basis_kwargs:list[dict],
                 by:str=None,
                 id:int=None,
                 nk:int=10,
                 basis:Callable=smooths.B_spline_basis,
-                basis_kwargs:dict={"convolve":True},
                 is_penalized:bool = True,
                 penalty:list[penalties.PenType] or None = None,
                 pen_kwargs:list[dict] or None = None) -> None:
@@ -296,6 +296,19 @@ class irf(GammTerm):
         if penalty is None:
            penalty = [penalties.PenType.DIFFERENCE]
            pen_kwargs = [{"m":2}]
+
+        # For impulse response tensor product smooths we need to for every penalty in
+        # penalty (and kwargs as well) repeat the penalty (and kwargs) for len(variables)
+        if len(variables) > 1:
+           tp_pens = []
+           tp_pen_kwargs = []
+           for pen,pen_kwarg in zip(penalty,pen_kwargs):
+              for _ in range(len(variables)):
+               tp_pens.append(copy.deepcopy(pen))
+               tp_pen_kwargs.append(copy.deepcopy(pen_kwarg))
+         
+           penalty = tp_pens
+           pen_kwargs = tp_pen_kwargs
         
         # Initialization: ToDo: the deepcopy can be dropped now.
         super().__init__(variables, TermType.LSMOOTH, is_penalized, copy.deepcopy(penalty), copy.deepcopy(pen_kwargs))
@@ -304,10 +317,15 @@ class irf(GammTerm):
         self.event = event
         self.by = by
         self.id = id
-        self.nk = nk
+
+        # nk can also be a list for irf smooths.
+        if len(variables) == 1 or isinstance(nk,list):
+         self.nk = nk
+        else:
+         self.nk = [nk for _ in range(len(variables))]
 
         # Term name
-        self.name = f"f({variables}"
+        self.name = f"f({'_'.join(variables)}"
         if by is not None:
            self.name += f",by={by})"
 
