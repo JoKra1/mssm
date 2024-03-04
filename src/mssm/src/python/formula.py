@@ -162,6 +162,80 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
 
    else:
       raise NotImplementedError(f"Requested option {option} for reparameterization is not implemented.")
+   
+class PTerm():
+   # Storage for sojourn time distribution
+   def __init__(self,distribution:callable,
+                init_kwargs:dict or None=None,
+                fit_kwargs:dict or None=None,
+                split_by:str or None=None) -> None:
+      self.distribution = distribution
+      self.kwargs = init_kwargs # Any parameters required to use distribution.
+      if self.kwargs is None:
+         self.kwargs = {}
+      self.split_by = split_by
+      self.fit_kwargs = fit_kwargs
+      if self.fit_kwargs is None:
+         self.fit_kwargs = {}
+      self.n_by = None
+      self.params = None
+
+   def log_prob(self,d,by_i=None):
+      # Get log-probability of durations d under current
+      # sojourn distribution
+      if self.params is None:
+         return self.distribution.logpdf(d,**self.kwargs)
+
+      if self.split_by is None:
+         return self.distribution.logpdf(d,*self.params)
+      
+      # Optionally use distribution associated with a particular variable
+      return self.distribution.logpdf(d,*self.params[by_i,:])
+
+   def sample(self,N,by_i=None):
+      # Sample N values from current sojourn time distribution
+      if self.split_by is None:
+
+         if not self.params is None:
+            return self.distribution.rvs(*self.params,size=N)
+
+      if not self.params is None:
+         # Optionally again pick distribution parameters associated with
+         # specific by variable
+         return self.distribution.rvs(*self.params[by_i,:],size=N)
+      
+      # Initial sampling might be based on distributions default parameters
+      # as provided by scipy and any necessary parameter specified in kwargs.
+      return self.distribution.rvs(**self.kwargs,size=N)
+   
+   def fit(self,d,by_i=None):
+      # Update parameters of distribution(s)
+      if self.split_by is None:
+         self.params = self.distribution.fit(d,**self.fit_kwargs)
+      else:
+         fit = self.distribution.fit(d,**self.fit_kwargs)
+         if self.params is None:
+            self.params = np.zeros((self.n_by,len(fit)))
+         self.params[by_i,:] = fit
+   
+   def max_ppf(self,q):
+      # Return the criticial value for quantile q.
+      # In case split_by is true, return the max critical
+      # value taken over all splits
+      if self.params is None:
+         return self.distribution.ppf(q,**self.kwargs)
+      
+      if not self.split_by is None:
+         return max([self.distribution.ppf(q,*self.params[by_i,:]) for by_i in range(self.n_by)])
+      
+      return self.distribution.ppf(q,*self.params)
+      
+class PFormula():
+   def __init__(self,terms:list[PTerm]) -> None:
+      self.__terms = terms
+   
+   def get_terms(self):
+      return copy.deepcopy(self.__terms)
 
 class lhs():
     """
@@ -582,6 +656,7 @@ class Formula():
                  lhs:lhs,
                  terms:list[GammTerm],
                  data:pd.DataFrame,
+                 p_formula:PFormula or None=None,
                  series_id:str or None=None,
                  split_scale:bool=False,
                  n_j:int=3,
@@ -591,6 +666,7 @@ class Formula():
         self.__lhs = lhs
         self.__terms = terms
         self.__data = data
+        self.p_formula = p_formula
         self.series_id = series_id
         self.__split_scale = split_scale # Separate scale parameters per state, if true then formula counts for individual state.
         self.__n_j = n_j # Number of latent states to estimate - not for irf terms but for f terms!
@@ -678,40 +754,7 @@ class Formula():
                      vartype = read_dtype(var,self.file_paths)
 
                 # Store information for all variables once.
-                if not var in self.__var_to_cov:
-                    self.__var_to_cov[var] = cvi
-
-                    # Assign vartype enum and calculate mins/maxs for continuous variables
-                    if vartype in ['float64','int64']:
-                        # ToDo: these can be properties of the formula.
-                        self.__var_types[var] = VarType.NUMERIC
-                        if len(self.file_paths) == 0:
-                           self.__var_mins[var] = np.min(self.__data[var])
-                           self.__var_maxs[var] = np.max(self.__data[var])
-                        else:
-                           min_read,max_read = read_min_max(var,self.file_paths)
-                           self.__var_mins[var] = min_read
-                           self.__var_maxs[var] = max_read
-                    else:
-                        self.__var_types[var] = VarType.FACTOR
-                        self.__var_mins[var] = None
-                        self.__var_maxs[var] = None
-
-                        # Code factor variables into integers for example for easy dummy coding
-                        if len(self.file_paths) == 0:
-                           levels = np.unique(self.__data[var])
-                        else:
-                           levels = read_unique(var,self.file_paths)
-
-                        self.__factor_codings[var] = {}
-                        self.__coding_factors[var] = {}
-                        self.__factor_levels[var] = levels
-                        
-                        for ci,c in enumerate(levels):
-                           self.__factor_codings[var][c] = ci
-                           self.__coding_factors[var][ci] = c
-
-                    cvi += 1
+                cvi = self.__encode_var(var,vartype,cvi)
                 
                 # Smooth-term variables must all be continuous
                 if isinstance(term, f) or isinstance(term, irf):
@@ -741,32 +784,23 @@ class Formula():
                         raise KeyError(f"Data-type of By-variable '{t_by}' attributed to term {ti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'.")
                     
                      # Store information for by variables as well.
-                    if not t_by in self.__var_to_cov:
-                        self.__var_to_cov[t_by] = cvi
-
-                        # Assign vartype enum
-                        self.__var_types[t_by] = VarType.FACTOR
-                        self.__var_mins[t_by] = None
-                        self.__var_maxs[t_by] = None
-
-                        # Code factor variables into integers for example for easy dummy coding
-                        if len(self.file_paths) == 0:
-                           levels = np.unique(self.__data[t_by])
-                        else:
-                           levels = read_unique(t_by,self.file_paths)
-
-                        self.__factor_codings[t_by] = {}
-                        self.__coding_factors[t_by] = {}
-                        self.__factor_levels[t_by] = levels
-                           
-                        for ci,c in enumerate(levels):
-                              self.__factor_codings[t_by][c] = ci
-                              self.__coding_factors[t_by][ci] = c
-
-                        cvi += 1
+                    cvi = self.__encode_var(t_by,'O',cvi)
 
                     if isinstance(term, f) and not term.binary is None:
                         term.binary_level = self.__factor_codings[t_by][term.binary[1]]
+
+        # Also encode P-formula term variables.
+        if self.p_formula is not None:
+           for pti,pTerm in enumerate(self.p_formula.get_terms()):
+              pt_by = pTerm.split_by
+
+              if not pt_by in self.__data.columns:
+                  raise KeyError(f"By-variable '{t_by}' attributed to P-term {pti} does not exist in dataframe.")
+              
+              if data[pt_by].dtype in ['float64','int64']:
+                  raise KeyError(f"Data-type of By-variable '{pt_by}' attributed to P-term {pti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'.")
+              
+              cvi = self.__encode_var(pt_by,'O',cvi)
             
         if self.__n_irf > 0:
            self.__has_irf = True
@@ -800,6 +834,45 @@ class Formula():
             self.__absorb_constraints2()
 
         #print(self.n_coef,len(self.coef_names))
+   
+    def __encode_var(self,var,vartype,cvi):
+      # Store information for all variables once.
+      if not var in self.__var_to_cov:
+         self.__var_to_cov[var] = cvi
+
+         # Assign vartype enum and calculate mins/maxs for continuous variables
+         if vartype in ['float64','int64']:
+            # ToDo: these can be properties of the formula.
+            self.__var_types[var] = VarType.NUMERIC
+            if len(self.file_paths) == 0:
+               self.__var_mins[var] = np.min(self.__data[var])
+               self.__var_maxs[var] = np.max(self.__data[var])
+            else:
+               min_read,max_read = read_min_max(var,self.file_paths)
+               self.__var_mins[var] = min_read
+               self.__var_maxs[var] = max_read
+         else:
+            self.__var_types[var] = VarType.FACTOR
+            self.__var_mins[var] = None
+            self.__var_maxs[var] = None
+
+            # Code factor variables into integers for example for easy dummy coding
+            if len(self.file_paths) == 0:
+               levels = np.unique(self.__data[var])
+            else:
+               levels = read_unique(var,self.file_paths)
+
+            self.__factor_codings[var] = {}
+            self.__coding_factors[var] = {}
+            self.__factor_levels[var] = levels
+            
+            for ci,c in enumerate(levels):
+               self.__factor_codings[var][c] = ci
+               self.__coding_factors[var][ci] = c
+
+         cvi += 1
+
+      return cvi
   
     def __get_coef_info(self):
       var_types = self.get_var_types()
@@ -2171,78 +2244,3 @@ def build_sparse_matrix_from_formula(terms,has_intercept,
    mat = scp.sparse.csc_array((elements,(rows,cols)),shape=(n_y,ci))
 
    return mat
-
-
-class PTerm():
-   # Storage for sojourn time distribution
-   def __init__(self,distribution:callable,
-                init_kwargs:dict or None=None,
-                fit_kwargs:dict or None=None,
-                split_by:str or None=None) -> None:
-      self.distribution = distribution
-      self.kwargs = init_kwargs # Any parameters required to use distribution.
-      if self.kwargs is None:
-         self.kwargs = {}
-      self.split_by = split_by
-      self.fit_kwargs = fit_kwargs
-      if self.fit_kwargs is None:
-         self.fit_kwargs = {}
-      self.n_by = None
-      self.params = None
-
-   def log_prob(self,d,by_i=None):
-      # Get log-probability of durations d under current
-      # sojourn distribution
-      if self.params is None:
-         return self.distribution.logpdf(d,**self.kwargs)
-
-      if self.split_by is None:
-         return self.distribution.logpdf(d,*self.params)
-      
-      # Optionally use distribution associated with a particular variable
-      return self.distribution.logpdf(d,*self.params[by_i,:])
-
-   def sample(self,N,by_i=None):
-      # Sample N values from current sojourn time distribution
-      if self.split_by is None:
-
-         if not self.params is None:
-            return self.distribution.rvs(*self.params,size=N)
-
-      if not self.params is None:
-         # Optionally again pick distribution parameters associated with
-         # specific by variable
-         return self.distribution.rvs(*self.params[by_i,:],size=N)
-      
-      # Initial sampling might be based on distributions default parameters
-      # as provided by scipy and any necessary parameter specified in kwargs.
-      return self.distribution.rvs(**self.kwargs,size=N)
-   
-   def fit(self,d,by_i=None):
-      # Update parameters of distribution(s)
-      if self.split_by is None:
-         self.params = self.distribution.fit(d,**self.fit_kwargs)
-      else:
-         fit = self.distribution.fit(d,**self.fit_kwargs)
-         if self.params is None:
-            self.params = np.zeros((self.n_by,len(fit)))
-         self.params[by_i,:] = fit
-   
-   def max_ppf(self,q):
-      # Return the criticial value for quantile q.
-      # In case split_by is true, return the max critical
-      # value taken over all splits
-      if self.params is None:
-         return self.distribution.ppf(q,**self.kwargs)
-      
-      if not self.split_by is None:
-         return max([self.distribution.ppf(q,*self.params[by_i,:]) for by_i in range(self.n_by)])
-      
-      return self.distribution.ppf(q,*self.params)
-      
-class PFormula():
-   def __init__(self,terms:list[PTerm]) -> None:
-      self.__terms = terms
-   
-   def get_terms(self):
-      return copy.deepcopy(self.__terms)

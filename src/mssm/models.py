@@ -16,7 +16,6 @@ class MSSM:
     def __init__(self,
                  formula:Formula,
                  family:Family,
-                 p_formula=None,
                  pre_llk_fun:Callable = None,
                  estimate_pi:bool=False,
                  estimate_TR:bool=False,
@@ -24,7 +23,7 @@ class MSSM:
         
         # Formulas associated with model
         self.formula = formula # For coefficients
-        self.p_formula = p_formula # For sojourn time distributions
+        self.p_formula = self.formula.p_formula # For sojourn time distributions
 
         # Family of model
         self.family = family
@@ -432,7 +431,6 @@ class sMsGAMM(MSSM):
     def __init__(self,
                  formula: Formula,
                  family: Family,
-                 p_formula: PFormula,
                  end_points:list,
                  pre_llk_fun=pre_ll_sms_gamm,
                  estimate_pi: bool = True,
@@ -444,7 +442,6 @@ class sMsGAMM(MSSM):
         
         super().__init__(formula,
                          family,
-                         p_formula,
                          pre_llk_fun,
                          estimate_pi,
                          estimate_TR,
@@ -914,7 +911,6 @@ class sMsIRGAMM(sMsGAMM):
     def __init__(self,
                  formula: Formula,
                  family: Family,
-                 p_formula: PFormula,
                  end_points: list,
                  fix:None or list[list[int,int]] = None,
                  pre_llk_fun=pre_ll_sms_IR_gamm,
@@ -922,7 +918,6 @@ class sMsIRGAMM(sMsGAMM):
 
         super().__init__(formula,
                          family,
-                         p_formula,
                          end_points,
                          pre_llk_fun,
                          False,
