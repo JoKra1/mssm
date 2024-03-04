@@ -6,6 +6,8 @@ import scipy as scp
 import pandas as pd
 from enum import Enum
 import math
+import multiprocessing as mp
+from itertools import repeat
 from .smooths import TP_basis_calc
 from .terms import GammTerm,i,l,f,irf,ri,rs
 from .penalties import PenType,id_dist_pen,diff_pen,TP_pen,LambdaTerm,translate_sparse,ConstType,Constraint,Reparameterization
@@ -1787,6 +1789,57 @@ def build_linear_term_matrix(ci,n_y,has_intercept,lti,lterm,var_types,var_map,fa
    
    return new_elements,new_rows,new_cols,new_ci
 
+def build_ir_smooth_series(irsterm,s_cov,s_state,vars,var_map,var_mins,var_maxs,by_levels):
+   for vi in range(len(vars)):
+
+      if len(vars) > 1:
+         id_nk = irsterm.nk[vi]
+      else:
+         id_nk = irsterm.nk
+
+      # Create matrix for state corresponding to term.
+      # ToDo: For Multivariate case, the matrix term needs to be build iteratively for
+      # every level of the multivariate factor to make sure that the convolution operation
+      # works as intended. The splitting can happen later via by.
+      basis_kwargs_v = irsterm.basis_kwargs[vi]
+
+      if "max_c" in basis_kwargs_v and "min_c" in basis_kwargs_v:
+         matrix_term_v = irsterm.basis(irsterm.event,s_cov[:,var_map[vars[vi]]],s_state, id_nk, **basis_kwargs_v)
+      else:
+         matrix_term_v = irsterm.basis(irsterm.event,s_cov[:,var_map[vars[vi]]],s_state, id_nk,min_c=var_mins[vars[vi]],max_c=var_maxs[vars[vi]], **basis_kwargs_v)
+
+      if vi == 0:
+         matrix_term = matrix_term_v
+      else:
+         matrix_term = TP_basis_calc(matrix_term,matrix_term_v)
+   
+   
+   m_rows,m_cols = matrix_term.shape
+
+   # Handle optional by keyword
+   if irsterm.by is not None:
+      
+      by_matrix_term = np.zeros((m_rows,m_cols*len(by_levels)),dtype=float)
+
+      by_cov = s_cov[:,var_map[irsterm.by]]
+
+      # ToDo: For MV case this check will be true.
+      if len(np.unique(by_cov)) > 1:
+         raise ValueError(f"By-variable {irsterm.by} has varying levels on series level. This should not be the case.")
+      
+      # Fill the by matrix blocks.
+      cByIndex = 0
+      for by_level in range(len(by_levels)):
+         if by_level == by_cov[0]:
+            by_matrix_term[:,cByIndex:cByIndex+m_cols] = matrix_term
+         cByIndex += m_cols # Update column range associated with current level.
+      
+      final_term = by_matrix_term
+   else:
+      final_term = matrix_term
+   
+   return final_term
+
 def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,var_mins,var_maxs,factor_levels,ridx,cov,state_est,use_only,pool,tol):
    """Parameterize model matrix for an impulse response term."""
    vars = irsterm.variables
@@ -1804,6 +1857,7 @@ def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,var_mins,var_maxs,facto
    if len(vars) > 1:
       n_coef = np.prod(irsterm.nk)
 
+   by_levels = None
    if irsterm.by is not None:
       by_levels = factor_levels[irsterm.by]
       n_coef *= len(by_levels)
@@ -1811,53 +1865,7 @@ def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,var_mins,var_maxs,facto
    if pool is None:
       for s_cov,s_state in zip(cov,state_est):
          
-         for vi in range(len(vars)):
-
-            if len(vars) > 1:
-               id_nk = irsterm.nk[vi]
-            else:
-               id_nk = irsterm.nk
-
-            # Create matrix for state corresponding to term.
-            # ToDo: For Multivariate case, the matrix term needs to be build iteratively for
-            # every level of the multivariate factor to make sure that the convolution operation
-            # works as intended. The splitting can happen later via by.
-            basis_kwargs_v = irsterm.basis_kwargs[vi]
-
-            if "max_c" in basis_kwargs_v and "min_c" in basis_kwargs_v:
-               matrix_term_v = irsterm.basis(irsterm.event,s_cov[:,var_map[vars[vi]]],s_state, id_nk, **basis_kwargs_v)
-            else:
-               matrix_term_v = irsterm.basis(irsterm.event,s_cov[:,var_map[vars[vi]]],s_state, id_nk,min_c=var_mins[vars[vi]],max_c=var_maxs[vars[vi]], **basis_kwargs_v)
-
-            if vi == 0:
-               matrix_term = matrix_term_v
-            else:
-               matrix_term = TP_basis_calc(matrix_term,matrix_term_v)
-         
-         
-         m_rows,m_cols = matrix_term.shape
-
-         # Handle optional by keyword
-         if irsterm.by is not None:
-            
-            by_matrix_term = np.zeros((m_rows,m_cols*len(by_levels)),dtype=float)
-
-            by_cov = s_cov[:,var_map[irsterm.by]]
-
-            # ToDo: For MV case this check will be true.
-            if len(np.unique(by_cov)) > 1:
-               raise ValueError(f"By-variable {irsterm.by} has varying levels on series level. This should not be the case.")
-            
-            # Fill the by matrix blocks.
-            cByIndex = 0
-            for by_level in range(len(by_levels)):
-               if by_level == by_cov[0]:
-                  by_matrix_term[:,cByIndex:cByIndex+m_cols] = matrix_term
-               cByIndex += m_cols # Update column range associated with current level.
-            
-            final_term = by_matrix_term
-         else:
-            final_term = matrix_term
+         final_term = build_ir_smooth_series(irsterm,s_cov,s_state,vars,var_map,var_mins,var_maxs,by_levels)
 
          m_rows,m_cols = final_term.shape
 
@@ -1887,7 +1895,23 @@ def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,var_mins,var_maxs,facto
          new_ci += 1
 
    else:
-      raise NotImplementedError("Multiprocessing code for impulse response terms is not yet implemented in new formula api.")
+      
+      args = zip(repeat(irsterm),cov,state_est,repeat(vars),repeat(var_map),repeat(var_mins),repeat(var_maxs),repeat(by_levels))
+        
+      final_terms = pool.starmap(build_ir_smooth_series,args)
+      final_term = np.vstack(final_terms)
+      m_rows,m_cols = final_term.shape
+
+      for m_coli in range(m_cols):
+         if use_only is None or irsti in use_only:
+            final_col = final_term[:,m_coli]
+            cidx = abs(final_col) > tol
+            new_elements.extend(final_col[cidx])
+            new_rows.extend(ridx[cidx])
+            new_cols.extend([ci for _ in range(len(ridx[cidx]))])
+         ci += 1
+         new_ci += 1
+
    
    return new_elements,new_rows,new_cols,new_ci
 

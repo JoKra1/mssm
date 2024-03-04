@@ -973,7 +973,7 @@ class sMsIRGAMM(sMsGAMM):
         state_durs_new, states_new, llks = zip(*pool.starmap(se_step_sms_dc_gamm,args))
         return list(state_durs_new),list(states_new), list(llks)
     
-    def fit(self,maxiter_outer=100,maxiter_inner=30,conv_tol=1e-6,extend_lambda=True,control_lambda=True,exclude_lambda=True,t0=1,r=0.925,schedule="anneal",n_prop=None,prop_sd=2,progress_bar=True):
+    def fit(self,maxiter_outer=100,maxiter_inner=30,conv_tol=1e-6,extend_lambda=True,control_lambda=True,exclude_lambda=True,t0=1,r=0.925,schedule="anneal",n_prop=None,prop_sd=2,progress_bar=True,mmat_MP=True):
         # Performs something like Stochastic Expectation maiximization (e.g., Nielsen, 2002) see the sem.py file for
         # more details.
         
@@ -1013,12 +1013,20 @@ class sMsIRGAMM(sMsGAMM):
         # Importantly, we must not exclude any rows for with the dependent variable is
         # NA at this point, to make sure that the convolution is calculated accurately.
         cov = self.formula.cov
-
-        model_mat_full = build_sparse_matrix_from_formula(terms,has_intercept,False,
-                                                          ltx,irstx,stx,rtx,var_types,var_map,
-                                                          var_mins,var_maxs,factor_levels,
-                                                          cov_flat,cov,None,
-                                                          None,states)
+        
+        if mmat_MP:
+            with mp.Pool(processes=self.cpus) as pool:
+                model_mat_full = build_sparse_matrix_from_formula(terms,has_intercept,False,
+                                                                ltx,irstx,stx,rtx,var_types,var_map,
+                                                                var_mins,var_maxs,factor_levels,
+                                                                cov_flat,cov,None,
+                                                                None,states,pool=pool)
+        else:
+            model_mat_full = build_sparse_matrix_from_formula(terms,has_intercept,False,
+                                                                ltx,irstx,stx,rtx,var_types,var_map,
+                                                                var_mins,var_maxs,factor_levels,
+                                                                cov_flat,cov,None,
+                                                                None,states,pool=None)
         
         # Only now can we remove the NAs
         model_mat_full = model_mat_full[NOT_NA_flat,]
@@ -1106,11 +1114,20 @@ class sMsIRGAMM(sMsGAMM):
             ### Maximization ###
 
             # First update all GAMM parameters
-            model_mat_full = build_sparse_matrix_from_formula(terms,has_intercept,False,
-                                                              ltx,irstx,stx,rtx,var_types,var_map,
-                                                              var_mins,var_maxs,factor_levels,
-                                                              cov_flat,cov,None,
-                                                              None,states)
+            if mmat_MP:
+                with mp.Pool(processes=self.cpus) as pool:
+                    model_mat_full = build_sparse_matrix_from_formula(terms,has_intercept,False,
+                                                                    ltx,irstx,stx,rtx,var_types,var_map,
+                                                                    var_mins,var_maxs,factor_levels,
+                                                                    cov_flat,cov,None,
+                                                                    None,states,pool=pool)
+            else:
+                model_mat_full = build_sparse_matrix_from_formula(terms,has_intercept,False,
+                                                                    ltx,irstx,stx,rtx,var_types,var_map,
+                                                                    var_mins,var_maxs,factor_levels,
+                                                                    cov_flat,cov,None,
+                                                                    None,states,pool=None)
+                
             model_mat_full = model_mat_full[NOT_NA_flat,]
 
             # Use last coefficient set for mu estimate. Penalties carry over as well.

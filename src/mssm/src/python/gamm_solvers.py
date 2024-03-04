@@ -1,11 +1,9 @@
 import numpy as np
 import scipy as scp
-import multiprocessing as mp
-from itertools import repeat
 import warnings
 from .exp_fam import Family,Gaussian,est_scale
 from .penalties import PenType,id_dist_pen,translate_sparse
-from .formula import setup_cache,clear_cache,read_mmat,cpp_solvers,pd,Formula,CACHE_DIR
+from .formula import setup_cache,clear_cache,read_mmat,cpp_solvers,pd,Formula,CACHE_DIR,mp,repeat
 from tqdm import tqdm
 
 def cpp_chol(A):
