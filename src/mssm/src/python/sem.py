@@ -528,6 +528,18 @@ def se_step_sms_dc_gamm(n_j,temp,series,NOT_NAs,end_point,cov,
     state_dist = np.zeros((n_prop,n_j - 1),dtype=int)
     states_durs_dist = []
     state_llks = []
+    
+    # Build model matrix once for all effects that do not differ over iterations
+    use_fixed = [t for t in [*ltx,*stx,*rtx] if use_only is None or t in use_only]
+    use_irs = [t for t in irstx if use_only is None or t in use_only]
+
+    model_mat_s_fix = build_sparse_matrix_from_formula(terms,has_intercept,False,
+                                                        ltx,irstx,stx,rtx,var_types,var_map,
+                                                        var_mins,var_maxs,factor_levels,
+                                                        cov,[cov],n_j,None,[states],
+                                                        use_only=use_fixed)
+
+    model_mat_s_fix = model_mat_s_fix[NOT_NAs,]
 
     for i in range(n_prop):
       
@@ -540,13 +552,15 @@ def se_step_sms_dc_gamm(n_j,temp,series,NOT_NAs,end_point,cov,
       # Calculate complete data likelihood under new state and current parameters
       if not rejection:
          # Start with re-building model-matrix for this series according to the proposed state.
+         # Re-build only the parts that differ during sampling.
          model_mat_s = build_sparse_matrix_from_formula(terms,has_intercept,False,
                                                         ltx,irstx,stx,rtx,var_types,var_map,
                                                         var_mins,var_maxs,factor_levels,
                                                         cov,[cov],n_j,None,[n_states],
-                                                        use_only=use_only)
+                                                        use_only=use_irs)
          
          model_mat_s = model_mat_s[NOT_NAs,]
+         model_mat_s += model_mat_s_fix
 
          # Re-collect observation probabilities under new state sequence
          log_o_probs_n = np.zeros(len(series))
