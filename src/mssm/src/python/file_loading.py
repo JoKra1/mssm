@@ -3,70 +3,70 @@ import numpy as np
 import scipy as scp
 import os
 import warnings
+import multiprocessing as mp
+from itertools import repeat
 
 CACHE_DIR = './.db'
 
 # Functions to load & read data used to accumulate cross product of model matrix iteratively
 
-def read_min_max(column,files,header=0,row_index=False):
-    """
-    Accumulates minimum and max for a specific variable over split data-files.
-    """
+def read_unique_single(x,file,file_loading_kwargs):
 
-    min_var = None
-    max_var = None
-    for fi,file in enumerate(files):
-        dat = pd.read_csv(file,header=header,index_col=row_index)
+    dat = pd.read_csv(file,**file_loading_kwargs)
+    unq_dat = np.unique(dat[x].values)
 
-        if fi == 0:
-            min_var = min(dat[column])
-            max_var = max(dat[column])
-        else:
-            if min_var > min(dat[column]):
-                min_var = min(dat[column])
-            if max_var < max(dat[column]):
-                max_var = max(dat[column])
-    
-    return min_var,max_var
+    return unq_dat
 
-def read_unique(column,files,header=0,row_index=False):
+def read_unique(x,files,nc,file_loading_kwargs):
     """
     Get unique values for a specific variable over split data-files.
     """
     unq = set()
-    for fi,file in enumerate(files):
-        dat = pd.read_csv(file,header=header,index_col=row_index)
-        
-        unq_dat = np.unique(dat[column].values)
-        for u in unq_dat:
-            unq.add(u)
-    
+    with mp.Pool(processes=nc) as pool:
+        unq_cov = pool.starmap(read_unique_single,zip(repeat(x),files,repeat(file_loading_kwargs)))
+
+    unq.update(*unq_cov)
+
     return np.array(list(unq))
 
-def read_cov(y,x,files,header=0,row_index=False):
+def read_cor_cov_single(y,x,file,file_loading_kwargs):
+    dat = pd.read_csv(file,**file_loading_kwargs)
+    x_f = dat[x].values
+    return x_f[np.isnan(dat[y]) == False]
+
+def read_cov(y,x,files,nc,file_loading_kwargs):
     """
     Collect an entire column on variable x, corrected for any NA values in the y column.
     """
 
-    cov = []
-    for fi,file in enumerate(files):
-        dat = pd.read_csv(file,header=header,index_col=row_index)
-        x_f = dat[x].values
-        cov.extend(x_f[np.isnan(dat[y]) == False])
+    with mp.Pool(processes=nc) as pool:
+        cov = pool.starmap(read_cor_cov_single,zip(repeat(y),repeat(x),files,repeat(file_loading_kwargs)))
+    
+    # Flatten
+    cov = np.array([cv for cs in cov for cv in cs])
+    return cov
 
-    return np.array(cov)
+def read_no_cor_cov_single(x,file,file_loading_kwargs):
+    dat = pd.read_csv(file,**file_loading_kwargs)
+    x_f = dat[x].values
+    return x_f
 
-def read_dtype(column,files,header=0,row_index=False):
+def read_cov_no_cor(x,files,nc,file_loading_kwargs):
+    """
+    Collect an entire column on variable x, without correcting for any NA values in the y column.
+    """
+
+    with mp.Pool(processes=nc) as pool:
+        cov = pool.starmap(read_no_cor_cov_single,zip(repeat(x),files,repeat(file_loading_kwargs)))
+    
+    # Flatten
+    cov = np.array([cv for cs in cov for cv in cs])
+    return cov
+
+def read_dtype(column,file,file_loading_kwargs):
     dtype = None
-    for fi,file in enumerate(files):
-        
-        dat = pd.read_csv(file,header=header,index_col=row_index)
-
-        if fi == 0:
-            dtype = dat[column].dtype
-        else:
-            if dtype != dat[column].dtype:
-                raise TypeError("Column data type varies between different files.")
+    dat = pd.read_csv(file,**file_loading_kwargs)
+    dtype = dat[column].dtype
     
     return dtype
 
