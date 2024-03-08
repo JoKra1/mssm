@@ -11,6 +11,7 @@ from .terms import GammTerm,i,l,f,irf,ri,rs
 from .penalties import PenType,id_dist_pen,diff_pen,TP_pen,LambdaTerm,translate_sparse,ConstType,Constraint,Reparameterization
 from .file_loading import read_cov, read_cor_cov_single, read_unique,read_dtype,setup_cache,clear_cache,cache_mmat,CACHE_DIR,mp,repeat
 import cpp_solvers
+from functools import reduce
 
 class VarType(Enum):
     NUMERIC = 1
@@ -1141,7 +1142,7 @@ class Formula():
                   else:
                      id_nk = sterm.nk
                   
-                  var_cov_flat = read_cov(self.__lhs.variable,vars[vi],self.file_paths)
+                  var_cov_flat = read_cov(self.__lhs.variable,vars[vi],self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
 
                   matrix_term_v = sterm.basis(None,var_cov_flat,
                                               None,id_nk,min_c=self.__var_mins[vars[vi]],
@@ -2143,8 +2144,8 @@ def build_rs_term_matrix(ci,n_y,rti,rterm,var_types,var_map,factor_levels,ridx,c
 
    return new_elements,new_rows,new_cols,new_ci
 
-@cache_mmat(CACHE_DIR)
-def read_mmat(file,formula):
+#@cache_mmat(CACHE_DIR)
+def read_mmat(file,formula,nc):
    """
    Reads subset of data and creates model matrix for that dataset.
    """
@@ -2172,15 +2173,153 @@ def read_mmat(file,formula):
 
    # Encode data in this file
    _,cov_flat_file,NAs_flat_file,_,_,_,_ = formula.encode_data(file_dat)
+   cov_flat_file = cov_flat_file[NAs_flat_file,:]
 
-   # Build the model matrix with all information from the formula - but only for sub-set of rows in this file
-   model_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
-                                                ltx,irstx,stx,rtx,var_types,var_map,
-                                                var_mins,var_maxs,factor_levels,
-                                                cov_flat_file[NAs_flat_file,:],
-                                                cov,n_j,state_est_flat,state_est)
-   
+   # Parallelize over sub-sets of this file
+   rows,_ = cov_flat_file.shape
+   split = np.arange(0,rows,max(1,int(rows/nc/5)),dtype=int)[1:]
+   cov_flat_files = np.vsplit(cov_flat_file,split)
+
+   with mp.Pool(processes=nc) as pool:
+      # Build the model matrix with all information from the formula - but only for sub-set of rows in this file
+      model_mat = pool.starmap(build_sparse_matrix_from_formula,zip(repeat(terms),repeat(has_intercept),repeat(has_scale_split),
+                                                                    repeat(ltx),repeat(irstx),repeat(stx),repeat(rtx),
+                                                                    repeat(var_types),repeat(var_map),
+                                                                    repeat(var_mins),repeat(var_maxs),repeat(factor_levels),
+                                                                    cov_flat_files,repeat(cov),repeat(n_j),
+                                                                    repeat(state_est_flat),repeat(state_est)))
+
+   model_mat = scp.sparse.vstack(model_mat,format='csc')
+
    return model_mat
+
+def form_cross_prod_mp(y_flat,terms,has_intercept,has_scale_split,
+                       ltx,irstx,stx,rtx,var_types,var_map,var_mins,
+                       var_maxs,factor_levels,cov_flat_file,cov,n_j,
+                       state_est_flat,state_est):
+   
+   model_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
+                                                ltx,irstx,stx,rtx,var_types,var_map,var_mins,
+                                                var_maxs,factor_levels,cov_flat_file,cov,n_j,
+                                                state_est_flat,state_est)
+   
+   Xy = model_mat.T @ y_flat
+   XX = model_mat.T @ model_mat
+
+   return XX,Xy
+
+def read_mmat_cross(file,formula,nc):
+   """
+   Reads subset of data and creates cross-product of model matrix for that dataset.
+   """
+
+   terms = formula.get_terms()
+   has_intercept = formula.has_intercept()
+   has_scale_split = False
+   ltx = formula.get_linear_term_idx()
+   irstx = []
+   stx = formula.get_smooth_term_idx()
+   rtx = formula.get_random_term_idx()
+   var_types = formula.get_var_types()
+   var_map = formula.get_var_map()
+   var_mins = formula.get_var_mins()
+   var_maxs = formula.get_var_maxs()
+   factor_levels = formula.get_factor_levels()
+
+   cov = None
+   n_j = None
+   state_est_flat = None
+   state_est = None
+
+   # Read file
+   file_dat = pd.read_csv(file)
+
+   # Encode data in this file
+   y_flat_file,cov_flat_file,NAs_flat_file,_,_,_,_ = formula.encode_data(file_dat)
+   cov_flat_file = cov_flat_file[NAs_flat_file,:]
+   y_flat_file = y_flat_file[NAs_flat_file]
+
+   # Parallelize over sub-sets of this file
+   rows,_ = cov_flat_file.shape
+   split = np.arange(0,rows,max(1,int(rows/nc/5)),dtype=int)[1:]
+   cov_flat_files = np.vsplit(cov_flat_file,split)
+   y_flat_files = np.split(y_flat_file,split)
+
+   with mp.Pool(processes=nc) as pool:
+      # Build the model matrix with all information from the formula - but only for sub-set of rows in this file
+      XX,Xy = zip(*pool.starmap(form_cross_prod_mp,zip(y_flat_files,repeat(terms),repeat(has_intercept),repeat(has_scale_split),
+                                                       repeat(ltx),repeat(irstx),repeat(stx),repeat(rtx),
+                                                       repeat(var_types),repeat(var_map),
+                                                       repeat(var_mins),repeat(var_maxs),repeat(factor_levels),
+                                                       cov_flat_files,repeat(cov),repeat(n_j),
+                                                       repeat(state_est_flat),repeat(state_est))))
+   
+   XX = reduce(lambda xx1,xx2: xx1+xx2,XX)
+   Xy = reduce(lambda xy1,xy2: xy1+xy2,Xy)
+   return XX,Xy,len(y_flat_file)
+
+def form_eta_mp(coef,terms,has_intercept,has_scale_split,
+                ltx,irstx,stx,rtx,var_types,var_map,var_mins,
+                var_maxs,factor_levels,cov_flat_file,cov,n_j,
+                state_est_flat,state_est):
+   
+   model_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
+                                                ltx,irstx,stx,rtx,var_types,var_map,var_mins,
+                                                var_maxs,factor_levels,cov_flat_file,cov,n_j,
+                                                state_est_flat,state_est)
+   
+   eta_file = (model_mat @ coef).reshape(-1,1)
+   return eta_file
+
+def read_eta(file,formula,coef,nc):
+   """
+   Reads subset of data and creates model matrix for that dataset.
+   """
+
+   terms = formula.get_terms()
+   has_intercept = formula.has_intercept()
+   has_scale_split = False
+   ltx = formula.get_linear_term_idx()
+   irstx = []
+   stx = formula.get_smooth_term_idx()
+   rtx = formula.get_random_term_idx()
+   var_types = formula.get_var_types()
+   var_map = formula.get_var_map()
+   var_mins = formula.get_var_mins()
+   var_maxs = formula.get_var_maxs()
+   factor_levels = formula.get_factor_levels()
+
+   cov = None
+   n_j = None
+   state_est_flat = None
+   state_est = None
+
+   # Read file
+   file_dat = pd.read_csv(file)
+
+   # Encode data in this file
+   _,cov_flat_file,NAs_flat_file,_,_,_,_ = formula.encode_data(file_dat)
+   cov_flat_file = cov_flat_file[NAs_flat_file,:]
+
+   # Parallelize over sub-sets of this file
+   rows,_ = cov_flat_file.shape
+   split = np.arange(0,rows,max(1,int(rows/nc/5)),dtype=int)[1:]
+   cov_flat_files = np.vsplit(cov_flat_file,split)
+
+   with mp.Pool(processes=nc) as pool:
+      # Build eta with all information from the formula - but only for sub-set of rows in this file
+      etas = pool.starmap(form_eta_mp,zip(repeat(coef),repeat(terms),repeat(has_intercept),repeat(has_scale_split),
+                                         repeat(ltx),repeat(irstx),repeat(stx),repeat(rtx),
+                                         repeat(var_types),repeat(var_map),
+                                         repeat(var_mins),repeat(var_maxs),repeat(factor_levels),
+                                         cov_flat_files,repeat(cov),repeat(n_j),
+                                         repeat(state_est_flat),repeat(state_est)))
+
+   eta = []
+   for eta_file in etas:
+      eta.extend(eta_file)
+
+   return eta
 
 def build_sparse_matrix_from_formula(terms,has_intercept,
                                      has_scale_split,

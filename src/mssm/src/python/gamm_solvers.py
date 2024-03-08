@@ -3,7 +3,7 @@ import scipy as scp
 import warnings
 from .exp_fam import Family,Gaussian,est_scale
 from .penalties import PenType,id_dist_pen,translate_sparse
-from .formula import setup_cache,clear_cache,read_mmat,cpp_solvers,pd,Formula,CACHE_DIR,mp,repeat
+from .formula import setup_cache,clear_cache,read_mmat,read_mmat_cross,read_eta,cpp_solvers,pd,Formula,CACHE_DIR,mp,repeat
 from tqdm import tqdm
 
 def cpp_chol(A):
@@ -396,8 +396,8 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,penalties,n_c,
    else:
       eta = []
       for file in formula.file_paths:
-         model_mat = read_mmat(file,formula)
-         eta.extend((model_mat @ coef).reshape(-1,1))
+         eta_file = read_eta(file,formula,coef,n_c)
+         eta.extend(eta_file)
       eta = np.array(eta)
 
    mu = eta
@@ -465,7 +465,7 @@ def init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
    return dev,pen_dev,eta,mu,coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,S_emb
 
 
-def correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,n_pen,S_emb,formula):
+def correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,n_pen,S_emb,formula,n_c):
    # Perform step-length control for the coefficients (Step 3 in Wood, 2017)
    corrections = 0
    while pen_dev > c_dev_prev:
@@ -485,8 +485,8 @@ def correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,n_pen
       else:
          eta = []
          for file in formula.file_paths:
-            model_mat = read_mmat(file,formula)
-            eta.extend((model_mat @ n_coef).reshape(-1,1))
+            eta_file = read_eta(file,formula,n_coef,n_c)
+            eta.extend(eta_file)
          eta = np.array(eta)
 
       mu = eta
@@ -599,7 +599,7 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
                        progress_bar=False,n_c=10):
    # Estimates a penalized additive mixed model, following the steps outlined in Wood (2017)
    # "Generalized Additive Models for Gigadata" but builds X.T @ X, and X.T @ y iteratively - and only once.
-   setup_cache(CACHE_DIR)
+   #setup_cache(CACHE_DIR)
    n_c = min(mp.cpu_count(),n_c)
 
    y_flat = []
@@ -617,17 +617,17 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
       y_flat_file,_,NAs_flat_file,_,_,_,_ = formula.encode_data(file_dat)
       y_flat.extend(y_flat_file[NAs_flat_file])
 
-      # Build the model matrix with all information from the formula - but only for sub-set of rows in this file
-      model_mat = read_mmat(file,formula)
-      rowsX += model_mat.shape[0]
+      # Build the model matrix cross-products with all information from the formula - but only for sub-set of rows in this file
+      XX0,Xy0,rowsX0 = read_mmat_cross(file,formula,n_c)
+      rowsX += rowsX0
       # Compute cross-product
       if fi == 0:
-         XX = model_mat.T @ model_mat
-         Xy = model_mat.T @ y_flat_file
+         XX = XX0
+         Xy = Xy0
       else:
-         XX += model_mat.T @ model_mat
-         Xy += model_mat.T @ y_flat_file
-
+         XX += XX0
+         Xy += Xy0
+      
    colsX = XX.shape[1]
    coef = None
    n_coef = None
@@ -669,7 +669,7 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
             c_dev_prev += coef.T @ S_emb @ coef
 
          # Perform step-length control for the coefficients (Step 3 in Wood, 2017)
-         dev,pen_dev,mu,eta,coef = correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,None,len(penalties),S_emb,formula)
+         dev,pen_dev,mu,eta,coef = correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,None,len(penalties),S_emb,formula,n_c)
 
          # Test for convergence (Step 2 in Wood, 2017)
          dev_diff = abs(pen_dev - prev_pen_dev)
@@ -723,7 +723,7 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
    if not term_edfs is None:
       term_edfs = calculate_term_edf(penalties,term_edfs)
 
-   clear_cache(CACHE_DIR)
+   #clear_cache(CACHE_DIR)
 
    return coef,eta,wres,scale,InvCholXXS,total_edf,term_edfs,penalty
    
@@ -786,7 +786,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
             c_dev_prev += coef.T @ S_emb @ coef
 
          # Perform step-length control for the coefficients (Step 3 in Wood, 2017)
-         dev,pen_dev,mu,eta,coef = correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,len(penalties),S_emb,None)
+         dev,pen_dev,mu,eta,coef = correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,len(penalties),S_emb,None,n_c)
 
          # Test for convergence (Step 2 in Wood, 2017)
          dev_diff = abs(pen_dev - prev_pen_dev)
