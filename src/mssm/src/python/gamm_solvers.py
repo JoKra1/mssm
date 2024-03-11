@@ -9,6 +9,7 @@ from functools import reduce
 
 CACHE_DIR = './.db'
 SHOULD_CACHE = False
+MP_SPLIT_SIZE=1000
 
 def cpp_chol(A):
    return cpp_solvers.chol(A)
@@ -778,6 +779,13 @@ def read_mmat_cross(file,formula,nc):
    var_maxs = formula.get_var_maxs()
    factor_levels = formula.get_factor_levels()
 
+   for sti in stx:
+      if terms[sti].should_rp:
+         for rpi in range(len(terms[sti].RP)):
+            # Don't need to pass those down to the processes.
+            terms[sti].RP[rpi].X = None
+            terms[sti].RP[rpi].cov = None
+
    cov = None
    n_j = None
    state_est_flat = None
@@ -793,7 +801,7 @@ def read_mmat_cross(file,formula,nc):
 
    # Parallelize over sub-sets of this file
    rows,_ = cov_flat_file.shape
-   split = np.arange(0,rows,max(1,int(rows/(5*nc))),dtype=int)[1:]
+   split = np.arange(0,rows,max(1,MP_SPLIT_SIZE),dtype=int)[1:]
    cov_flat_files = np.vsplit(cov_flat_file,split)
    y_flat_files = np.split(y_flat_file,split)
    subsets = [fi for fi in range(len(split) + 1)]
@@ -842,6 +850,13 @@ def read_eta(file,formula,coef,nc):
    var_maxs = formula.get_var_maxs()
    factor_levels = formula.get_factor_levels()
 
+   for sti in stx:
+      if terms[sti].should_rp:
+         for rpi in range(len(terms[sti].RP)):
+            # Don't need to pass those down to the processes.
+            terms[sti].RP[rpi].X = None
+            terms[sti].RP[rpi].cov = None
+
    cov = None
    n_j = None
    state_est_flat = None
@@ -856,7 +871,7 @@ def read_eta(file,formula,coef,nc):
 
    # Parallelize over sub-sets of this file
    rows,_ = cov_flat_file.shape
-   split = np.arange(0,rows,max(1,int(rows/(5*nc))),dtype=int)[1:]
+   split = np.arange(0,rows,max(1,MP_SPLIT_SIZE),dtype=int)[1:]
    cov_flat_files = np.vsplit(cov_flat_file,split)
    subsets = [fi for fi in range(len(split) + 1)]
 
