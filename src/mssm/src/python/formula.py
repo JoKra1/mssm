@@ -795,14 +795,15 @@ class Formula():
         if self.p_formula is not None:
            for pti,pTerm in enumerate(self.p_formula.get_terms()):
               pt_by = pTerm.split_by
+              if not pt_by is  None:
 
-              if not pt_by in self.__data.columns:
-                  raise KeyError(f"By-variable '{t_by}' attributed to P-term {pti} does not exist in dataframe.")
-              
-              if data[pt_by].dtype in ['float64','int64']:
+               if not pt_by in self.__data.columns:
+                  raise KeyError(f"By-variable '{pt_by}' attributed to P-term {pti} does not exist in dataframe.")
+               
+               if data[pt_by].dtype in ['float64','int64']:
                   raise KeyError(f"Data-type of By-variable '{pt_by}' attributed to P-term {pti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'.")
-              
-              cvi = self.__encode_var(pt_by,'O',cvi)
+               
+               cvi = self.__encode_var(pt_by,'O',cvi)
             
         if self.__n_irf > 0:
            self.__has_irf = True
