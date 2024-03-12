@@ -35,7 +35,7 @@ def map_csc_to_eigen(X):
    see: https://github.com/fwilliams/numpyeigen/blob/master/src/npe_sparse_array.h#L74
    """
 
-   if X.getformat() != "csc":
+   if X.format != "csc":
       raise TypeError(f"Format of sparse matrix passed to c++ MUST be 'csc' but is {X.getformat()}")
 
    rows, cols = X.shape

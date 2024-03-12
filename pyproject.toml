@@ -7,6 +7,10 @@ requires = [
 ]
 build-backend = "setuptools.build_meta"
 
+[tool.cibuildwheel]
+test-requires = "pytest"
+test-command = "pytest {project}/tests"
+
 [project]
 dependencies=["numpy >= 1.24.1",
               "pandas >= 1.5.3",
@@ -28,4 +32,4 @@ dynamic = ["version"]
 
 [tool.setuptools_scm]
 # https://github.com/pypa/setuptools_scm/issues/342
-local_scheme = "no-local-version" 
+local_scheme = "no-local-version"
