@@ -45,7 +45,15 @@ jobs:
       
     - uses: actions/upload-artifact@v3
       with:
+        name: wheels
         path: ./wheelhouse/*.whl
+    
+    - uses: actions/upload-artifact@v3
+      with:
+        name: coverage
+        path: |
+          ./coverage.xml
+          ./htmlcov/index.html
         
   release:
     # https://packaging.python.org/en/latest/guides/publishing-package-distribution-releases-using-github-actions-ci-cd-workflows/
@@ -70,6 +78,7 @@ jobs:
       - name: Download Artifacts
         uses: actions/download-artifact@v3
         with:
+          name: wheels
           path: ./wheelhouse/
         
       - name: Create GitHub Release
@@ -86,7 +95,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           gh release upload
-          '${{ github.ref_name }}' ./wheelhouse/artifact/**
+          '${{ github.ref_name }}' ./wheelhouse/wheels/**
           --repo '${{ github.repository }}'
 
   publish-test:
@@ -107,12 +116,13 @@ jobs:
       - name: Download Artifacts
         uses: actions/download-artifact@v3
         with:
+          name: wheels
           path: ./wheelhouse/
           
       - name: Publish wheels to test-pypi
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: ./wheelhouse/artifact
+          packages-dir: ./wheelhouse/wheels
           repository-url: https://test.pypi.org/legacy/
   
   publish-release:
@@ -133,9 +143,10 @@ jobs:
       - name: Download Artifacts
         uses: actions/download-artifact@v3
         with:
+          name: wheels
           path: ./wheelhouse/
           
       - name: Publish wheels to test-pypi
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: ./wheelhouse/artifact
+          packages-dir: ./wheelhouse/wheels
