@@ -3,7 +3,7 @@ import scipy as scp
 import warnings
 from .exp_fam import Family,Gaussian,est_scale
 from .penalties import PenType,id_dist_pen,translate_sparse
-from .formula import build_sparse_matrix_from_formula,setup_cache,clear_cache,cpp_solvers,pd,Formula,mp,repeat,os
+from .formula import build_sparse_matrix_from_formula,setup_cache,clear_cache,cpp_solvers,pd,Formula,mp,repeat,os,map_csc_to_eigen
 from tqdm import tqdm
 from functools import reduce
 
@@ -12,34 +12,34 @@ SHOULD_CACHE = False
 MP_SPLIT_SIZE=1000
 
 def cpp_chol(A):
-   return cpp_solvers.chol(A)
+   return cpp_solvers.chol(*map_csc_to_eigen(A))
 
 def cpp_cholP(A):
-   return cpp_solvers.cholP(A)
+   return cpp_solvers.cholP(*map_csc_to_eigen(A))
 
 def cpp_qr(A):
-   return cpp_solvers.pqr(A)
+   return cpp_solvers.pqr(*map_csc_to_eigen(A))
 
 def cpp_solve_am(y,X,S):
-   return cpp_solvers.solve_am(y,X,S)
+   return cpp_solvers.solve_am(y,*map_csc_to_eigen(X),*map_csc_to_eigen(S))
 
 def cpp_solve_coef(y,X,S):
-   return cpp_solvers.solve_coef(y,X,S)
+   return cpp_solvers.solve_coef(y,*map_csc_to_eigen(X),*map_csc_to_eigen(S))
 
 def cpp_solve_coefXX(Xy,XXS):
-   return cpp_solvers.solve_coefXX(Xy,XXS)
+   return cpp_solvers.solve_coefXX(Xy,*map_csc_to_eigen(XXS))
 
 def cpp_solve_L(X,S):
-   return cpp_solvers.solve_L(X,S)
+   return cpp_solvers.solve_L(*map_csc_to_eigen(X),*map_csc_to_eigen(S))
 
 def cpp_solve_LXX(XXS):
-   return cpp_solvers.solve_L(XXS)
+   return cpp_solvers.solve_L(*map_csc_to_eigen(XXS))
 
-def cpp_solve_tr(A,B):
-   return cpp_solvers.solve_tr(A,B)
+def cpp_solve_tr(A,C):
+   return cpp_solvers.solve_tr(*map_csc_to_eigen(A),C)
 
-def cpp_backsolve_tr(A,B):
-   return cpp_solvers.backsolve_tr(A,B)
+def cpp_backsolve_tr(A,C):
+   return cpp_solvers.backsolve_tr(*map_csc_to_eigen(A),C)
 
 def compute_lgdetD_bsb(rank,cLam,gInv,emb_SJ,cCoef):
    # Derivative of log(|S_lambda|+), the log of the "Generalized determinant", with respect to lambda see Wood, Shaddick, & Augustin, (2017)
@@ -224,7 +224,8 @@ def update_PIRLS(y,yb,mu,eta,X,Xb,family):
 
       # Update yb and Xb
       yb = Wr @ z
-      Xb = Wr @ X
+      Xb = (Wr @ X).tocsc()
+      
    
    return yb,Xb,z,Wr
 
@@ -757,7 +758,7 @@ def form_cross_prod_mp(should_cache,cache_dir,file,fi,y_flat,terms,has_intercept
                          state_est_flat,state_est)
    
    Xy = model_mat.T @ y_flat
-   XX = model_mat.T @ model_mat
+   XX = (model_mat.T @ model_mat).tocsc()
 
    return XX,Xy
 

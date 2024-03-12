@@ -17,6 +17,30 @@ class VarType(Enum):
     NUMERIC = 1
     FACTOR = 2
 
+def map_csc_to_eigen(X):
+   """
+   Pybind11 comes with copy overhead for sparse matrices, so instead of passing the
+   sparse matrix to c++, I pass the data, indices, and indptr arrays as buffers to c++.
+   see: https://pybind11.readthedocs.io/en/stable/advanced/pycpp/numpy.html.
+
+   An Eigen mapping can then be used to refer to these, without requiring an extra copy.
+   see: https://eigen.tuxfamily.org/dox/classEigen_1_1Map_3_01SparseMatrixType_01_4.html
+
+   The mapping needs to assume compressed storage, since then we can use the indices, indptr, and data
+   arrays directly for the valuepointer, innerPointer, and outerPointer fields of the sparse array
+   map constructor.
+   see: https://eigen.tuxfamily.org/dox/group__TutorialSparse.html (section sparse matrix format).
+
+   I got this idea from the NumpyEigen project, which also uses such a map!
+   see: https://github.com/fwilliams/numpyeigen/blob/master/src/npe_sparse_array.h#L74
+   """
+
+   if X.getformat() != "csc":
+      raise TypeError(f"Format of sparse matrix passed to c++ MUST be 'csc' but is {X.getformat()}")
+
+   rows, cols = X.shape
+   return rows, cols, X.nnz, X.data, X.indptr, X.indices
+
 def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
    """
     Options 1 - 3 are natural reparameterization discussed in Wood (2017; 5.4.2)
@@ -89,8 +113,9 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
          R = scp.sparse.csc_array(R)
          
       else:
-         XX = X.T @ X
-         L,code = cpp_solvers.chol(XX)
+         XX = (X.T @ X).tocsc()
+         
+         L,code = cpp_solvers.chol(*map_csc_to_eigen(XX))
 
          if code != 0:
             raise ValueError("Cholesky failed during reparameterization.")
@@ -105,7 +130,8 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
       # A.T = S @ Rinv ## Transpose order reverses!
       # B = Rinv.T @ A.T
       # B = Rinv.T @ S @ Rinv
-      B = cpp_solvers.solve_tr(R.T,cpp_solvers.solve_tr(R.T,S.T).T)
+      
+      B = cpp_solvers.solve_tr(*map_csc_to_eigen(R.T),cpp_solvers.solve_tr(*map_csc_to_eigen(R.T),S.T).T)
 
       s, U =scp.linalg.eigh(B.toarray())
 
@@ -126,8 +152,8 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
       # based on QR decomposition we have X = Q @ R, so we form matrix C so that R @ C = U to have Xrp = Q @ R @ C = Q @ U.
       # Then Xpred_rp = X_pred @ C can similarly be obtained.
       # see smooth.R nat.param function in mgcv.
-
-      C = cpp_solvers.backsolve_tr(R,U)
+      
+      C = cpp_solvers.backsolve_tr(*map_csc_to_eigen(R.tocsc()),U)
 
       IRrp = None
       if identity:
@@ -495,9 +521,25 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
             if sterm.by_latent is not False and has_scale_split is False:
                 pen_iter = (len(by_levels)*n_j)-1
 
-            for _ in range(pen_iter):
-                lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,id_k,cur_pen_idx)
-                lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,id_k,cur_pen_idx)
+            #for _ in range(pen_iter):
+            #    lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,id_k,cur_pen_idx)
+            #    lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,id_k,cur_pen_idx)
+            
+            chol_rep = np.tile(chol_data,pen_iter)
+            idx_row_rep = np.repeat(np.arange(pen_iter),len(chol_rows))*id_k
+            idx_col_rep = np.repeat(np.arange(pen_iter),len(chol_cols))*id_k
+            chol_rep_row = np.tile(chol_rows,pen_iter) + idx_row_rep
+            chol_rep_cols = np.tile(chol_cols,pen_iter) + idx_col_rep
+            
+            lTerm.D_J_emb, _ = embed_in_S_sparse(chol_rep,chol_rep_row,chol_rep_cols,lTerm.D_J_emb,col_S,id_k*pen_iter,cur_pen_idx)
+
+            pen_rep = np.tile(pen_data,pen_iter)
+            idx_row_rep = np.repeat(np.arange(pen_iter),len(pen_rows))*id_k
+            idx_col_rep = np.repeat(np.arange(pen_iter),len(pen_cols))*id_k
+            pen_rep_row = np.tile(pen_rows,pen_iter) + idx_row_rep
+            pren_rep_cols = np.tile(pen_cols,pen_iter) + idx_col_rep
+
+            lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_rep,pen_rep_row,pren_rep_cols,lTerm.S_J_emb,col_S,id_k*pen_iter,cur_pen_idx)
 
             # For pinv calculation during model fitting.
             lTerm.rep_sj = pen_iter + 1
@@ -1498,10 +1540,27 @@ class Formula():
                         
                         # Handle any By-keyword
                         if last_pen_rep > 1:
-                           for _ in range(last_pen_rep - 1):
-                              lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,idk,cur_pen_idx)
-                              lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,idk,cur_pen_idx)
-                        
+                           pen_iter = last_pen_rep - 1
+                           #for _ in range(pen_iter):
+                           #   lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,idk,cur_pen_idx)
+                           #   lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,idk,cur_pen_idx)
+                           
+                           chol_rep = np.tile(chol_data,pen_iter)
+                           idx_row_rep = np.repeat(np.arange(pen_iter),len(chol_rows))*idk
+                           idx_col_rep = np.repeat(np.arange(pen_iter),len(chol_cols))*idk
+                           chol_rep_row = np.tile(chol_rows,pen_iter) + idx_row_rep
+                           chol_rep_cols = np.tile(chol_cols,pen_iter) + idx_col_rep
+                           
+                           lTerm.D_J_emb, _ = embed_in_S_sparse(chol_rep,chol_rep_row,chol_rep_cols,lTerm.D_J_emb,col_S,idk*pen_iter,cur_pen_idx)
+
+                           pen_rep = np.tile(pen_data,pen_iter)
+                           idx_row_rep = np.repeat(np.arange(pen_iter),len(pen_rows))*idk
+                           idx_col_rep = np.repeat(np.arange(pen_iter),len(pen_cols))*idk
+                           pen_rep_row = np.tile(pen_rows,pen_iter) + idx_row_rep
+                           pren_rep_cols = np.tile(pen_cols,pen_iter) + idx_col_rep
+
+                           lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_rep,pen_rep_row,pren_rep_cols,lTerm.S_J_emb,col_S,idk*pen_iter,cur_pen_idx)
+                           
                            lTerm.rep_sj = last_pen_rep
 
                         # In any case, term can be appended here.

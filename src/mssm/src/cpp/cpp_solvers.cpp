@@ -1,5 +1,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/eigen.h>
+#include <pybind11/numpy.h>
 #include<Eigen/Sparse>
 #include <iostream>
 #include <vector>
@@ -10,14 +11,25 @@
 
 namespace py = pybind11;
 
-std::tuple<Eigen::SparseMatrix<double>,int> chol(Eigen::SparseMatrix<double> A){
+std::tuple<Eigen::SparseMatrix<double>,int> chol(int Arows, int Acols, int Annz,
+                                                 py::array_t<double, py::array::f_style | py::array::forcecast> Adata,
+                                                 py::array_t<int, py::array::f_style | py::array::forcecast> Aidptr,
+                                                 py::array_t<int, py::array::f_style | py::array::forcecast> Aindices){
+    
+
+    // Map idea based on: https://github.com/fwilliams/numpyeigen/blob/master/src/npe_sparse_array.h#L74
+    Eigen::Map<Eigen::SparseMatrix<double>> A(Arows,Acols,Annz,
+                                                    (Eigen::SparseMatrix<double>::StorageIndex*) Aidptr.data(),
+                                                    (Eigen::SparseMatrix<double>::StorageIndex*) Aindices.data(),
+                                                    (Eigen::SparseMatrix<double>::Scalar*) Adata.data());
+
     // We prevent any sparsity preserving ordering, since we need the un-pivoted factor L so that L * L' = A
     Eigen::SimplicialLLT<Eigen::SparseMatrix<double>,Eigen::Lower,Eigen::NaturalOrdering<int>> solver;
     solver.compute(A);
 
     if (solver.info()!=Eigen::Success)
     {
-        Eigen::SparseMatrix<double> id(A.rows(),A.cols());
+        Eigen::SparseMatrix<double> id(Arows,Acols);
         id.setIdentity();
         return std::make_tuple(std::move(id),1);
     }
@@ -27,7 +39,15 @@ std::tuple<Eigen::SparseMatrix<double>,int> chol(Eigen::SparseMatrix<double> A){
     return std::make_tuple(std::move(L),0);
 }
 
-std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> cholP(Eigen::SparseMatrix<double> A){
+std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> cholP(int Arows, int Acols, int Annz,
+                                                                  py::array_t<double, py::array::f_style | py::array::forcecast> Adata,
+                                                                  py::array_t<int, py::array::f_style | py::array::forcecast> Aidptr,
+                                                                  py::array_t<int, py::array::f_style | py::array::forcecast> Aindices){
+
+    Eigen::Map<Eigen::SparseMatrix<double>> A(Arows,Acols,Annz,
+                                                    (Eigen::SparseMatrix<double>::StorageIndex*) Aidptr.data(),
+                                                    (Eigen::SparseMatrix<double>::StorageIndex*) Aindices.data(),
+                                                    (Eigen::SparseMatrix<double>::Scalar*) Adata.data());
     // Like chol() but with sparsity preserving pivoting
     Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver;
     solver.compute(A);
@@ -37,7 +57,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> cholP(Eigen::SparseM
 
     if (solver.info()!=Eigen::Success)
     {
-        Eigen::SparseMatrix<double> id(A.rows(),A.cols());
+        Eigen::SparseMatrix<double> id(Arows,Acols);
         id.setIdentity();
         return std::make_tuple(std::move(id),P.indices(),1);
     }
@@ -47,7 +67,15 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> cholP(Eigen::SparseM
     return std::make_tuple(std::move(L),P.indices(),0);
 }
 
-std::tuple<Eigen::SparseMatrix<double>,Eigen::SparseMatrix<double>,Eigen::VectorXi, int> pqr(Eigen::SparseMatrix<double> A) {
+std::tuple<Eigen::SparseMatrix<double>,Eigen::SparseMatrix<double>,Eigen::VectorXi, int> pqr(int Arows, int Acols, int Annz,
+                                                                                             py::array_t<double, py::array::f_style | py::array::forcecast> Adata,
+                                                                                             py::array_t<int, py::array::f_style | py::array::forcecast> Aidptr,
+                                                                                             py::array_t<int, py::array::f_style | py::array::forcecast> Aindices){
+
+    Eigen::Map<Eigen::SparseMatrix<double>> A(Arows,Acols,Annz,
+                                                    (Eigen::SparseMatrix<double>::StorageIndex*) Aidptr.data(),
+                                                    (Eigen::SparseMatrix<double>::StorageIndex*) Aindices.data(),
+                                                    (Eigen::SparseMatrix<double>::Scalar*) Adata.data());
     // Computed column-pivoted QR factorization of A.
     Eigen::SparseQR<Eigen::SparseMatrix<double>,Eigen::COLAMDOrdering<int>> solver;
     solver.compute(A);
@@ -57,10 +85,10 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::SparseMatrix<double>,Eigen::Vector
 
     if(solver.info()!=Eigen::Success)
     {
-        Eigen::SparseMatrix<double> Q(A.rows(),A.cols());
+        Eigen::SparseMatrix<double> Q(Arows,Acols);
         Q.setIdentity();
 
-        Eigen::SparseMatrix<double> R(A.cols(),A.cols());
+        Eigen::SparseMatrix<double> R(Arows,Acols);
         R.setIdentity();
         return std::make_tuple(std::move(Q),std::move(R),P.indices(),1);
     }
@@ -79,7 +107,14 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::SparseMatrix<double>,Eigen::Vector
     
 }
 
-std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solve_am(Eigen::VectorXd y, Eigen::SparseMatrix<double> X, Eigen::SparseMatrix<double> S){
+std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solve_am(Eigen::VectorXd y, int Xrows, int Xcols, int Xnnz,
+                                                                                     py::array_t<double, py::array::f_style | py::array::forcecast> Xdata,
+                                                                                     py::array_t<int, py::array::f_style | py::array::forcecast> Xidptr,
+                                                                                     py::array_t<int, py::array::f_style | py::array::forcecast> Xindices,
+                                                                                     int Srows, int Scols, int Snnz,
+                                                                                     py::array_t<double, py::array::f_style | py::array::forcecast> Sdata,
+                                                                                     py::array_t<int, py::array::f_style | py::array::forcecast> Sidptr,
+                                                                                     py::array_t<int, py::array::f_style | py::array::forcecast> Sindices){
     // Permuted Cholesky:
     // P * A * P' = L * L'
     // A = P' * L * L' * P
@@ -89,7 +124,15 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
     // Inverse:
     // inv(A) = P' * Inv(L)' * inv(L) * Perm
 
-    int Xcols = X.cols();
+    Eigen::Map<Eigen::SparseMatrix<double>> X(Xrows,Xcols,Xnnz,
+                                              (Eigen::SparseMatrix<double>::StorageIndex*) Xidptr.data(),
+                                              (Eigen::SparseMatrix<double>::StorageIndex*) Xindices.data(),
+                                              (Eigen::SparseMatrix<double>::Scalar*) Xdata.data());
+
+    Eigen::Map<Eigen::SparseMatrix<double>> S(Srows,Scols,Snnz,
+                                              (Eigen::SparseMatrix<double>::StorageIndex*) Sidptr.data(),
+                                              (Eigen::SparseMatrix<double>::StorageIndex*) Sindices.data(),
+                                              (Eigen::SparseMatrix<double>::Scalar*) Sdata.data());
 
     // Prepare and compute Cholesky factor of X' * X + S
     Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver;
@@ -131,7 +174,14 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
     return std::make_tuple(std::move(id),P.indices(),std::move(coef),0);
 }
 
-std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> solve_L(Eigen::SparseMatrix<double> X, Eigen::SparseMatrix<double> S){
+std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> solve_L(int Xrows, int Xcols, int Xnnz,
+                                                                    py::array_t<double, py::array::f_style | py::array::forcecast> Xdata,
+                                                                    py::array_t<int, py::array::f_style | py::array::forcecast> Xidptr,
+                                                                    py::array_t<int, py::array::f_style | py::array::forcecast> Xindices,
+                                                                    int Srows, int Scols, int Snnz,
+                                                                    py::array_t<double, py::array::f_style | py::array::forcecast> Sdata,
+                                                                    py::array_t<int, py::array::f_style | py::array::forcecast> Sidptr,
+                                                                    py::array_t<int, py::array::f_style | py::array::forcecast> Sindices){
     // Permuted Cholesky:
     // P * A * P' = L * L'
     // A = P' * L * L' * P
@@ -141,7 +191,15 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> solve_L(Eigen::Spars
     // Inverse:
     // inv(A) = P' * Inv(L)' * inv(L) * Perm
 
-    int Xcols = X.cols();
+    Eigen::Map<Eigen::SparseMatrix<double>> X(Xrows,Xcols,Xnnz,
+                                              (Eigen::SparseMatrix<double>::StorageIndex*) Xidptr.data(),
+                                              (Eigen::SparseMatrix<double>::StorageIndex*) Xindices.data(),
+                                              (Eigen::SparseMatrix<double>::Scalar*) Xdata.data());
+
+    Eigen::Map<Eigen::SparseMatrix<double>> S(Srows,Scols,Snnz,
+                                              (Eigen::SparseMatrix<double>::StorageIndex*) Sidptr.data(),
+                                              (Eigen::SparseMatrix<double>::StorageIndex*) Sindices.data(),
+                                              (Eigen::SparseMatrix<double>::Scalar*) Sdata.data());
 
     // Prepare and compute Cholesky factor of X' * X + S
     Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver;
@@ -168,7 +226,10 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> solve_L(Eigen::Spars
     return std::make_tuple(std::move(id),P.indices(),0);
 }
 
-std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> solve_LXX(Eigen::SparseMatrix<double> XX){
+std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> solve_LXX(int Xrows, int Xcols, int Xnnz,
+                                                                      py::array_t<double, py::array::f_style | py::array::forcecast> Xdata,
+                                                                      py::array_t<int, py::array::f_style | py::array::forcecast> Xidptr,
+                                                                      py::array_t<int, py::array::f_style | py::array::forcecast> Xindices){
     // Permuted Cholesky:
     // P * A * P' = L * L'
     // A = P' * L * L' * P
@@ -178,7 +239,10 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> solve_LXX(Eigen::Spa
     // Inverse:
     // inv(A) = P' * Inv(L)' * inv(L) * Perm
 
-    int Xcols = XX.cols();
+    Eigen::Map<Eigen::SparseMatrix<double>> XX(Xrows,Xcols,Xnnz,
+                                              (Eigen::SparseMatrix<double>::StorageIndex*) Xidptr.data(),
+                                              (Eigen::SparseMatrix<double>::StorageIndex*) Xindices.data(),
+                                              (Eigen::SparseMatrix<double>::Scalar*) Xdata.data());
 
     // Prepare and compute Cholesky factor of X' * X + S or X' * X 
     Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver;
@@ -205,7 +269,14 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> solve_LXX(Eigen::Spa
     return std::make_tuple(std::move(id),P.indices(),0);
 }
 
-std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solve_coef(Eigen::VectorXd y, Eigen::SparseMatrix<double> X, Eigen::SparseMatrix<double> S){
+std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solve_coef(Eigen::VectorXd y, int Xrows, int Xcols, int Xnnz,
+                                                                                       py::array_t<double, py::array::f_style | py::array::forcecast> Xdata,
+                                                                                       py::array_t<int, py::array::f_style | py::array::forcecast> Xidptr,
+                                                                                       py::array_t<int, py::array::f_style | py::array::forcecast> Xindices,
+                                                                                       int Srows, int Scols, int Snnz,
+                                                                                       py::array_t<double, py::array::f_style | py::array::forcecast> Sdata,
+                                                                                       py::array_t<int, py::array::f_style | py::array::forcecast> Sidptr,
+                                                                                       py::array_t<int, py::array::f_style | py::array::forcecast> Sindices){
     // Permuted Cholesky:
     // P * A * P' = L * L'
     // A = P' * L * L' * P
@@ -215,7 +286,15 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
     // Inverse:
     // inv(A) = P' * Inv(L)' * inv(L) * Perm
 
-    int Xcols = X.cols();
+    Eigen::Map<Eigen::SparseMatrix<double>> X(Xrows,Xcols,Xnnz,
+                                                    (Eigen::SparseMatrix<double>::StorageIndex*) Xidptr.data(),
+                                                    (Eigen::SparseMatrix<double>::StorageIndex*) Xindices.data(),
+                                                    (Eigen::SparseMatrix<double>::Scalar*) Xdata.data());
+
+    Eigen::Map<Eigen::SparseMatrix<double>> S(Srows,Scols,Snnz,
+                                                    (Eigen::SparseMatrix<double>::StorageIndex*) Sidptr.data(),
+                                                    (Eigen::SparseMatrix<double>::StorageIndex*) Sindices.data(),
+                                                    (Eigen::SparseMatrix<double>::Scalar*) Sdata.data());
 
     // Prepare and compute Cholesky factor of X' * X + S
     Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver;
@@ -248,7 +327,10 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
     return std::make_tuple(solver.matrixL(),P.indices(),std::move(coef),0);
 }
 
-std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solve_coefXX(Eigen::VectorXd Xy, Eigen::SparseMatrix<double> XXS){
+std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solve_coefXX(Eigen::VectorXd Xy, int Xrows, int Xcols, int Xnnz,
+                                                                                         py::array_t<double, py::array::f_style | py::array::forcecast> Xdata,
+                                                                                         py::array_t<int, py::array::f_style | py::array::forcecast> Xidptr,
+                                                                                         py::array_t<int, py::array::f_style | py::array::forcecast> Xindices){
     // Permuted Cholesky:
     // P * A * P' = L * L'
     // A = P' * L * L' * P
@@ -258,7 +340,10 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
     // Inverse:
     // inv(A) = P' * Inv(L)' * inv(L) * Perm
 
-    int Xcols = XXS.cols();
+    Eigen::Map<Eigen::SparseMatrix<double>> XXS(Xrows,Xcols,Xnnz,
+                                                (Eigen::SparseMatrix<double>::StorageIndex*) Xidptr.data(),
+                                                (Eigen::SparseMatrix<double>::StorageIndex*) Xindices.data(),
+                                                (Eigen::SparseMatrix<double>::Scalar*) Xdata.data());
 
     // Prepare and compute Cholesky factor of X' * X + S
     Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver;
@@ -291,22 +376,42 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
     return std::make_tuple(solver.matrixL(),P.indices(),std::move(coef),0);
 }
 
-Eigen::SparseMatrix<double> solve_tr(Eigen::SparseMatrix<double> A,Eigen::SparseMatrix<double> B){
-    // Solves A*B=C, where B is lower triangular. This can be utilized to obtain B = inv(A), when C is
+Eigen::SparseMatrix<double> solve_tr(int Arows, int Acols, int Annz,
+                                     py::array_t<double, py::array::f_style | py::array::forcecast> Adata,
+                                     py::array_t<int, py::array::f_style | py::array::forcecast> Aidptr,
+                                     py::array_t<int, py::array::f_style | py::array::forcecast> Aindices,
+                                     Eigen::SparseMatrix<double> C){
+    // Solves A*B=C, where A is lower triangular. This can be utilized to obtain B = inv(A), when C is
     // the identity. Importantly, when A is a n*n matrix then C can also be specified as a n*m block of
-    // the identity. In that case, inv(A) can be obtained in parallel. 
+    // the identity. In that case, inv(A) can be obtained in parallel.
+    // Note: we copy C over, so we can solve in place and then just return.
 
-    A.triangularView<Eigen::Lower>().solveInPlace(B);
-    return B;
+    Eigen::Map<Eigen::SparseMatrix<double>> A(Arows,Acols,Annz,
+                                              (Eigen::SparseMatrix<double>::StorageIndex*) Aidptr.data(),
+                                              (Eigen::SparseMatrix<double>::StorageIndex*) Aindices.data(),
+                                              (Eigen::SparseMatrix<double>::Scalar*) Adata.data()); 
+
+    A.triangularView<Eigen::Lower>().solveInPlace(C);
+    return C;
 }
 
-Eigen::SparseMatrix<double> backsolve_tr(Eigen::SparseMatrix<double> A,Eigen::SparseMatrix<double> B){
-    // Solves A*B=C, where B is UPPER triangular. This can be utilized to obtain B = inv(A), when C is
+Eigen::SparseMatrix<double> backsolve_tr(int Arows, int Acols, int Annz,
+                                         py::array_t<double, py::array::f_style | py::array::forcecast> Adata,
+                                         py::array_t<int, py::array::f_style | py::array::forcecast> Aidptr,
+                                         py::array_t<int, py::array::f_style | py::array::forcecast> Aindices,
+                                         Eigen::SparseMatrix<double> C){
+    // Solves A*B=C, where A is UPPER triangular. This can be utilized to obtain B = inv(A), when C is
     // the identity. Importantly, when A is a n*n matrix then C can also be specified as a n*m block of
-    // the identity. In that case, inv(A) can be obtained in parallel. 
+    // the identity. In that case, inv(A) can be obtained in parallel.
+    // Note: we copy C over, so we can solve in place and then just return.
 
-    A.triangularView<Eigen::Upper>().solveInPlace(B);
-    return B;
+    Eigen::Map<Eigen::SparseMatrix<double>> A(Arows,Acols,Annz,
+                                              (Eigen::SparseMatrix<double>::StorageIndex*) Aidptr.data(),
+                                              (Eigen::SparseMatrix<double>::StorageIndex*) Aindices.data(),
+                                              (Eigen::SparseMatrix<double>::Scalar*) Adata.data());  
+
+    A.triangularView<Eigen::Upper>().solveInPlace(C);
+    return C;
 }
 
 PYBIND11_MODULE(cpp_solvers, m) {
