@@ -52,7 +52,7 @@ jobs:
       with:
         name: coverage
         path: |
-          .coverage.xml
+          coverage.xml
           ./htmlcov/*.html
         
   release:
