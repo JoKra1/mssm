@@ -35,6 +35,81 @@ class Test_GAM:
     def test_GAMlam(self):
         assert round(self.model.formula.penalties[0].lam,ndigits=5) == 0.0089
 
+class Test_GAM_TE:
+
+    dat = pd.read_csv(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'tutorials/data/GAMM/sim_dat.csv'))
+    
+    # mssm requires that the data-type for variables used as factors is 'O'=object
+    dat = dat.astype({'series': 'O',
+                    'cond':'O',
+                    'sub':'O',
+                    'series':'O'})
+    
+    formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
+                        terms=[i(), # The intercept, a
+                               l(["cond"]), # Offset for cond='b'
+                               f(["time","x"],by="cond",te=True)], # one smooth surface over time and x - f(time,x) - per level of cond: three-way interaction!
+                        data=dat,
+                        print_warn=False)
+        
+    model = GAMM(formula,Gaussian())
+
+    model.fit()
+
+    def test_GAMedf(self):
+        assert round(self.model.edf,ndigits=3) == 33.83
+
+    def test_GAMTermEdf(self):
+        diff = np.abs(np.round(self.model.term_edf,decimals=3) - np.array([12.69, 19.14]))
+        rel_diff = diff/np.array([12.69, 19.14])
+        assert np.max(rel_diff) < 1e-7
+    
+    def test_GAMsigma(self):
+        _, sigma = self.model.get_pars()
+        assert round(sigma,ndigits=3) == 967.71
+    
+    def test_GAMlam(self):
+        diff = np.abs(np.round([p.lam for p in self.model.formula.penalties],decimals=3) - np.array([     0.001,      0.001, 573912.862,     48.871]))
+        rel_diff = diff/np.array([     0.001,      0.001, 573912.862,     48.871])
+        assert np.max(rel_diff) < 1e-7
+
+class Test_GAM_TE_BINARY:
+
+    dat = pd.read_csv(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'tutorials/data/GAMM/sim_dat.csv'))
+    
+    # mssm requires that the data-type for variables used as factors is 'O'=object
+    dat = dat.astype({'series': 'O',
+                    'cond':'O',
+                    'sub':'O',
+                    'series':'O'})
+    
+    formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
+                        terms=[i(), # The intercept, a
+                               f(["time","x"],te=True), # one smooth surface over time and x - f(time,x) - for the reference level = cond == b
+                               f(["time","x"],te=True,binary=["cond","a"])], # another smooth surface over time and x - f(time,x) - representing the difference from the other surface when cond==a
+                        data=dat,
+                        print_warn=False)
+        
+    model = GAMM(formula,Gaussian())
+
+    model.fit()
+
+    def test_GAMedf(self):
+        assert round(self.model.edf,ndigits=3) == 29.884
+
+    def test_GAMTermEdf(self):
+        diff = np.abs(np.round(self.model.term_edf,decimals=3) - np.array([16.668, 12.216]))
+        rel_diff = diff/np.array([16.668, 12.216])
+        assert np.max(rel_diff) < 1e-7
+    
+    def test_GAMsigma(self):
+        _, sigma = self.model.get_pars()
+        assert round(sigma,ndigits=3) == 967.893
+    
+    def test_GAMlam(self):
+        diff = np.abs(np.round([p.lam for p in self.model.formula.penalties],decimals=3) - np.array([    0.001,   621.874,     0.011, 25335.589]))
+        rel_diff = diff/np.array([    0.001,   621.874,     0.011, 25335.589])
+        assert np.max(rel_diff) < 1e-7
 
 class Test_GAMM:
 
