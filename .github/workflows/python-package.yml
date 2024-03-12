@@ -46,7 +46,10 @@ jobs:
     - uses: actions/upload-artifact@v3
       with:
         name: wheels
-        path: ./wheelhouse/*.whl
+        path: ./wheelhouse/* #.whl
+
+    - name: Print dir
+      run: ls
     
     - uses: actions/upload-artifact@v3
       with:
