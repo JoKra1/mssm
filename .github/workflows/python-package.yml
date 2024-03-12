@@ -52,8 +52,8 @@ jobs:
       with:
         name: coverage
         path: |
-          ./coverage.xml
-          ./htmlcov/index.html
+          .coverage.xml
+          ./htmlcov/*.html
         
   release:
     # https://packaging.python.org/en/latest/guides/publishing-package-distribution-releases-using-github-actions-ci-cd-workflows/
