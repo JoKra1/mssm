@@ -118,7 +118,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           gh release upload
-          '${{ github.ref_name }}' ./wheelhouse/artifact/**
+          '${{ github.ref_name }}' ./wheelhouse/**
           --repo '${{ github.repository }}'
 
   publish-test:
@@ -141,11 +141,14 @@ jobs:
         with:
           name: wheels
           path: ./wheelhouse/
+      
+      - name: Print wheel content
+        run: ls ./wheelhouse
           
       - name: Publish wheels to test-pypi
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: ./wheelhouse/artifact
+          packages-dir: ./wheelhouse/
           repository-url: https://test.pypi.org/legacy/
   
   publish-release:
@@ -172,4 +175,4 @@ jobs:
       - name: Publish wheels to test-pypi
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: ./wheelhouse/artifact
+          packages-dir: ./wheelhouse/
