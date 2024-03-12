@@ -4,8 +4,8 @@ import os
 
 class Test_GAM:
 
-    dat = pd.read_csv(os.path.join(os.path.dirname(__file__), 'test_gamm.csv'))
-
+    dat = pd.read_csv(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'tutorials/data/GAMM/sim_dat.csv'))
+    
     # mssm requires that the data-type for variables used as factors is 'O'=object
     dat = dat.astype({'series': 'O',
                     'cond':'O',
@@ -38,7 +38,7 @@ class Test_GAM:
 
 class Test_GAMM:
 
-    dat = pd.read_csv(os.path.join(os.path.dirname(__file__), 'test_gamm.csv'))
+    dat = pd.read_csv(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'tutorials/data/GAMM/sim_dat.csv'))
 
     # mssm requires that the data-type for variables used as factors is 'O'=object
     dat = dat.astype({'series': 'O',
