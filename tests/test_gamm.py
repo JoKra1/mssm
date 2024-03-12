@@ -3,7 +3,7 @@ import numpy as np
 
 class Test_GAM:
 
-    dat = pd.read_csv("./tutorials/data/GAMM/sim_dat.csv")
+    dat = pd.read_csv("./test_gamm.csv")
 
     # mssm requires that the data-type for variables used as factors is 'O'=object
     dat = dat.astype({'series': 'O',
@@ -37,7 +37,7 @@ class Test_GAM:
 
 class Test_GAMM:
 
-    dat = pd.read_csv("./tutorials/data/GAMM/sim_dat.csv")
+    dat = pd.read_csv("./test_gamm.csv")
 
     # mssm requires that the data-type for variables used as factors is 'O'=object
     dat = dat.astype({'series': 'O',
