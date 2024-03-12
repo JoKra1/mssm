@@ -64,11 +64,11 @@ class Test_GAMM:
         assert round(self.model.edf,ndigits=3) == 153.601
 
     def test_GAMMTermEdf(self):
-        assert np.max(np.abs(np.round(self.model.term_edf,decimals=3) - np.array([6.892, 8.635, 1.181, 1.001, 1.001, 1.029, 131.861]))) < 1e-6
+        assert np.array_equal(np.round(self.model.term_edf,decimals=3),np.array([6.892, 8.635, 1.181, 1.001, 1.001, 1.029, 131.861])) == True
     
     def test_GAMMsigma(self):
         _, sigma = self.model.get_pars()
         assert round(sigma,ndigits=3) == 577.196
     
     def test_GAMMlam(self):
-        assert np.max(np.abs(np.round([p.lam for p in self.model.formula.penalties],decimals=3) - np.array([0.004, 0.006, 5842.507, 1101786.56 , 328846.811, 174267.629, 162215.095, 1178.787, 0.119, 2.166]))) < 1e-6
+        assert np.array_equal(np.round(np.array([p.lam for p in self.model.formula.penalties]),decimals=3),np.array([0.004, 0.006, 5842.507, 1101786.56 , 328846.811, 174267.629, 162215.095, 1178.787, 0.119, 2.166])) == True
