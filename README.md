@@ -20,11 +20,7 @@ pip install mssm
 pip install matplotlib # Only needed for tutorials
 ```
 
-The fourth line, installing ``matplotlib`` is only necessary if you want to run the tutorials. Note: pypi will only reflect releases (Basically, the state of the stable branch). Pushes to main continue to be distributed to test.pypi, so if you need the latest changes you can get them from [test.pypi](https://test.pypi.org/project/mssm/#description). In that case, you need to replace the third line in the code above with:
-
-```
-pip install -i https://test.pypi.org/simple/ mssm
-```
+The fourth line, installing ``matplotlib`` is only necessary if you want to run the tutorials. Note: pypi will only reflect releases (Basically, the state of the stable branch). If you urgently need a feature currently only available on the main branch, consider building from source.
 
 ### Building from source
 
@@ -43,4 +39,4 @@ pip install .
 
 ## Contributing
 
-Contributions are welcome! Feel free to open issues or make pull-requests to main.
+Contributions are welcome! Feel free to open issues or make pull-requests to main. Some problems that could use work are listed below.

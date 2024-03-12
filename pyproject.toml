@@ -7,10 +7,17 @@ requires = [
 ]
 build-backend = "setuptools.build_meta"
 
+[tool.cibuildwheel]
+before-test = "ls"
+test-skip = "*-win32 pp* *i686"
+test-requires = ["pytest", "pytest-cov"]
+test-command = "pytest {project}/tests --cov={project}"
+
 [project]
 dependencies=["numpy >= 1.24.1",
               "pandas >= 1.5.3",
-              "scipy >= 1.10.0"]
+              "scipy >= 1.10.0",
+              "tqdm >= 4.66.1"]
 name = "mssm"
 authors = [
   { name="Joshua Krause", email="jokra001@proton.me" }
@@ -27,4 +34,4 @@ dynamic = ["version"]
 
 [tool.setuptools_scm]
 # https://github.com/pypa/setuptools_scm/issues/342
-local_scheme = "no-local-version" 
+local_scheme = "no-local-version"

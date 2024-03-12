@@ -139,9 +139,12 @@ def backward_eta(n_j,n_t,TR,log_dur_mat,etas,u):
       for j in range(n_j):
         if t > 0:
          for i in range(n_j):
+            if i == j:
+               continue # No self transitions in hsmms
+
             betas[t-1,j] = np.logaddexp(betas[t-1,j],log_TR[j,i] + beta_stars_t[i])
 
-            # Now we can update etas as well - eq 6!
+         # Now we can update etas as well - eq 6!
          etas[t-1,j,:] +=  betas[t-1,j]
 
         # Finally, we can calculate gammas, according to eq 8.
@@ -267,6 +270,41 @@ def pre_ll_sms_gamm(n_j, end_point, state_dur_est, state_est):
 
    return False
 
+def compute_hsmm_probabilities(n_j,cov,pi,TR,log_o_probs,
+                              log_dur_probs,pds,var_map,
+                              compute_smoothed):
+   
+   # Computes bunch of probabilities defined by Yu (2011)
+   s_log_dur_probs = np.zeros((n_j,log_dur_probs.shape[1]))
+   j = 0
+   j_split = 0
+   while j < n_j:
+      pd_j = pds[j]
+      if pd_j.split_by is not None:
+         #print(j,j_split+int(cov[0,var_map[pd_j.split_by]]),cov[0,var_map[pd_j.split_by]])
+         s_log_dur_probs[j,:] = log_dur_probs[j_split+int(cov[0,var_map[pd_j.split_by]]),:]
+         j_split += pd_j.n_by
+      else:
+         #print(j,j_split)
+         s_log_dur_probs[j,:] =log_dur_probs[j_split,:]
+         j_split += 1
+      j += 1
+
+   # Now we can perform the regular forward and backward pass + some additional calculations...
+   llk_fwd, etas_c, u = forward_eta(n_j,log_o_probs.shape[1],pi,TR,s_log_dur_probs,log_o_probs)
+   etas_c, gammas_c = backward_eta(n_j,log_o_probs.shape[1],TR,s_log_dur_probs,etas_c,u)
+
+   # Now the gammas_c are log-probs. We could convert them to probs
+   # via exp() but that is not going to guarantee that every columns sums
+   # up to 1 because of numerical precision (or lack of). So we use a softmax
+   # to ensure this.
+   smoothed = None
+   if compute_smoothed:
+      smoothed = gammas_c - llk_fwd
+      smoothed = scp.special.softmax(smoothed ,axis=1).T
+
+   return llk_fwd,etas_c,gammas_c,smoothed
+
 def se_step_sms_gamm(n_j,temp,cov,end_point,pi,TR,
                      log_o_probs,log_dur_probs,pds,
                      pre_lln_fn,var_map):
@@ -276,24 +314,8 @@ def se_step_sms_gamm(n_j,temp,cov,end_point,pi,TR,
     # for this particular trial - i.e., in case of a by_split we need
     # to select the distribution corresponding to the factor level on
     # this series!
-    s_log_dur_probs = np.zeros((n_j,log_dur_probs.shape[1]))
-    j = 0
-    j_split = 0
-    while j < n_j:
-       pd_j = pds[j]
-       if pd_j.split_by is not None:
-          #print(j,j_split+int(cov[0,var_map[pd_j.split_by]]),cov[0,var_map[pd_j.split_by]])
-          s_log_dur_probs[j,:] = log_dur_probs[j_split+int(cov[0,var_map[pd_j.split_by]]),:]
-          j_split += pd_j.n_by
-       else:
-          #print(j,j_split)
-          s_log_dur_probs[j,:] =log_dur_probs[j_split,:]
-          j_split += 1
-       j += 1
-
-    # Now we can perform the regular forward and backward pass + some additional calculations...
-    llk_fwd, etas_c, u = forward_eta(n_j,log_o_probs.shape[1],pi,TR,s_log_dur_probs,log_o_probs)
-    etas_c, gammas_c = backward_eta(n_j,log_o_probs.shape[1],TR,s_log_dur_probs,etas_c,u)
+    llk_fwd,_,gammas_c,_ = compute_hsmm_probabilities(n_j,cov,pi,TR,log_o_probs,
+                                                    log_dur_probs,pds,var_map,False)
 
     # Now the gammas_c are log-probs. We could convert them to probs
     # via exp() but that is not going to guarantee that every columns sums
@@ -319,31 +341,8 @@ def se_step_sms_gamm(n_j,temp,cov,end_point,pi,TR,
 def decode_local(n_j,cov,pi,TR,log_o_probs,log_dur_probs,pds,var_map):
     # Decoding from the smoothed probabilities - selecting j according to argmax(smoothed,axis=0)
     # See, Langrock (2021)
-    s_log_dur_probs = np.zeros((n_j,log_dur_probs.shape[1]))
-    j = 0
-    j_split = 0
-    while j < n_j:
-       pd_j = pds[j]
-       if pd_j.split_by is not None:
-          #print(j,j_split+int(cov[0,var_map[pd_j.split_by]]),cov[0,var_map[pd_j.split_by]])
-          s_log_dur_probs[j,:] = log_dur_probs[j_split+int(cov[0,var_map[pd_j.split_by]]),:]
-          j_split += pd_j.n_by
-       else:
-          #print(j,j_split)
-          s_log_dur_probs[j,:] =log_dur_probs[j_split,:]
-          j_split += 1
-       j += 1
-
-    # Now we can perform the regular forward and backward pass + some additional calculations...
-    llk_fwd, etas_c, u = forward_eta(n_j,log_o_probs.shape[1],pi,TR,s_log_dur_probs,log_o_probs)
-    etas_c, gammas_c = backward_eta(n_j,log_o_probs.shape[1],TR,s_log_dur_probs,etas_c,u)
-
-    # Now the gammas_c are log-probs. We could convert them to probs
-    # via exp() but that is not going to guarantee that every columns sums
-    # up to 1 because of numerical precision (or lack of). So we use a softmax
-    # to ensure this.
-    smoothed = gammas_c - llk_fwd
-    smoothed = scp.special.softmax(smoothed ,axis=1).T
+    llk_fwd,_,_,smoothed = compute_hsmm_probabilities(n_j,cov,pi,TR,log_o_probs,
+                                                    log_dur_probs,pds,var_map,True)
 
     # Up until here this was just like setting up for sampling, but now we select more optimally to decode!
     states_est = np.argmax(smoothed,axis=0)
@@ -529,6 +528,18 @@ def se_step_sms_dc_gamm(n_j,temp,series,NOT_NAs,end_point,cov,
     state_dist = np.zeros((n_prop,n_j - 1),dtype=int)
     states_durs_dist = []
     state_llks = []
+    
+    # Build model matrix once for all effects that do not differ over iterations
+    use_fixed = [t for t in [*ltx,*stx,*rtx] if use_only is None or t in use_only]
+    use_irs = [t for t in irstx if use_only is None or t in use_only]
+
+    model_mat_s_fix = build_sparse_matrix_from_formula(terms,has_intercept,False,
+                                                        ltx,irstx,stx,rtx,var_types,var_map,
+                                                        var_mins,var_maxs,factor_levels,
+                                                        cov,[cov],n_j,None,[states],
+                                                        use_only=use_fixed)
+
+    model_mat_s_fix = model_mat_s_fix[NOT_NAs,]
 
     for i in range(n_prop):
       
@@ -541,13 +552,15 @@ def se_step_sms_dc_gamm(n_j,temp,series,NOT_NAs,end_point,cov,
       # Calculate complete data likelihood under new state and current parameters
       if not rejection:
          # Start with re-building model-matrix for this series according to the proposed state.
+         # Re-build only the parts that differ during sampling.
          model_mat_s = build_sparse_matrix_from_formula(terms,has_intercept,False,
                                                         ltx,irstx,stx,rtx,var_types,var_map,
                                                         var_mins,var_maxs,factor_levels,
                                                         cov,[cov],n_j,None,[n_states],
-                                                        use_only=use_only)
+                                                        use_only=use_irs)
          
          model_mat_s = model_mat_s[NOT_NAs,]
+         model_mat_s += model_mat_s_fix
 
          # Re-collect observation probabilities under new state sequence
          log_o_probs_n = np.zeros(len(series))

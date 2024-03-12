@@ -9,6 +9,8 @@ class PenType(Enum):
     IDENTITY = 1
     DIFFERENCE = 2
     DISTANCE = 3
+    REPARAM = 4
+    NULL = 5
 
 ##################################### Penalty functions #####################################
 
@@ -40,6 +42,7 @@ def diff_pen(n,constraint,m=2):
 
   D = np.diff(np.identity(n),m)
   S = D @ D.T
+  rank = n - m # Eilers & Marx (1996): P-spline penalties consider m-degree polynomial as smooth, i.e., un-penalized!
 
   # ToDo: mgcv scales penalties - I wanted to do something
   # similar, but the approach below does not work.
@@ -57,8 +60,10 @@ def diff_pen(n,constraint,m=2):
         S = np.delete(np.delete(S,Z,axis=1),Z,axis=0)
         D = np.delete(D,Z,axis=0)
      elif constraint.type == ConstType.DIFF:
-        D = np.diff(D,axis=0) # Correct for column differencing applied to X! See smoothCon help for mgcv (Wood, 2017)
+        D = np.diff(np.concatenate((D[Z:D.shape[0],:],D[:Z,:]),axis=0),axis=0) # Correct for column differencing applied to X! See smoothCon help for mgcv (Wood, 2017)
+        D = np.concatenate((D[D.shape[0]-Z:,:],D[:D.shape[0]-Z,:]),axis=0) 
         S = D @ D.T
+
         
   S = scp.sparse.csc_array(S)
   D = scp.sparse.csc_array(D)
@@ -67,7 +72,7 @@ def diff_pen(n,constraint,m=2):
   pen_data,pen_rows,pen_cols = translate_sparse(S)
   chol_data,chol_rows,chol_cols = translate_sparse(D)
 
-  return pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols
+  return pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank
 
 def id_dist_pen(n,constraint,f=None):
   # Creates identity matrix penalty in case f(i) = 1
@@ -82,9 +87,9 @@ def id_dist_pen(n,constraint,f=None):
       elements[i] = f(i+1)
     idx[i] = i
 
-  return elements,idx,idx,elements,idx,idx # I' @ I = I
+  return elements,idx,idx,elements,idx,idx,n # I' @ I = I; also identity is full rank
 
-def TP_pen(S_j,D_j,j,ks,constraint):
+def TP_pen(S_j,D_j,j,ks,constraint,m_rank):
    # Tensor smooth penalty - not including the reparameterization of Wood (2017) 5.6.2
    # but reflecting Eilers & Marx (2003) instead
    if j == 0:
@@ -93,6 +98,7 @@ def TP_pen(S_j,D_j,j,ks,constraint):
    else:
       S_TP = scp.sparse.identity(ks[0])
       D_TP = scp.sparse.identity(ks[0])
+      m_rank *= ks[0] # Modify rank of marginal - identities are full-rank.
    
    for i in range(1,len(ks)):
       if j == i:
@@ -101,6 +107,7 @@ def TP_pen(S_j,D_j,j,ks,constraint):
       else:
          S_TP = scp.sparse.kron(S_TP,scp.sparse.identity(ks[i]),format='csc')
          D_TP = scp.sparse.kron(D_TP,scp.sparse.identity(ks[i]),format='csc')
+         m_rank *= ks[i]
    
    if constraint is not None:
      Z = constraint.Z
@@ -113,15 +120,16 @@ def TP_pen(S_j,D_j,j,ks,constraint):
         S_TP = scp.sparse.csc_array(np.delete(np.delete(S_TP.toarray(),Z,axis=1),Z,axis=0))
         D_TP = scp.sparse.csc_array(np.delete(D_TP.toarray(),Z,axis=0))
      elif constraint.type == ConstType.DIFF:
-        D_TP = np.diff(D_TP.toarray(),axis=0) # Correct for column differencing applied to X! See smoothCon help for mgcv (Wood, 2017)
+        D_TP = D_TP.toarray()
+        D_TP = np.diff(np.concatenate((D_TP[Z:D_TP.shape[0],:],D_TP[:Z,:]),axis=0),axis=0) # Correct for column differencing applied to X! See smoothCon help for mgcv (Wood, 2017)
+        D_TP = np.concatenate((D_TP[D_TP.shape[0]-Z:,:],D_TP[:D_TP.shape[0]-Z,:]),axis=0) 
         S_TP = D_TP @ D_TP.T
         S_TP = scp.sparse.csc_array(S_TP)
         D_TP = scp.sparse.csc_array(D_TP)
 
    pen_data,pen_rows,pen_cols = translate_sparse(S_TP)
    chol_data,chol_rows,chol_cols = translate_sparse(D_TP)
-      
-   return pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols
+   return pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,m_rank
 
 @dataclass
 class LambdaTerm:
@@ -138,3 +146,16 @@ class LambdaTerm:
   frozen:bool = False
   type:PenType = None
   rank:int or None = None
+  term:int or None = None
+
+@dataclass
+class Reparameterization:
+   # Holds all information necessary to transform model matrix & penalty via various re-parameterization strategies as discussed in Wood (2017).
+   X:scp.sparse.csc_array = None
+   cov:np.ndarray = None
+   C:scp.sparse.csc_array= None
+   scale:float = None
+   IRrp:scp.sparse.csc_array = None
+   rms1:float = None
+   rms2:float = None
+   rank:int = None

@@ -1,34 +1,66 @@
 import numpy as np
 import scipy as scp
 import warnings
-from .exp_fam import Family,Gaussian
+from .exp_fam import Family,Gaussian,est_scale
 from .penalties import PenType,id_dist_pen,translate_sparse
-import cpp_solvers
+from .formula import build_sparse_matrix_from_formula,setup_cache,clear_cache,cpp_solvers,pd,Formula,mp,repeat,os,map_csc_to_eigen
+from tqdm import tqdm
+from functools import reduce
+
+CACHE_DIR = './.db'
+SHOULD_CACHE = False
+MP_SPLIT_SIZE=1000
 
 def cpp_chol(A):
-   return cpp_solvers.chol(A)
+   return cpp_solvers.chol(*map_csc_to_eigen(A))
+
+def cpp_cholP(A):
+   return cpp_solvers.cholP(*map_csc_to_eigen(A))
 
 def cpp_qr(A):
-   return cpp_solvers.pqr(A)
+   return cpp_solvers.pqr(*map_csc_to_eigen(A))
 
 def cpp_solve_am(y,X,S):
-   return cpp_solvers.solve_am(y,X,S)
+   return cpp_solvers.solve_am(y,*map_csc_to_eigen(X),*map_csc_to_eigen(S))
 
 def cpp_solve_coef(y,X,S):
-   return cpp_solvers.solve_coef(y,X,S)
+   return cpp_solvers.solve_coef(y,*map_csc_to_eigen(X),*map_csc_to_eigen(S))
+
+def cpp_solve_coefXX(Xy,XXS):
+   return cpp_solvers.solve_coefXX(Xy,*map_csc_to_eigen(XXS))
 
 def cpp_solve_L(X,S):
-   return cpp_solvers.solve_L(X,S)
+   return cpp_solvers.solve_L(*map_csc_to_eigen(X),*map_csc_to_eigen(S))
 
-def cpp_solve_tr(L,P,D):
-   return cpp_solvers.solve_tr(L,P,D)
+def cpp_solve_LXX(XXS):
+   return cpp_solvers.solve_L(*map_csc_to_eigen(XXS))
 
-def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,scale,verbose=False):
+def cpp_solve_tr(A,C):
+   return cpp_solvers.solve_tr(*map_csc_to_eigen(A),C)
+
+def cpp_backsolve_tr(A,C):
+   return cpp_solvers.backsolve_tr(*map_csc_to_eigen(A),C)
+
+def compute_lgdetD_bsb(rank,cLam,gInv,emb_SJ,cCoef):
+   # Derivative of log(|S_lambda|+), the log of the "Generalized determinant", with respect to lambda see Wood, Shaddick, & Augustin, (2017)
+   # and Wood & Fasiolo (2016), and Wood (2017), and Wood (2020)
+   if not rank is None:
+      # (gInv @ emb_SJ).trace() should be equal to rank(S_J)/cLam for single penalty terms (Wood, 2020)
+      lgdet_deriv = rank/cLam
+   else:
+      lgdet_deriv = (gInv @ emb_SJ).trace()
+
+   # Derivative of log(|XX + S_lambda|) is computed elsewhere, but we need the remaining part from the LLK (Wood & Fasiolo, 2016):
+   bSb = cCoef.T @ emb_SJ @ cCoef
+   return lgdet_deriv,bSb
+
+def step_fellner_schall_sparse(lgdet_deriv,ldet_deriv,bSb,cLam,scale):
   # Compute a generalized Fellner Schall update step for a lambda term. This update rule is
   # discussed in Wood & Fasiolo (2016) and used here because of it's efficiency.
-  # ToDo: (gInv @ emb_SJ).trace() should be equal to rank(S_J)/cLam for single penalty terms (Wood, 2020)
-  num = max(0,(gInv @ emb_SJ).trace() - Bps)
-  denom = max(0,cCoef.T @ emb_SJ @ cCoef)
+  
+  num = max(0,lgdet_deriv - ldet_deriv)
+
+  denom = max(0,bSb)
 
   # Especially when using Null-penalties denom can realisitically become
   # equal to zero: every coefficient of a term is penalized away. In that
@@ -41,18 +73,15 @@ def step_fellner_schall_sparse(gInv,emb_SJ,Bps,cCoef,cLam,scale,verbose=False):
      nLam = max(nLam,1e-7) # Prevent Lambda going to zero
      nLam = min(nLam,1e+7) # Prevent overflow
 
-  if verbose:
-   print(f"Num = {(gInv @ emb_SJ).trace()} - {Bps} == {num}\nDenom = {denom}; Lambda = {nLam}")
-
   # Compute lambda delta
   delta_lam = nLam-cLam
 
   return delta_lam
 
-def grad_lambda(gInv,emb_SJ,Bps,cCoef,scale):
+def grad_lambda(lgdet_deriv,ldet_deriv,bSb,scale):
    # P. Deriv of restricted likelihood with respect to lambda.
    # From Wood & Fasiolo (2016)
-   return (gInv @ emb_SJ).trace()/2 - Bps/2 - (cCoef.T @ emb_SJ @ cCoef) / (2*scale)
+   return lgdet_deriv/2 - ldet_deriv/2 - bSb / (2*scale)
 
 def compute_S_emb_pinv_det(col_S,penalties,pinv):
    # Computes final S multiplied with lambda
@@ -111,13 +140,15 @@ def compute_S_emb_pinv_det(col_S,penalties,pinv):
    S_pinv_cols = []
    cIndexPinv = SJ_idx[0]
 
+   FS_use_rank = []
    for SJi in range(SJ_idx_len):
       # Now handle all pinv calculations because all penalties
       # associated with a term have been collected in SJ
-      
-      if SJ_terms[SJi] == 1 and SJ_types[SJi] == PenType.IDENTITY:
-         #print("Identity shortcut",SJ_lams[SJi])
-         SJ_pinv_elements,SJ_pinv_rows,SJ_pinv_cols,_,_,_ = id_dist_pen(SJs[SJi].shape[1],lambda x: 1/SJ_lams[SJi])
+
+      if SJ_terms[SJi] == 1:
+         cIndexPinv += (SJs[SJi].shape[1]*SJ_reps[SJi])
+         FS_use_rank.append(True)
+
       else:
          # Compute pinv(SJ) via cholesky factor L so that L @ L' = SJ' @ SJ.
          # If SJ is full rank, then pinv(SJ) = inv(L)' @ inv(L) @ SJ'.
@@ -150,18 +181,26 @@ def compute_S_emb_pinv_det(col_S,penalties,pinv):
             SJ_pinv = scp.sparse.csc_array(SJ_pinv)
 
          SJ_pinv_elements,SJ_pinv_rows,SJ_pinv_cols = translate_sparse(SJ_pinv)
-      
-      SJ_pinv_rows = np.array(SJ_pinv_rows)
-      SJ_pinv_cols = np.array(SJ_pinv_cols)
 
-      for _ in range(SJ_reps[SJi]):
-         S_pinv_elements.extend(SJ_pinv_elements)
-         S_pinv_rows.extend(SJ_pinv_rows + cIndexPinv)
-         S_pinv_cols.extend(SJ_pinv_cols + cIndexPinv)
-         cIndexPinv += (SJ_pinv_cols[-1] + 1)
+         SJ_pinv_rows = np.array(SJ_pinv_rows)
+         SJ_pinv_cols = np.array(SJ_pinv_cols)
 
+         SJ_pinv_shape = SJs[SJi].shape[1]
+         for _ in range(SJ_reps[SJi]):
+            S_pinv_elements.extend(SJ_pinv_elements)
+            S_pinv_rows.extend(SJ_pinv_rows + cIndexPinv)
+            S_pinv_cols.extend(SJ_pinv_cols + cIndexPinv)
+            cIndexPinv += SJ_pinv_shape
+         
+         for _ in range(SJ_terms[SJi]):
+            FS_use_rank.append(False)
+         
    S_pinv = scp.sparse.csc_array((S_pinv_elements,(S_pinv_rows,S_pinv_cols)),shape=(col_S,col_S))
-   return S_emb, S_pinv
+
+   if len(FS_use_rank) != len(penalties):
+      raise IndexError("An incorrect number of rank decisions were made.")
+   
+   return S_emb, S_pinv, FS_use_rank
 
 def PIRLS_pdat_weights(y,mu,eta,family:Family):
    # Compute pseudo-data and weights for Penalized Reweighted Least Squares iteration (Wood, 2017, 6.1.1)
@@ -185,7 +224,8 @@ def update_PIRLS(y,yb,mu,eta,X,Xb,family):
 
       # Update yb and Xb
       yb = Wr @ z
-      Xb = Wr @ X
+      Xb = (Wr @ X).tocsc()
+      
    
    return yb,Xb,z,Wr
 
@@ -200,6 +240,63 @@ def apply_eigen_perm(Pr,InvCholXXSP):
    Perm = compute_eigen_perm(Pr)
    InvCholXXS = InvCholXXSP @ Perm
    return InvCholXXS
+
+def compute_B_mp(L,PD):
+   B = cpp_solve_tr(L,PD)
+   return B.power(2).sum()
+   
+def compute_B(L,P,lTerm,n_c=10):
+   # Solves L @ B = P @ D for B, parallelizing over column
+   # blocks of D if int(D.shape[1]/1000) > 1
+
+   # D is extremely sparse and P only shuffles rows, so we
+   # can take only the columns which we know contain non-zero elements
+   D_start = lTerm.start_index
+   D_len = lTerm.rep_sj * lTerm.S_J.shape[1]
+   D_end = lTerm.start_index + D_len
+
+   D_r = int(D_len/1000)
+   if D_r > 1 and n_c > 1:
+      # Parallelize
+      n_c = min(D_r,n_c)
+      split = np.array_split(range(D_start,D_end),n_c)
+      PD = P @ lTerm.D_J_emb
+      PDs = [PD[:,split[i]] for i in range(n_c)]
+
+      with mp.Pool(processes=n_c) as pool:
+         args = zip(repeat(L),PDs)
+        
+         pow_sums = pool.starmap(compute_B_mp,args)
+      return sum(pow_sums)
+
+   B = cpp_solve_tr(L,P @ lTerm.D_J_emb[:,D_start:D_end])
+   return B.power(2).sum()
+
+def compute_Linv(L,n_c=10):
+   # Solves L @ inv(L) = I for Binv(L) parallelizing over column
+   # blocks of I if int(I.shape[1]/2000) > 1
+   
+   n_col = L.shape[1]
+   r = int(n_col/2000)
+   T = scp.sparse.eye(n_col,format='csc')
+   if r > 1 and n_c > 1:
+      # Parallelize over column blocks of I
+      # Can speed up computations considerably and is feasible memory-wise
+      # since L itself is super sparse.
+      
+      n_c = min(r,n_c)
+      split = np.array_split(range(n_col),n_c)
+      LBs = [T[:,split[i]] for i in range(n_c)]
+
+      with mp.Pool(processes=n_c) as pool:
+         args = zip(repeat(L),LBs)
+        
+         LBinvs = pool.starmap(cpp_solve_tr,args)
+      
+      return scp.sparse.hstack(LBinvs)
+
+   return cpp_solve_tr(L,T)
+
 
 def calculate_edf(InvCholXXS,penalties,colsX):
    total_edf = colsX
@@ -279,21 +376,36 @@ def update_scale_edf(y,z,eta,Wr,rowsX,colsX,InvCholXXSP,Pr,family,penalties):
 
    # Optionally estimate scale parameter
    if family.scale is None:
-      scale = family.est_scale(wres,rowsX,total_edf)
+      scale = est_scale(wres,rowsX,total_edf)
    else:
       scale = family.scale
    
    return wres,InvCholXXS,total_edf,term_edfs,Bs,scale
 
-def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,penalties):
+def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,penalties,n_c,formula):
    # Solves the additive model for a given set of weights and penalty
-   InvCholXXSP, Pr, coef, code = cpp_solve_am(yb,Xb,S_emb)
+   if formula is None:
+      LP, Pr, coef, code = cpp_solve_coef(yb,Xb,S_emb)
+   else:
+      #yb is X.T@y and Xb is X.T@X
+      LP, Pr, coef, code = cpp_solve_coefXX(yb,Xb + S_emb)
 
    if code != 0:
       raise ArithmeticError(f"Solving for coef failed with code {code}. Model is likely unidentifiable.")
    
+   # Solve for inverse of Chol factor of XX+S
+   InvCholXXSP = compute_Linv(LP,n_c)
+   
    # Update mu & eta
-   eta = (X @ coef).reshape(-1,1)
+   if formula is None:
+      eta = (X @ coef).reshape(-1,1)
+   else:
+      eta = []
+      for file in formula.file_paths:
+         eta_file = read_eta(file,formula,coef,n_c)
+         eta.extend(eta_file)
+      eta = np.array(eta)
+
    mu = eta
 
    if isinstance(family,Gaussian) == False:
@@ -302,34 +414,15 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,penalties):
    # Update scale parameter
    wres,InvCholXXS,total_edf,term_edfs,Bs,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,InvCholXXSP,Pr,family,penalties)
    return eta,mu,coef,InvCholXXS,total_edf,term_edfs,Bs,scale,wres
-   
-def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
-                      maxiter=10,pinv="svd",conv_tol=1e-7,
-                      extend_lambda=True,control_lambda=True):
-   # Estimates a penalized Generalized additive mixed model, following the steps outlined in Wood (2017)
-   # "Generalized Additive Models for Gigadata"
 
-   rowsX,colsX = X.shape
-   coef = None
-   n_coef = None
-
-   # Additive mixed model can simply be fit on y and X
-   # Generalized mixed model needs to be fit on weighted X and pseudo-dat
-   # but the same routine can be used (Wood, 2017) so both should end
-   # up in the same variables passed down:
-   yb = y
-   Xb = X
-
-   # mu and eta (start estimates in case the family is not Gaussian)
-   mu = mu_init
-   eta = mu
-
-   if isinstance(family,Gaussian) == False:
-      eta = family.link.f(mu)
+def init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
+                  family,col_S,penalties,
+                  pinv,n_c,formula):
+   # Initial fitting iteration without step-length control for gam.
 
    # Compute starting estimate S_emb and S_pinv
    if len(penalties) > 0:
-      S_emb,S_pinv = compute_S_emb_pinv_det(col_S,penalties,pinv)
+      S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(col_S,penalties,pinv)
    else:
       S_emb = scp.sparse.csc_array((colsX, colsX), dtype=np.float64)
 
@@ -347,7 +440,8 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    total_edf,\
    term_edfs,\
    Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
-                                         X,Xb,family,S_emb,penalties)
+                                         X,Xb,family,S_emb,
+                                         penalties,n_c,formula)
    
    # Deviance under these starting coefficients
    # As well as penalized deviance
@@ -357,27 +451,192 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    if len(penalties) > 0:
       pen_dev += coef.T @ S_emb @ coef
 
-   # Now we propose a lambda extension via the Fellner Schall method
-   # by Wood & Fasiolo (2016)
-   # We also consider an extension term as reccomended by Wood & Fasiolo (2016)
-   extend_by = 2
+   # Now propose first lambda extension via the Fellner Schall method
+   # by Wood & Fasiolo (2016). Simply don't use an extension term (see Wood & Fasiolo; 2016) for
+   # this first update.
+   lam_delta = []
    if len(penalties) > 0:
-      lam_delta = []
       for lti,lTerm in enumerate(penalties):
-         dLam = step_fellner_schall_sparse(S_pinv,lTerm.S_J_emb,Bs[lti],coef,lTerm.lam,scale)
 
-         if extend_lambda:
-            extension = lTerm.lam  + dLam*extend_by
-            if extension < 1e7 and extension > 1e-7: # Keep lambda in correct space
-               dLam *= extend_by
+         lt_rank = None
+         if FS_use_rank[lti]:
+            lt_rank = lTerm.rank
+         
+         lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
+         dLam = step_fellner_schall_sparse(lgdetD,Bs[lti],bsb,lTerm.lam,scale)
          lam_delta.append(dLam)
 
       lam_delta = np.array(lam_delta).reshape(-1,1)
    
+   return dev,pen_dev,eta,mu,coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,S_emb
+
+
+def correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,n_pen,S_emb,formula,n_c):
+   # Perform step-length control for the coefficients (Step 3 in Wood, 2017)
+   corrections = 0
+   while pen_dev > c_dev_prev:
+      # Coefficient step did not improve deviance - so correction
+      # is necessary.
+
+      if corrections > 30:
+         # If we could not find a better coefficient set simply accept
+         # previous coefficient
+         n_coef = coef
+
+      n_coef = (coef + n_coef)/2
+
+      # Update mu & eta for correction
+      if formula is None:
+         eta = (X @ n_coef).reshape(-1,1)
+      else:
+         eta = []
+         for file in formula.file_paths:
+            eta_file = read_eta(file,formula,n_coef,n_c)
+            eta.extend(eta_file)
+         eta = np.array(eta)
+
+      mu = eta
+
+      if isinstance(family,Gaussian) == False:
+         mu = family.link.fi(eta)
+      
+      # Update deviance
+      dev = family.deviance(y,mu)
+
+      # And penalized deviance term
+      if n_pen > 0:
+         pen_dev = dev + n_coef.T @ S_emb @ n_coef
+      corrections += 1
+   
+   # Collect accepted coefficient
+   coef = n_coef
+   return dev,pen_dev,mu,eta,coef
+
+def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
+                        family,col_S,S_emb,penalties,
+                        pinv,lam_delta,extend_by,o_iter,
+                        dev_check,n_c,control_lambda,
+                        extend_lambda,exclude_lambda,
+                        formula):
+   # Propose & perform step-length control for the lambda parameters via the Fellner Schall method
+   # by Wood & Fasiolo (2016)
+   lam_accepted = False
+   lam_checks = 0
+   while not lam_accepted:
+
+      # Re-compute S_emb and S_pinv
+      S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(col_S,penalties,pinv)
+
+      # Update coefficients
+      eta,mu,n_coef,\
+      InvCholXXS,\
+      total_edf,\
+      term_edfs,\
+      Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
+                                             X,Xb,family,S_emb,
+                                             penalties,n_c,formula)
+      
+      # Compute gradient of REML with respect to lambda
+      # to check if step size needs to be reduced.
+      lgdetDs = []
+      bsbs = []
+      for lti,lTerm in enumerate(penalties):
+
+         lt_rank = None
+         if FS_use_rank[lti]:
+            lt_rank = lTerm.rank
+
+         lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,n_coef)
+         lgdetDs.append(lgdetD)
+         bsbs.append(bsb)
+
+      lam_grad = [grad_lambda(lgdetDs[lti],Bs[lti],bsbs[lti],scale) for lti in range(len(penalties))]
+      lam_grad = np.array(lam_grad).reshape(-1,1) 
+      check = lam_grad.T @ lam_delta
+
+      if check[0,0] < 0 and control_lambda: # because of minimization in Wood (2017) they use a different check.
+         # Reset extension or cut the step taken in half
+         for lti,lTerm in enumerate(penalties):
+            if extend_lambda and extend_by > 1:
+               # I experimented with just iteratively reducing the step-size but it just takes too many
+               # wasted iterations then. Thus, I now just reset the extension factor below. It can then build up again
+               # if needed.
+               lTerm.lam -= lam_delta[lti][0]
+               lam_delta[lti] /= extend_by
+               lTerm.lam += lam_delta[lti][0]
+            else: # If the step size extension is already at the minimum, fall back to the strategy by Wood (2017) to just half the step
+               lam_delta[lti] = lam_delta[lti]/2
+               lTerm.lam -= lam_delta[lti][0]
+
+         if extend_lambda and extend_by > 1:
+            extend_by = 1
+      else:
+         if extend_lambda and lam_checks == 0 and extend_by < 2 and o_iter > 0 and dev_check: # Try longer step next time.
+            extend_by += 0.5
+
+         # Accept the step and propose a new one as well!
+         lam_accepted = True
+         lam_delta = []
+         for lti,(lGrad,lTerm) in enumerate(zip(lam_grad,penalties)):
+            
+            if np.abs(lGrad[0]) >= 1e-8*np.sum(np.abs(lam_grad)) or exclude_lambda == False:
+
+               dLam = step_fellner_schall_sparse(lgdetDs[lti],Bs[lti],bsbs[lti],lTerm.lam,scale)
+
+               if extend_lambda:
+                  extension = lTerm.lam  + dLam*extend_by
+                  if extension < 1e7 and extension > 1e-7:
+                     dLam *= extend_by
+            else: # ReLikelihood is insensitive to further changes in this smoothing penalty, so set change to 0.
+               dLam = 0
+
+            lam_delta.append(dLam)
+
+         lam_delta = np.array(lam_delta).reshape(-1,1)
+
+      lam_checks += 1
+
+   return eta,mu,n_coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,S_emb
+
+def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
+                      maxiter=10,pinv="svd",conv_tol=1e-7,
+                      extend_lambda=True,control_lambda=True,
+                      exclude_lambda=False,
+                      progress_bar=False,n_c=10):
+   # Estimates a penalized Generalized additive mixed model, following the steps outlined in Wood (2017)
+   # "Generalized Additive Models for Gigadata"
+
+   n_c = min(mp.cpu_count(),n_c)
+   rowsX,colsX = X.shape
+   coef = None
+   n_coef = None
+   extend_by = 1 # Extension factor for lambda update for the Fellner Schall method by Wood & Fasiolo (2016)
+
+   # Additive mixed model can simply be fit on y and X
+   # Generalized mixed model needs to be fit on weighted X and pseudo-dat
+   # but the same routine can be used (Wood, 2017) so both should end
+   # up in the same variables passed down:
+   yb = y
+   Xb = X
+
+   # mu and eta (start estimates in case the family is not Gaussian)
+   mu = mu_init
+   eta = mu
+
+   if isinstance(family,Gaussian) == False:
+      eta = family.link.f(mu)
+
+   # Compute starting estimates
+   dev,pen_dev,eta,mu,coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,S_emb = init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
+                                                                                                     family,col_S,penalties,
+                                                                                                     pinv,n_c,None)
+   
    # Loop to optimize smoothing parameter (see Wood, 2017)
-   converged = False
-   o_iter = 0
-   while o_iter < maxiter and not converged:
+   iterator = range(maxiter)
+   if progress_bar:
+      iterator = tqdm(iterator,desc="Fitting",leave=True)
+
+   for o_iter in iterator:
 
       # We need the previous deviance and penalized deviance
       # for step control and convergence control respectively
@@ -398,39 +657,18 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
             c_dev_prev += coef.T @ S_emb @ coef
 
          # Perform step-length control for the coefficients (Step 3 in Wood, 2017)
-         corrections = 0
-         while pen_dev > c_dev_prev:
-            # Newton step did not improve deviance - so correction
-            # is necessary.
-
-            if corrections > 30:
-               # If we could not find a better coefficient set simply accept
-               # previous coefficient
-               n_coef = coef[:]
-         
-            n_coef = (coef + n_coef)/2
-
-            # Update mu & eta for correction
-            eta = (X @ n_coef).reshape(-1,1)
-            mu = eta
-
-            if isinstance(family,Gaussian) == False:
-               mu = family.link.fi(eta)
-            
-            # Update deviance
-            dev = family.deviance(y,mu)
-
-            # And penalized deviance term
-            if len(penalties) > 0:
-               pen_dev = dev + n_coef.T @ S_emb @ n_coef
-            corrections += 1
-         
-         # Collect accepted coefficient
-         coef = n_coef[:]
+         dev,pen_dev,mu,eta,coef = correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,len(penalties),S_emb,None,n_c)
 
          # Test for convergence (Step 2 in Wood, 2017)
-         if abs(pen_dev - prev_pen_dev) < conv_tol*pen_dev:
-            converged = True
+         dev_diff = abs(pen_dev - prev_pen_dev)
+
+         if progress_bar:
+            iterator.set_description_str(desc="Fitting - Conv.: " + "{:.2e}".format(dev_diff - conv_tol*pen_dev), refresh=True)
+            
+         if dev_diff < conv_tol*pen_dev:
+            if progress_bar:
+               iterator.set_description_str(desc="Converged!", refresh=True)
+               iterator.close()
             break
 
       # Update pseudo-dat weights for next coefficient step
@@ -444,62 +682,16 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
             lTerm.lam += lam_delta[lti][0]
             #print(lTerm.lam,lam_delta[lti][0])
 
-         lam_accepted = False
-         lam_checks = 0
-         while not lam_accepted:
+         # Now check step length and compute lambda + coef update.
+         dev_check = None
+         if o_iter > 0:
+            dev_check = dev_diff < 1e-3*pen_dev
 
-            # Re-compute S_emb and S_pinv
-            S_emb,S_pinv = compute_S_emb_pinv_det(col_S,penalties,pinv)
-
-            # Update coefficients
-            eta,mu,n_coef,\
-            InvCholXXS,\
-            total_edf,\
-            term_edfs,\
-            Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
-                                                  X,Xb,family,S_emb,penalties)
-            
-            # Compute gradient of REML with respect to lambda
-            # to check if step size needs to be reduced.
-            lam_grad = [grad_lambda(S_pinv,penalties[lti].S_J_emb,Bs[lti],n_coef,scale) for lti in range(len(penalties))]
-            lam_grad = np.array(lam_grad).reshape(-1,1) 
-            check = lam_grad.T @ lam_delta
-
-            if check[0,0] < 0 and control_lambda: # because of minimization in Wood (2017) they use a different check.
-               # Reset extension or cut the step taken in half
-               for lti,lTerm in enumerate(penalties):
-                  if extend_lambda and extend_by > 1:
-                     # I experimented with just iteratively reducing the step-size but it just takes too many
-                     # wasted iterations then. Thus, I now just reset the extension factor below. It can then build up again
-                     # if needed.
-                     lTerm.lam -= lam_delta[lti][0]
-                     lam_delta[lti] /= extend_by
-                     lTerm.lam += lam_delta[lti][0]
-                  else: # If the step size extension is already at the minimum, fall back to the strategy by Wood (2017) to just half the step
-                     lam_delta[lti] = lam_delta[lti]/2
-                     lTerm.lam -= lam_delta[lti][0]
-
-               if extend_lambda and extend_by > 1:
-                  extend_by = 1
-            else:
-               if extend_lambda and lam_checks == 0: # Try longer step next time.
-                  extend_by += 0.5
-
-               # Accept the step and propose a new one as well!
-               lam_accepted = True
-               lam_delta = []
-               for lti,lTerm in enumerate(penalties):
-                  dLam = step_fellner_schall_sparse(S_pinv,lTerm.S_J_emb,Bs[lti],n_coef,lTerm.lam,scale)
-
-                  if extend_lambda:
-                     extension = lTerm.lam  + dLam*extend_by
-                     if extension < 1e7 and extension > 1e-7:
-                        dLam *= extend_by
-                  lam_delta.append(dLam)
-
-               lam_delta = np.array(lam_delta).reshape(-1,1)
-
-            lam_checks += 1
+         eta,mu,n_coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,S_emb = correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
+                                                                                                                           family,col_S,S_emb,penalties,
+                                                                                                                           pinv,lam_delta,extend_by,o_iter,
+                                                                                                                           dev_check,n_c,control_lambda,
+                                                                                                                           extend_lambda,exclude_lambda,None)
       
       else:
          # If there are no penalties simply perform a newton step
@@ -508,11 +700,9 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
          InvCholXXS,\
          total_edf,\
          term_edfs,\
-         Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
-                                               X,Xb,family,S_emb,penalties)
-
-      # Update number of iterations completed
-      o_iter += 1
+         _,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
+                                              X,Xb,family,S_emb,
+                                              penalties,n_c,None)
 
    # Final penalty
    if len(penalties) > 0:
@@ -523,5 +713,315 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    # Final term edf
    if not term_edfs is None:
       term_edfs = calculate_term_edf(penalties,term_edfs)
+
+   return coef,eta,wres,scale,InvCholXXS,total_edf,term_edfs,penalty
+
+################################################ Iterative GAMM building code ################################################
+
+def read_mmat(should_cache,cache_dir,file,fi,terms,has_intercept,has_scale_split,
+              ltx,irstx,stx,rtx,var_types,var_map,var_mins,
+              var_maxs,factor_levels,cov_flat_file,cov,n_j,
+              state_est_flat,state_est):
+   """
+   Creates model matrix for that dataset. The model-matrix is either cached or not. If the former is the case,
+   the matrix is read in on subsequent calls to this function
+   """
+
+   target = file.split("/")[-1].split(".csv")[0] + f"_{fi}.npz"
+   
+   if should_cache == False:
+         mmat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
+                                       ltx,irstx,stx,rtx,var_types,var_map,var_mins,
+                                       var_maxs,factor_levels,cov_flat_file,cov,n_j,
+                                       state_est_flat,state_est)
+         
+   elif should_cache == True and target not in os.listdir(cache_dir):
+         mmat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
+                                       ltx,irstx,stx,rtx,var_types,var_map,var_mins,
+                                       var_maxs,factor_levels,cov_flat_file,cov,n_j,
+                                       state_est_flat,state_est)
+         
+         scp.sparse.save_npz(f"{cache_dir}/" + target,mmat)
+   else:
+         mmat = scp.sparse.load_npz(f"{cache_dir}/" + target)
+
+   return mmat
+
+def form_cross_prod_mp(should_cache,cache_dir,file,fi,y_flat,terms,has_intercept,has_scale_split,
+                       ltx,irstx,stx,rtx,var_types,var_map,var_mins,
+                       var_maxs,factor_levels,cov_flat_file,cov,n_j,
+                       state_est_flat,state_est):
+   
+   model_mat = read_mmat(should_cache,cache_dir,file,fi,terms,has_intercept,has_scale_split,
+                         ltx,irstx,stx,rtx,var_types,var_map,var_mins,
+                         var_maxs,factor_levels,cov_flat_file,cov,n_j,
+                         state_est_flat,state_est)
+   
+   Xy = model_mat.T @ y_flat
+   XX = (model_mat.T @ model_mat).tocsc()
+
+   return XX,Xy
+
+def read_mmat_cross(file,formula,nc):
+   """
+   Reads subset of data and creates cross-product of model matrix for that dataset.
+   """
+
+   terms = formula.get_terms()
+   has_intercept = formula.has_intercept()
+   has_scale_split = False
+   ltx = formula.get_linear_term_idx()
+   irstx = []
+   stx = formula.get_smooth_term_idx()
+   rtx = formula.get_random_term_idx()
+   var_types = formula.get_var_types()
+   var_map = formula.get_var_map()
+   var_mins = formula.get_var_mins()
+   var_maxs = formula.get_var_maxs()
+   factor_levels = formula.get_factor_levels()
+
+   for sti in stx:
+      if terms[sti].should_rp:
+         for rpi in range(len(terms[sti].RP)):
+            # Don't need to pass those down to the processes.
+            terms[sti].RP[rpi].X = None
+            terms[sti].RP[rpi].cov = None
+
+   cov = None
+   n_j = None
+   state_est_flat = None
+   state_est = None
+
+   # Read file
+   file_dat = pd.read_csv(file)
+
+   # Encode data in this file
+   y_flat_file,cov_flat_file,NAs_flat_file,_,_,_,_ = formula.encode_data(file_dat)
+   cov_flat_file = cov_flat_file[NAs_flat_file,:]
+   y_flat_file = y_flat_file[NAs_flat_file]
+
+   # Parallelize over sub-sets of this file
+   rows,_ = cov_flat_file.shape
+   split = np.arange(0,rows,max(1,MP_SPLIT_SIZE),dtype=int)[1:]
+   cov_flat_files = np.vsplit(cov_flat_file,split)
+   y_flat_files = np.split(y_flat_file,split)
+   subsets = [fi for fi in range(len(split) + 1)]
+
+   with mp.Pool(processes=nc) as pool:
+      # Build the model matrix with all information from the formula - but only for sub-set of rows in this file
+      XX,Xy = zip(*pool.starmap(form_cross_prod_mp,zip(repeat(SHOULD_CACHE),repeat(CACHE_DIR),repeat(file),subsets,y_flat_files,repeat(terms),repeat(has_intercept),repeat(has_scale_split),
+                                                       repeat(ltx),repeat(irstx),repeat(stx),repeat(rtx),
+                                                       repeat(var_types),repeat(var_map),
+                                                       repeat(var_mins),repeat(var_maxs),repeat(factor_levels),
+                                                       cov_flat_files,repeat(cov),repeat(n_j),
+                                                       repeat(state_est_flat),repeat(state_est))))
+   
+   XX = reduce(lambda xx1,xx2: xx1+xx2,XX)
+   Xy = reduce(lambda xy1,xy2: xy1+xy2,Xy)
+   return XX,Xy,len(y_flat_file)
+
+def form_eta_mp(should_cache,cache_dir,file,fi,coef,terms,has_intercept,has_scale_split,
+                ltx,irstx,stx,rtx,var_types,var_map,var_mins,
+                var_maxs,factor_levels,cov_flat_file,cov,n_j,
+                state_est_flat,state_est):
+   
+   model_mat = read_mmat(should_cache,cache_dir,file,fi,terms,has_intercept,has_scale_split,
+                         ltx,irstx,stx,rtx,var_types,var_map,var_mins,
+                         var_maxs,factor_levels,cov_flat_file,cov,n_j,
+                         state_est_flat,state_est)
+   
+   eta_file = (model_mat @ coef).reshape(-1,1)
+   return eta_file
+
+def read_eta(file,formula,coef,nc):
+   """
+   Reads subset of data and creates model matrix for that dataset.
+   """
+
+   terms = formula.get_terms()
+   has_intercept = formula.has_intercept()
+   has_scale_split = False
+   ltx = formula.get_linear_term_idx()
+   irstx = []
+   stx = formula.get_smooth_term_idx()
+   rtx = formula.get_random_term_idx()
+   var_types = formula.get_var_types()
+   var_map = formula.get_var_map()
+   var_mins = formula.get_var_mins()
+   var_maxs = formula.get_var_maxs()
+   factor_levels = formula.get_factor_levels()
+
+   for sti in stx:
+      if terms[sti].should_rp:
+         for rpi in range(len(terms[sti].RP)):
+            # Don't need to pass those down to the processes.
+            terms[sti].RP[rpi].X = None
+            terms[sti].RP[rpi].cov = None
+
+   cov = None
+   n_j = None
+   state_est_flat = None
+   state_est = None
+
+   # Read file
+   file_dat = pd.read_csv(file)
+
+   # Encode data in this file
+   _,cov_flat_file,NAs_flat_file,_,_,_,_ = formula.encode_data(file_dat)
+   cov_flat_file = cov_flat_file[NAs_flat_file,:]
+
+   # Parallelize over sub-sets of this file
+   rows,_ = cov_flat_file.shape
+   split = np.arange(0,rows,max(1,MP_SPLIT_SIZE),dtype=int)[1:]
+   cov_flat_files = np.vsplit(cov_flat_file,split)
+   subsets = [fi for fi in range(len(split) + 1)]
+
+   with mp.Pool(processes=nc) as pool:
+      # Build eta with all information from the formula - but only for sub-set of rows in this file
+      etas = pool.starmap(form_eta_mp,zip(repeat(SHOULD_CACHE),repeat(CACHE_DIR),repeat(file),subsets,repeat(coef),repeat(terms),repeat(has_intercept),repeat(has_scale_split),
+                                         repeat(ltx),repeat(irstx),repeat(stx),repeat(rtx),
+                                         repeat(var_types),repeat(var_map),
+                                         repeat(var_mins),repeat(var_maxs),repeat(factor_levels),
+                                         cov_flat_files,repeat(cov),repeat(n_j),
+                                         repeat(state_est_flat),repeat(state_est)))
+
+   eta = []
+   for eta_file in etas:
+      eta.extend(eta_file)
+
+   return eta
+
+def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
+                       maxiter=10,pinv="svd",conv_tol=1e-7,
+                       extend_lambda=True,control_lambda=True,
+                       exclude_lambda=False,
+                       progress_bar=False,n_c=10):
+   # Estimates a penalized additive mixed model, following the steps outlined in Wood (2017)
+   # "Generalized Additive Models for Gigadata" but builds X.T @ X, and X.T @ y iteratively - and only once.
+   setup_cache(CACHE_DIR,SHOULD_CACHE)
+   n_c = min(mp.cpu_count(),n_c)
+
+   y_flat = []
+   rowsX = 0
+
+   iterator = formula.file_paths
+   if progress_bar:
+      iterator = tqdm(iterator,desc="Accumulating X.T @ X",leave=True)
+
+   for fi,file in enumerate(iterator):
+      # Read file
+      file_dat = pd.read_csv(file)
+
+      # Encode data in this file
+      y_flat_file,_,NAs_flat_file,_,_,_,_ = formula.encode_data(file_dat)
+      y_flat.extend(y_flat_file[NAs_flat_file])
+
+      # Build the model matrix cross-products with all information from the formula - but only for sub-set of rows in this file
+      XX0,Xy0,rowsX0 = read_mmat_cross(file,formula,n_c)
+      rowsX += rowsX0
+      # Compute cross-product
+      if fi == 0:
+         XX = XX0
+         Xy = Xy0
+      else:
+         XX += XX0
+         Xy += Xy0
+      
+   colsX = XX.shape[1]
+   coef = None
+   n_coef = None
+   extend_by = 1 # Extension factor for lambda update for the Fellner Schall method by Wood & Fasiolo (2016)
+
+   # mu and eta (start estimates in case the family is not Gaussian)
+   y = np.array(y_flat)
+   mu = np.array(y_flat)
+   eta = mu
+
+   # Compute starting estimates
+   dev,pen_dev,eta,mu,coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,S_emb = init_step_gam(y,Xy,mu,eta,rowsX,colsX,None,XX,
+                                                                                                     family,col_S,penalties,
+                                                                                                     pinv,n_c,formula)
+   
+   # Loop to optimize smoothing parameter (see Wood, 2017)
+   iterator = range(maxiter)
+   if progress_bar:
+      iterator = tqdm(iterator,desc="Fitting",leave=True)
+
+   for o_iter in iterator:
+
+      # We need the previous deviance and penalized deviance
+      # for step control and convergence control respectively
+      prev_dev = dev
+      prev_pen_dev = pen_dev
+      
+      if o_iter > 0:
+
+         # Obtain deviance and penalized deviance terms
+         # under current lambda for proposed coef (n_coef)
+         # and current coef.
+         dev = family.deviance(y,mu) 
+         pen_dev = dev
+         c_dev_prev = prev_dev
+
+         if len(penalties) > 0:
+            pen_dev += n_coef.T @ S_emb @ n_coef
+            c_dev_prev += coef.T @ S_emb @ coef
+
+         # Perform step-length control for the coefficients (Step 3 in Wood, 2017)
+         dev,pen_dev,mu,eta,coef = correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,None,len(penalties),S_emb,formula,n_c)
+
+         # Test for convergence (Step 2 in Wood, 2017)
+         dev_diff = abs(pen_dev - prev_pen_dev)
+
+         if progress_bar:
+            iterator.set_description_str(desc="Fitting - Conv.: " + "{:.2e}".format(dev_diff - conv_tol*pen_dev), refresh=True)
+            
+         if dev_diff < conv_tol*pen_dev:
+            if progress_bar:
+               iterator.set_description_str(desc="Converged!", refresh=True)
+               iterator.close()
+            break
+         
+      # Step length control for proposed lambda change
+      if len(penalties) > 0: 
+         
+         # Test the lambda update
+         for lti,lTerm in enumerate(penalties):
+            lTerm.lam += lam_delta[lti][0]
+            #print(lTerm.lam,lam_delta[lti][0])
+
+         # Now check step length and compute lambda + coef update.
+         dev_check = None
+         if o_iter > 0:
+            dev_check = dev_diff < 1e-3*pen_dev
+
+         eta,mu,n_coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,S_emb = correct_lambda_step(y,Xy,None,None,rowsX,colsX,None,XX,
+                                                                                                                           family,col_S,S_emb,penalties,
+                                                                                                                           pinv,lam_delta,extend_by,o_iter,
+                                                                                                                           dev_check,n_c,control_lambda,
+                                                                                                                           extend_lambda,exclude_lambda,
+                                                                                                                           formula)
+      
+      else:
+         # If there are no penalties simply perform a newton step
+         # for the coefficients only
+         eta,mu,n_coef,\
+         InvCholXXS,\
+         total_edf,\
+         term_edfs,\
+         _,scale,wres = update_coef_and_scale(y,Xy,None,None,rowsX,colsX,
+                                              None,XX,family,S_emb,penalties,n_c,formula)
+
+   # Final penalty
+   if len(penalties) > 0:
+      penalty = coef.T @ S_emb @ coef
+   else:
+      penalty = 0
+
+   # Final term edf
+   if not term_edfs is None:
+      term_edfs = calculate_term_edf(penalties,term_edfs)
+
+   clear_cache(CACHE_DIR,SHOULD_CACHE)
 
    return coef,eta,wres,scale,InvCholXXS,total_edf,term_edfs,penalty

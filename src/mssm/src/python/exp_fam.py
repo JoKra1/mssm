@@ -42,6 +42,14 @@ class Logit(Link):
       return 1 / ((1 - mu) * mu)
 
 
+def est_scale(res,rows_X,total_edf):
+   # Scale estimate from Wood & Fasiolo (2016)
+   resDot = res.T.dot(res)[0,0]
+
+   sigma = resDot / (rows_X - total_edf)
+   
+   return sigma
+
 class Family:
    # Base class to be implemented by Exp. family member
    def __init__(self,link:Link or None,twopar:bool,scale:float=None) -> None:
@@ -107,12 +115,6 @@ class Binomial(Family):
 class Gaussian(Family):
    def __init__(self, link: Link=None, scale: float = None) -> None:
       super().__init__(link, True, scale)
-
-   def est_scale(self,res,rows_X,total_edf):
-      # Sigma estimate from Wood & Fasiolo (2016)
-      resDot = res.T.dot(res)[0,0]
-      sigma = resDot / (rows_X - total_edf)
-      return sigma
 
    def V(self,mu):
       # Faraway (2016)
