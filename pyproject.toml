@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 before-test = "ls"
 test-skip = "*-win32 pp* *i686"
 test-requires = ["pytest", "pytest-cov"]
-test-command = "pytest {project}/tests --cov={project}  --cov-report=html --cov-report=xml"
+test-command = "pytest {project}/tests --cov={project}"
 
 [project]
 dependencies=["numpy >= 1.24.1",
