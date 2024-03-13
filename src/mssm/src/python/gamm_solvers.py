@@ -514,10 +514,10 @@ def correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,n_pen
 
 def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
                         family,col_S,S_emb,penalties,
-                        pinv,lam_delta,extend_by,o_iter,
-                        dev_check,n_c,control_lambda,
-                        extend_lambda,exclude_lambda,
-                        formula):
+                        was_extended,pinv,lam_delta,
+                        extend_by,o_iter,dev_check,n_c,
+                        control_lambda,extend_lambda,
+                        exclude_lambda,formula):
    # Propose & perform step-length control for the lambda parameters via the Fellner Schall method
    # by Wood & Fasiolo (2016)
    lam_accepted = False
@@ -561,9 +561,16 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
                # I experimented with just iteratively reducing the step-size but it just takes too many
                # wasted iterations then. Thus, I now just reset the extension factor below. It can then build up again
                # if needed.
-               lTerm.lam -= lam_delta[lti][0]
-               lam_delta[lti] /= extend_by
-               lTerm.lam += lam_delta[lti][0]
+
+               if was_extended[lti]:
+                  # Make sure correction by extend_by is only applied if an extension was actually used.
+                  lTerm.lam -= lam_delta[lti][0]
+                  lam_delta[lti] /= extend_by
+                  lTerm.lam += lam_delta[lti][0]
+               else: # fall back to the strategy by Wood (2017) to just half the step
+                  lam_delta[lti] = lam_delta[lti]/2
+                  lTerm.lam -= lam_delta[lti][0]
+
             else: # If the step size extension is already at the minimum, fall back to the strategy by Wood (2017) to just half the step
                lam_delta[lti] = lam_delta[lti]/2
                lTerm.lam -= lam_delta[lti][0]
@@ -587,8 +594,12 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
                   extension = lTerm.lam  + dLam*extend_by
                   if extension < 1e7 and extension > 1e-7:
                      dLam *= extend_by
+                     was_extended[lti] = True
+                  else:
+                     was_extended[lti] = False
             else: # ReLikelihood is insensitive to further changes in this smoothing penalty, so set change to 0.
                dLam = 0
+               was_extended[lti] = False
 
             lam_delta.append(dLam)
 
@@ -596,7 +607,7 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
 
       lam_checks += 1
 
-   return eta,mu,n_coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,S_emb
+   return eta,mu,n_coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb
 
 def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
                       maxiter=10,pinv="svd",conv_tol=1e-7,
@@ -611,6 +622,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    coef = None
    n_coef = None
    extend_by = 1 # Extension factor for lambda update for the Fellner Schall method by Wood & Fasiolo (2016)
+   was_extended = [False for _ in enumerate(penalties)]
 
    # Additive mixed model can simply be fit on y and X
    # Generalized mixed model needs to be fit on weighted X and pseudo-dat
@@ -687,11 +699,12 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
          if o_iter > 0:
             dev_check = dev_diff < 1e-3*pen_dev
 
-         eta,mu,n_coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,S_emb = correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
-                                                                                                                           family,col_S,S_emb,penalties,
-                                                                                                                           pinv,lam_delta,extend_by,o_iter,
-                                                                                                                           dev_check,n_c,control_lambda,
-                                                                                                                           extend_lambda,exclude_lambda,None)
+         eta,mu,n_coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb = correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
+                                                                                                                                        family,col_S,S_emb,penalties,
+                                                                                                                                        was_extended,pinv,lam_delta,
+                                                                                                                                        extend_by,o_iter,dev_check,n_c,
+                                                                                                                                        control_lambda,extend_lambda,
+                                                                                                                                        exclude_lambda,None)
       
       else:
          # If there are no penalties simply perform a newton step
@@ -931,6 +944,7 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
    coef = None
    n_coef = None
    extend_by = 1 # Extension factor for lambda update for the Fellner Schall method by Wood & Fasiolo (2016)
+   was_extended = [False for _ in enumerate(penalties)]
 
    # mu and eta (start estimates in case the family is not Gaussian)
    y = np.array(y_flat)
@@ -995,12 +1009,12 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
          if o_iter > 0:
             dev_check = dev_diff < 1e-3*pen_dev
 
-         eta,mu,n_coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,S_emb = correct_lambda_step(y,Xy,None,None,rowsX,colsX,None,XX,
-                                                                                                                           family,col_S,S_emb,penalties,
-                                                                                                                           pinv,lam_delta,extend_by,o_iter,
-                                                                                                                           dev_check,n_c,control_lambda,
-                                                                                                                           extend_lambda,exclude_lambda,
-                                                                                                                           formula)
+         eta,mu,n_coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb = correct_lambda_step(y,Xy,None,None,rowsX,colsX,None,XX,
+                                                                                                                                       family,col_S,S_emb,penalties,
+                                                                                                                                       was_extended,pinv,lam_delta,
+                                                                                                                                       extend_by,o_iter,dev_check,
+                                                                                                                                       n_c,control_lambda,extend_lambda,
+                                                                                                                                       exclude_lambda,formula)
       
       else:
          # If there are no penalties simply perform a newton step
