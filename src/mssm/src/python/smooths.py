@@ -62,7 +62,15 @@ def B_spline_basis(i, cov, state_est, nk, drop_outer_k=False, convolve=False, mi
 
   if not min_c is None:
     xl = min_c
-
+  
+  if convolve:
+    # For the IR GAMM, the ***outer***-most knots should be close to min_c and max_c.
+    # Hence, we need to adjust xl and xr by (at least) half of the extension subtracted/added
+    # to xl/xr in line 86 below.
+    ext = (xr-xl) / (nk - deg) * deg / 2
+    xl += ext
+    xr -= ext
+    
   # ndx is equal to n in Eilers & Marx (2011)
   # So there will be n-1 knots (without expansion)
   # n + 1 + 2*deg knots with expansion
