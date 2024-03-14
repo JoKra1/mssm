@@ -973,7 +973,7 @@ class sMsIRGAMM(sMsGAMM):
         state_durs_new, states_new, llks = zip(*pool.starmap(se_step_sms_dc_gamm,args))
         return list(state_durs_new),list(states_new), list(llks)
     
-    def fit(self,maxiter_outer=100,maxiter_inner=30,conv_tol=1e-6,extend_lambda=True,control_lambda=True,exclude_lambda=True,t0=1,r=0.925,schedule="anneal",n_prop=None,prop_sd=2,progress_bar=True,mmat_MP=True):
+    def fit(self,maxiter_outer=100,maxiter_inner=30,conv_tol=1e-6,extend_lambda=True,control_lambda=True,exclude_lambda=True,t0=1,r=0.925,schedule="anneal",n_prop=None,prop_sd=2,progress_bar=True,mmat_MP=True,init_dur_state=None):
         # Performs something like Stochastic Expectation maiximization (e.g., Nielsen, 2002) see the sem.py file for
         # more details.
         
@@ -983,8 +983,12 @@ class sMsIRGAMM(sMsGAMM):
         penalties = self.formula.penalties
 
         # Propose an initial set of states and state_durs for every series.
-        with mp.Pool(processes=self.cpus) as pool:
-            durs,states = self.__init_all_states(pool,self.end_points)
+        if init_dur_state is None:
+            with mp.Pool(processes=self.cpus) as pool:
+                durs,states = self.__init_all_states(pool,self.end_points)
+        else:
+            durs = init_dur_state["durs"]
+            states = init_dur_state["states"]
 
         # Model matrix parameters that remain constant are specified.
         # And then we need to build the model matrix for the start estimates to get start coefficients.
@@ -1202,7 +1206,7 @@ class sMsIRGAMM(sMsGAMM):
 
         return llk_hist,states_flat,states
 
-    def predict(self, states, use_terms, n_dat,alpha=0.05,ci=False):
+    def predict(self, states, use_terms, n_dat,alpha=0.05,ci=False,mmat_MP=True):
         # Basically GAMM.predict() but with states.
         var_map = self.formula.get_var_map()
         var_keys = var_map.keys()
@@ -1231,11 +1235,19 @@ class sMsIRGAMM(sMsGAMM):
         state_est_flat = None
 
         # So we pass the desired terms to the use_only argument
-        predi_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
-                                                     ltx,irstx,stx,rtx,var_types,var_map,
-                                                     var_mins,var_maxs,factor_levels,
-                                                     pred_cov_flat,pred_cov,n_j,state_est_flat,
-                                                     [states],use_only=use_terms)
+        if mmat_MP:
+            with mp.Pool(processes=self.cpus) as pool:
+                predi_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
+                                                            ltx,irstx,stx,rtx,var_types,var_map,
+                                                            var_mins,var_maxs,factor_levels,
+                                                            pred_cov_flat,pred_cov,n_j,state_est_flat,
+                                                            states,use_only=use_terms,pool=pool)
+        else:
+            predi_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
+                                                            ltx,irstx,stx,rtx,var_types,var_map,
+                                                            var_mins,var_maxs,factor_levels,
+                                                            pred_cov_flat,pred_cov,n_j,state_est_flat,
+                                                            states,use_only=use_terms,pool=None)
         
         # Now we calculate the prediction
         pred = predi_mat @ self.__coef
