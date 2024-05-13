@@ -4,7 +4,7 @@ import os
 
 class Test_GAM:
 
-    dat = pd.read_csv(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'tutorials/data/GAMM/sim_dat.csv'))
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
     
     # mssm requires that the data-type for variables used as factors is 'O'=object
     dat = dat.astype({'series': 'O',
@@ -37,7 +37,7 @@ class Test_GAM:
 
 class Test_GAM_TE:
 
-    dat = pd.read_csv(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'tutorials/data/GAMM/sim_dat.csv'))
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
     
     # mssm requires that the data-type for variables used as factors is 'O'=object
     dat = dat.astype({'series': 'O',
@@ -77,7 +77,7 @@ class Test_GAM_TE:
 
 class Test_GAM_TE_BINARY:
 
-    dat = pd.read_csv(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'tutorials/data/GAMM/sim_dat.csv'))
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
     
     # mssm requires that the data-type for variables used as factors is 'O'=object
     dat = dat.astype({'series': 'O',
@@ -116,7 +116,7 @@ class Test_GAM_TE_BINARY:
 
 class Test_GAMM:
 
-    dat = pd.read_csv(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'tutorials/data/GAMM/sim_dat.csv'))
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
 
     # mssm requires that the data-type for variables used as factors is 'O'=object
     dat = dat.astype({'series': 'O',
@@ -158,7 +158,7 @@ class Test_GAMM:
 
 class Test_BIG_GAMM:
 
-    file_paths = [os.path.join(os.path.dirname(os.path.dirname(__file__)), f'tutorials/data/GAMM/sim_dat_cond_{cond}.csv') for cond in ["a","b"]]
+    file_paths = [f'https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat_cond_{cond}.csv' for cond in ["a","b"]]
 
     formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
                       terms=[i(), # The intercept, a
