@@ -213,7 +213,7 @@ class GAMM(MSSM):
                 
     ##################################### Fitting #####################################
     
-    def fit(self,maxiter=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=True,restart=False,progress_bar=True,n_cores=10):
+    def fit(self,maxiter=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=True,extension_method_lam = "nesterov",restart=False,progress_bar=True,n_cores=10):
         """
         Fit the specified model.
 
@@ -277,7 +277,7 @@ class GAMM(MSSM):
                                                                              model_mat,penalties,self.formula.n_coef,
                                                                              self.family,maxiter,"svd",
                                                                              conv_tol,extend_lambda,control_lambda,
-                                                                             exclude_lambda,progress_bar,n_cores)
+                                                                             exclude_lambda,extension_method_lam,progress_bar,n_cores)
         
         else:
             # Iteratively build model matrix.
@@ -288,7 +288,7 @@ class GAMM(MSSM):
             coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse2(self.formula,penalties,self.formula.n_coef,
                                                                               self.family,maxiter,"svd",
                                                                               conv_tol,extend_lambda,control_lambda,
-                                                                              exclude_lambda,progress_bar,n_cores)
+                                                                              exclude_lambda,extension_method_lam,progress_bar,n_cores)
         
         self.__coef = coef
         self.__scale = scale # ToDo: scale name is used in another context for more general mssm..
@@ -720,7 +720,7 @@ class sMsGAMM(MSSM):
                                                                                     model_mat,penalties[j],self.formula.n_coef,
                                                                                     self.family,maxiter_inner,"svd",
                                                                                     conv_tol,extend_lambda,control_lambda,
-                                                                                    exclude_lambda,False,self.cpus)
+                                                                                    exclude_lambda,"nesterov",False,self.cpus)
                     
                     
                     
@@ -1044,7 +1044,7 @@ class sMsIRGAMM(sMsGAMM):
                                                                         model_mat_full,penalties,self.formula.n_coef,
                                                                         self.family,maxiter_inner,"svd",
                                                                         conv_tol,extend_lambda,control_lambda,
-                                                                        exclude_lambda,False,self.cpus)
+                                                                        exclude_lambda,"nesterov",False,self.cpus)
 
         # For state proposals we can utilize a temparature schedule. See sMsGamm.fit().
         if schedule == "anneal":
@@ -1145,7 +1145,7 @@ class sMsIRGAMM(sMsGAMM):
                                                                              model_mat_full,penalties,self.formula.n_coef,
                                                                              self.family,maxiter_inner,"svd",
                                                                              conv_tol,extend_lambda,control_lambda,
-                                                                             exclude_lambda,False,self.cpus)
+                                                                             exclude_lambda,"nesterov",False,self.cpus)
 
             # Next update all sojourn time distribution parameters
 

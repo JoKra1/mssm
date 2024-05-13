@@ -20,7 +20,7 @@ class Test_GAM:
         
     model = GAMM(formula,Gaussian())
 
-    model.fit()
+    model.fit(extension_method_lam = "mult")
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 9.723
@@ -54,7 +54,7 @@ class Test_GAM_TE:
         
     model = GAMM(formula,Gaussian())
 
-    model.fit()
+    model.fit(extension_method_lam = "mult")
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=2) == 33.83
@@ -94,7 +94,7 @@ class Test_GAM_TE_BINARY:
         
     model = GAMM(formula,Gaussian())
 
-    model.fit()
+    model.fit(extension_method_lam = "mult")
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 29.884
@@ -136,7 +136,7 @@ class Test_GAMM:
         
     model = GAMM(formula,Gaussian())
 
-    model.fit()
+    model.fit(extension_method_lam = "mult")
 
     def test_GAMMedf(self):
         assert round(self.model.edf,ndigits=3) == 153.601
