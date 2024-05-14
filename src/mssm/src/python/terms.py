@@ -141,7 +141,7 @@ class f(GammTerm):
                 nk:int or list[int] = 9,
                 te: bool = False,
                 rp:int = 0,
-                constraint:penalties.ConstType=penalties.ConstType.DROP,
+                constraint:penalties.ConstType=penalties.ConstType.QR,
                 identifiable:bool=True,
                 basis:Callable=smooths.B_spline_basis,
                 basis_kwargs:dict={"convolve":False},
@@ -269,7 +269,7 @@ class fs(f):
                 nk: int = 9,
                 m: int = 1,
                 rp:int = 1,
-                constraint:penalties.ConstType=penalties.ConstType.DROP,
+                constraint:penalties.ConstType=penalties.ConstType.QR,
                 basis: Callable = smooths.B_spline_basis,
                 basis_kwargs: dict = {},
                 by_latent: bool = False):
