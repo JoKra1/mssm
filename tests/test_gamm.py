@@ -160,6 +160,8 @@ class Test_BIG_GAMM:
 
     file_paths = [f'https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat_cond_{cond}.csv' for cond in ["a","b"]]
 
+    codebook = {'cond':{'a': 0, 'b': 1}}
+
     formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
                       terms=[i(), # The intercept, a
                                l(["cond"]), # For cond='b'
@@ -169,7 +171,8 @@ class Test_BIG_GAMM:
                                fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
                         data=None, # No data frame!
                         file_paths=file_paths, # Just a list with paths to files.
-                        print_warn=False)
+                        print_warn=False,
+                        codebook=codebook)
         
     model = GAMM(formula,Gaussian())
 

@@ -746,6 +746,7 @@ class Formula():
                  series_id:str or None=None,
                  split_scale:bool=False,
                  n_j:int=3,
+                 codebook:dict or None=None,
                  print_warn=True,
                  file_paths = [],
                  file_loading_nc = 10,
@@ -844,7 +845,7 @@ class Formula():
                      vartype = read_dtype(var,self.file_paths[0],self.file_loading_kwargs)
 
                 # Store information for all variables once.
-                cvi = self.__encode_var(var,vartype,cvi)
+                cvi = self.__encode_var(var,vartype,cvi,codebook)
                 
                 # Smooth-term variables must all be continuous
                 if isinstance(term, f) or isinstance(term, irf):
@@ -874,7 +875,7 @@ class Formula():
                         raise KeyError(f"Data-type of By-variable '{t_by}' attributed to term {ti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'.")
                     
                      # Store information for by variables as well.
-                    cvi = self.__encode_var(t_by,'O',cvi)
+                    cvi = self.__encode_var(t_by,'O',cvi,codebook)
 
                     if isinstance(term, f) and not term.binary is None:
                         term.binary_level = self.__factor_codings[t_by][term.binary[1]]
@@ -891,7 +892,7 @@ class Formula():
                if data[pt_by].dtype in ['float64','int64']:
                   raise KeyError(f"Data-type of By-variable '{pt_by}' attributed to P-term {pti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'.")
                
-               cvi = self.__encode_var(pt_by,'O',cvi)
+               cvi = self.__encode_var(pt_by,'O',cvi,codebook)
             
         if self.__n_irf > 0:
            self.__has_irf = True
@@ -926,7 +927,7 @@ class Formula():
 
         #print(self.n_coef,len(self.coef_names))
    
-    def __encode_var(self,var,vartype,cvi):
+    def __encode_var(self,var,vartype,cvi,codebook):
       # Store information for all variables once.
       if not var in self.__var_to_cov:
          self.__var_to_cov[var] = cvi
@@ -958,8 +959,12 @@ class Formula():
             self.__factor_levels[var] = levels
             
             for ci,c in enumerate(levels):
-               self.__factor_codings[var][c] = ci
-               self.__coding_factors[var][ci] = c
+               if not codebook is None and var in codebook:
+                  self.__factor_codings[var][c] = codebook[var][c]
+                  self.__coding_factors[var][codebook[var][c]] = c
+               else:
+                  self.__factor_codings[var][c] = ci
+                  self.__coding_factors[var][ci] = c
 
          cvi += 1
 
