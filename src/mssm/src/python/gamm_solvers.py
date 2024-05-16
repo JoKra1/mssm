@@ -7,6 +7,7 @@ from .formula import build_sparse_matrix_from_formula,setup_cache,clear_cache,cp
 from tqdm import tqdm
 from functools import reduce
 from multiprocessing import managers,shared_memory
+import sys
 
 CACHE_DIR = './.db'
 SHOULD_CACHE = False
@@ -670,7 +671,7 @@ def extend_lambda_step(lti,lam,dLam,extend_by,was_extended, method):
    
       diff_lam = lam - extend_by["prev_lam"][lti]
       extend_by["prev_lam"][lti] = lam
-      acc = np.sign(dLam)*(dLam**2/abs(diff_lam))
+      acc = np.sign(dLam)*(dLam**2/max(sys.float_info.epsilon,abs(diff_lam)))
       extend_by["acc"][lti] = acc
 
       extension = lam + dLam + acc
