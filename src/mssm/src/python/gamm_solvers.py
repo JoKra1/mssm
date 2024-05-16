@@ -456,7 +456,7 @@ def update_scale_edf(y,z,eta,Wr,rowsX,colsX,InvCholXXSP,Pr,family,penalties):
    
    return wres,InvCholXXS,total_edf,term_edfs,Bs,scale
 
-def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,penalties,n_c,formula):
+def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,S_pinv,FS_use_rank,penalties,n_c,formula):
    # Solves the additive model for a given set of weights and penalty
    if formula is None:
       LP, Pr, coef, code = cpp_solve_coef(yb,Xb,S_emb)
@@ -466,6 +466,22 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,penalties,n_c,
 
    if code != 0:
       raise ArithmeticError(f"Solving for coef failed with code {code}. Model is likely unidentifiable.")
+   
+   # Given new coefficients compute lgdetDs and bsbs - needed for REML gradient and EFS step
+   lgdetDs = None
+   bsbs = None
+   if len(penalties) > 0:
+      lgdetDs = []
+      bsbs = []
+      for lti,lTerm in enumerate(penalties):
+
+         lt_rank = None
+         if FS_use_rank[lti]:
+            lt_rank = lTerm.rank
+
+         lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
+         lgdetDs.append(lgdetD)
+         bsbs.append(bsb)
    
    # Solve for inverse of Chol factor of XX+S
    InvCholXXSP = compute_Linv(LP,n_c)
@@ -487,7 +503,7 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,penalties,n_c,
 
    # Update scale parameter
    wres,InvCholXXS,total_edf,term_edfs,Bs,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,InvCholXXSP,Pr,family,penalties)
-   return eta,mu,coef,InvCholXXS,total_edf,term_edfs,Bs,scale,wres
+   return eta,mu,coef,InvCholXXS,lgdetDs,bsbs,total_edf,term_edfs,Bs,scale,wres
 
 def init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
                   family,col_S,penalties,
@@ -499,6 +515,8 @@ def init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
       S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(col_S,penalties,pinv)
    else:
       S_emb = scp.sparse.csc_array((colsX, colsX), dtype=np.float64)
+      S_pinv = None
+      FS_use_rank = None
 
    # Estimate coefficients for starting lambda
    # We just accept those here - no step control, since
@@ -511,11 +529,14 @@ def init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
    # Solve additive model
    eta,mu,coef,\
    InvCholXXS,\
+   lgdetDs,\
+   bsbs,\
    total_edf,\
    term_edfs,\
    Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
-                                         X,Xb,family,S_emb,
-                                         penalties,n_c,formula)
+                                         X,Xb,family,S_emb,S_pinv,
+                                         FS_use_rank,penalties,n_c,
+                                         formula)
    
    # Deviance under these starting coefficients
    # As well as penalized deviance
@@ -532,12 +553,7 @@ def init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
    if len(penalties) > 0:
       for lti,lTerm in enumerate(penalties):
 
-         lt_rank = None
-         if FS_use_rank[lti]:
-            lt_rank = lTerm.rank
-         
-         lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
-         dLam = step_fellner_schall_sparse(lgdetD,Bs[lti],bsb,lTerm.lam,scale)
+         dLam = step_fellner_schall_sparse(lgdetDs[lti],Bs[lti],bsbs[lti],lTerm.lam,scale)
          lam_delta.append(dLam)
 
       lam_delta = np.array(lam_delta).reshape(-1,1)
@@ -721,26 +737,17 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
       # Update coefficients
       eta,mu,n_coef,\
       InvCholXXS,\
+      lgdetDs,\
+      bsbs,\
       total_edf,\
       term_edfs,\
       Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
-                                             X,Xb,family,S_emb,
-                                             penalties,n_c,formula)
+                                             X,Xb,family,S_emb,S_pinv,
+                                             FS_use_rank,penalties,n_c,
+                                             formula)
       
       # Compute gradient of REML with respect to lambda
       # to check if step size needs to be reduced.
-      lgdetDs = []
-      bsbs = []
-      for lti,lTerm in enumerate(penalties):
-
-         lt_rank = None
-         if FS_use_rank[lti]:
-            lt_rank = lTerm.rank
-
-         lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,n_coef)
-         lgdetDs.append(lgdetD)
-         bsbs.append(bsb)
-
       lam_grad = [grad_lambda(lgdetDs[lti],Bs[lti],bsbs[lti],scale) for lti in range(len(penalties))]
       lam_grad = np.array(lam_grad).reshape(-1,1) 
       check = lam_grad.T @ lam_delta
@@ -897,10 +904,12 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
          # for the coefficients only
          eta,mu,n_coef,\
          InvCholXXS,\
+         _,\
+         _,\
          total_edf,\
          term_edfs,\
          _,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
-                                              X,Xb,family,S_emb,
+                                              X,Xb,family,S_emb,None,None,
                                               penalties,n_c,None)
 
    # Final penalty
@@ -1212,10 +1221,13 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
          # for the coefficients only
          eta,mu,n_coef,\
          InvCholXXS,\
+         _,\
+         _,\
          total_edf,\
          term_edfs,\
          _,scale,wres = update_coef_and_scale(y,Xy,None,None,rowsX,colsX,
-                                              None,XX,family,S_emb,penalties,n_c,formula)
+                                              None,XX,family,S_emb,None,None,
+                                              penalties,n_c,formula)
 
    # Final penalty
    if len(penalties) > 0:
