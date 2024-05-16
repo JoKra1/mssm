@@ -943,6 +943,7 @@ class Formula():
               # Clean up
               self.cov_flat = None
               self.sid = None
+              self.series_id = None
 
         # Absorb any constraints for model terms
         if len(self.file_paths) == 0:

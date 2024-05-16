@@ -277,7 +277,9 @@ class GAMM(MSSM):
                                                                              model_mat,penalties,self.formula.n_coef,
                                                                              self.family,maxiter,"svd",
                                                                              conv_tol,extend_lambda,control_lambda,
-                                                                             exclude_lambda,extension_method_lam,progress_bar,n_cores)
+                                                                             exclude_lambda,extension_method_lam,
+                                                                             self.formula.discretize is None,
+                                                                             progress_bar,n_cores)
         
         else:
             # Iteratively build model matrix.
@@ -288,7 +290,9 @@ class GAMM(MSSM):
             coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse2(self.formula,penalties,self.formula.n_coef,
                                                                               self.family,maxiter,"svd",
                                                                               conv_tol,extend_lambda,control_lambda,
-                                                                              exclude_lambda,extension_method_lam,progress_bar,n_cores)
+                                                                              exclude_lambda,extension_method_lam,
+                                                                              self.formula.discretize is None,
+                                                                              progress_bar,n_cores)
         
         self.__coef = coef
         self.__scale = scale # ToDo: scale name is used in another context for more general mssm..
@@ -720,7 +724,9 @@ class sMsGAMM(MSSM):
                                                                                     model_mat,penalties[j],self.formula.n_coef,
                                                                                     self.family,maxiter_inner,"svd",
                                                                                     conv_tol,extend_lambda,control_lambda,
-                                                                                    exclude_lambda,"nesterov",False,self.cpus)
+                                                                                    exclude_lambda,"nesterov",
+                                                                                    self.formula.discretize is None,
+                                                                                    False,self.cpus)
                     
                     
                     
@@ -1044,7 +1050,9 @@ class sMsIRGAMM(sMsGAMM):
                                                                         model_mat_full,penalties,self.formula.n_coef,
                                                                         self.family,maxiter_inner,"svd",
                                                                         conv_tol,extend_lambda,control_lambda,
-                                                                        exclude_lambda,"nesterov",False,self.cpus)
+                                                                        exclude_lambda,"nesterov",
+                                                                        self.formula.discretize is None,
+                                                                        False,self.cpus)
 
         # For state proposals we can utilize a temparature schedule. See sMsGamm.fit().
         if schedule == "anneal":
@@ -1145,7 +1153,9 @@ class sMsIRGAMM(sMsGAMM):
                                                                              model_mat_full,penalties,self.formula.n_coef,
                                                                              self.family,maxiter_inner,"svd",
                                                                              conv_tol,extend_lambda,control_lambda,
-                                                                             exclude_lambda,"nesterov",False,self.cpus)
+                                                                             exclude_lambda,"nesterov",
+                                                                             self.formula.discretize is None,
+                                                                             False,self.cpus)
 
             # Next update all sojourn time distribution parameters
 

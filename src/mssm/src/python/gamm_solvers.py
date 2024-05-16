@@ -372,14 +372,28 @@ def compute_Linv(L,n_c=10):
    return cpp_solve_tr(L,T)
 
 
-def calculate_edf(InvCholXXS,penalties,colsX):
+def calculate_edf(LP,Pr,InvCholXXS,penalties,lgdetDs,colsX,n_c):
    total_edf = colsX
    Bs = []
    term_edfs = []
 
-   for lTerm in penalties:
-      B = InvCholXXS @ lTerm.D_J_emb # Needed for Fellner Schall update (Wood & Fasiolo, 2016)
-      Bps = B.power(2).sum()
+   for lti,lTerm in enumerate(penalties):
+      if not InvCholXXS is None:
+         B = InvCholXXS @ lTerm.D_J_emb # Needed for Fellner Schall update (Wood & Fasiolo, 2016)
+         Bps = B.power(2).sum()
+      else:
+         Bps = compute_B(LP,compute_eigen_perm(Pr),lTerm,n_c)
+
+         if not lTerm.clust_series is None:
+            if Bps[1] < lgdetDs[lti]:
+               Bps = Bps[1]
+            elif (Bps[1] + Bps[1])/2 < lgdetDs[lti]:
+               Bps = (Bps[1] + Bps[1])/2
+            elif Bps[0] < lgdetDs[lti]:
+               Bps = Bps[0]
+            else:
+               Bps = lgdetDs[lti] - 1e-7
+
       pen_params = lTerm.lam * Bps
       total_edf -= pen_params
       Bs.append(Bps)
@@ -425,7 +439,7 @@ def calculate_term_edf(penalties,param_penalized):
    
    return term_edf
 
-def update_scale_edf(y,z,eta,Wr,rowsX,colsX,InvCholXXSP,Pr,family,penalties):
+def update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,penalties,n_c):
    # Updates the scale of the model. For this the edf
    # are computed as well - they are returned because they are needed for the
    # lambda step proposal anyway.
@@ -438,11 +452,13 @@ def update_scale_edf(y,z,eta,Wr,rowsX,colsX,InvCholXXSP,Pr,family,penalties):
       wres = y - eta
 
    # Calculate total and term wise edf
-   InvCholXXS = apply_eigen_perm(Pr,InvCholXXSP)
+   InvCholXXS = None
+   if not InvCholXXSP is None:
+      InvCholXXS = apply_eigen_perm(Pr,InvCholXXSP)
 
    # If there are penalized terms we need to adjust the total_edf
    if len(penalties) > 0:
-      total_edf, term_edfs, Bs = calculate_edf(InvCholXXS,penalties,colsX)
+      total_edf, term_edfs, Bs = calculate_edf(LP,Pr,InvCholXXS,penalties,lgdetDs,colsX,n_c)
    else:
       total_edf = colsX
       term_edfs = None
@@ -456,7 +472,7 @@ def update_scale_edf(y,z,eta,Wr,rowsX,colsX,InvCholXXSP,Pr,family,penalties):
    
    return wres,InvCholXXS,total_edf,term_edfs,Bs,scale
 
-def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,S_pinv,FS_use_rank,penalties,n_c,formula):
+def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,S_pinv,FS_use_rank,penalties,n_c,formula,form_Linv):
    # Solves the additive model for a given set of weights and penalty
    if formula is None:
       LP, Pr, coef, code = cpp_solve_coef(yb,Xb,S_emb)
@@ -484,7 +500,9 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,S_pinv,FS_use_
          bsbs.append(bsb)
    
    # Solve for inverse of Chol factor of XX+S
-   InvCholXXSP = compute_Linv(LP,n_c)
+   InvCholXXSP = None
+   if form_Linv:
+      InvCholXXSP = compute_Linv(LP,n_c)
    
    # Update mu & eta
    if formula is None:
@@ -502,12 +520,12 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,S_pinv,FS_use_
       mu = family.link.fi(eta)
 
    # Update scale parameter
-   wres,InvCholXXS,total_edf,term_edfs,Bs,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,InvCholXXSP,Pr,family,penalties)
+   wres,InvCholXXS,total_edf,term_edfs,Bs,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,penalties,n_c)
    return eta,mu,coef,InvCholXXS,lgdetDs,bsbs,total_edf,term_edfs,Bs,scale,wres
 
 def init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
                   family,col_S,penalties,
-                  pinv,n_c,formula):
+                  pinv,n_c,formula,form_Linv):
    # Initial fitting iteration without step-length control for gam.
 
    # Compute starting estimate S_emb and S_pinv
@@ -536,7 +554,7 @@ def init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
    Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
                                          X,Xb,family,S_emb,S_pinv,
                                          FS_use_rank,penalties,n_c,
-                                         formula)
+                                         formula,form_Linv)
    
    # Deviance under these starting coefficients
    # As well as penalized deviance
@@ -724,7 +742,7 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
                         extend_by,o_iter,dev_check,n_c,
                         control_lambda,extend_lambda,
                         exclude_lambda,extension_method_lam,
-                        formula):
+                        formula,form_Linv):
    # Propose & perform step-length control for the lambda parameters via the Fellner Schall method
    # by Wood & Fasiolo (2016)
    lam_accepted = False
@@ -744,7 +762,7 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
       Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
                                              X,Xb,family,S_emb,S_pinv,
                                              FS_use_rank,penalties,n_c,
-                                             formula)
+                                             formula,form_Linv)
       
       # Compute gradient of REML with respect to lambda
       # to check if step size needs to be reduced.
@@ -801,7 +819,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
                       maxiter=10,pinv="svd",conv_tol=1e-7,
                       extend_lambda=True,control_lambda=True,
                       exclude_lambda=False,extension_method_lam = "nesterov",
-                      progress_bar=False,n_c=10):
+                      form_Linv=True,progress_bar=False,n_c=10):
    # Estimates a penalized Generalized additive mixed model, following the steps outlined in Wood (2017)
    # "Generalized Additive Models for Gigadata"
 
@@ -827,7 +845,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    # Compute starting estimates
    dev,pen_dev,eta,mu,coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,S_emb = init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
                                                                                                      family,col_S,penalties,
-                                                                                                     pinv,n_c,None)
+                                                                                                     pinv,n_c,None,form_Linv)
       
    # Initialize extension variable
    extend_by = initialize_extension(extension_method_lam,penalties)
@@ -896,7 +914,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
                                                                                                                                                    extend_by,o_iter,dev_check,n_c,
                                                                                                                                                    control_lambda,extend_lambda,
                                                                                                                                                    exclude_lambda,extension_method_lam,
-                                                                                                                                                   None)
+                                                                                                                                                   None,form_Linv)
          total_lambda_props += lam_checks
          
       else:
@@ -910,7 +928,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
          term_edfs,\
          _,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
                                               X,Xb,family,S_emb,None,None,
-                                              penalties,n_c,None)
+                                              penalties,n_c,None,form_Linv)
 
    # Final penalty
    if len(penalties) > 0:
@@ -921,6 +939,11 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    # Final term edf
    if not term_edfs is None:
       term_edfs = calculate_term_edf(penalties,term_edfs)
+
+   if InvCholXXS is None:
+      Lp, Pr, _ = cpp_cholP((Xb.T @ Xb + S_emb).tocsc())
+      InvCholXXSP = compute_Linv(Lp,n_c)
+      InvCholXXS = apply_eigen_perm(Pr,InvCholXXSP)
 
    return coef,eta,wres,scale,InvCholXXS,total_edf,term_edfs,penalty
 
@@ -1103,7 +1126,7 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
                        maxiter=10,pinv="svd",conv_tol=1e-7,
                        extend_lambda=True,control_lambda=True,
                        exclude_lambda=False,extension_method_lam = "nesterov",
-                       progress_bar=False,n_c=10):
+                       form_Linv=True,progress_bar=False,n_c=10):
    # Estimates a penalized additive mixed model, following the steps outlined in Wood (2017)
    # "Generalized Additive Models for Gigadata" but builds X.T @ X, and X.T @ y iteratively - and only once.
    setup_cache(CACHE_DIR,SHOULD_CACHE)
@@ -1149,7 +1172,7 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
    # Compute starting estimates
    dev,pen_dev,eta,mu,coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,S_emb = init_step_gam(y,Xy,mu,eta,rowsX,colsX,None,XX,
                                                                                                      family,col_S,penalties,
-                                                                                                     pinv,n_c,formula)
+                                                                                                     pinv,n_c,formula,form_Linv)
    
    # Initialize extension variable
    extend_by = initialize_extension(extension_method_lam,penalties)
@@ -1214,7 +1237,8 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
                                                                                                                                                    was_extended,pinv,lam_delta,
                                                                                                                                                    extend_by,o_iter,dev_check,
                                                                                                                                                    n_c,control_lambda,extend_lambda,
-                                                                                                                                                   exclude_lambda,extension_method_lam,formula)
+                                                                                                                                                   exclude_lambda,extension_method_lam,
+                                                                                                                                                   formula,form_Linv)
          total_lambda_props += lam_checks
       else:
          # If there are no penalties simply perform a newton step
@@ -1227,7 +1251,7 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
          term_edfs,\
          _,scale,wres = update_coef_and_scale(y,Xy,None,None,rowsX,colsX,
                                               None,XX,family,S_emb,None,None,
-                                              penalties,n_c,formula)
+                                              penalties,n_c,formula,form_Linv)
 
    # Final penalty
    if len(penalties) > 0:
@@ -1238,6 +1262,11 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
    # Final term edf
    if not term_edfs is None:
       term_edfs = calculate_term_edf(penalties,term_edfs)
+
+   if InvCholXXS is None:
+      Lp, Pr, _ = cpp_cholP((XX+S_emb).tocsc())
+      InvCholXXSP = compute_Linv(Lp,n_c)
+      InvCholXXS = apply_eigen_perm(Pr,InvCholXXSP)
 
    clear_cache(CACHE_DIR,SHOULD_CACHE)
 
