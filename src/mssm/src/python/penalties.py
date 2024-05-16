@@ -147,6 +147,8 @@ class LambdaTerm:
   type:PenType = None
   rank:int or None = None
   term:int or None = None
+  clust_series:[int] or None = None
+  clust_weights:[[float]] or None = None
 
 @dataclass
 class Reparameterization:

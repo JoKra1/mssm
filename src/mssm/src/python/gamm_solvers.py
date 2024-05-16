@@ -242,38 +242,81 @@ def apply_eigen_perm(Pr,InvCholXXSP):
    InvCholXXS = InvCholXXSP @ Perm
    return InvCholXXS
 
-def compute_B_mp(L,PD):
-   B = cpp_solve_tr(L,PD)
-   return B.power(2).sum()
+def compute_block_B_shared(address_dat,address_ptr,address_idx,shape_dat,shape_ptr,rows,cols,nnz,T):
+   BB = compute_block_linv_shared(address_dat,address_ptr,address_idx,shape_dat,shape_ptr,rows,cols,nnz,T)
+   return BB.power(2).sum()
    
 def compute_B(L,P,lTerm,n_c=10):
    # Solves L @ B = P @ D for B, parallelizing over column
-   # blocks of D if int(D.shape[1]/1000) > 1
+   # blocks of D if int(D.shape[1]/2000) > 1
 
-   # D is extremely sparse and P only shuffles rows, so we
-   # can take only the columns which we know contain non-zero elements
+   # Also allows for approximate B computation for very big factor smooths.
    D_start = lTerm.start_index
-   D_len = lTerm.rep_sj * lTerm.S_J.shape[1]
-   D_end = lTerm.start_index + D_len
 
-   D_r = int(D_len/1000)
-   if D_r > 1 and n_c > 1:
-      # Parallelize
-      n_c = min(D_r,n_c)
-      split = np.array_split(range(D_start,D_end),n_c)
-      PD = P @ lTerm.D_J_emb
-      PDs = [PD[:,split[i]] for i in range(n_c)]
+   if lTerm.clust_series is None:
+      D_len = lTerm.rep_sj * lTerm.S_J.shape[1]
+      D_end = lTerm.start_index + D_len
 
-      with mp.Pool(processes=n_c) as pool:
-         args = zip(repeat(L),PDs)
-        
-         pow_sums = pool.starmap(compute_B_mp,args)
-      return sum(pow_sums)
+      D_r = int(D_len/2000)
 
-   B = cpp_solve_tr(L,P @ lTerm.D_J_emb[:,D_start:D_end])
-   return B.power(2).sum()
+      if D_r > 1 and n_c > 1:
+         # Parallelize over column blocks of P @ D
+         # Can speed up computations considerably and is feasible memory-wise
+         # since L itself is super sparse.
+         n_c = min(D_r,n_c)
+         split = np.array_split(range(D_start,D_end),n_c)
+         PD = P @ lTerm.D_J_emb
+         PDs = [PD[:,split[i]] for i in range(n_c)]
 
-def compute_block_linv_shared(address_dat,address_ptr,address_idx,shape_dat,shape_ptr,rows,cols,nnz,LB):
+         with managers.SharedMemoryManager() as manager, mp.Pool(processes=n_c) as pool:
+            # Create shared memory copies of data, indptr, and indices
+            rows, cols, nnz, data, indptr, indices = map_csc_to_eigen(L)
+            shape_dat = data.shape
+            shape_ptr = indptr.shape
+
+            dat_mem = manager.SharedMemory(data.nbytes)
+            dat_shared = np.ndarray(shape_dat, dtype=np.double, buffer=dat_mem.buf)
+            dat_shared[:] = data[:]
+
+            ptr_mem = manager.SharedMemory(indptr.nbytes)
+            ptr_shared = np.ndarray(shape_ptr, dtype=np.int32, buffer=ptr_mem.buf)
+            ptr_shared[:] = indptr[:]
+
+            idx_mem = manager.SharedMemory(indices.nbytes)
+            idx_shared = np.ndarray(shape_dat, dtype=np.int32, buffer=idx_mem.buf)
+            idx_shared[:] = indices[:]
+
+            args = zip(repeat(dat_mem.name),repeat(ptr_mem.name),repeat(idx_mem.name),repeat(shape_dat),repeat(shape_ptr),repeat(rows),repeat(cols),repeat(nnz),PDs)
+         
+            pow_sums = pool.starmap(compute_block_B_shared,args)
+
+         return sum(pow_sums)
+      
+      # Not worth parallelizing, solve directly
+      B = cpp_solve_tr(L,P @ lTerm.D_J_emb[:,D_start:D_end])
+      return B.power(2).sum()
+   
+   # Approximate the derivative based just on the columns in D_J that belong to the
+   # maximum series identified for each cluster. Use the size of the cluster and the weights to
+   # correct for the fact that all series in the cluster are slightly different after all.
+
+   n_coef = lTerm.S_J.shape[0]
+   rank = int(lTerm.rank/lTerm.rep_sj)
+
+   sum_bs_lw = 0
+   sum_bs_up = 0
+
+   for s in lTerm.clust_series:
+
+      ci = np.argmax(lTerm.clust_series == s)
+      target = P@lTerm.D_J_emb[:,(D_start + (s*n_coef)):(D_start + ((s+1)*n_coef) - (n_coef-rank))]
+      BB = cpp_solve_tr(L,target)
+      sum_bs_lw += np.sum(lTerm.clust_weights[ci]*BB.power(2).sum())
+      sum_bs_up += len(lTerm.clust_weights[ci])*BB.power(2).sum()
+
+   return sum_bs_lw, sum_bs_up
+
+def compute_block_linv_shared(address_dat,address_ptr,address_idx,shape_dat,shape_ptr,rows,cols,nnz,T):
    dat_shared = shared_memory.SharedMemory(name=address_dat,create=False)
    ptr_shared = shared_memory.SharedMemory(name=address_ptr,create=False)
    idx_shared = shared_memory.SharedMemory(name=address_idx,create=False)
@@ -282,12 +325,12 @@ def compute_block_linv_shared(address_dat,address_ptr,address_idx,shape_dat,shap
    indptr = np.ndarray(shape_ptr,dtype=np.int32,buffer=ptr_shared.buf)
    indices = np.ndarray(shape_dat,dtype=np.int32,buffer=idx_shared.buf)
 
-   L = cpp_solvers.solve_tr(rows, cols, nnz, data, indptr, indices, LB)
+   L = cpp_solvers.solve_tr(rows, cols, nnz, data, indptr, indices, T)
 
    return L
 
 def compute_Linv(L,n_c=10):
-   # Solves L @ inv(L) = I for Binv(L) parallelizing over column
+   # Solves L @ inv(L) = I for inv(L) parallelizing over column
    # blocks of I if int(I.shape[1]/2000) > 1
    
    n_col = L.shape[1]
@@ -300,7 +343,7 @@ def compute_Linv(L,n_c=10):
       
       n_c = min(r,n_c)
       split = np.array_split(range(n_col),n_c)
-      LBs = [T[:,split[i]] for i in range(n_c)]
+      Ts = [T[:,split[i]] for i in range(n_c)]
 
       with managers.SharedMemoryManager() as manager, mp.Pool(processes=n_c) as pool:
          # Create shared memory copies of data, indptr, and indices
@@ -320,7 +363,7 @@ def compute_Linv(L,n_c=10):
          idx_shared = np.ndarray(shape_dat, dtype=np.int32, buffer=idx_mem.buf)
          idx_shared[:] = indices[:]
 
-         args = zip(repeat(dat_mem.name),repeat(ptr_mem.name),repeat(idx_mem.name),repeat(shape_dat),repeat(shape_ptr),repeat(rows),repeat(cols),repeat(nnz),LBs)
+         args = zip(repeat(dat_mem.name),repeat(ptr_mem.name),repeat(idx_mem.name),repeat(shape_dat),repeat(shape_ptr),repeat(rows),repeat(cols),repeat(nnz),Ts)
         
          LBinvs = pool.starmap(compute_block_linv_shared,args)
       

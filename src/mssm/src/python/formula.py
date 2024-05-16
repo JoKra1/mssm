@@ -7,7 +7,7 @@ import pandas as pd
 from enum import Enum
 import math
 from .smooths import TP_basis_calc
-from .terms import GammTerm,i,l,f,irf,ri,rs
+from .terms import GammTerm,i,l,f,irf,ri,rs,fs
 from .penalties import PenType,id_dist_pen,diff_pen,TP_pen,LambdaTerm,translate_sparse,ConstType,Constraint,Reparameterization
 from .file_loading import read_cov, read_cor_cov_single, read_unique,read_dtype,setup_cache,clear_cache,mp,repeat,os
 import cpp_solvers
@@ -798,6 +798,8 @@ class Formula():
         self.sid = None
         # Penalties
         self.penalties = None
+        # Discretization?
+        self.discretize = None
         
         # Perform input checks first for LHS/Dependent variable.
         if len(self.file_paths) == 0 and self.__lhs.variable not in self.__data.columns:
@@ -832,6 +834,10 @@ class Formula():
             if not isinstance(term,irf):
                if term.by_latent:
                   self.__has_by_latent = True
+            
+            if isinstance(term,fs):
+               if not term.approx_deriv is None:
+                  self.discretize = term.approx_deriv
             
             # All variables must exist in data
             for var in term.variables:
@@ -918,6 +924,25 @@ class Formula():
             self.cov = cov
             self.NOT_NA = NAs
             self.sid = sid
+        
+        if self.discretize:
+           if self.series_id is None:
+               raise ValueError(f"The identifier column for unique series must be provided when requesting to approximate the derivative of one or more factor smooth terms.")
+    
+           if len(self.file_paths) != 0:
+              # Need to create cov_flat (or at least figure out the correct dimensions) and sid after all
+              sid_var_cov_flat = read_cov(self.__lhs.variable,self.series_id,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+              self.cov_flat = np.zeros((len(sid_var_cov_flat),len(self.__var_to_cov.keys())),dtype=int)
+
+              _, id = np.unique(sid_var_cov_flat,return_index=True)
+              self.sid = np.sort(id)
+
+           self.__cluster_discretize(self.__discretize())
+           
+           if len(self.file_paths) != 0:
+              # Clean up
+              self.cov_flat = None
+              self.sid = None
 
         # Absorb any constraints for model terms
         if len(self.file_paths) == 0:
@@ -1171,6 +1196,85 @@ class Formula():
 
       return y_flat,cov_flat,NAs_flat,y,cov,NAs,sid
     
+    def __discretize(self):
+      dig_cov_flat = np.zeros_like(self.cov_flat)
+      var_types = self.get_var_types()
+      var_map = self.get_var_map()
+      collected = []
+
+      for var in var_types.keys():
+         if var_types[var] == VarType.NUMERIC and var not in self.discretize["excl"]:
+            # Discretize continuous variable into k**0.5 bins, where k is the number of unique values this variable
+            # took on in the training set (based on, Wood et al., 2017 "Gams for Gigadata").
+            _,values = np.histogram(self.cov_flat[:,var_map[var]],bins=int(len(np.unique(self.cov_flat[:,var_map[var]]))**0.5))
+            dig_cov_flat[:,var_map[var]] = np.digitize(self.cov_flat[:,var_map[var]],values)
+            collected.append(var_map[var])
+         # Also collect continuous variables that should not be discretized
+         elif var_types[var] == VarType.NUMERIC:
+            dig_cov_flat[:,var_map[var]] = self.cov_flat[:,var_map[var]]
+            collected.append(var_map[var])
+
+      return dig_cov_flat[:,collected]
+    
+    def __cluster_discretize(self,dig_cov_flat):
+      # Get unique identifiers of each series and based on that create
+      # a splitting factor (sid) that can be used to split the model dataframe into
+      # separate frames for every series.
+
+      # Also create a simple index vector for each unique series.
+      sid_idx = np.arange(len(self.sid))
+
+      # Now compute the number of unique rows across the discretized matrix.
+      # Also compute the inverse - telling us for each row in the discretized data
+      # to which unique row it belongs.
+      dig_cov_flat_unq,dig_cov_flat_unq_memb = np.unique(dig_cov_flat,axis=0,return_inverse=True)
+
+      # Now we prepare the cluster structure:
+      # Every series now gets represented by a row vector with len(dig_cov_flat_unq) entries
+      # Every column in these vectors corresponds to a unique row in the discretized data and
+      # gets assigned the number of times the corresponding unique row exists for the series to
+      # which the vector belongs.
+      clust = np.zeros((len(self.sid),len(dig_cov_flat_unq)))
+
+      # To compute this just iterate over the unqiue rows, find for each series how many rows
+      # match this unique row (using the inverse computed above), and sum
+      for dim in range(clust.shape[1]):
+         clust[:,dim] = [sp.sum() for sp in np.split(dig_cov_flat_unq_memb == dim,self.sid[1:])]
+      
+      # Use heuristic to determine the number of clusters also used to discretize individual covariates
+      # Then cluster - for estimation this only has to do once before starting the actual fitting routine
+      _,clust_lab = scp.cluster.vq.kmeans2(clust,dig_cov_flat.shape[1]*int(dig_cov_flat_unq.shape[0]**0.5),minit='++')
+
+      # Find ordering of series ids based on assigned cluster labels
+      arg_sort_clust = np.argsort(clust_lab)
+
+      # Sort cluster labels in ascending order for easy split of cluster ordered
+      # ids into cluster groups
+      sort_clust = clust_lab[arg_sort_clust]
+      idx_clust_sort = sid_idx[arg_sort_clust]
+
+      # Find cluster split points
+      _, cid = np.unique(sort_clust,return_index=True)
+      csid = np.sort(cid)
+
+      # Now collect all series ids of a particular cluster into a separate array
+      idx_grouped = np.split(idx_clust_sort,csid[1:])
+
+      # Find the (ideally, this is done heuristically after all) most complex series in every cluster:
+      # Compute the number of unique rows for each series in a cluster, then pick the maximum.
+      # Compute complexity weights for all series in the cluster relative to that maximum.
+      # These act as a a proxy of how similar each series is to the cluster prototype/maximum.
+      clust_max_series = []
+      weights = []
+      for clu in idx_grouped:
+         clu_sums = np.sum(clust[clu,:],axis=1)
+         clust_max_series.append(clu[np.argmax(clu_sums)])
+         weights.append(clu_sums/np.max(clu_sums))
+      clust_max_series = np.array(clust_max_series)
+
+      self.discretize["clust_series"] = clust_max_series
+      self.discretize["clust_weights"] = weights
+
     def __absorb_constraints2(self):
       
       for sti in self.get_smooth_term_idx():
@@ -1442,6 +1546,13 @@ class Formula():
                                                               penalties,cur_pen_idx,
                                                               pen,penid,sti,sterm,vars,
                                                               by_levels,n_coef,col_S)
+
+               
+               # Add necessary info for derivative approx. for factor smooth penalties
+               if isinstance(sterm,fs):
+                  if not sterm.approx_deriv is None:
+                     penalties[-1].clust_series = self.discretize["clust_series"]
+                     penalties[-1].clust_weights = self.discretize["clust_weights"]
 
                if sterm.has_null_penalty:
 

@@ -269,6 +269,7 @@ class fs(f):
                 nk: int = 9,
                 m: int = 1,
                 rp:int = 1,
+                approx_deriv:dict or None = None,
                 constraint:penalties.ConstType=penalties.ConstType.QR,
                 basis: Callable = smooths.B_spline_basis,
                 basis_kwargs: dict = {},
@@ -279,6 +280,8 @@ class fs(f):
       super().__init__(variables, rf, None, 99, nk+1, False, rp, constraint, False,
                        basis, basis_kwargs, by_latent,
                        True, True, penalty, pen_kwargs)
+      
+      self.approx_deriv=approx_deriv
         
 class irf(GammTerm):
     def __init__(self,variables:[str],
