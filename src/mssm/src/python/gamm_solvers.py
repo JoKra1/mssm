@@ -255,8 +255,23 @@ def compute_B(L,P,lTerm,n_c=10):
    D_start = lTerm.start_index
 
    if lTerm.clust_series is None:
-      D_len = lTerm.rep_sj * lTerm.S_J.shape[1]
-      D_end = lTerm.start_index + D_len
+      
+      col_sums = lTerm.S_J.sum(axis=0)
+      if lTerm.type == PenType.NULL and sum(col_sums[col_sums > 0]) == 1:
+         # Null penalty for factor smooth has usually only non-zero element in a single colum,
+         # so we only need to solve one linear system per level of the factor smooth.
+         NULL_idx = np.argmax(col_sums)
+
+         D_NULL_idx = np.arange(lTerm.start_index+NULL_idx,
+                                lTerm.S_J.shape[1]*(lTerm.rep_sj+1),
+                                lTerm.S_J.shape[1])
+
+         D_len = len(D_NULL_idx)
+         PD = P @ lTerm.D_J_emb[:,D_NULL_idx]
+      else:
+         D_len = lTerm.rep_sj * lTerm.S_J.shape[1]
+         D_end = lTerm.start_index + D_len
+         PD = P @ lTerm.D_J_emb[:,D_start:D_end]
 
       D_r = int(D_len/2000)
 
@@ -265,7 +280,7 @@ def compute_B(L,P,lTerm,n_c=10):
          # Can speed up computations considerably and is feasible memory-wise
          # since L itself is super sparse.
          n_c = min(D_r,n_c)
-         split = np.array_split(range(D_start,D_end),n_c)
+         split = np.array_split(range(D_len),n_c)
          PD = P @ lTerm.D_J_emb
          PDs = [PD[:,split[i]] for i in range(n_c)]
 
@@ -294,7 +309,7 @@ def compute_B(L,P,lTerm,n_c=10):
          return sum(pow_sums)
       
       # Not worth parallelizing, solve directly
-      B = cpp_solve_tr(L,P @ lTerm.D_J_emb[:,D_start:D_end])
+      B = cpp_solve_tr(L,PD)
       return B.power(2).sum()
    
    # Approximate the derivative based just on the columns in D_J that belong to the

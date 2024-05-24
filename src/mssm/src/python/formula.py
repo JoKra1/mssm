@@ -749,7 +749,7 @@ class Formula():
                  codebook:dict or None=None,
                  print_warn=True,
                  file_paths = [],
-                 file_loading_nc = 10,
+                 file_loading_nc = 1,
                  file_loading_kwargs: dict = {"header":0,"index_col":False}) -> None:
         
         self.__lhs = lhs
@@ -1201,6 +1201,7 @@ class Formula():
       dig_cov_flat = np.zeros_like(self.cov_flat)
       var_types = self.get_var_types()
       var_map = self.get_var_map()
+      
       collected = []
 
       for var in var_types.keys():
@@ -1210,17 +1211,16 @@ class Formula():
             _,values = np.histogram(self.cov_flat[:,var_map[var]],bins=int(len(np.unique(self.cov_flat[:,var_map[var]]))**0.5))
             dig_cov_flat[:,var_map[var]] = np.digitize(self.cov_flat[:,var_map[var]],values)
             collected.append(var_map[var])
-         # Also collect continuous variables that should not be discretized
-         elif var_types[var] == VarType.NUMERIC:
+         # Also collect continuous variables that should not be discretized + categorical variables - except for UID
+         elif var != self.series_id:
             dig_cov_flat[:,var_map[var]] = self.cov_flat[:,var_map[var]]
             collected.append(var_map[var])
 
       return dig_cov_flat[:,collected]
     
     def __cluster_discretize(self,dig_cov_flat):
-      # Get unique identifiers of each series and based on that create
-      # a splitting factor (sid) that can be used to split the model dataframe into
-      # separate frames for every series.
+      # Get for each factor variable the levels associated with that variable.
+      f_levels = self.get_factor_levels()
 
       # Also create a simple index vector for each unique series.
       sid_idx = np.arange(len(self.sid))
@@ -1244,7 +1244,13 @@ class Formula():
       
       # Use heuristic to determine the number of clusters also used to discretize individual covariates
       # Then cluster - for estimation this only has to do once before starting the actual fitting routine
-      _,clust_lab = scp.cluster.vq.kmeans2(clust,dig_cov_flat.shape[1]*int(dig_cov_flat_unq.shape[0]**0.5),minit='++')
+      n_flevels = 1
+      
+      for fact in f_levels.keys():
+         if fact != self.series_id:
+            n_flevels *= len(f_levels[fact])
+
+      _,clust_lab = scp.cluster.vq.kmeans2(clust,n_flevels*int((dig_cov_flat.shape[1]*dig_cov_flat_unq.shape[0])**0.5),minit='++')
 
       # Find ordering of series ids based on assigned cluster labels
       arg_sort_clust = np.argsort(clust_lab)

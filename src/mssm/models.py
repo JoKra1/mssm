@@ -264,10 +264,33 @@ class GAMM(MSSM):
                 print("NAs were excluded for fitting.")
 
             # Build the model matrix with all information from the formula
-            model_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
-                                                         ltx,irstx,stx,rtx,var_types,var_map,
-                                                         var_mins,var_maxs,factor_levels,
-                                                         cov_flat,cov,n_j,state_est_flat,state_est)
+            if self.formula.file_loading_nc == 1:
+                model_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
+                                                            ltx,irstx,stx,rtx,var_types,var_map,
+                                                            var_mins,var_maxs,factor_levels,
+                                                            cov_flat,cov,n_j,state_est_flat,state_est)
+            
+            else:
+                # Build row sets of model matrix in parallel:
+                for sti in stx:
+                    if terms[sti].should_rp:
+                        for rpi in range(len(terms[sti].RP)):
+                            # Don't need to pass those down to the processes.
+                            terms[sti].RP[rpi].X = None
+                            terms[sti].RP[rpi].cov = None
+                
+                cov_split = np.array_split(cov_flat,self.formula.file_loading_nc,axis=0)
+                with mp.Pool(processes=self.formula.file_loading_nc) as pool:
+                    # Build the model matrix with all information from the formula - but only for sub-set of rows
+                    Xs = pool.starmap(build_sparse_matrix_from_formula,zip(repeat(terms),repeat(has_intercept),repeat(has_scale_split),
+                                                                           repeat(ltx),repeat(irstx),repeat(stx),repeat(rtx),
+                                                                           repeat(var_types),repeat(var_map),repeat(var_mins),
+                                                                           repeat(var_maxs),repeat(factor_levels),cov_split,
+                                                                           repeat(cov),repeat(n_j),repeat(state_est_flat),
+                                                                           repeat(state_est)))
+                    
+                    model_mat = scp.sparse.vstack(Xs,format='csc')
+
 
             # Get initial estimate of mu based on family:
             init_mu_flat = self.family.init_mu(y_flat)
