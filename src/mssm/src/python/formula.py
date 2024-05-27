@@ -937,7 +937,7 @@ class Formula():
               _, id = np.unique(sid_var_cov_flat,return_index=True)
               self.sid = np.sort(id)
 
-           self.__cluster_discretize(self.__discretize())
+           self.__cluster_discretize(*self.__split_discretize(self.__discretize()))
            
            if len(self.file_paths) != 0:
               # Clean up
@@ -1205,82 +1205,144 @@ class Formula():
       collected = []
 
       for var in var_types.keys():
-         if var_types[var] == VarType.NUMERIC and var not in self.discretize["excl"]:
+         # Skip variables that should be ignored all together.
+         # Useful if one or more continuous variables can be split into
+         # categorical factor passed along via "split_by"
+         if var in self.discretize["excl"] or var_types[var] == VarType.FACTOR:
+            continue
+
+         if var not in self.discretize["no_disc"]:
             # Discretize continuous variable into k**0.5 bins, where k is the number of unique values this variable
             # took on in the training set (based on, Wood et al., 2017 "Gams for Gigadata").
-            _,values = np.histogram(self.cov_flat[:,var_map[var]],bins=int(len(np.unique(self.cov_flat[:,var_map[var]]))**0.5))
+            values = np.linspace(min(self.cov_flat[:,var_map[var]]),
+                                 max(self.cov_flat[:,var_map[var]]),
+                                 int(len(np.unique(self.cov_flat[:,var_map[var]]))**0.5))
             dig_cov_flat[:,var_map[var]] = np.digitize(self.cov_flat[:,var_map[var]],values)
             collected.append(var_map[var])
-         # Also collect continuous variables that should not be discretized + categorical variables - except for UID
-         elif var != self.series_id:
+
+         # Also collect continuous variables that should not be discretized
+         else:
             dig_cov_flat[:,var_map[var]] = self.cov_flat[:,var_map[var]]
             collected.append(var_map[var])
 
       return dig_cov_flat[:,collected]
+
     
-    def __cluster_discretize(self,dig_cov_flat):
-      # Get for each factor variable the levels associated with that variable.
-      f_levels = self.get_factor_levels()
+    def __split_discretize(self,dig_cov_flat_all):
+      var_map = self.get_var_map()
 
-      # Also create a simple index vector for each unique series.
-      sid_idx = np.arange(len(self.sid))
+      # Create seried id column in ascending order:
+      id_col = np.zeros(dig_cov_flat_all.shape[0],dtype=int)
+      id_splits = np.split(id_col,self.sid[1:])
+      id_splits = [split + i for i,split in enumerate(id_splits)]
+      id_col = np.concatenate(id_splits)
 
-      # Now compute the number of unique rows across the discretized matrix.
-      # Also compute the inverse - telling us for each row in the discretized data
-      # to which unique row it belongs.
-      dig_cov_flat_unq,dig_cov_flat_unq_memb = np.unique(dig_cov_flat,axis=0,return_inverse=True)
+      if len(self.discretize["split_by"]) == 0:
+         # Don't actually split
+         return [dig_cov_flat_all],[id_col]
 
-      # Now we prepare the cluster structure:
-      # Every series now gets represented by a row vector with len(dig_cov_flat_unq) entries
-      # Every column in these vectors corresponds to a unique row in the discretized data and
-      # gets assigned the number of times the corresponding unique row exists for the series to
-      # which the vector belongs.
-      clust = np.zeros((len(self.sid),len(dig_cov_flat_unq)))
+      # Now split dig_cov_flat_all per level of combination of all factor variables used for splitting
+      unq_fact_comb,unq_fact_comb_memb = np.unique(self.cov_flat[:,[var_map[fact] for fact in self.discretize["split_by"]]],
+                                                   axis=0,return_inverse=True)
 
-      # To compute this just iterate over the unqiue rows, find for each series how many rows
-      # match this unique row (using the inverse computed above), and sum
-      for dim in range(clust.shape[1]):
-         clust[:,dim] = [sp.sum() for sp in np.split(dig_cov_flat_unq_memb == dim,self.sid[1:])]
+      # Split series id column per level
+      fact_series = [id_col[unq_fact_comb_memb == fact] for fact in range(len(unq_fact_comb))]
+
+      # Split dig_cov_flat_all per level
+      dig_cov_flats = [dig_cov_flat_all[unq_fact_comb_memb == fact,:] for fact in range(len(unq_fact_comb))]
+
+      return dig_cov_flats, fact_series
+    
+    def __cluster_discretize(self,dig_cov_flats, fact_series):
       
-      # Use heuristic to determine the number of clusters also used to discretize individual covariates
-      # Then cluster - for estimation this only has to do once before starting the actual fitting routine
-      n_flevels = 1
-      
-      for fact in f_levels.keys():
-         if fact != self.series_id:
-            n_flevels *= len(f_levels[fact])
+      best_series = None
+      best_weights = None
+      best_error = None
+      for rep in range(self.discretize["restarts"]):
+         clust_max_series = []
+         weights = []
+         error = 0
 
-      _,clust_lab = scp.cluster.vq.kmeans2(clust,n_flevels*int((dig_cov_flat.shape[1]*dig_cov_flat_unq.shape[0])**0.5),minit='++')
+         for dig_cov_flat,fact_s in zip(dig_cov_flats,fact_series):
 
-      # Find ordering of series ids based on assigned cluster labels
-      arg_sort_clust = np.argsort(clust_lab)
+            # Create a simple index vector for each unique series in this factor split.
+            _,fact_s_idx = np.unique(fact_s,return_index=True)
+            sid_idx = fact_s[fact_s_idx]
 
-      # Sort cluster labels in ascending order for easy split of cluster ordered
-      # ids into cluster groups
-      sort_clust = clust_lab[arg_sort_clust]
-      idx_clust_sort = sid_idx[arg_sort_clust]
+            # Now compute the number of unique rows across the discretized matrix.
+            # Also compute the inverse - telling us for each row in the discretized data
+            # to which unique row it belongs.
+            dig_cov_flat_unq,dig_cov_flat_unq_memb = np.unique(dig_cov_flat,axis=0,return_inverse=True)
 
-      # Find cluster split points
-      _, cid = np.unique(sort_clust,return_index=True)
-      csid = np.sort(cid)
+            # Now we prepare the cluster structure:
+            # Every series now gets represented by a row vector with len(dig_cov_flat_unq) entries
+            # Every column in these vectors corresponds to a unique row in the discretized data and
+            # gets assigned the number of times the corresponding unique row exists for the series to
+            # which the vector belongs.
+            clust = np.zeros((len(sid_idx),len(dig_cov_flat_unq)))
 
-      # Now collect all series ids of a particular cluster into a separate array
-      idx_grouped = np.split(idx_clust_sort,csid[1:])
+            # To compute this we just split the inverse per unique series
+            s_split_unq_memb = np.split(dig_cov_flat_unq_memb,fact_s_idx[1:])
+            # And compute the unique indices and how often they occur - in this trial
+            s_split_unq_cnts = [np.unique(s_dig,return_counts=True) for s_dig in s_split_unq_memb]
 
-      # Find the (ideally, this is done heuristically after all) most complex series in every cluster:
-      # Compute the number of unique rows for each series in a cluster, then pick the maximum.
-      # Compute complexity weights for all series in the cluster relative to that maximum.
-      # These act as a a proxy of how similar each series is to the cluster prototype/maximum.
-      clust_max_series = []
-      weights = []
-      for clu in idx_grouped:
-         clu_sums = np.sum(clust[clu,:],axis=1)
-         clust_max_series.append(clu[np.argmax(clu_sums)])
-         weights.append(clu_sums/np.max(clu_sums))
-      clust_max_series = np.array(clust_max_series)
+            # Then loop over each series and add the counts of the corresponding rows to the cluster structure
+            for sidx,(udr,cnts) in enumerate(s_split_unq_cnts):
+               clust[sidx,udr] += cnts
 
-      self.discretize["clust_series"] = clust_max_series
-      self.discretize["clust_weights"] = weights
+            # Use heuristic to determine the number of clusters also used to discretize individual covariates
+            # Then cluster - for estimation this only has to do once before starting the actual fitting routine
+            clust_centroids,clust_lab = scp.cluster.vq.kmeans2(clust,int((dig_cov_flat_unq.shape[1]*clust.shape[1])**0.5),minit='++')
+
+            # Compute clustering loss, according to scipy docs: https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.vq.kmeans2.html
+            # Simply pick the cluster set out of all repetitions that minimizes the loss
+            for k in range(clust_centroids.shape[0]):
+               error += np.power(clust[clust_lab == k,:] - clust_centroids[k,:],2).sum()
+
+            # Find ordering of series ids based on assigned cluster labels
+            arg_sort_clust = np.argsort(clust_lab)
+
+            # Sort cluster labels in ascending order for easy split of cluster ordered
+            # ids into cluster groups
+            sort_clust = clust_lab[arg_sort_clust]
+            idx_clust_sort = np.arange(0,len(clust_lab),dtype=int)[arg_sort_clust]
+
+            # Find cluster split points
+            _, cid = np.unique(sort_clust,return_index=True)
+            csid = np.sort(cid)
+
+            # Now collect all series ids of a particular cluster into a separate array
+            idx_grouped = np.split(idx_clust_sort,csid[1:])
+
+            # Find the (ideally, this is done heuristically after all) most complex series in every cluster:
+            # Compute the number of unique rows for each series in a cluster, then pick the maximum.
+            # Compute complexity weights for all series in the cluster relative to that maximum.
+            # These act as a a proxy of how similar each series is to the cluster prototype/maximum.
+            
+            for k,clu in enumerate(idx_grouped):
+               clu_sums = np.sum(clust[clu,:],axis=1)
+               clust_max_series.append(sid_idx[clu[np.argmax(clu_sums)]])
+               weights.append(clu_sums/np.max(clu_sums))
+
+               #
+               #clust_distances = np.power(clust[clu,:] - clust_centroids[k,:],2).sum(axis=1) + 1
+            
+               #clust_max_series.append(sid_idx[clu[np.argmin(clust_distances)]])
+               #clust_rel_distances = clu_sums/clu_sums[np.argmin(clust_distances)]
+               #weights.append(clust_rel_distances/np.max(clust_rel_distances))
+
+         clust_max_series = np.array(clust_max_series)
+         if rep == 0:
+            best_series = clust_max_series
+            best_weights = weights
+            best_error = error
+         elif error < best_error:
+            best_error = error
+            best_weights[:] = weights
+            best_series[:] = clust_max_series
+
+      self.discretize["clust_series"] = best_series
+      self.discretize["clust_weights"] = best_weights
 
     def __absorb_constraints2(self):
       

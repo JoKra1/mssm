@@ -403,8 +403,10 @@ def calculate_edf(LP,Pr,InvCholXXS,penalties,lgdetDs,colsX,n_c):
          if not lTerm.clust_series is None:
             if Bps[1] < lgdetDs[lti]:
                Bps = Bps[1]
-            elif (Bps[1] + Bps[1])/2 < lgdetDs[lti]:
-               Bps = (Bps[1] + Bps[1])/2
+            elif (Bps[1]*0.7 + Bps[0]*0.3) < lgdetDs[lti]:
+               Bps = Bps[1]*0.7 + Bps[0]*0.3
+            elif (Bps[1] + Bps[0])/2 < lgdetDs[lti]:
+               Bps = (Bps[1] + Bps[0])/2
             elif Bps[0] < lgdetDs[lti]:
                Bps = Bps[0]
             else:
