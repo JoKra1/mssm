@@ -11,7 +11,7 @@ import sys
 
 CACHE_DIR = './.db'
 SHOULD_CACHE = False
-MP_SPLIT_SIZE=1000
+MP_SPLIT_SIZE = 2000
 
 def cpp_chol(A):
    return cpp_solvers.chol(*map_csc_to_eigen(A))
@@ -526,10 +526,13 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,S_pinv,FS_use_
    if formula is None:
       eta = (X @ coef).reshape(-1,1)
    else:
-      eta = []
-      for file in formula.file_paths:
-         eta_file = read_eta(file,formula,coef,n_c)
-         eta.extend(eta_file)
+      if formula.keep_cov:
+         eta = keep_eta(formula,coef,n_c)
+      else:
+         eta = []
+         for file in formula.file_paths:
+            eta_file = read_eta(file,formula,coef,n_c)
+            eta.extend(eta_file)
       eta = np.array(eta)
 
    mu = eta
@@ -615,10 +618,13 @@ def correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,n_pen
       if formula is None:
          eta = (X @ n_coef).reshape(-1,1)
       else:
-         eta = []
-         for file in formula.file_paths:
-            eta_file = read_eta(file,formula,n_coef,n_c)
-            eta.extend(eta_file)
+         if formula.keep_cov:
+            eta = keep_eta(formula,n_coef,n_c)
+         else:
+            eta = []
+            for file in formula.file_paths:
+               eta_file = read_eta(file,formula,n_coef,n_c)
+               eta.extend(eta_file)
          eta = np.array(eta)
 
       mu = eta
@@ -1011,9 +1017,9 @@ def form_cross_prod_mp(should_cache,cache_dir,file,fi,y_flat,terms,has_intercept
 
    return XX,Xy
 
-def read_mmat_cross(file,formula,nc):
+def read_XTX(file,formula,nc):
    """
-   Reads subset of data and creates cross-product of model matrix for that dataset.
+   Reads subset of data and creates X.T@X with X = model matrix for that dataset.
    """
 
    terms = formula.get_terms()
@@ -1051,14 +1057,14 @@ def read_mmat_cross(file,formula,nc):
 
    # Parallelize over sub-sets of this file
    rows,_ = cov_flat_file.shape
-   split = np.arange(0,rows,max(1,MP_SPLIT_SIZE),dtype=int)[1:]
-   cov_flat_files = np.vsplit(cov_flat_file,split)
-   y_flat_files = np.split(y_flat_file,split)
-   subsets = [fi for fi in range(len(split) + 1)]
+   cov_flat_files = np.array_split(cov_flat_file,min(nc,rows),axis=0)
+   y_flat_files = np.array_split(y_flat_file,min(nc,rows))
+   subsets = [i for i in range(len(cov_flat_files))]
 
    with mp.Pool(processes=nc) as pool:
       # Build the model matrix with all information from the formula - but only for sub-set of rows in this file
-      XX,Xy = zip(*pool.starmap(form_cross_prod_mp,zip(repeat(SHOULD_CACHE),repeat(CACHE_DIR),repeat(file),subsets,y_flat_files,repeat(terms),repeat(has_intercept),repeat(has_scale_split),
+      XX,Xy = zip(*pool.starmap(form_cross_prod_mp,zip(repeat(SHOULD_CACHE),repeat(CACHE_DIR),repeat(file),
+                                                       subsets,y_flat_files,repeat(terms),repeat(has_intercept),repeat(has_scale_split),
                                                        repeat(ltx),repeat(irstx),repeat(stx),repeat(rtx),
                                                        repeat(var_types),repeat(var_map),
                                                        repeat(var_mins),repeat(var_maxs),repeat(factor_levels),
@@ -1068,6 +1074,74 @@ def read_mmat_cross(file,formula,nc):
    XX = reduce(lambda xx1,xx2: xx1+xx2,XX)
    Xy = reduce(lambda xy1,xy2: xy1+xy2,Xy)
    return XX,Xy,len(y_flat_file)
+
+def keep_XTX(cov_flat,y_flat,formula,nc,progress_bar):
+   """
+   Takes subsets of data and creates X.T@X with X = model matrix iteratively over these subsets.
+   """
+
+   terms = formula.get_terms()
+   has_intercept = formula.has_intercept()
+   has_scale_split = False
+   ltx = formula.get_linear_term_idx()
+   irstx = []
+   stx = formula.get_smooth_term_idx()
+   rtx = formula.get_random_term_idx()
+   var_types = formula.get_var_types()
+   var_map = formula.get_var_map()
+   var_mins = formula.get_var_mins()
+   var_maxs = formula.get_var_maxs()
+   factor_levels = formula.get_factor_levels()
+
+   for sti in stx:
+      if terms[sti].should_rp:
+         for rpi in range(len(terms[sti].RP)):
+            # Don't need to pass those down to the processes.
+            terms[sti].RP[rpi].X = None
+            terms[sti].RP[rpi].cov = None
+
+   cov = None
+   n_j = None
+   state_est_flat = None
+   state_est = None
+
+   
+   cov_split = np.array_split(cov_flat,len(formula.file_paths),axis=0)
+   y_split = np.array_split(y_flat,len(formula.file_paths))
+
+   iterator = cov_split
+   if progress_bar:
+      iterator = tqdm(iterator,desc="Accumulating X.T @ X",leave=True)
+
+   for fi,_ in enumerate(iterator):
+
+      rows,_ = cov_split[fi].shape
+      cov_flat_files = np.array_split(cov_split[fi],min(nc,rows),axis=0)
+      y_flat_files = np.array_split(y_split[fi],min(nc,rows))
+      subsets = [i for i in range(len(cov_flat_files))]
+
+      with mp.Pool(processes=min(rows,nc)) as pool:
+         # Build the model matrix with all information from the formula - but only for sub-set of rows at a time
+         XX0,Xy0 = zip(*pool.starmap(form_cross_prod_mp,zip(repeat(SHOULD_CACHE),repeat(CACHE_DIR),repeat(f"/outer_split_{fi}.csv"),
+                                                         subsets,y_flat_files,repeat(terms),repeat(has_intercept),repeat(has_scale_split),
+                                                         repeat(ltx),repeat(irstx),repeat(stx),repeat(rtx),
+                                                         repeat(var_types),repeat(var_map),
+                                                         repeat(var_mins),repeat(var_maxs),repeat(factor_levels),
+                                                         cov_flat_files,repeat(cov),repeat(n_j),
+                                                         repeat(state_est_flat),repeat(state_est))))
+      
+      XX0 = reduce(lambda xx1,xx2: xx1+xx2,XX0)
+      Xy0 = reduce(lambda xy1,xy2: xy1+xy2,Xy0)
+
+      # Compute X.T@X and X.T@y
+      if fi == 0:
+         XX = XX0
+         Xy = Xy0
+      else:
+         XX += XX0
+         Xy += Xy0
+
+   return XX,Xy
 
 def form_eta_mp(should_cache,cache_dir,file,fi,coef,terms,has_intercept,has_scale_split,
                 ltx,irstx,stx,rtx,var_types,var_map,var_mins,
@@ -1084,7 +1158,7 @@ def form_eta_mp(should_cache,cache_dir,file,fi,coef,terms,has_intercept,has_scal
 
 def read_eta(file,formula,coef,nc):
    """
-   Reads subset of data and creates model matrix for that dataset.
+   Reads subset of data and creates model prediction for that dataset.
    """
 
    terms = formula.get_terms()
@@ -1121,24 +1195,77 @@ def read_eta(file,formula,coef,nc):
 
    # Parallelize over sub-sets of this file
    rows,_ = cov_flat_file.shape
-   split = np.arange(0,rows,max(1,MP_SPLIT_SIZE),dtype=int)[1:]
-   cov_flat_files = np.vsplit(cov_flat_file,split)
-   subsets = [fi for fi in range(len(split) + 1)]
+   cov_flat_files = np.array_split(cov_flat_file,min(nc,rows),axis=0)
+   subsets = [i for i in range(len(cov_flat_files))]
 
    with mp.Pool(processes=nc) as pool:
       # Build eta with all information from the formula - but only for sub-set of rows in this file
-      etas = pool.starmap(form_eta_mp,zip(repeat(SHOULD_CACHE),repeat(CACHE_DIR),repeat(file),subsets,repeat(coef),repeat(terms),repeat(has_intercept),repeat(has_scale_split),
-                                         repeat(ltx),repeat(irstx),repeat(stx),repeat(rtx),
-                                         repeat(var_types),repeat(var_map),
-                                         repeat(var_mins),repeat(var_maxs),repeat(factor_levels),
-                                         cov_flat_files,repeat(cov),repeat(n_j),
-                                         repeat(state_est_flat),repeat(state_est)))
+      etas = pool.starmap(form_eta_mp,zip(repeat(SHOULD_CACHE),repeat(CACHE_DIR),repeat(file),subsets,
+                                          repeat(coef),repeat(terms),repeat(has_intercept),
+                                          repeat(has_scale_split),repeat(ltx),repeat(irstx),repeat(stx),
+                                          repeat(rtx),repeat(var_types),repeat(var_map),
+                                          repeat(var_mins),repeat(var_maxs),repeat(factor_levels),
+                                          cov_flat_files,repeat(cov),repeat(n_j),
+                                          repeat(state_est_flat),repeat(state_est)))
 
    eta = []
    for eta_file in etas:
       eta.extend(eta_file)
 
    return eta
+
+def keep_eta(formula,coef,nc):
+   """
+   Forms subset of data and creates model prediction for that dataset.
+   """
+
+   terms = formula.get_terms()
+   has_intercept = formula.has_intercept()
+   has_scale_split = False
+   ltx = formula.get_linear_term_idx()
+   irstx = []
+   stx = formula.get_smooth_term_idx()
+   rtx = formula.get_random_term_idx()
+   var_types = formula.get_var_types()
+   var_map = formula.get_var_map()
+   var_mins = formula.get_var_mins()
+   var_maxs = formula.get_var_maxs()
+   factor_levels = formula.get_factor_levels()
+
+   for sti in stx:
+      if terms[sti].should_rp:
+         for rpi in range(len(terms[sti].RP)):
+            # Don't need to pass those down to the processes.
+            terms[sti].RP[rpi].X = None
+            terms[sti].RP[rpi].cov = None
+
+   cov = None
+   n_j = None
+   state_est_flat = None
+   state_est = None
+
+   cov_split = np.array_split(formula.cov_flat[formula.NOT_NA_flat],len(formula.file_paths),axis=0)
+   eta = []
+   for fi,_ in enumerate(cov_split):
+      rows,_ = cov_split[fi].shape
+      cov_flat_files = np.array_split(cov_split[fi],min(nc,rows),axis=0)
+      subsets = [i for i in range(len(cov_flat_files))]
+
+      with mp.Pool(processes=min(rows,nc)) as pool:
+         # Build eta with all information from the formula - but only for sub-set of rows
+         etas = pool.starmap(form_eta_mp,zip(repeat(SHOULD_CACHE),repeat(CACHE_DIR),repeat(f"/outer_split_{fi}.csv"),subsets,
+                                             repeat(coef),repeat(terms),repeat(has_intercept),
+                                             repeat(has_scale_split),repeat(ltx),repeat(irstx),repeat(stx),
+                                             repeat(rtx),repeat(var_types),repeat(var_map),
+                                             repeat(var_mins),repeat(var_maxs),repeat(factor_levels),
+                                             cov_flat_files,repeat(cov),repeat(n_j),
+                                             repeat(state_est_flat),repeat(state_est)))
+
+
+      for eta_split in etas:
+         eta.extend(eta_split)
+   return eta
+
 
 def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
                        maxiter=10,pinv="svd",conv_tol=1e-7,
@@ -1153,28 +1280,38 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
    y_flat = []
    rowsX = 0
 
-   iterator = formula.file_paths
-   if progress_bar:
-      iterator = tqdm(iterator,desc="Accumulating X.T @ X",leave=True)
 
-   for fi,file in enumerate(iterator):
-      # Read file
-      file_dat = pd.read_csv(file)
+   if formula.keep_cov:
+      y_flat_np = formula.y_flat[formula.NOT_NA_flat].reshape(-1,1)
+      rowsX = len(y_flat_np)
 
-      # Encode data in this file
-      y_flat_file,_,NAs_flat_file,_,_,_,_ = formula.encode_data(file_dat)
-      y_flat.extend(y_flat_file[NAs_flat_file])
+      # Compute X.T@X and X.T@y
+      XX,Xy = keep_XTX(formula.cov_flat[formula.NOT_NA_flat,:],y_flat_np,formula,n_c,progress_bar)
+      y_flat.extend(y_flat_np)
+      y_flat_np = None
+   else:
+      iterator = formula.file_paths
+      if progress_bar:
+         iterator = tqdm(iterator,desc="Accumulating X.T @ X",leave=True)
 
-      # Build the model matrix cross-products with all information from the formula - but only for sub-set of rows in this file
-      XX0,Xy0,rowsX0 = read_mmat_cross(file,formula,n_c)
-      rowsX += rowsX0
-      # Compute cross-product
-      if fi == 0:
-         XX = XX0
-         Xy = Xy0
-      else:
-         XX += XX0
-         Xy += Xy0
+      for fi,file in enumerate(iterator):
+         # Read file
+         file_dat = pd.read_csv(file)
+
+         # Encode data in this file
+         y_flat_file,_,NAs_flat_file,_,_,_,_ = formula.encode_data(file_dat)
+         y_flat.extend(y_flat_file[NAs_flat_file])
+
+         # Build the model matrix products with all information from the formula - but only for sub-set of rows in this file
+         XX0,Xy0,rowsX0 = read_XTX(file,formula,n_c)
+         rowsX += rowsX0
+         # Compute X.T@X and X.T@y
+         if fi == 0:
+            XX = XX0
+            Xy = Xy0
+         else:
+            XX += XX0
+            Xy += Xy0
       
    colsX = XX.shape[1]
    coef = None

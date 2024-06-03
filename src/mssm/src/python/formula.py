@@ -9,7 +9,7 @@ import math
 from .smooths import TP_basis_calc
 from .terms import GammTerm,i,l,f,irf,ri,rs,fs
 from .penalties import PenType,id_dist_pen,diff_pen,TP_pen,LambdaTerm,translate_sparse,ConstType,Constraint,Reparameterization
-from .file_loading import read_cov, read_cor_cov_single, read_unique,read_dtype,setup_cache,clear_cache,mp,repeat,os
+from .file_loading import read_cov, read_cor_cov_single, read_cov_no_cor ,read_unique,read_dtype,setup_cache,clear_cache,mp,repeat,os
 import cpp_solvers
 
 
@@ -748,6 +748,7 @@ class Formula():
                  n_j:int=3,
                  codebook:dict or None=None,
                  print_warn=True,
+                 keep_cov = False,
                  file_paths = [],
                  file_loading_nc = 1,
                  file_loading_kwargs: dict = {"header":0,"index_col":False}) -> None:
@@ -762,6 +763,7 @@ class Formula():
         self.print_warn = print_warn
         if self.__split_scale and self.print_warn:
            warnings.warn("split_scale==True! All terms will be estimted per latent stage, independent of terms' by_latent status.")
+        self.keep_cov = keep_cov # For iterative X.T@X building, whether the encoded data should be kept or read in from file again during every iteration.
         self.file_paths = file_paths # If this will not be empty, we accumulate t(X)@X directly without forming X. Only useful if model is normal.
         self.file_loading_nc = file_loading_nc
         self.file_loading_kwargs = file_loading_kwargs
@@ -913,7 +915,7 @@ class Formula():
         self.__get_coef_info()
         
         # Encode data into columns usable by the model
-        if len(self.file_paths) == 0:
+        if len(self.file_paths) == 0 or self.keep_cov:
             y_flat,cov_flat,NAs_flat,y,cov,NAs,sid = self.encode_data(self.__data)
 
             # Store encoding
@@ -929,7 +931,7 @@ class Formula():
            if self.series_id is None:
                raise ValueError(f"The identifier column for unique series must be provided when requesting to approximate the derivative of one or more factor smooth terms.")
     
-           if len(self.file_paths) != 0:
+           if len(self.file_paths) != 0 and self.keep_cov == False:
               # Need to create cov_flat (or at least figure out the correct dimensions) and sid after all
               sid_var_cov_flat = read_cov(self.__lhs.variable,self.series_id,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
               self.cov_flat = np.zeros((len(sid_var_cov_flat),len(self.__var_to_cov.keys())),dtype=int)
@@ -939,7 +941,7 @@ class Formula():
 
            self.__cluster_discretize(*self.__split_discretize(self.__discretize()))
            
-           if len(self.file_paths) != 0:
+           if len(self.file_paths) != 0 and self.keep_cov == False:
               # Clean up
               self.cov_flat = None
               self.sid = None
@@ -1131,16 +1133,26 @@ class Formula():
          NAs = None
          NAs_flat = None
       else:
-         NAs_flat = np.isnan(data[self.get_lhs().variable]) == False
+         if data is None:
+            # read in dep var - without NA correction!
+            y_flat = read_cov_no_cor(self.get_lhs().variable,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+            NAs_flat = np.isnan(y_flat) == False
+         else:
+            NAs_flat = np.isnan(data[self.get_lhs().variable]) == False
 
-      if not prediction and data.shape[0] != data[NAs_flat].shape[0] and self.print_warn:
-         warnings.warn(f"{data.shape[0] - data[NAs_flat].shape[0]} {self.get_lhs().variable} values ({round((data.shape[0] - data[NAs_flat].shape[0]) / data.shape[0] * 100,ndigits=2)}%) are NA.")
-
-      n_y = data.shape[0]
+      if not data is None:
+         if not prediction and data.shape[0] != data[NAs_flat].shape[0] and self.print_warn:
+            warnings.warn(f"{data.shape[0] - data[NAs_flat].shape[0]} {self.get_lhs().variable} values ({round((data.shape[0] - data[NAs_flat].shape[0]) / data.shape[0] * 100,ndigits=2)}%) are NA.")
+         n_y = data.shape[0]
+      else:
+         n_y = len(y_flat)
 
       id_col = None
       if not self.series_id is None:
-         id_col = np.array(data[self.series_id])
+         if data is None:
+            id_col = read_cov_no_cor(self.series_id,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+         else:
+            id_col = np.array(data[self.series_id])
 
       var_map = self.get_var_map()
       n_var = len(var_map)
@@ -1161,7 +1173,8 @@ class Formula():
          y = None
       else:
          # Collect entire y column
-         y_flat = np.array(data[self.get_lhs().variable]).reshape(-1,1)
+         if not data is None:
+            y_flat = np.array(data[self.get_lhs().variable]).reshape(-1,1)
          
          # Then split by seried id
          y = None
@@ -1176,7 +1189,10 @@ class Formula():
       cov_flat = np.zeros((n_y,n_var),dtype=float) # Treating all predictors as floats has important implications for factors and requires special care!
 
       for c in var_keys:
-         c_raw = np.array(data[c])
+         if data is None:
+            c_raw = read_cov_no_cor(c,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+         else:
+            c_raw = np.array(data[c])
 
          if var_types[c] == VarType.FACTOR:
 
@@ -2403,7 +2419,7 @@ def build_sparse_matrix_from_formula(terms,has_intercept,
    elements = []
    rows = []
    cols = []
-   ridx = np.array([ri for ri in range(n_y)])
+   ridx = np.array([ri for ri in range(n_y)]) #ToDo: dtype=int?
 
    ci = 0
    for lti in ltx:
