@@ -6,6 +6,7 @@ import scipy as scp
 import pandas as pd
 from enum import Enum
 import math
+from tqdm import tqdm
 from .smooths import TP_basis_calc
 from .terms import GammTerm,i,l,f,irf,ri,rs,fs
 from .penalties import PenType,id_dist_pen,diff_pen,TP_pen,LambdaTerm,translate_sparse,ConstType,Constraint,Reparameterization
@@ -1274,7 +1275,12 @@ class Formula():
       best_series = None
       best_weights = None
       best_error = None
-      for rep in range(self.discretize["restarts"]):
+
+      iterator = range(self.discretize["restarts"])
+      if self.print_warn:
+         iterator = tqdm(iterator,desc="Clustering",leave=True)
+
+      for rep in iterator:
          clust_max_series = []
          weights = []
          error = 0
