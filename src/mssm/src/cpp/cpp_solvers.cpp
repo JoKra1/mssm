@@ -107,6 +107,44 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::SparseMatrix<double>,Eigen::Vector
     
 }
 
+std::tuple<Eigen::SparseMatrix<double>, int, int> solve_pqr(int Arows, int Acols, int Annz,
+                                                       py::array_t<double, py::array::f_style | py::array::forcecast> Adata,
+                                                       py::array_t<int, py::array::f_style | py::array::forcecast> Aidptr,
+                                                       py::array_t<int, py::array::f_style | py::array::forcecast> Aindices){
+
+    Eigen::Map<Eigen::SparseMatrix<double>> A(Arows,Acols,Annz,
+                                                    (Eigen::SparseMatrix<double>::StorageIndex*) Aidptr.data(),
+                                                    (Eigen::SparseMatrix<double>::StorageIndex*) Aindices.data(),
+                                                    (Eigen::SparseMatrix<double>::Scalar*) Adata.data());
+
+    // Computed column-pivoted QR factorization of A and solve A @ B = I for B (inverse of A)
+    Eigen::SparseQR<Eigen::SparseMatrix<double>,Eigen::AMDOrdering<int>> solver;
+    solver.compute(A);
+
+    // Also setup identity target for inverse of A
+    Eigen::SparseMatrix<double> id(Acols,Acols);
+    id.setIdentity();
+
+    if(solver.info()!=Eigen::Success)
+    {
+        
+        return std::make_tuple(std::move(id),0,1);
+    }
+
+    // see: https://eigen.tuxfamily.org/dox/classEigen_1_1SparseQR.html
+    Eigen::SparseMatrix<double> invA(Acols,Acols);
+    invA = solver.solve(id);
+
+    if(solver.info()!=Eigen::Success)
+    {
+        
+        return std::make_tuple(std::move(id),0,1);
+    }
+
+    return std::make_tuple(std::move(invA),solver.rank(),0);
+    
+}
+
 std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solve_am(Eigen::VectorXd y, int Xrows, int Xcols, int Xnnz,
                                                                                      py::array_t<double, py::array::f_style | py::array::forcecast> Xdata,
                                                                                      py::array_t<int, py::array::f_style | py::array::forcecast> Xidptr,
@@ -420,6 +458,7 @@ PYBIND11_MODULE(cpp_solvers, m) {
     m.def("chol", &chol, "Compute cholesky factor L of A");
     m.def("cholP", &cholP, "Compute cholesky factor L of A after applying a sparsity enhancing permutation to A");
     m.def("pqr", &pqr, "Perform column pivoted QR decomposition of A");
+    m.def("solve_pqr", &solve_pqr, "Perform column pivoted QR decomposition of A, then solve for inverse of A");
     m.def("solve_am", &solve_am, "Solve additive model, return coefficient vector and inverse");
     m.def("solve_L", &solve_L, "Solve cholesky of XX+S");
     m.def("solve_LXX", &solve_LXX, "Solve cholesky of XX+S, but with XX + S pre-computed.");

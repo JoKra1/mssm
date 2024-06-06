@@ -21,6 +21,9 @@ def cpp_cholP(A):
 def cpp_qr(A):
    return cpp_solvers.pqr(*map_csc_to_eigen(A))
 
+def cpp_solve_qr(A):
+   return cpp_solvers.solve_pqr(*map_csc_to_eigen(A))
+
 def cpp_solve_am(y,X,S):
    return cpp_solvers.solve_am(y,*map_csc_to_eigen(X),*map_csc_to_eigen(S))
 
@@ -1416,11 +1419,6 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
    # Final term edf
    if not term_edfs is None:
       term_edfs = calculate_term_edf(penalties,term_edfs)
-
-   if InvCholXXS is None:
-      Lp, Pr, _ = cpp_cholP((XX+S_emb).tocsc())
-      InvCholXXSP = compute_Linv(Lp,n_c)
-      InvCholXXS = apply_eigen_perm(Pr,InvCholXXSP)
 
    clear_cache(CACHE_DIR,SHOULD_CACHE)
 
