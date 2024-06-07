@@ -296,13 +296,13 @@ class GAMM(MSSM):
             init_mu_flat = self.family.init_mu(y_flat)
 
             # Now we have to estimate the model
-            coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,y_flat,
-                                                                             model_mat,penalties,self.formula.n_coef,
-                                                                             self.family,maxiter,"svd",
-                                                                             conv_tol,extend_lambda,control_lambda,
-                                                                             exclude_lambda,extension_method_lam,
-                                                                             self.formula.discretize is None,
-                                                                             progress_bar,n_cores)
+            coef,eta,wres,scale,LVI,edf,term_edf,penalty,fit_info = solve_gamm_sparse(init_mu_flat,y_flat,
+                                                                                      model_mat,penalties,self.formula.n_coef,
+                                                                                      self.family,maxiter,"svd",
+                                                                                      conv_tol,extend_lambda,control_lambda,
+                                                                                      exclude_lambda,extension_method_lam,
+                                                                                      self.formula.discretize is None,
+                                                                                      progress_bar,n_cores)
         
         else:
             # Iteratively build model matrix.
@@ -310,12 +310,12 @@ class GAMM(MSSM):
             if isinstance(self.family,Gaussian) == False:
                 raise ValueError("Iteratively building the model matrix is currently only supported for Normal models.")
             
-            coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse2(self.formula,penalties,self.formula.n_coef,
-                                                                              self.family,maxiter,"svd",
-                                                                              conv_tol,extend_lambda,control_lambda,
-                                                                              exclude_lambda,extension_method_lam,
-                                                                              self.formula.discretize is None,
-                                                                              progress_bar,n_cores)
+            coef,eta,wres,scale,LVI,edf,term_edf,penalty,fit_info = solve_gamm_sparse2(self.formula,penalties,self.formula.n_coef,
+                                                                                       self.family,maxiter,"svd",
+                                                                                       conv_tol,extend_lambda,control_lambda,
+                                                                                       exclude_lambda,extension_method_lam,
+                                                                                       self.formula.discretize is None,
+                                                                                       progress_bar,n_cores)
         
         self.__coef = coef
         self.__scale = scale # ToDo: scale name is used in another context for more general mssm..
@@ -324,7 +324,7 @@ class GAMM(MSSM):
         self.edf = edf
         self.term_edf = term_edf
         self.penalty = penalty
-
+        self.info = fit_info
         self.lvi = LVI
     
     ##################################### Prediction #####################################
@@ -743,7 +743,7 @@ class sMsGAMM(MSSM):
                         init_mu_flat = self.family.link.fi(model_mat @ state_coef[j])
 
                     # Now we have to estimate the model for the current state j
-                    coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,state_y,
+                    coef,eta,wres,scale,LVI,edf,term_edf,penalty,_ = solve_gamm_sparse(init_mu_flat,state_y,
                                                                                     model_mat,penalties[j],self.formula.n_coef,
                                                                                     self.family,maxiter_inner,"svd",
                                                                                     conv_tol,extend_lambda,control_lambda,
@@ -1069,7 +1069,7 @@ class sMsIRGAMM(sMsGAMM):
         # Get initial estimate of mu based on family:
         init_mu_flat = self.family.init_mu(y_flat[NOT_NA_flat])
 
-        coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,y_flat[NOT_NA_flat],
+        coef,eta,wres,scale,LVI,edf,term_edf,penalty,_ = solve_gamm_sparse(init_mu_flat,y_flat[NOT_NA_flat],
                                                                         model_mat_full,penalties,self.formula.n_coef,
                                                                         self.family,maxiter_inner,"svd",
                                                                         conv_tol,extend_lambda,control_lambda,
@@ -1172,7 +1172,7 @@ class sMsIRGAMM(sMsGAMM):
                 init_mu_flat = self.family.link.fi(model_mat_full @ coef)
 
             # Now fit the model again.
-            coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,y_flat[NOT_NA_flat],
+            coef,eta,wres,scale,LVI,edf,term_edf,penalty,_ = solve_gamm_sparse(init_mu_flat,y_flat[NOT_NA_flat],
                                                                              model_mat_full,penalties,self.formula.n_coef,
                                                                              self.family,maxiter_inner,"svd",
                                                                              conv_tol,extend_lambda,control_lambda,

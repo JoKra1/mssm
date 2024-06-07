@@ -139,11 +139,11 @@ class Test_GAMM:
     model.fit(extension_method_lam = "mult")
 
     def test_GAMMedf(self):
-        assert round(self.model.edf,ndigits=3) == 153.601
+        assert round(self.model.edf,ndigits=3) == 153.619
 
     def test_GAMMTermEdf(self):
-        diff = np.abs(np.round(self.model.term_edf,decimals=3) - np.array([6.892, 8.635, 1.181, 1.001, 1.001, 1.029, 131.861]))
-        rel_diff = diff/np.array([6.892, 8.635, 1.181, 1.001, 1.001, 1.029, 131.861])
+        diff = np.abs(np.round(self.model.term_edf,decimals=3) - np.array([6.892, 8.635, 1.182, 1.01, 1.001, 1.039, 131.861]))
+        rel_diff = diff/np.array([6.892, 8.635, 1.182, 1.01, 1.001, 1.039, 131.861])
         assert np.max(rel_diff) < 1e-7
     
     def test_GAMMsigma(self):
@@ -151,8 +151,8 @@ class Test_GAMM:
         assert round(sigma,ndigits=3) == 577.196
     
     def test_GAMMlam(self):
-        diff = np.abs(np.round([p.lam for p in self.model.formula.penalties],decimals=3) - np.array([0.004, 0.006, 5842.507, 1101786.56 , 328846.811, 174267.629, 162215.095, 1178.787, 0.119, 2.166]))
-        rel_diff = diff/np.array([0.004, 0.006, 5842.507, 1101786.56 , 328846.811, 174267.629, 162215.095, 1178.787, 0.119, 2.166])
+        diff = np.abs(np.round([p.lam for p in self.model.formula.penalties],decimals=3) - np.array([0.004, 0.006, 5814.327, 153569.898 , 328846.811, 105218.21, 162215.095, 934.775, 0.119, 2.166]))
+        rel_diff = diff/np.array([0.004, 0.006, 5814.327, 153569.898 , 328846.811, 105218.21, 162215.095, 934.775, 0.119, 2.166])
         assert np.max(rel_diff) < 1e-7
 
 
@@ -179,11 +179,11 @@ class Test_BIG_GAMM:
     model.fit(extension_method_lam = "mult")
 
     def test_GAMMedf(self):
-        assert round(self.model.edf,ndigits=3) == 153.601
+        assert round(self.model.edf,ndigits=3) == 153.619
 
     def test_GAMMTermEdf(self):
-        diff = np.abs(np.round(self.model.term_edf,decimals=3) - np.array([6.892, 8.635, 1.181, 1.001, 1.001, 1.029, 131.861]))
-        rel_diff = diff/np.array([6.892, 8.635, 1.181, 1.001, 1.001, 1.029, 131.861])
+        diff = np.abs(np.round(self.model.term_edf,decimals=3) - np.array([6.892, 8.635, 1.182, 1.01, 1.001, 1.039, 131.861]))
+        rel_diff = diff/np.array([6.892, 8.635, 1.182, 1.01, 1.001, 1.039, 131.861])
         assert np.max(rel_diff) < 1e-7
     
     def test_GAMMsigma(self):
@@ -191,6 +191,6 @@ class Test_BIG_GAMM:
         assert round(sigma,ndigits=3) == 577.196
     
     def test_GAMMlam(self):
-        diff = np.abs(np.round([p.lam for p in self.model.formula.penalties],decimals=3) - np.array([0.004, 0.006, 5842.507, 1101786.56 , 328846.811, 174267.629, 162215.095, 1178.787, 0.119, 2.166]))
-        rel_diff = diff/np.array([0.004, 0.006, 5842.507, 1101786.56 , 328846.811, 174267.629, 162215.095, 1178.787, 0.119, 2.166])
+        diff = np.abs(np.round([p.lam for p in self.model.formula.penalties],decimals=3) - np.array([0.004, 0.006, 5814.327, 153569.898 , 328846.811, 105218.21, 162215.095, 934.775, 0.119, 2.166]))
+        rel_diff = diff/np.array([0.004, 0.006, 5814.327, 153569.898 , 328846.811, 105218.21, 162215.095, 934.775, 0.119, 2.166])
         assert np.max(rel_diff) < 1e-7

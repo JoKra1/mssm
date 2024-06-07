@@ -2,7 +2,7 @@ import numpy as np
 import scipy as scp
 import warnings
 from .exp_fam import Family,Gaussian,est_scale
-from .penalties import PenType,id_dist_pen,translate_sparse
+from .penalties import PenType,id_dist_pen,translate_sparse,dataclass
 from .formula import build_sparse_matrix_from_formula,setup_cache,clear_cache,cpp_solvers,pd,Formula,mp,repeat,os,map_csc_to_eigen,math,tqdm
 from functools import reduce
 from multiprocessing import managers,shared_memory
@@ -11,6 +11,12 @@ import sys
 CACHE_DIR = './.db'
 SHOULD_CACHE = False
 MP_SPLIT_SIZE = 2000
+
+@dataclass
+class Fit_info:
+   lambda_updates:int=0
+   iter:int=0
+   code:int=1
 
 def cpp_chol(A):
    return cpp_solvers.chol(*map_csc_to_eigen(A))
@@ -819,15 +825,18 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
          lam_accepted = True
          lam_delta = []
          for lti,(lGrad,lTerm) in enumerate(zip(lam_grad,penalties)):
-            
-            if np.abs(lGrad[0]) >= 1e-8*np.sum(np.abs(lam_grad)) or exclude_lambda == False:
+            # Heuristic check to determine whether smooth penalty should be excluded from further updates.
+            # For penalties that -> inf, there is an inverse relationship between the gradient^2 and the lambda term:
+            # the gradient^2 diminishes, the lambda term explodes
+            # If the ratio between those two gets close to zero, we drop the corresponding term from the next update.
+            if (not ((lTerm.lam > 1e5) and (((lGrad[0]**2)/lTerm.lam) < 1e-8))) or exclude_lambda == False:
 
                dLam = step_fellner_schall_sparse(lgdetDs[lti],Bs[lti],bsbs[lti],lTerm.lam,scale)
 
                if extend_lambda:
                   dLam,extend_by,was_extended = extend_lambda_step(lti,lTerm.lam,dLam,extend_by,was_extended,extension_method_lam)
 
-            else: # ReLikelihood is insensitive to further changes in this smoothing penalty, so set change to 0.
+            else: # ReLikelihood is probably insensitive to further changes in this smoothing penalty, so set change to 0.
                dLam = 0
                was_extended[lti] = False
 
@@ -882,7 +891,8 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    if progress_bar:
       iterator = tqdm(iterator,desc="Fitting",leave=True)
 
-   total_lambda_props = 0
+   # Keep track on some useful info
+   fit_info = Fit_info()
    for o_iter in iterator:
 
       # We need the previous deviance and penalized deviance
@@ -916,6 +926,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
             if progress_bar:
                iterator.set_description_str(desc="Converged!", refresh=True)
                iterator.close()
+            fit_info.code = 0
             break
 
       # Update pseudo-dat weights for next coefficient step
@@ -941,7 +952,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
                                                                                                                                                    control_lambda,extend_lambda,
                                                                                                                                                    exclude_lambda,extension_method_lam,
                                                                                                                                                    None,form_Linv)
-         total_lambda_props += lam_checks
+         fit_info.lambda_updates += lam_checks
          
       else:
          # If there are no penalties simply perform a newton step
@@ -955,6 +966,8 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
          _,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
                                               X,Xb,family,S_emb,None,None,
                                               penalties,n_c,None,form_Linv)
+      
+      fit_info.iter += 1
 
    # Final penalty
    if len(penalties) > 0:
@@ -971,7 +984,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
       InvCholXXSP = compute_Linv(Lp,n_c)
       InvCholXXS = apply_eigen_perm(Pr,InvCholXXSP)
 
-   return coef,eta,wres,scale,InvCholXXS,total_edf,term_edfs,penalty
+   return coef,eta,wres,scale,InvCholXXS,total_edf,term_edfs,penalty,fit_info
 
 ################################################ Iterative GAMM building code ################################################
 
@@ -1340,7 +1353,8 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
    if progress_bar:
       iterator = tqdm(iterator,desc="Fitting",leave=True)
 
-   total_lambda_props = 0
+   # Keep track on some useful info
+   fit_info = Fit_info()
    for o_iter in iterator:
 
       # We need the previous deviance and penalized deviance
@@ -1374,6 +1388,7 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
             if progress_bar:
                iterator.set_description_str(desc="Converged!", refresh=True)
                iterator.close()
+            fit_info.code = 0
             break
          
       # Step length control for proposed lambda change
@@ -1396,7 +1411,7 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
                                                                                                                                                    n_c,control_lambda,extend_lambda,
                                                                                                                                                    exclude_lambda,extension_method_lam,
                                                                                                                                                    formula,form_Linv)
-         total_lambda_props += lam_checks
+         fit_info.lambda_updates += lam_checks
       else:
          # If there are no penalties simply perform a newton step
          # for the coefficients only
@@ -1410,6 +1425,8 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
                                               None,XX,family,S_emb,None,None,
                                               penalties,n_c,formula,form_Linv)
 
+      fit_info.iter += 1
+
    # Final penalty
    if len(penalties) > 0:
       penalty = coef.T @ S_emb @ coef
@@ -1422,4 +1439,4 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
 
    clear_cache(CACHE_DIR,SHOULD_CACHE)
 
-   return coef,eta,wres,scale,InvCholXXS,total_edf,term_edfs,penalty
+   return coef,eta,wres,scale,InvCholXXS,total_edf,term_edfs,penalty,fit_info
