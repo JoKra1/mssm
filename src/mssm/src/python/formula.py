@@ -1292,20 +1292,41 @@ class Formula():
             sid_idx = fact_s[fact_s_idx]
 
             # Now compute the number of unique rows across the discretized matrix.
-            # Also compute the inverse - telling us for each row in the discretized data
-            # to which unique row it belongs.
-            dig_cov_flat_unq,dig_cov_flat_unq_memb = np.unique(dig_cov_flat,axis=0,return_inverse=True)
+            dig_cov_flat_unq = np.unique(dig_cov_flat,axis=0)
+
+            # Also compute, for each column, the inverse - telling us for each row in the discretized data
+            # to which unique value on the corresponding **variable** it belongs.
+            dig_cov_flat_unq_memb = np.zeros_like(dig_cov_flat,dtype=int)
+
+            dig_cov_unq_counts = []
+
+            for vari in range(dig_cov_flat.shape[1]):
+               dig_var_flat_unq,dig_var_flat_unq_memb = np.unique(dig_cov_flat[:,vari],return_inverse=True)
+
+               if vari > 0:
+                  dig_var_flat_unq_memb += dig_cov_unq_counts[-1]
+
+               dig_cov_unq_counts.append(len(dig_var_flat_unq))
+               dig_cov_flat_unq_memb[:,vari] = dig_var_flat_unq_memb[:]
 
             # Now we prepare the cluster structure:
-            # Every series now gets represented by a row vector with len(dig_cov_flat_unq) entries
-            # Every column in these vectors corresponds to a unique row in the discretized data and
-            # gets assigned the number of times the corresponding unique row exists for the series to
+            # Every series now gets represented by a row vector with sum(dig_cov_unq_counts) entries
+            # Every column in these vectors corresponds to a unique value of an individual discretized
+            # (or not) co-variate. The first dig_cov_unq_counts[0] columns correspond to the unique values
+            # of covariate 1, the next dig_cov_unq_counts[1] columns correspond to covariate 2, and so on.
+            # Each column gets assigned the number of times the corresponding unique value exists for the series to
             # which the vector belongs.
-            clust = np.zeros((len(sid_idx),len(dig_cov_flat_unq)))
+            clust = np.zeros((len(sid_idx),sum(dig_cov_unq_counts)))
 
             # To compute this we just split the inverse per unique series
+            # s_split_unq_memb is a list of 2d arrays, each array corresponding to a series
+            # with the number of rows matching the number of observations collected for that series.
+            # the number of columns matches the number of collected (and potentially discretized) covariates.
             s_split_unq_memb = np.split(dig_cov_flat_unq_memb,fact_s_idx[1:])
-            # And compute the unique indices and how often they occur - in this trial
+
+            # Now we flatten that 2d array and collect the unique values and how often they occur. This gives us
+            # for every series the indices in the cluster structure that will be non-zero and the value we need to
+            # store in each non-zero cell.
             s_split_unq_cnts = [np.unique(s_dig,return_counts=True) for s_dig in s_split_unq_memb]
 
             # Then loop over each series and add the counts of the corresponding rows to the cluster structure
@@ -1314,7 +1335,7 @@ class Formula():
 
             # Use heuristic to determine the number of clusters also used to discretize individual covariates
             # Then cluster - for estimation this only has to do once before starting the actual fitting routine
-            clust_centroids,clust_lab = scp.cluster.vq.kmeans2(clust,int((dig_cov_flat_unq.shape[1]*clust.shape[1])**0.5),minit='++')
+            clust_centroids,clust_lab = scp.cluster.vq.kmeans2(clust,int((dig_cov_flat_unq.shape[1]*dig_cov_flat_unq.shape[0])**0.5),minit='++')
 
             # Compute clustering loss, according to scipy docs: https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.vq.kmeans2.html
             # Simply pick the cluster set out of all repetitions that minimizes the loss
