@@ -106,7 +106,7 @@ class Binomial(Family):
    
    def llk(self,y,mu):
       # y is observed proportion of success
-      return sum(self.lp(y,mu))
+      return sum(self.lp(y,mu))[0]
    
    def deviance(self,y,mu):
       D = 2 * (self.__max_llk - self.llk(y,mu))
@@ -124,7 +124,7 @@ class Gaussian(Family):
       return scp.stats.norm.logpdf(y,loc=mu,scale=math.sqrt(sigma))
    
    def llk(self,y,mu,sigma = 1):
-      return sum(self.lp(y,mu,sigma))
+      return sum(self.lp(y,mu,sigma))[0]
    
    def deviance(self,y,mu):
       # Based on Faraway (2016)
