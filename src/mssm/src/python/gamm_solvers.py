@@ -254,6 +254,11 @@ def apply_eigen_perm(Pr,InvCholXXSP):
 def compute_block_B_shared(address_dat,address_ptr,address_idx,shape_dat,shape_ptr,rows,cols,nnz,T):
    BB = compute_block_linv_shared(address_dat,address_ptr,address_idx,shape_dat,shape_ptr,rows,cols,nnz,T)
    return BB.power(2).sum()
+
+def compute_block_B_shared_cluster(address_dat,address_ptr,address_idx,shape_dat,shape_ptr,rows,cols,nnz,T,cluster_weights):
+   BB = compute_block_linv_shared(address_dat,address_ptr,address_idx,shape_dat,shape_ptr,rows,cols,nnz,T)
+   BBps = BB.power(2).sum()
+   return np.sum(cluster_weights*BBps),len(cluster_weights)*BBps
    
 def compute_B(L,P,lTerm,n_c=10):
    # Solves L @ B = P @ D for B, parallelizing over column
@@ -330,13 +335,46 @@ def compute_B(L,P,lTerm,n_c=10):
    sum_bs_lw = 0
    sum_bs_up = 0
 
-   for s in lTerm.clust_series:
+   targets = [P@lTerm.D_J_emb[:,(D_start + (s*n_coef)):(D_start + ((s+1)*n_coef) - (n_coef-rank))] for s in lTerm.clust_series]
 
-      ci = np.argmax(lTerm.clust_series == s)
-      target = P@lTerm.D_J_emb[:,(D_start + (s*n_coef)):(D_start + ((s+1)*n_coef) - (n_coef-rank))]
-      BB = cpp_solve_tr(L,target)
-      sum_bs_lw += np.sum(lTerm.clust_weights[ci]*BB.power(2).sum())
-      sum_bs_up += len(lTerm.clust_weights[ci])*BB.power(2).sum()
+   if len(targets) < 20*n_c:
+
+      for weights,target in zip(lTerm.clust_weights,targets):
+
+         BB = cpp_solve_tr(L,target)
+         BBps = BB.power(2).sum()
+         sum_bs_lw += np.sum(weights*BBps)
+         sum_bs_up += len(weights)*BBps
+   
+   else:
+      # Parallelize
+      with managers.SharedMemoryManager() as manager, mp.Pool(processes=n_c) as pool:
+         # Create shared memory copies of data, indptr, and indices
+         rows, cols, nnz, data, indptr, indices = map_csc_to_eigen(L)
+         shape_dat = data.shape
+         shape_ptr = indptr.shape
+
+         dat_mem = manager.SharedMemory(data.nbytes)
+         dat_shared = np.ndarray(shape_dat, dtype=np.double, buffer=dat_mem.buf)
+         dat_shared[:] = data[:]
+
+         ptr_mem = manager.SharedMemory(indptr.nbytes)
+         ptr_shared = np.ndarray(shape_ptr, dtype=np.int32, buffer=ptr_mem.buf)
+         ptr_shared[:] = indptr[:]
+
+         idx_mem = manager.SharedMemory(indices.nbytes)
+         idx_shared = np.ndarray(shape_dat, dtype=np.int32, buffer=idx_mem.buf)
+         idx_shared[:] = indices[:]
+
+         args = zip(repeat(dat_mem.name),repeat(ptr_mem.name),repeat(idx_mem.name),
+                    repeat(shape_dat),repeat(shape_ptr),repeat(rows),repeat(cols),
+                    repeat(nnz),targets,lTerm.clust_weights)
+         
+         sum_bs_lw_all,sum_bs_up_all = zip(*pool.starmap(compute_block_B_shared_cluster,args))
+
+         sum_bs_lw = np.sum(sum_bs_lw_all)
+         sum_bs_up = np.sum(sum_bs_up_all)
+
 
    return sum_bs_lw, sum_bs_up
 
@@ -696,7 +734,7 @@ def extend_lambda_step(lti,lam,dLam,extend_by,was_extended, method):
          was_extended[lti] = False
 
    elif method == "nesterov":
-      # The notion for the correction is based on the derivations in the supplementary materials
+      # The idea for the correction is based on the derivations in the supplementary materials
       # of Sutskever et al. (2013) - but adapted to use efs_step**2 / |lam_t - lam_{t-1}| for
       # the correction to lambda. So that the next efs update will be calculated from
       # lam_t + efs_step + (efs_step**2 / |lam_t - lam_{t-1}|) instead of just lam_t + efs_step.

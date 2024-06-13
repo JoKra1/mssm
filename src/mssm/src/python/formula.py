@@ -1374,15 +1374,10 @@ class Formula():
                #clust_rel_distances = clu_sums/clu_sums[np.argmin(clust_distances)]
                #weights.append(clust_rel_distances/np.max(clust_rel_distances))
 
-         clust_max_series = np.array(clust_max_series)
-         if rep == 0:
-            best_series = clust_max_series
+         if (rep == 0) or (error < best_error):
+            best_series = np.array(clust_max_series)
             best_weights = weights
             best_error = error
-         elif error < best_error:
-            best_error = error
-            best_weights[:] = weights
-            best_series[:] = clust_max_series
 
       self.discretize["clust_series"] = best_series
       self.discretize["clust_weights"] = best_weights
