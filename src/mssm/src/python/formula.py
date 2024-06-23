@@ -40,7 +40,9 @@ def map_csc_to_eigen(X):
       raise TypeError(f"Format of sparse matrix passed to c++ MUST be 'csc' but is {X.getformat()}")
 
    rows, cols = X.shape
-   return rows, cols, X.nnz, X.data, X.indptr, X.indices
+
+   # Cast to int64 here, since that's what the c++ side expects to be stored in the buffers
+   return rows, cols, X.nnz, X.data, X.indptr.astype(np.int64), X.indices.astype(np.int64)
 
 def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
    """

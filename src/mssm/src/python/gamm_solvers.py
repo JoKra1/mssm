@@ -156,6 +156,8 @@ def compute_S_emb_pinv_det(col_S,penalties,pinv):
       # associated with a term have been collected in SJ
 
       if SJ_terms[SJi] == 1:
+         # No overlap between penalties so we can just leave this block in the
+         # pseudo-inverse empty.
          cIndexPinv += (SJs[SJi].shape[1]*SJ_reps[SJi])
          FS_use_rank.append(True)
 
@@ -308,11 +310,11 @@ def compute_B(L,P,lTerm,n_c=10):
             dat_shared[:] = data[:]
 
             ptr_mem = manager.SharedMemory(indptr.nbytes)
-            ptr_shared = np.ndarray(shape_ptr, dtype=np.int32, buffer=ptr_mem.buf)
+            ptr_shared = np.ndarray(shape_ptr, dtype=np.int64, buffer=ptr_mem.buf)
             ptr_shared[:] = indptr[:]
 
             idx_mem = manager.SharedMemory(indices.nbytes)
-            idx_shared = np.ndarray(shape_dat, dtype=np.int32, buffer=idx_mem.buf)
+            idx_shared = np.ndarray(shape_dat, dtype=np.int64, buffer=idx_mem.buf)
             idx_shared[:] = indices[:]
 
             args = zip(repeat(dat_mem.name),repeat(ptr_mem.name),repeat(idx_mem.name),repeat(shape_dat),repeat(shape_ptr),repeat(rows),repeat(cols),repeat(nnz),PDs)
@@ -359,11 +361,11 @@ def compute_B(L,P,lTerm,n_c=10):
          dat_shared[:] = data[:]
 
          ptr_mem = manager.SharedMemory(indptr.nbytes)
-         ptr_shared = np.ndarray(shape_ptr, dtype=np.int32, buffer=ptr_mem.buf)
+         ptr_shared = np.ndarray(shape_ptr, dtype=np.int64, buffer=ptr_mem.buf)
          ptr_shared[:] = indptr[:]
 
          idx_mem = manager.SharedMemory(indices.nbytes)
-         idx_shared = np.ndarray(shape_dat, dtype=np.int32, buffer=idx_mem.buf)
+         idx_shared = np.ndarray(shape_dat, dtype=np.int64, buffer=idx_mem.buf)
          idx_shared[:] = indices[:]
 
          args = zip(repeat(dat_mem.name),repeat(ptr_mem.name),repeat(idx_mem.name),
@@ -384,8 +386,8 @@ def compute_block_linv_shared(address_dat,address_ptr,address_idx,shape_dat,shap
    idx_shared = shared_memory.SharedMemory(name=address_idx,create=False)
 
    data = np.ndarray(shape_dat,dtype=np.double,buffer=dat_shared.buf)
-   indptr = np.ndarray(shape_ptr,dtype=np.int32,buffer=ptr_shared.buf)
-   indices = np.ndarray(shape_dat,dtype=np.int32,buffer=idx_shared.buf)
+   indptr = np.ndarray(shape_ptr,dtype=np.int64,buffer=ptr_shared.buf)
+   indices = np.ndarray(shape_dat,dtype=np.int64,buffer=idx_shared.buf)
 
    L = cpp_solvers.solve_tr(rows, cols, nnz, data, indptr, indices, T)
 
@@ -418,11 +420,11 @@ def compute_Linv(L,n_c=10):
          dat_shared[:] = data[:]
 
          ptr_mem = manager.SharedMemory(indptr.nbytes)
-         ptr_shared = np.ndarray(shape_ptr, dtype=np.int32, buffer=ptr_mem.buf)
+         ptr_shared = np.ndarray(shape_ptr, dtype=np.int64, buffer=ptr_mem.buf)
          ptr_shared[:] = indptr[:]
 
          idx_mem = manager.SharedMemory(indices.nbytes)
-         idx_shared = np.ndarray(shape_dat, dtype=np.int32, buffer=idx_mem.buf)
+         idx_shared = np.ndarray(shape_dat, dtype=np.int64, buffer=idx_mem.buf)
          idx_shared[:] = indices[:]
 
          args = zip(repeat(dat_mem.name),repeat(ptr_mem.name),repeat(idx_mem.name),repeat(shape_dat),repeat(shape_ptr),repeat(rows),repeat(cols),repeat(nnz),Ts)
