@@ -8,6 +8,7 @@ from .src.python.sem import anneal_temps_zero,const_temps,compute_log_probs,pre_
 from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 from .src.python.penalties import PenType
+from .src.python.utils import sample_MVN
 
 ##################################### Base Class #####################################
 
@@ -329,12 +330,87 @@ class GAMM(MSSM):
     
     ##################################### Prediction #####################################
 
-    def predict(self, use_terms, n_dat,alpha=0.05,ci=False):
+    def sample_post(self,n_ps,use_post=None,deviations=False,seed=None):
+        """
+        Obtain ``n_ps`` samples from posterior [\boldsymbol{\beta} - \hat{\boldsymbol{\beta}}] | y,\lambda ~ N(0,V),
+        where V is [X.T@X + S_\lambda]^{-1}*scale (see Wood, 2017; section 6.10). To obtain samples for \boldsymbol{\beta},
+        simply set ``deviations`` to false.
+
+        see ``sample_MVN`` in ``mssm.src.python.utils.py`` for more details.
+
+        References:
+        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+        Parameters:
+
+        :param use_post: The indices corresponding to coefficients for which to actually obtain samples.
+        """
+        if deviations:
+            post = sample_MVN(n_ps,0,self.__scale,P=None,L=None,LI=self.lvi,use=use_post,seed=seed)
+        else:
+            post = sample_MVN(n_ps,self.__coef,self.__scale,P=None,L=None,LI=self.lvi,use=use_post,seed=seed)
+        
+        return post
+    
+    def __adjust_CI(self,n_ps,b,predi_mat,use_terms,alpha,seed):
+        """
+        Adjusts point-wise CI to behave like whole-interval (based on Wood, 2017; section 6.10.2 and Simpson, 2016):
+
+        self.coef +- b gives point-wise interval, so for interval to be whole-interval
+        1-alpha% of posterior samples should fall completely within these boundaries.
+
+        From section 6.10 in Wood (2017) we have that *coef | y, lambda ~ N(coef,V), where V is self.lvi.T @ self.lvi * self.__scale.
+        Implication is that deviations [*coef - coef] | y, lambda ~ N(0,V). In line with definition above, 1-alpha% of
+        predi_mat@[*coef - coef] should fall within [b,-b]. Wood (2017) suggests to find a so that [a*b,a*-b] achieves this.
+
+        To do this, we find a for every predi_mat@[*coef - coef] and then select the final one so that 1-alpha% of samples had an equal or lower
+        one. The consequence: 1-alpha% of samples drawn should fall completely within the modified boundaries.
+
+        References:
+        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+        - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
+        """
+        use_post = None
+        if not use_terms is None:
+            # If we have many random factor levels, but want to make predictions only
+            # for fixed effects, it's wasteful to sample all coefficients from posterior.
+            # The code below performs a selection of the coefficients to be sampled.
+            use_post = predi_mat.sum(axis=0) != 0
+            use_post = np.arange(0,predi_mat.shape[1])[use_post]
+
+        # Sample deviations [*coef - coef] from posterior of GAMM
+        post = self.sample_post(n_ps,use_post,deviations=True,seed=seed)
+
+        # To make computations easier take the abs of predi_mat@[*coef - coef], because [b,-b] is symmetric we can
+        # simply check whether abs(predi_mat@[*coef - coef]) < b by computing abs(predi_mat@[*coef - coef])/b. The max of
+        # this ratio, over rows of predi_mat, is a for this sample. If a<=1, no extension is necessary for this series.
+        if use_post is None:
+            fpost = np.abs(predi_mat@post)
+        else:
+            fpost = np.abs(predi_mat[:,use_post]@post)
+
+        # Compute ratio between abs(predi_mat@[*coef - coef])/b for every sample.
+        fpost = fpost / b[:,None]
+
+        # Then compute max of this ratio, over rows of predi_mat, for every sample. np.max(fpost,axis=0) now is a vector
+        # with n_ps elements, holding for each sample the multiplicative adjustment a, necessary to ensure that predi_mat@[*coef - coef]
+        # falls completely between [a*b,a*-b].
+        # The final multiplicative adjustment bmadq is selected from this vector to be high enough so that in 1-(alpha) simulations
+        # we have an equal or lower a.
+        bmadq = np.quantile(np.max(fpost,axis=0),1-alpha)
+
+        # Then adjust b
+        b *= bmadq
+
+        return b
+
+    def predict(self, use_terms, n_dat,alpha=0.05,ci=False,whole_interval=False,n_ps=10000,seed=None):
         """
         Make a prediction using the fitted model for new data ``n_dat`` using only the terms indexed by ``use_terms``.
 
         References:
         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+        - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
 
         Parameters:
 
@@ -401,11 +477,18 @@ class GAMM(MSSM):
             c = predi_mat @ self.lvi.T @ self.lvi * self.__scale @ predi_mat.T
             c = c.diagonal()
             b = scp.stats.norm.ppf(1-(alpha/2)) * np.sqrt(c)
+
+            # Whole-interval CI (section 6.10.2 in Wood, 2017), the same idea was also
+            # explored by Simpson (2016) who performs very similar computations to compute
+            # such intervals. See __adjust_CI function.
+            if whole_interval:
+                b = self.__adjust_CI(n_ps,b,predi_mat,use_terms,alpha,seed)
+
             return pred,predi_mat,b
 
         return pred,predi_mat,None
     
-    def predict_diff(self,dat1,dat2,use_terms,alpha=0.05):
+    def predict_diff(self,dat1,dat2,use_terms,alpha=0.05,whole_interval=False,n_ps=10000,seed=None):
         """
         Get the difference in the predictions for two datasets. Useful to compare a smooth estimated for
         one level of a factor to the smooth estimated for another level of a factor. In that case, ``dat1`` and
@@ -413,6 +496,7 @@ class GAMM(MSSM):
 
         References:
         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+        - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
         - ``get_difference`` function from ``itsadug`` R-package: https://rdrr.io/cran/itsadug/man/get_difference.html
 
         Parameters:
@@ -446,6 +530,12 @@ class GAMM(MSSM):
         c = pmat_diff @ self.lvi.T @ self.lvi * self.__scale @ pmat_diff.T
         c = c.diagonal()
         b = scp.stats.norm.ppf(1-(alpha/2)) * np.sqrt(c)
+
+        # Whole-interval CI (section 6.10.2 in Wood, 2017), the same idea was also
+        # explored by Simpson (2016) who performs very similar computations to compute
+        # such intervals. See __adjust_CI function.
+        if whole_interval:
+            b = self.__adjust_CI(n_ps,b,pmat_diff,use_terms,alpha,seed)
 
         return diff,b
 

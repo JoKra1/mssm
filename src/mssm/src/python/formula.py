@@ -113,7 +113,7 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
       # Now decompose X = Q @ R
       if QR:
          _,R = scp.linalg.qr(X.toarray(),mode='economic')
-         R = scp.sparse.csc_array(R)
+         R = scp.sparse.csr_array(R)
          
       else:
          XX = (X.T @ X).tocsc()
