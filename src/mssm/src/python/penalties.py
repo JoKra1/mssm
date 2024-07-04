@@ -89,7 +89,7 @@ def id_dist_pen(n,constraint,f=None):
 
   return elements,idx,idx,elements,idx,idx,n # I' @ I = I; also identity is full rank
 
-def TP_pen(S_j,D_j,j,ks,constraint,m_rank):
+def TP_pen(S_j,D_j,j,ks,constraint):
    # Tensor smooth penalty - not including the reparameterization of Wood (2017) 5.6.2
    # but reflecting Eilers & Marx (2003) instead
    if j == 0:
@@ -98,7 +98,7 @@ def TP_pen(S_j,D_j,j,ks,constraint,m_rank):
    else:
       S_TP = scp.sparse.identity(ks[0])
       D_TP = scp.sparse.identity(ks[0])
-      m_rank *= ks[0] # Modify rank of marginal - identities are full-rank.
+      #m_rank *= ks[0] # Modify rank of marginal - identities are full-rank.
    
    for i in range(1,len(ks)):
       if j == i:
@@ -107,7 +107,7 @@ def TP_pen(S_j,D_j,j,ks,constraint,m_rank):
       else:
          S_TP = scp.sparse.kron(S_TP,scp.sparse.identity(ks[i]),format='csc')
          D_TP = scp.sparse.kron(D_TP,scp.sparse.identity(ks[i]),format='csc')
-         m_rank *= ks[i]
+         #m_rank *= ks[i]
    
    if constraint is not None:
      Z = constraint.Z
@@ -129,7 +129,7 @@ def TP_pen(S_j,D_j,j,ks,constraint,m_rank):
 
    pen_data,pen_rows,pen_cols = translate_sparse(S_TP)
    chol_data,chol_rows,chol_cols = translate_sparse(D_TP)
-   return pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,m_rank
+   return pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols
 
 @dataclass
 class LambdaTerm:
