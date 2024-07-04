@@ -218,6 +218,7 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
       SJ_reps = [] # How often should SJ be stacked
       SJ_term_idx = [] # Penalty index of every SJ
       SJ_idx = [] # start index of every SJ
+      SJ_coef = [] # Number of coef in the term penalized by a (sum of) SJ
       SJ_idx_max = 0 # Max starting index - used to decide whether a new SJ should be added.
       SJ_idx_len = 0 # Number of separate SJ blocks.
 
@@ -231,6 +232,7 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
             ljs.append([lTerm.lam])
             SJ_term_idx.append([lti])
             SJ_reps.append(lTerm.rep_sj)
+            SJ_coef.append(lTerm.S_J.shape[1])
             SJ_idx.append(lTerm.start_index)
             SJ_idx_max = lTerm.start_index
             SJ_idx_len += 1
@@ -250,12 +252,14 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
       
       # Now we can re-parameterize SJ groups of length > 1
       Sj_reps = [] # Will hold transformed S_J
+      Q_reps = []
+      QT_reps = []
       for pen in S:
-         Sj_reps.append(LambdaTerm(S_J=copy.deepcopy(pen.S_J),rep_sj=pen.rep_sj,lam=pen.lam,type=pen.type,rank=pen.rank,term=pen.term))
+         Sj_reps.append(LambdaTerm(S_J=copy.deepcopy(pen.S_J),rep_sj=pen.rep_sj,lam=pen.lam,type=pen.type,rank=pen.rank,term=pen.term,start_index=pen.start_index))
 
       S_reps = [] # Term specific S_\lambda
       eps = sys.float_info.epsilon**0.7
-
+      Mp = Sj_reps[0].start_index # Number of un-penalized dimensions (Kernel space dimension of total S_\lambda; Wood, 2011)
       for grp_idx,SJgroup,LJgroup in zip(SJ_term_idx,SJs,ljs):
 
 
@@ -272,20 +276,34 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
 
          Ur = U[:,D > max(D)*eps]
          r = Ur.shape[1] # Range dimension
+         Mp += (normed_S.shape[1] - r)
 
          # Initial re-parameterization as discussed by Wood (2011)
          if r < normed_S.shape[1]:
             SJbar = [Ur.T@SJ_mat@Ur for SJ_mat in SJgroup]
+
+            if not X is None:
+               Q_rep0 = copy.deepcopy(Ur) # Need to account for this when computing Q matrix.
          else:
             SJbar = copy.deepcopy(SJgroup)
-
+            Q_rep0 = None
+            
          if len(SJgroup) == 1: # No further re-parameterization necessary
             Sj_reps[grp_idx[0]].S_J = SJbar[0]
             S_reps.append(SJbar[0]*LJgroup[0])
+
+            if not X is None:
+               if not Q_rep0 is None:
+                  Q_reps.append(scp.sparse.csc_array(Q_rep0))
+                  QT_reps.append(scp.sparse.csc_array(Q_rep0.T))
+               else:
+                  Q_reps.append(scp.sparse.eye(r,format='csc'))
+                  QT_reps.append(scp.sparse.eye(r,format='csc'))
             continue
 
          S_Jrep = copy.deepcopy(SJbar) # Original S_J transformed 
          S_rep = None
+         Q_rep = None
 
          # Initialization as described by Wood (2011)
          K = 0
@@ -356,6 +374,9 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
                   S_rep = C
                   Ta = np.concatenate((Ur.toarray(),np.zeros((Ur.shape[0],n))),axis=1)
                   Tg = U.toarray()
+                  
+                  if not X is None:
+                     Q_rep = U.toarray()
             else:
                   A = S_rep[:K,:K]
                   B = S_rep[:K,:Q]
@@ -368,6 +389,9 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
                   
                   Tb = np.concatenate((np.concatenate((np.identity(K),np.zeros((K,r+n))),axis=1),
                                        np.concatenate((np.zeros((U.shape[0],K)),U.toarray()),axis=1)),axis=0)
+                  
+                  if not X is None:
+                     Q_rep = Tb @ Q_rep
 
             #print(Ta.shape,Tg.shape)
             # Transform remaining terms that made up Sjk
@@ -388,8 +412,16 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
             Sj_reps[grp_idx[j]].S_J = scp.sparse.csc_array(S_Jrep[j])
          
          S_reps.append(scp.sparse.csc_array(S_rep))
+
+         if not X is None:
+            if not Q_rep0 is None:
+               Q_reps.append(scp.sparse.csc_array(Q_rep0@Q_rep))
+               QT_reps.append(scp.sparse.csc_array(Q_rep.T@Q_rep0.T))
+            else:
+               Q_reps.append(scp.sparse.csc_array(Q_rep))
+               QT_reps.append(scp.sparse.csc_array(Q_rep.T))
          
-      return Sj_reps,S_reps
+      return Sj_reps,S_reps,SJ_term_idx,SJ_idx,SJ_coef,Q_reps,QT_reps,Mp
          
    else:
       raise NotImplementedError(f"Requested option {option} for reparameterization is not implemented.")

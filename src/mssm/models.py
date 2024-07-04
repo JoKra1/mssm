@@ -8,7 +8,7 @@ from .src.python.sem import anneal_temps_zero,const_temps,compute_log_probs,pre_
 from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 from .src.python.penalties import PenType
-from .src.python.utils import sample_MVN
+from .src.python.utils import sample_MVN,REML
 
 ##################################### Base Class #####################################
 
@@ -210,7 +210,22 @@ class GAMM(MSSM):
             elif pen_out > 1:
                 print(f"\n{pen_out} terms have been effectively penalized to zero and are marked with a '*'")
                         
-
+    def get_reml(self):
+        """
+        Get's the REML (Restrcited Maximum Likelihood) score for the estimated lambda values (e.g., Wood, 2011).
+        """
+        if self.__coef is None or self.formula.penalties is None:
+            raise ValueError("Model needs to be estimated before evaluating the REML score. Call model.fit()")
+        
+        scale = self.family.scale
+        if self.family.twopar:
+            scale = self.__scale # Estimated scale
+        
+        X = self.get_mmat()
+        llk = self.get_llk(False)
+        reml = REML(llk,(X.T@X).tocsc(),self.__coef,scale,self.formula.penalties)
+        
+        return reml
                 
     ##################################### Fitting #####################################
     
