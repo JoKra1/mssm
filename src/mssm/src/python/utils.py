@@ -119,7 +119,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties):
 
    # Now compute REML for candidate
    reml = REML(llk,(X.T@X).tocsc(),coef,scale,penalties)
-   return reml
+   return reml,LP,Pr,coef,scale
    
 
 def REML(llk,H,coef,scale,penalties):
