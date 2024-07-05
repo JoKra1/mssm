@@ -2,8 +2,11 @@ import numpy as np
 import scipy as scp
 import math
 import warnings
-from ..python.gamm_solvers import cpp_backsolve_tr,compute_S_emb_pinv_det,cpp_chol,cpp_solve_coef,update_scale_edf
+import itertools
+import copy
+from ..python.gamm_solvers import cpp_backsolve_tr,compute_S_emb_pinv_det,cpp_chol,cpp_solve_coef,update_scale_edf,compute_Linv,apply_eigen_perm,tqdm
 from ..python.formula import reparam
+from ..python.exp_fam import Family,Gaussian
 
 def sample_MVN(n,mu,scale,P,L,LI=None,use=None,seed=None):
     """
@@ -98,8 +101,12 @@ def compute_reml_candidate_GAMM(family,y,X,penalties):
 
    Used for computing the correction applied to the edf for the GLRT - based on Wood (2017) and Wood et al., (2016).
 
-   See REML function below for morre details.
+   See REML function below for more details.
    """
+
+   if not isinstance(family,Gaussian):
+       raise TypeError("REML computation for a specific lambda candidate is currently only implemented for Gaussian additive models.")
+
    S_emb,_,_ = compute_S_emb_pinv_det(X.shape[1],penalties,"svd")
    LP, Pr, coef, code = cpp_solve_coef(y,X,S_emb)
 
@@ -126,6 +133,10 @@ def REML(llk,H,coef,scale,penalties):
    """
    Based on Wood (2011). Exact REML for Gaussian GAM, Laplace approximate (Wood, 2016) for everything else.
    Evaluated after applying stabilizing reparameterization discussed by Wood (2011).
+
+   References:
+   - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
+   - Wood, S. N., Pya, N., Saefken, B., (2016). Smoothing Parameter and Model Selection for General Smooth Models
    """ 
 
    # Compute S_\lambda before any re-parameterization
@@ -190,3 +201,102 @@ def REML(llk,H,coef,scale,penalties):
 
    # Done
    return reml + lgdetS/2 - lgdetXXS/2 + Mp/2*np.log(2*np.pi)
+
+def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ'):
+    """
+    Wood et al. (2016) and Wood (2017) show that when basing conditional versions of model selection criteria or hypothesis
+    tests on Vb, which is the co-variance matrix for the conditional posterior of \boldsymbol{\beta} so that
+    \boldsymbol{\beta} | y, \lambda ~ N(\hat{\boldsymbol{\beta}},Vb), the tests are severely biased. To correct for this they
+    show that uncertainty in \lambda needs to be accounted for. Hence they suggest to base these tests on V, the covariance matrix
+    of the unconditional posterior \boldsymbol{\beta} | y ~ N(\hat{\boldsymbol{\beta}},V). They show how to obtain an estimate of V,
+    but this requires V_p - an estimate of the covariance matrix of log(\lambda). V_p requires derivatives that are not available
+    when using the efs update.
+
+    Greven & Scheipl in their comment to the paper by Wood et al. (2016) show another option to estimate V that does not require V_p,
+    based either on forming a mixture approximation or on the total variance property. The latter is implemented below, based on the
+    equations for the expectations outlined in their response. A problem of this estimate is that a grid of \lambda values needs to be
+    provided covering the prior on \lambda (see Wood 2011 for the relation between smoothness penalties and this prior). For ``mssm`` the
+    limits on this are 1e-7 and 1e7. However, as the authors already conclude, covering the entire prior range is not that efficient.
+    Hence we provide an alternative way to set-up the grid, based on first forming marginal grids for each \lambda that contain nR equally-spaced
+    samples from \lambda/lr to \lambda*lr. This is done when argument grid_type = 'JJJ'. Otherwise, the G&S strategy is employed - forming a grid over
+    the full space (from 1e-7 to 1e7, again evaluated for nR equally-spaced values and then permuted for the number of \lambda parameters). Note that
+    the latter can get very expensive quite quickly.
+
+    References:
+    - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
+    - Wood, S. N., Pya, N., Saefken, B., (2016). Smoothing Parameter and Model Selection for General Smooth Models
+    - Greven, S., & Scheipl, F. (2016). Comment on: Smoothing Parameter and Model Selection for General Smooth Models
+    - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+    """
+
+    nPen = len(model.formula.penalties)
+    rPen = copy.deepcopy(model.formula.penalties)
+
+    if grid_type == 'GS':
+        # Build Full prior grid as discussed by Greven & Scheipl in their comment on Wood et al. (2016)
+        rGrid = np.exp(np.linspace(np.log(1e-7),np.log(1e7),nR))
+        rGrid = np.array(list(itertools.permutations(rGrid,nPen)))
+    else:
+        # Set up grid of nR equidistant values based on marginal grids that cover range from \lambda/lr to \lambda*lr
+        rGrid = [np.exp(np.linspace(np.log(max([1e-7,pen.lam/lR])),np.log(min([1e7,pen.lam*lR])),nR))for pen in rPen]
+        rGrid = np.array(list(itertools.product(*rGrid)))
+
+    y = model.formula.y_flat[model.formula.NOT_NA_flat]
+    X = model.get_mmat()
+    family = model.family
+
+    orig_scale = family.scale
+    if family.twopar:
+        _,orig_scale = model.get_pars()
+
+    remls = []
+    Vs = []
+    coefs = []
+
+    for r in tqdm(rGrid):
+
+        # Prepare penalties with current lambda candidate r
+        for ridx,rc in enumerate(r):
+            rPen[ridx].lam = rc
+        
+        # Now compute REML - and all other terms needed for correction proposed by Greven & Scheipl (2017)
+        reml,LP,Pr,coef,scale = compute_reml_candidate_GAMM(family,y,X,rPen)
+        coef = coef.reshape(-1,1)
+
+        # Form VB, first solve LP{^-1}
+        LPinv = compute_Linv(LP)
+        Linv = apply_eigen_perm(Pr,LPinv)
+
+        # Can already compute first term from correction
+        Vb = Linv.T@Linv*scale
+        Vb += coef@coef.T
+
+        # Now collect what we need for the remaining terms
+        Vs.append(Vb)
+        coefs.append(coef)
+        remls.append(reml)
+
+    # Compute weights proposed by Greven & Scheipl (2017)
+    ws = scp.special.softmax(remls)
+
+    # Now compute \hat{cov(\boldsymbol{\beta}|y)}
+    Vr1 = ws[0]*Vs[0] # E_{p|y}[V_\boldsymbol{\beta}(\lambda)] + E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] in Greven & Scheipl (2017)
+    Vr2 = ws[0]*coefs[0] # E_{p|y}[\boldsymbol{\beta}] in Greven & Scheipl (2017)
+
+    for ri in range(1,len(rGrid)):
+
+        Vr1 += ws[ri]*Vs[ri]
+        Vr2 += ws[ri]*coefs[ri]
+
+    # Now, Greven & Scheipl provide final estimate =
+    # E_{p|y}[V_\boldsymbol{\beta}(\lambda)] + E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] - E_{p|y}[\boldsymbol{\beta}] E_{p|y}[\boldsymbol{\beta}]^T
+    V = Vr1 - (Vr2@Vr2.T)
+
+    # Check V is full rank - can use LV for sampling as well..
+    LV,code = cpp_chol(scp.sparse.csc_array(V))
+    if code != 0:
+        raise ValueError("Failed to estimate unconditional covariance matrix.")
+
+    # Compute corrected edf
+    total_edf = (V@((X.T@X)/orig_scale)).trace()
+    return V,LV,total_edf

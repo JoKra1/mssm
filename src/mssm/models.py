@@ -214,6 +214,9 @@ class GAMM(MSSM):
         """
         Get's the REML (Restrcited Maximum Likelihood) score for the estimated lambda values (e.g., Wood, 2011).
         """
+        if not isinstance(self.family,Gaussian):
+            raise TypeError("REML score can currently only be obtained for Gaussian additive models. It can be computed via the REML function in mssm.src.python.utils when H=X.T@W@X is formed manually.")
+        
         if self.__coef is None or self.formula.penalties is None:
             raise ValueError("Model needs to be estimated before evaluating the REML score. Call model.fit()")
         
