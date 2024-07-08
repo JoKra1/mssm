@@ -111,7 +111,7 @@ class GAMM(MSSM):
         """ Returns a tuple. The first entry is a np.array with all estimated coefficients. The second entry is the estimated scale parameter. Will contain Nones before fitting."""
         return self.__coef,self.__scale
     
-    def get_llk(self,penalized:bool=True):
+    def get_llk(self,penalized:bool=True,ext_scale:float or None=None):
         """Get the (penalized) log-likelihood of the estimated model given the trainings data."""
 
         pen = 0
@@ -122,7 +122,10 @@ class GAMM(MSSM):
             if isinstance(self.family,Gaussian) == False:
                 mu = self.family.link.fi(self.pred)
             if self.family.twopar:
-                return self.family.llk(self.formula.y_flat[self.formula.NOT_NA_flat],mu,self.__scale) - pen
+                scale = self.__scale
+                if not ext_scale is None:
+                    scale = ext_scale
+                return self.family.llk(self.formula.y_flat[self.formula.NOT_NA_flat],mu,scale) - pen
             else:
                 return self.family.llk(self.formula.y_flat[self.formula.NOT_NA_flat],mu) - pen
         return None

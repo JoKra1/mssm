@@ -2,10 +2,10 @@ import numpy as np
 import scipy as scp
 import math
 import warnings
-import itertools
+from itertools import permutations,product,repeat
 import copy
-from ..python.gamm_solvers import cpp_backsolve_tr,compute_S_emb_pinv_det,cpp_chol,cpp_solve_coef,update_scale_edf,compute_Linv,apply_eigen_perm,tqdm
-from ..python.formula import reparam
+from ..python.gamm_solvers import cpp_backsolve_tr,compute_S_emb_pinv_det,cpp_chol,cpp_solve_coef,update_scale_edf,compute_Linv,apply_eigen_perm,tqdm,managers,shared_memory,cpp_solve_coefXX
+from ..python.formula import reparam,map_csc_to_eigen,mp
 from ..python.exp_fam import Family,Gaussian
 
 def sample_MVN(n,mu,scale,P,L,LI=None,use=None,seed=None):
@@ -202,7 +202,63 @@ def REML(llk,H,coef,scale,penalties):
    # Done
    return reml + lgdetS/2 - lgdetXXS/2 + Mp/2*np.log(2*np.pi)
 
-def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ'):
+def _compute_VB_corr_terms_MP(family,address_y,address_dat,address_ptr,address_idx,address_datXX,address_ptrXX,address_idxXX,shape_y,shape_dat,shape_ptr,shape_datXX,shape_ptrXX,rows,cols,rPen,r):
+   """
+   Multi-processing code for Grevel & Scheipl correction for Gaussian additive model - see ``correct_VB`` for details.
+   """
+   dat_shared = shared_memory.SharedMemory(name=address_dat,create=False)
+   ptr_shared = shared_memory.SharedMemory(name=address_ptr,create=False)
+   idx_shared = shared_memory.SharedMemory(name=address_idx,create=False)
+   dat_sharedXX = shared_memory.SharedMemory(name=address_datXX,create=False)
+   ptr_sharedXX = shared_memory.SharedMemory(name=address_ptrXX,create=False)
+   idx_sharedXX = shared_memory.SharedMemory(name=address_idxXX,create=False)
+   y_shared = shared_memory.SharedMemory(name=address_y,create=False)
+
+   data = np.ndarray(shape_dat,dtype=np.double,buffer=dat_shared.buf)
+   indptr = np.ndarray(shape_ptr,dtype=np.int64,buffer=ptr_shared.buf)
+   indices = np.ndarray(shape_dat,dtype=np.int64,buffer=idx_shared.buf)
+   dataXX = np.ndarray(shape_datXX,dtype=np.double,buffer=dat_sharedXX.buf)
+   indptrXX = np.ndarray(shape_ptrXX,dtype=np.int64,buffer=ptr_sharedXX.buf)
+   indicesXX = np.ndarray(shape_datXX,dtype=np.int64,buffer=idx_sharedXX.buf)
+   y = np.ndarray(shape_y,dtype=np.double,buffer=y_shared.buf)
+
+   X = scp.sparse.csc_array((data,indices,indptr),shape=(rows,cols),copy=False)
+   XX = scp.sparse.csc_array((dataXX,indicesXX,indptrXX),shape=(cols,cols),copy=False)
+
+   # Prepare penalties with current lambda candidate r
+   for ridx,rc in enumerate(r):
+        rPen[ridx].lam = rc
+
+   # Now compute REML - and all other terms needed for correction proposed by Greven & Scheipl (2017)
+   S_emb,_,_ = compute_S_emb_pinv_det(X.shape[1],rPen,"svd")
+   LP, Pr, coef, code = cpp_solve_coef(y,X,S_emb)
+
+   if code != 0:
+       raise ValueError("Forming coefficients for specified penalties was not possible.")
+   
+   eta = (X @ coef).reshape(-1,1)
+   
+   # Optionally estimate scale
+   if family.twopar:
+        _,_,_,_,_,scale = update_scale_edf(y,None,eta,None,X.shape[0],X.shape[1],LP,None,Pr,None,family,rPen,10)
+
+        llk = family.llk(y,eta,scale)
+   else:
+        scale = family.scale
+        llk = family.llk(y,eta)
+
+   # Now compute REML for candidate
+   reml = REML(llk,XX,coef,scale,rPen)
+   coef = coef.reshape(-1,1)
+
+   # Form VB, first solve LP{^-1}
+   LPinv = compute_Linv(LP,1)
+   Linv = apply_eigen_perm(Pr,LPinv)
+
+   # Now collect what we need for the remaining terms
+   return Linv,coef,reml,scale
+
+def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t1=False,verbose=False):
     """
     Wood et al. (2016) and Wood (2017) show that when basing conditional versions of model selection criteria or hypothesis
     tests on Vb, which is the co-variance matrix for the conditional posterior of \boldsymbol{\beta} so that
@@ -234,12 +290,12 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ'):
 
     if grid_type == 'GS':
         # Build Full prior grid as discussed by Greven & Scheipl in their comment on Wood et al. (2016)
-        rGrid = np.exp(np.linspace(np.log(1e-7),np.log(1e7),nR))
-        rGrid = np.array(list(itertools.permutations(rGrid,nPen)))
+        rGrid = [np.exp(np.linspace(np.log(1e-7),np.log(1e7),nR)) for _ in range(nPen)]
+        rGrid = np.array(list(product(*rGrid)))
     else:
         # Set up grid of nR equidistant values based on marginal grids that cover range from \lambda/lr to \lambda*lr
         rGrid = [np.exp(np.linspace(np.log(max([1e-7,pen.lam/lR])),np.log(min([1e7,pen.lam*lR])),nR))for pen in rPen]
-        rGrid = np.array(list(itertools.product(*rGrid)))
+        rGrid = np.array(list(product(*rGrid)))
 
     y = model.formula.y_flat[model.formula.NOT_NA_flat]
     X = model.get_mmat()
@@ -253,40 +309,107 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ'):
     Vs = []
     coefs = []
 
-    for r in tqdm(rGrid):
+    if X.shape[1] < 2000 and isinstance(family,Gaussian) and n_c > 1: # Parallelize grid search
+        with managers.SharedMemoryManager() as manager, mp.Pool(processes=n_c) as pool:
+            # Create shared memory copies of data, indptr, and indices for X, XX, and y
 
-        # Prepare penalties with current lambda candidate r
-        for ridx,rc in enumerate(r):
-            rPen[ridx].lam = rc
-        
-        # Now compute REML - and all other terms needed for correction proposed by Greven & Scheipl (2017)
-        reml,LP,Pr,coef,scale = compute_reml_candidate_GAMM(family,y,X,rPen)
-        coef = coef.reshape(-1,1)
+            # X
+            rows, cols, _, data, indptr, indices = map_csc_to_eigen(X)
+            shape_dat = data.shape
+            shape_ptr = indptr.shape
+            shape_y = y.shape
 
-        # Form VB, first solve LP{^-1}
-        LPinv = compute_Linv(LP)
-        Linv = apply_eigen_perm(Pr,LPinv)
+            dat_mem = manager.SharedMemory(data.nbytes)
+            dat_shared = np.ndarray(shape_dat, dtype=np.double, buffer=dat_mem.buf)
+            dat_shared[:] = data[:]
 
-        # Can already compute first term from correction
-        Vb = Linv.T@Linv*scale
-        Vb += coef@coef.T
+            ptr_mem = manager.SharedMemory(indptr.nbytes)
+            ptr_shared = np.ndarray(shape_ptr, dtype=np.int64, buffer=ptr_mem.buf)
+            ptr_shared[:] = indptr[:]
 
-        # Now collect what we need for the remaining terms
-        Vs.append(Vb)
-        coefs.append(coef)
-        remls.append(reml)
+            idx_mem = manager.SharedMemory(indices.nbytes)
+            idx_shared = np.ndarray(shape_dat, dtype=np.int64, buffer=idx_mem.buf)
+            idx_shared[:] = indices[:]
+
+            #XX
+            _, _, _, dataXX, indptrXX, indicesXX = map_csc_to_eigen((X.T@X).tocsc())
+            shape_datXX = dataXX.shape
+            shape_ptrXX = indptrXX.shape
+
+            dat_memXX = manager.SharedMemory(dataXX.nbytes)
+            dat_sharedXX = np.ndarray(shape_datXX, dtype=np.double, buffer=dat_memXX.buf)
+            dat_sharedXX[:] = dataXX[:]
+
+            ptr_memXX = manager.SharedMemory(indptrXX.nbytes)
+            ptr_sharedXX = np.ndarray(shape_ptrXX, dtype=np.int64, buffer=ptr_memXX.buf)
+            ptr_sharedXX[:] = indptrXX[:]
+
+            idx_memXX = manager.SharedMemory(indicesXX.nbytes)
+            idx_sharedXX = np.ndarray(shape_datXX, dtype=np.int64, buffer=idx_memXX.buf)
+            idx_sharedXX[:] = indicesXX[:]
+
+            # y
+            y_mem = manager.SharedMemory(y.nbytes)
+            y_shared = np.ndarray(shape_y, dtype=np.double, buffer=y_mem.buf)
+            y_shared[:] = y[:]
+
+            args = zip(repeat(family),repeat(y_mem.name),repeat(dat_mem.name),
+                       repeat(ptr_mem.name),repeat(idx_mem.name),repeat(dat_memXX.name),
+                       repeat(ptr_memXX.name),repeat(idx_memXX.name),repeat(shape_y),
+                       repeat(shape_dat),repeat(shape_ptr),repeat(shape_datXX),repeat(shape_ptrXX),
+                       repeat(rows),repeat(cols),repeat(rPen),rGrid)
+            Linvs, coefs, remls, scales = zip(*pool.starmap(_compute_VB_corr_terms_MP,args))
+
+    else: # Better to parallelize inverse computation necessary to obtain Vb
+        enumerator = rGrid
+        if verbose:
+            enumerator = tqdm(rGrid)
+        for r in enumerator:
+
+            # Prepare penalties with current lambda candidate r
+            for ridx,rc in enumerate(r):
+                rPen[ridx].lam = rc
+            
+            # Now compute REML - and all other terms needed for correction proposed by Greven & Scheipl (2017)
+            reml,LP,Pr,coef,scale = compute_reml_candidate_GAMM(family,y,X,rPen)
+            coef = coef.reshape(-1,1)
+
+            # Form VB, first solve LP{^-1}
+            LPinv = compute_Linv(LP,n_c)
+            Linv = apply_eigen_perm(Pr,LPinv)
+
+            # Can already compute first term from correction
+            Vb = Linv.T@Linv*scale
+            Vb += coef@coef.T
+
+            # Now collect what we need for the remaining terms
+            Vs.append(Vb)
+            coefs.append(coef)
+            remls.append(reml)
 
     # Compute weights proposed by Greven & Scheipl (2017)
     ws = scp.special.softmax(remls)
 
     # Now compute \hat{cov(\boldsymbol{\beta}|y)}
-    Vr1 = ws[0]*Vs[0] # E_{p|y}[V_\boldsymbol{\beta}(\lambda)] + E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] in Greven & Scheipl (2017)
-    Vr2 = ws[0]*coefs[0] # E_{p|y}[\boldsymbol{\beta}] in Greven & Scheipl (2017)
+    if X.shape[1] < 2000 and isinstance(family,Gaussian) and n_c > 1:
+        # E_{p|y}[V_\boldsymbol{\beta}(\lambda)] + E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] in Greven & Scheipl (2017)
+        Vr1 = ws[0]* ((Linvs[0].T@Linvs[0]*scales[0]) + (coefs[0]@coefs[0].T))
 
-    for ri in range(1,len(rGrid)):
+        # E_{p|y}[\boldsymbol{\beta}] in Greven & Scheipl (2017)
+        Vr2 = ws[0]*coefs[0] 
+        
+        # Now sum over remaining r
+        for ri in range(1,len(rGrid)):
+            Vr1 += ws[ri]*((Linvs[ri].T@Linvs[ri]*scales[ri]) + (coefs[ri]@coefs[ri].T))
+            Vr2 += ws[ri]*coefs[ri]
 
-        Vr1 += ws[ri]*Vs[ri]
-        Vr2 += ws[ri]*coefs[ri]
+    else:
+        Vr1 = ws[0]*Vs[0] 
+        Vr2 = ws[0]*coefs[0] 
+
+        for ri in range(1,len(rGrid)):
+            Vr1 += ws[ri]*Vs[ri]
+            Vr2 += ws[ri]*coefs[ri]
 
     # Now, Greven & Scheipl provide final estimate =
     # E_{p|y}[V_\boldsymbol{\beta}(\lambda)] + E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] - E_{p|y}[\boldsymbol{\beta}] E_{p|y}[\boldsymbol{\beta}]^T
@@ -297,6 +420,15 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ'):
     if code != 0:
         raise ValueError("Failed to estimate unconditional covariance matrix.")
 
-    # Compute corrected edf
-    total_edf = (V@((X.T@X)/orig_scale)).trace()
-    return V,LV,total_edf
+    # Compute corrected edf (e.g., for AIC; Wood, Pya, & Saefken, 2016)
+    total_edf = None
+    if form_t or form_t1:
+        F = V@((X.T@X)/orig_scale)
+        total_edf = F.trace()
+
+    # Compute corrected smoothness bias corrected edf (t1 in section 6.1.2 of Wood, 2017)
+    total_edf2 = None
+    if form_t1:
+        total_edf2 = 2*total_edf - (F@F).trace()
+
+    return V,LV,total_edf,total_edf2
