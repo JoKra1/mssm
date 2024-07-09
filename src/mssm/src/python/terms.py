@@ -220,7 +220,7 @@ class fs(f):
    """
     Essentially a ``f()`` term with ``by``=``rf``, ``id`` != None, ``penalize_null`` = True, and ``pen_kwargs`` = ``[{"m":1}]``.
     This term approximates the "factor-smooth interaction" basis "fs" with ``m``= 1 available in mgcv (Wood, 2017). It is however
-    not equivalent (mgcv by default uses a very different basis and the ``m`` key-word has a different functionality).
+    not equivalent (mgcv by default uses a different basis and the ``m`` key-word has a different functionality).
     
     Specifically, here ``m``= 1 implies that the only function left unpenalized by the default (difference) penalty is the constant. Thus,
     a linear ``f(``variables``)`` is penalized by the same default penalty that also penalizes smoothness (and not by a separate penalty as
@@ -269,6 +269,7 @@ class fs(f):
                 nk: int = 9,
                 m: int = 1,
                 rp:int = 1,
+                by_subgroup:[str,str]or None = None,
                 approx_deriv:dict or None = None,
                 constraint:penalties.ConstType=penalties.ConstType.QR,
                 basis: Callable = smooths.B_spline_basis,
@@ -282,6 +283,11 @@ class fs(f):
                        True, True, penalty, pen_kwargs)
       
       self.approx_deriv=approx_deriv
+      self.by_subgroup = by_subgroup
+
+      if not self.by_subgroup is None:
+
+         self.name +=  ": " + self.by_subgroup[1]
         
 class irf(GammTerm):
     def __init__(self,variables:[str],

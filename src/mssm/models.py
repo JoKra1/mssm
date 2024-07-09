@@ -323,7 +323,7 @@ class GAMM(MSSM):
                                                                                       self.family,maxiter,"svd",
                                                                                       conv_tol,extend_lambda,control_lambda,
                                                                                       exclude_lambda,extension_method_lam,
-                                                                                      self.formula.discretize is None,
+                                                                                      len(self.formula.discretize) == 0,
                                                                                       progress_bar,n_cores)
         
         else:
@@ -336,7 +336,7 @@ class GAMM(MSSM):
                                                                                        self.family,maxiter,"svd",
                                                                                        conv_tol,extend_lambda,control_lambda,
                                                                                        exclude_lambda,extension_method_lam,
-                                                                                       self.formula.discretize is None,
+                                                                                       len(self.formula.discretize) == 0,
                                                                                        progress_bar,n_cores)
         
         self.__coef = coef
@@ -457,10 +457,15 @@ class GAMM(MSSM):
         """
         var_map = self.formula.get_var_map()
         var_keys = var_map.keys()
+        sub_group_vars = self.formula.get_subgroup_variables()
 
         for k in var_keys:
-            if k not in n_dat.columns:
-                raise IndexError(f"Variable {k} is missing in new data.")
+            if k in sub_group_vars:
+                if k.split(":")[0] not in n_dat.columns:
+                    raise IndexError(f"Variable {k.split(':')[0]} is missing in new data.")
+            else:
+                if k not in n_dat.columns:
+                    raise IndexError(f"Variable {k} is missing in new data.")
         
         # Encode test data
         _,pred_cov_flat,_,_,_,_,_ = self.formula.encode_data(n_dat,prediction=True)
@@ -859,7 +864,7 @@ class sMsGAMM(MSSM):
                                                                                     self.family,maxiter_inner,"svd",
                                                                                     conv_tol,extend_lambda,control_lambda,
                                                                                     exclude_lambda,"nesterov",
-                                                                                    self.formula.discretize is None,
+                                                                                    len(self.formula.discretize) == 0,
                                                                                     False,self.cpus)
                     
                     
@@ -1185,7 +1190,7 @@ class sMsIRGAMM(sMsGAMM):
                                                                         self.family,maxiter_inner,"svd",
                                                                         conv_tol,extend_lambda,control_lambda,
                                                                         exclude_lambda,"nesterov",
-                                                                        self.formula.discretize is None,
+                                                                        len(self.formula.discretize) == 0,
                                                                         False,self.cpus)
 
         # For state proposals we can utilize a temparature schedule. See sMsGamm.fit().
@@ -1288,7 +1293,7 @@ class sMsIRGAMM(sMsGAMM):
                                                                              self.family,maxiter_inner,"svd",
                                                                              conv_tol,extend_lambda,control_lambda,
                                                                              exclude_lambda,"nesterov",
-                                                                             self.formula.discretize is None,
+                                                                             len(self.formula.discretize) == 0,
                                                                              False,self.cpus)
 
             # Next update all sojourn time distribution parameters

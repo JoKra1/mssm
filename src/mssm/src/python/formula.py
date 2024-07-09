@@ -1020,6 +1020,7 @@ class Formula():
         self.__var_types = {}
         self.__var_mins = {}
         self.__var_maxs = {}
+        self.__subgroup_variables = []
         self.__term_names = []
         self.__linear_terms = []
         self.__smooth_terms = []
@@ -1047,7 +1048,7 @@ class Formula():
         # Penalties
         self.penalties = None
         # Discretization?
-        self.discretize = None
+        self.discretize = {}
         
         # Perform input checks first for LHS/Dependent variable.
         if len(self.file_paths) == 0 and self.__lhs.variable not in self.__data.columns:
@@ -1085,7 +1086,7 @@ class Formula():
             
             if isinstance(term,fs):
                if not term.approx_deriv is None:
-                  self.discretize = term.approx_deriv
+                  self.discretize[ti] = term.approx_deriv
             
             # All variables must exist in data
             for var in term.variables:
@@ -1128,9 +1129,32 @@ class Formula():
                     if len(self.file_paths) > 0 and read_dtype(t_by,self.file_paths[0],self.file_loading_kwargs) in ['float64','int64']:
                         raise KeyError(f"Data-type of By-variable '{t_by}' attributed to term {ti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'.")
                     
-                     # Store information for by variables as well.
-                    cvi = self.__encode_var(t_by,'O',cvi,codebook)
+                    
+                    t_by_subgroup = None
+                    # Handle sub-cluster for factor smooth term.
+                    if isinstance(term, fs) and not term.by_subgroup is None:
 
+                       t_by_subgroup = term.by_subgroup
+
+                       if len(self.file_paths) == 0 and not t_by_subgroup[0] in self.__data.columns:
+                           raise KeyError(f"Sub-group by-variable '{t_by_subgroup}' attributed to term {ti} does not exist in dataframe.")
+                        
+                       if len(self.file_paths) == 0 and data[t_by_subgroup[0]].dtype in ['float64','int64']:
+                           raise KeyError(f"Data-type of sub-group by-variable '{t_by_subgroup[0]}' attributed to term {ti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'.")
+                        
+                       if len(self.file_paths) > 0 and read_dtype(t_by_subgroup[0],self.file_paths[0],self.file_loading_kwargs) in ['float64','int64']:
+                           raise KeyError(f"Data-type of sub-group by-variable '{t_by_subgroup[0]}' attributed to term {ti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'.")
+                       
+                       # Make sure sub-group variable is also encoded.
+                       cvi = self.__encode_var(t_by_subgroup[0],'O',cvi,codebook)
+
+                     # Store information for by variables as well.
+                    cvi = self.__encode_var(t_by,'O',cvi,codebook,by_subgroup=t_by_subgroup)
+                    
+                    # If no error was raised we can now over-write the by variable for the factor smooth
+                    if isinstance(term, fs) and  not t_by_subgroup is None:
+                        term.by += ":" + t_by_subgroup[1]
+                    
                     if isinstance(term, f) and not term.binary is None:
                         term.binary_level = self.__factor_codings[t_by][term.binary[1]]
 
@@ -1173,25 +1197,27 @@ class Formula():
             self.NOT_NA = NAs
             self.sid = sid
         
-        if self.discretize:
+        if len(self.discretize) > 0:
            if self.series_id is None:
                raise ValueError(f"The identifier column for unique series must be provided when requesting to approximate the derivative of one or more factor smooth terms.")
     
            if len(self.file_paths) != 0 and self.keep_cov == False:
               # Need to create cov_flat (or at least figure out the correct dimensions) and sid after all
-              sid_var_cov_flat = read_cov(self.__lhs.variable,self.series_id,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
-              self.cov_flat = np.zeros((len(sid_var_cov_flat),len(self.__var_to_cov.keys())),dtype=int)
+              #sid_var_cov_flat = read_cov(self.__lhs.variable,self.series_id,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+              #self.cov_flat = np.zeros((len(sid_var_cov_flat),len(self.__var_to_cov.keys())),dtype=int)
 
-              _, id = np.unique(sid_var_cov_flat,return_index=True)
-              self.sid = np.sort(id)
-
-           self.__cluster_discretize(*self.__split_discretize(self.__discretize()))
+              #_, id = np.unique(sid_var_cov_flat,return_index=True)
+              #self.sid = np.sort(id)
+              raise ValueError("``Formula.keep.cov`` must be set to ``True`` when reading data from file AND approximating the derivative for factor smooths.")
            
-           if len(self.file_paths) != 0 and self.keep_cov == False:
-              # Clean up
-              self.cov_flat = None
-              self.sid = None
-              self.series_id = None
+           for sti in self.discretize.keys():
+               self.__cluster_discretize(*self.__split_discretize(self.__discretize(sti),sti),sti)
+           
+           #if len(self.file_paths) != 0 and self.keep_cov == False:
+           #   # Clean up
+           #   self.cov_flat = None
+           #   self.sid = None
+           #   self.series_id = None
 
         # Absorb any constraints for model terms
         if len(self.file_paths) == 0:
@@ -1201,8 +1227,13 @@ class Formula():
 
         #print(self.n_coef,len(self.coef_names))
    
-    def __encode_var(self,var,vartype,cvi,codebook):
+    def __encode_var(self,var,vartype,cvi,codebook,by_subgroup=None):
       # Store information for all variables once.
+      if not by_subgroup is None:
+         _org_var = var
+         var += ":" + by_subgroup[1]
+         self.__subgroup_variables.append(var)
+
       if not var in self.__var_to_cov:
          self.__var_to_cov[var] = cvi
 
@@ -1222,11 +1253,22 @@ class Formula():
             self.__var_mins[var] = None
             self.__var_maxs[var] = None
 
-            # Code factor variables into integers for example for easy dummy coding
+            # Code factor variables into integers for easy dummy coding
             if len(self.file_paths) == 0:
-               levels = np.unique(self.__data[var])
+               if by_subgroup is None:
+                  levels = np.unique(self.__data[var])
+               else:
+                  levels = np.unique(self.__data.loc[self.__data[by_subgroup[0]] == by_subgroup[1],_org_var])
             else:
-               levels = read_unique(var,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+               if by_subgroup is None:
+                  levels = read_unique(var,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+               else:
+                  rf_fac = read_cov(self.__lhs.variable,_org_var,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+                  #print(len(rf_fac))
+                  sub_fac = read_cov(self.__lhs.variable,by_subgroup[0],self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+                  #print(len(rf_fac[sub_fac == by_subgroup[1]]))
+                  levels = np.unique(rf_fac[sub_fac == by_subgroup[1]])
+                  
 
             self.__factor_codings[var] = {}
             self.__coding_factors[var] = {}
@@ -1436,16 +1478,26 @@ class Formula():
 
       for c in var_keys:
          if data is None:
-            c_raw = read_cov_no_cor(c,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+            if c in self.__subgroup_variables:
+               c_raw = read_cov_no_cor(c.split(":")[0],self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+            else:
+               c_raw = read_cov_no_cor(c,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
          else:
-            c_raw = np.array(data[c])
+            if c in self.__subgroup_variables:
+               c_raw = np.array(data[c.split(":")[0]])
+            else:
+               c_raw = np.array(data[c])
 
          if var_types[c] == VarType.FACTOR:
 
             c_coding = factor_coding[c]
 
             # Code factor variable
-            c_code = [c_coding[cr] for cr in c_raw]
+            if c in self.__subgroup_variables:
+               # Set level to -1 which will be ignored later when building the factor smooth.
+               c_code = [c_coding[cr] if cr in c_coding else -1 for cr in c_raw]
+            else:
+               c_code = [c_coding[cr] for cr in c_raw]
 
             cov_flat[:,var_map[c]] = c_code
 
@@ -1459,7 +1511,7 @@ class Formula():
 
       return y_flat,cov_flat,NAs_flat,y,cov,NAs,sid
     
-    def __discretize(self):
+    def __discretize(self,sti):
       dig_cov_flat = np.zeros_like(self.cov_flat)
       var_types = self.get_var_types()
       var_map = self.get_var_map()
@@ -1470,10 +1522,10 @@ class Formula():
          # Skip variables that should be ignored all together.
          # Useful if one or more continuous variables can be split into
          # categorical factor passed along via "split_by"
-         if var in self.discretize["excl"] or var_types[var] == VarType.FACTOR:
+         if var in self.discretize[sti]["excl"] or var_types[var] == VarType.FACTOR:
             continue
 
-         if var not in self.discretize["no_disc"]:
+         if var not in self.discretize[sti]["no_disc"]:
             # Discretize continuous variable into k**0.5 bins, where k is the number of unique values this variable
             # took on in the training set (based on, Wood et al., 2017 "Gams for Gigadata").
             values = np.linspace(min(self.cov_flat[:,var_map[var]]),
@@ -1490,8 +1542,9 @@ class Formula():
       return dig_cov_flat[:,collected]
 
     
-    def __split_discretize(self,dig_cov_flat_all):
+    def __split_discretize(self,dig_cov_flat_all,sti):
       var_map = self.get_var_map()
+      factor_codings = self.get_factor_codings()
 
       # Create seried id column in ascending order:
       id_col = np.zeros(dig_cov_flat_all.shape[0],dtype=int)
@@ -1499,14 +1552,46 @@ class Formula():
       id_splits = [split + i for i,split in enumerate(id_splits)]
       id_col = np.concatenate(id_splits)
 
-      if len(self.discretize["split_by"]) == 0:
+      if not self.__terms[sti].by_subgroup is None:
+         # Adjust for fact that this factor smooth is fitted for separate level of sub-group.
+         sub_group_fact = self.__terms[sti].by_subgroup[0]
+         sub_group_lvl = self.__terms[sti].by_subgroup[1]
+
+         # Build index vector corresponding only to series of sub-group level
+         sub_lvl_idx = self.cov_flat[:,var_map[sub_group_fact]] == factor_codings[sub_group_fact][sub_group_lvl]
+
+         # Just take what belongs to the sub-group from the disceretized matrix
+         dig_cov_flat_all = dig_cov_flat_all[sub_lvl_idx,:]
+
+         # For id col a bit more work is necessary..
+         # First take again what belongs to sub-group. Now the problem is that series will no longer go from 0-S. So we
+         # have to reset the values in id_col to start from zero and then increment towards the number of series included
+         # in this sub-group.
+         id_col = id_col[sub_lvl_idx]
+         # Split based on indices
+         _, id = np.unique(id_col,return_index=True)
+         sub_sid = np.sort(id)
+
+         # Reset index
+         id_splits = np.split(id_col,sub_sid[1:])
+         for i,_ in enumerate(id_splits):
+            id_splits[i][:] = i
+
+         # And merge again
+         id_col = np.concatenate(id_splits)
+
+      if len(self.discretize[sti]["split_by"]) == 0:
          # Don't actually split
          return [dig_cov_flat_all],[id_col]
 
-      # Now split dig_cov_flat_all per level of combination of all factor variables used for splitting
-      unq_fact_comb,unq_fact_comb_memb = np.unique(self.cov_flat[:,[var_map[fact] for fact in self.discretize["split_by"]]],
-                                                   axis=0,return_inverse=True)
-
+      # Now split dig_cov_flat_all per level of combination of all factor variables used for splitting, again correcting for any
+      # potential sub-grouping
+      if self.__terms[sti].by_subgroup is None:
+         unq_fact_comb,unq_fact_comb_memb = np.unique(self.cov_flat[:,[var_map[fact] for fact in self.discretize[sti]["split_by"]]],
+                                                      axis=0,return_inverse=True)
+      else:
+         unq_fact_comb,unq_fact_comb_memb = np.unique(self.cov_flat[sub_lvl_idx,[var_map[fact] for fact in self.discretize[sti]["split_by"]]],
+                                                      axis=0,return_inverse=True)
       # Split series id column per level
       fact_series = [id_col[unq_fact_comb_memb == fact] for fact in range(len(unq_fact_comb))]
 
@@ -1515,13 +1600,12 @@ class Formula():
 
       return dig_cov_flats, fact_series
     
-    def __cluster_discretize(self,dig_cov_flats, fact_series):
-      
+    def __cluster_discretize(self,dig_cov_flats, fact_series, sti):
       best_series = None
       best_weights = None
       best_error = None
 
-      iterator = range(self.discretize["restarts"])
+      iterator = range(self.discretize[sti]["restarts"])
       if self.print_warn:
          iterator = tqdm(iterator,desc="Clustering",leave=True)
 
@@ -1624,8 +1708,8 @@ class Formula():
             best_weights = weights
             best_error = error
 
-      self.discretize["clust_series"] = best_series
-      self.discretize["clust_weights"] = best_weights
+      self.discretize[sti]["clust_series"] = best_series
+      self.discretize[sti]["clust_weights"] = best_weights
 
     def __absorb_constraints2(self):
       
@@ -1903,8 +1987,8 @@ class Formula():
                # Add necessary info for derivative approx. for factor smooth penalties
                if isinstance(sterm,fs):
                   if not sterm.approx_deriv is None:
-                     penalties[-1].clust_series = self.discretize["clust_series"]
-                     penalties[-1].clust_weights = self.discretize["clust_weights"]
+                     penalties[-1].clust_series = self.discretize[sti]["clust_series"]
+                     penalties[-1].clust_weights = self.discretize[sti]["clust_weights"]
 
                if sterm.has_null_penalty:
 
@@ -2219,6 +2303,10 @@ class Formula():
     def get_term_names(self) -> list:
        """Returns a copy of the list with the names of the terms specified for this formula."""
        return copy.deepcopy(self.__term_names)
+   
+    def get_subgroup_variables(self) -> list:
+       """Returns a copy of sub-group variables for factor smooths."""
+       return copy.deepcopy(self.__subgroup_variables)
 
 def embed_in_S_sparse(pen_data,pen_rows,pen_cols,S_emb,S_col,SJ_col,cIndex):
    """Embed a term-specific penalty matrix (provided as elements, row and col indices) into the across-term penalty matrix (see Wood, 2017) """
