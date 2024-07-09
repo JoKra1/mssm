@@ -1087,6 +1087,12 @@ class Formula():
             if isinstance(term,fs):
                if not term.approx_deriv is None:
                   self.discretize[ti] = term.approx_deriv
+
+                  # Make sure all categorical split variables end up being encoded since
+                  # they do not necessarily have to be in the formula in case of
+                  # sub-groups.
+                  for split_by_fac in self.discretize[ti]["split_by"]:
+                     cvi = self.__encode_var(split_by_fac,'O',cvi,codebook)
             
             # All variables must exist in data
             for var in term.variables:
