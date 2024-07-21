@@ -2353,6 +2353,48 @@ def embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,Sj,SJ_col):
       
    return Sj
 
+def embed_shared_penalties(formulas):
+    """
+    Embed penalties from individual model into overall penalties for GAMLSS models.
+    """
+
+    shared_penalties = [copy.deepcopy(form.penalties) for form in formulas]
+
+    for fi,form in enumerate(formulas):
+        for ofi,other_form in enumerate(formulas):
+            if fi == ofi:
+                continue
+
+            if ofi < fi:
+                for lterm in shared_penalties[fi]:
+                    lterm.S_J_emb = scp.sparse.vstack([scp.sparse.csc_array((other_form.n_coef,form.n_coef)),
+                                                    lterm.S_J_emb])
+                    lterm.D_J_emb = scp.sparse.vstack([scp.sparse.csc_array((other_form.n_coef,form.n_coef)),
+                                                    lterm.D_J_emb])
+                    
+                    lterm.S_J_emb = scp.sparse.hstack([scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef)),
+                                                    lterm.S_J_emb])
+                    
+                    lterm.D_J_emb = scp.sparse.hstack([scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef)),
+                                                    lterm.D_J_emb])
+                    
+                    lterm.start_index += other_form.n_coef
+            
+            elif ofi > fi:
+                for lterm in shared_penalties[fi]:
+                    lterm.S_J_emb = scp.sparse.vstack([lterm.S_J_emb,
+                                                    scp.sparse.csc_array((other_form.n_coef,form.n_coef))])
+                    
+                    lterm.D_J_emb = scp.sparse.vstack([lterm.D_J_emb,
+                                                    scp.sparse.csc_array((other_form.n_coef,form.n_coef))])
+                    
+                    lterm.S_J_emb = scp.sparse.hstack([lterm.S_J_emb,
+                                                    scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef))])
+                    
+                    lterm.D_J_emb = scp.sparse.hstack([lterm.D_J_emb,
+                                                    scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef))])
+                
+    return shared_penalties
 
 def build_linear_term_matrix(ci,n_y,has_intercept,lti,lterm,var_types,var_map,factor_levels,ridx,cov_flat,use_only):
    """Parameterize model matrix for a linear term."""

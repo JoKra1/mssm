@@ -1,7 +1,7 @@
 import numpy as np
 import scipy as scp
 import warnings
-from .exp_fam import Family,Gaussian,est_scale
+from .exp_fam import Family,Gaussian,est_scale,GAMLSSFamily
 from .penalties import PenType,id_dist_pen,translate_sparse,dataclass
 from .formula import build_sparse_matrix_from_formula,setup_cache,clear_cache,cpp_solvers,pd,Formula,mp,repeat,os,map_csc_to_eigen,math,tqdm,sys
 from functools import reduce
@@ -1503,3 +1503,366 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
    clear_cache(CACHE_DIR,SHOULD_CACHE)
 
    return coef,eta,wres,scale,InvCholXXS,total_edf,term_edfs,penalty,fit_info
+
+
+################################################ GAMMLSS code ################################################
+
+def deriv_transform_mu_eta(y,means,family:GAMLSSFamily):
+    """
+    Compute derivatives (first and second order) of llk with respect to each mean for all observations following steps outlined by Wood, Pya, & Säfken (2016)
+
+    References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+    """
+    d1 = [fd1(y,*means) for fd1 in family.d1]
+    d2 = [fd2(y,*means) for fd2 in family.d2]
+    d2m = [fd2m(y,*means) for fd2m in family.d2m]
+
+    # Link derivatives
+    ld1 = [family.links[mui].dy1(means[mui]) for mui in range(len(means))]
+    ld2 = [family.links[mui].dy2(means[mui]) for mui in range(len(means))]
+
+    # Transform first order derivatives via A.1 in Wood, Pya, & Säfken (2016)
+    """
+    WPS (2016) provide that $l_{\eta}$ is obtained as $l^i_{\mu}/h'(\mu^i)$ - where $h'$ is the derivative of the link function $h$.
+    This follows from applying the chain rule and the inversion rule of derivatives
+    $\frac{\partial llk(h^{-1}(\eta))}{\partial \eta} = \frac{\partial llk(\mu)}{\partial \mu} \frac{\partial h^{-1}(\eta)}{\partial \eta} = \frac{\partial llk(\mu)}{\partial \mu}\frac{1}{\frac{\partial h(\mu)}{\mu}}$.
+    """
+    d1eta = [d1[mui]/ld1[mui] for mui in range(len(means))]
+
+    # Pure second order derivatives are transformed via A.2 in WPS (2016)
+    """
+    For second derivatives we need pure and mixed. Computation of $l^\mathbf{i}_{\eta^l,\eta^m}$ in general is again obtained by applying the steps outlined for first order and provided by WPS (2016)
+    for the pure case. For the mixed case it is even simpler: We need $\frac{\partial^2 llk(h_1^{-1}(\eta^1),h_2^{-1}(\eta^2))}{\partial \eta^1 \partial \eta^2}$,
+    which is $\frac{\partial llk /\ \partial \eta^1}{\partial \eta^2}$. With the first partial being equal to
+    $\frac{\partial llk}{\partial \mu^1}\frac{1}{\frac{\partial h_1(\mu^1)}{\mu^1}}$ (see comment above for first order) we now have
+    $\frac{\partial \frac{\partial llk}{\partial \mu^1}\frac{1}{\frac{\partial h_1(\mu^1)}{\mu^1}}}{\partial \eta^2}$.
+    
+    We now apply the product rule (the second term in the sum disappears, because
+    $\partial \frac{1}{\frac{\partial h_1(\mu^1)}{\mu^1}} /\ \partial \eta^2 = 0$, this is not the case for pure second derivatives as shown in WPS, 2016)
+    to get $\frac{\partial \frac{\partial llk}{\partial \mu^1}}{\partial \eta^2} \frac{1}{\frac{\partial h_1(\mu^1)}{\mu^1}}$.
+    We can now again rely on the same steps taken to get the first derivatives (chain rule + inversion rule) to get
+    $\frac{\partial \frac{\partial llk}{\partial \mu^1}}{\partial \eta^2} =
+    \frac{\partial^2 llk}{\partial \mu^1 \partial \mu^2}\frac{1}{\frac{\partial h_2(\mu^2)}{\mu^2}}$.
+    
+    Thus, $\frac{\partial llk /\ \partial \eta^1}{\partial \eta^2} =
+    \frac{\partial^2 llk}{\partial \mu^1 \partial \mu^2}\frac{1}{\frac{\partial h_2(\mu^2)}{\mu^2}}\frac{1}{\frac{\partial h_1(\mu^1)}{\mu^1}}$.
+    """
+    d2eta = [d2[mui]/np.power(ld1[mui],2) - d1[mui]*ld2[mui]/np.power(ld1[mui],3) for mui in range(len(means))]
+
+    # Mixed second derivatives thus also are transformed as proposed by WPS (2016)
+    d2meta = []
+    mixed_idx = 0
+    for mui in range(len(means)):
+        for muj in range(len(means)):
+            if muj <= mui:
+                continue
+            
+            d2meta.append(d2m[mixed_idx] * (1/ld1[mui]) * (1/ld1[muj]))
+            mixed_idx += 1
+
+    return d1eta,d2eta,d2meta
+
+def deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs):
+    """
+    Further transforms derivatives of llk with respect to eta to get derivatives of llk with respect to coefficients
+    Based on section 3.2 and Appendix A in Wood, Pya, & Säfken (2016)
+
+    References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+    """
+
+    # Gradient: First order partial derivatives of llk with respect to coefficients
+    """
+    WPS (2016) provide $l^j_{\beta^l} = l^\mathbf{i}_{\eta^l}\mathbf{X}^l_{\mathbf{i},j}$. See ```deriv_transform_mu_eta```.
+    """
+    grad = []
+
+    for etai in range(len(d1eta)):
+        # Naive:
+        # for j in range(Xs[etai].shape[1]):
+            # grad.append(np.sum([d1eta[etai][i]*Xs[etai][i,j] for i in range(Xs[etai].shape[0])]))
+            # but this is just product of d1eta[etai][:] and Xs[etai], so we can skip inner loop
+        grad.extend((d1eta[etai].T @ Xs[etai]).T)
+
+    # Hessian: Second order partial derivatives of llk with respect to coefficients
+    """
+    WPS (2016) provide in general:
+    $l^{j,k}_{\beta^l,\beta^m} = l^\mathbf{i}_{\eta^l,\eta^m}\mathbf{X}^l_{\mathbf{i},j}\mathbf{X}^m_{\mathbf{i},k}$.
+    See ```deriv_transform_mu_eta```.
+    """
+
+    mixed_idx = 0
+    
+    hr_idx = 0
+    h_rows = []
+    h_cols = []
+    h_vals = []
+    for etai in range(len(d1eta)):
+        hc_idx = 0
+        for etaj in range(len(d1eta)):
+
+            if etaj < etai:
+                hc_idx += Xs[etaj].shape[1]
+                continue
+
+            if etai == etaj:
+                # Pure 2nd
+                d2 = d2eta[etai]
+            else:
+                # Mixed partial
+                d2 = d2meta[mixed_idx]
+                mixed_idx += 1
+
+                
+            for coefi in range(Xs[etai].shape[1]):
+                for coefj in range(Xs[etaj].shape[1]):
+
+                    if hc_idx+coefj < hr_idx+coefi:
+                        continue
+
+                    # Naive:
+                    # d2beta = np.sum([d2[i]*Xs[etai][i,coefi]*Xs[etaj][i,coefj] for i in range(Xs[etai].shape[0])])
+                    # But this is again just a dot product, preceded by element wise multiplication. In principle we
+                    # could even skip these loops but that might get a bit tricky with sparse matrix set up- for now
+                    # I just leave it like this...
+                    d2beta = ((d2*Xs[etai][:,[coefi]]).T @ Xs[etaj][:,[coefj]])[0,0]
+
+                    h_rows.append(hr_idx+coefi)
+                    h_cols.append(hc_idx+coefj)
+                    h_vals.append(d2beta)
+                    if hr_idx+coefi != hc_idx+coefj: # Symmetric 2nd deriv..
+                        h_rows.append(hc_idx+coefj)
+                        h_cols.append(hr_idx+coefi)
+                        h_vals.append(d2beta)
+
+            hc_idx += Xs[etaj].shape[1]
+        hr_idx += Xs[etaj].shape[1]
+    
+    hessian = scp.sparse.csc_array((h_vals,(h_rows,h_cols)))
+    return np.array(grad).reshape(-1,1),hessian
+
+def newton_coef_smooth(coef,grad,H,S_emb):
+    """
+    Follows sections 3.1.2 and 3.14 in WPS (2016) to update the coefficients of the GAMLSS model via a
+    newton step.
+    1) Computes gradient of the penalized likelihood (grad - S_emb@coef)
+    2) Computes negative Hessian of the penalized likelihood (-1*H + S_emb) and it's inverse.
+    3) Uses these two to compute the Netwon step.
+    4) Step size control - happens outside
+
+    References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+    """
+    
+    pgrad = np.array([grad[i] - (S_emb[i,:]@coef)[0] for i in range(len(grad))])
+    nH = -1*H + S_emb
+
+    # Diagonal pre-conditioning as suggested by WPS (2016)
+    D = scp.sparse.diags(np.abs(nH.diagonal())**0.5)
+    nH2 = (D@nH@D).tocsc()
+
+    # Compute V, inverse of nH
+    eps = 0
+    code = 1
+    while code != 0:
+
+        Lp, Pr, code = cpp_cholP(nH2+eps*scp.sparse.identity(nH2.shape[1],format='csc'))
+        LVp = compute_Linv(Lp,10)
+        LV = apply_eigen_perm(Pr,LVp)
+        V = LV.T @ LV
+
+        if code == 0:
+            continue
+        
+        if eps == 0:
+            eps += 1e-14
+        else:
+            eps *= 2
+
+    # Undo conditioning.
+    V = D@V@D
+
+    # Update coef
+    n_coef = coef + (V@pgrad)
+
+    return n_coef,V,eps
+
+def correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb):
+    """
+    Apply step size correction to Newton update for general smooth
+    models and GAMLSS models, as discussed by WPS (2016).
+
+    References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+    """
+    # Update etas and mus
+    next_split_coef = np.split(next_coef,coef_split_idx)
+    next_etas = [Xs[i]@next_split_coef[i] for i in range(family.n_par)]
+    next_mus = [family.links[i].fi(next_etas[i]) for i in range(family.n_par)]
+    
+    # Step size control for newton step.
+    next_llk = family.llk(y,*next_mus)
+    
+    # Evaluate improvement of penalized llk under new and old coef - but in both
+    # cases for current lambda (see Wood, Li, Shaddick, & Augustin; 2017)
+    next_pen_llk = next_llk - next_coef.T@S_emb@next_coef
+    prev_llk_cur_pen = c_llk - coef.T@S_emb@coef
+    n_checks = 0
+    while next_pen_llk < prev_llk_cur_pen:
+        if n_checks > 30:
+            next_coef = coef
+            
+        # Half it if we do not observe an increase in penalized likelihood (WPS, 2016)
+        next_coef = (coef + next_coef)/2
+        next_split_coef = np.split(next_coef,coef_split_idx)
+
+        # Update etas and mus again
+        next_etas = [Xs[i]@next_split_coef[i] for i in range(family.n_par)]
+
+        next_mus = [family.links[i].fi(next_etas[i]) for i in range(family.n_par)]
+        
+        # Step size control for newton step. Half it if we do not
+        # observe an increase in penalized likelihood (WPS, 2016)
+        next_llk = family.llk(y,*next_mus)
+        next_pen_llk = next_llk - next_coef.T@S_emb@next_coef
+        n_checks += 1
+    
+    return next_coef,next_split_coef,next_mus,next_etas,next_llk,next_pen_llk
+    
+    
+def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
+                         max_outer=50,max_inner=30,min_inner=1,conv_tol=1e-7,
+                         extend_lambda=True,progress_bar=True,n_c=10):
+    """
+    Fits a GAMLSS model, following steps outlined by Wood, Pya, & Säfken (2016).
+
+    References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+    """
+    # total number of coefficients
+    n_coef = np.sum(form_n_coef)
+
+    extend_by = initialize_extension("nesterov",gamlss_pen)
+    was_extended = [False for _ in enumerate(gamlss_pen)]
+
+    split_coef = np.split(coef,coef_split_idx)
+
+    # Initialize etas and mus
+    etas = [Xs[i]@split_coef[i] for i in range(family.n_par)]
+    mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
+
+    # Build current penalties
+    S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
+    c_llk = family.llk(y,*mus)
+    c_pen_llk = c_llk - coef.T@S_emb@coef
+
+    iterator = range(max_outer)
+    if progress_bar:
+        iterator = tqdm(iterator,desc="Fitting",leave=True)
+
+    for outer in iterator:
+
+        # Update coefficients:
+        for inner in range(max_inner):
+            
+            # Get derivatives with respect to eta
+            d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,mus,family)
+
+            # Get derivatives with respect to coef
+            grad,H = deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs)
+
+            # Update coef and perform step size control
+            if outer > 0 or inner > 0:
+                # Update Coefficients
+                next_coef,V,eps = newton_coef_smooth(coef,grad,H,S_emb)
+
+                # Prepare to check convergence
+                prev_llk_cur_pen = c_llk - coef.T@S_emb@coef
+
+                # Perform step length control
+                coef,split_coef,mus,etas,c_llk,c_pen_llk = correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb)
+
+                if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
+                    break
+            
+                if eps <= 0 and outer > 0 and inner >= (min_inner-1):
+                    break # end inner loop and immediately optimize lambda again.
+            else:
+                # Simply accept next coef step on first iteration
+                coef,V,_ = newton_coef_smooth(coef,grad,H,S_emb)
+                split_coef = np.split(coef,coef_split_idx)
+                etas = [Xs[i]@split_coef[i] for i in range(family.n_par)]
+                mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
+                c_llk = family.llk(y,*mus)
+                c_pen_llk = c_llk - coef.T@S_emb@coef
+        
+        # Check overall convergence
+        if outer > 0:
+
+            if progress_bar:
+                iterator.set_description_str(desc="Fitting - Conv.: " + "{:.2e}".format((np.abs(prev_pen_llk - c_pen_llk) - conv_tol*np.abs(c_pen_llk))[0,0]), refresh=True)
+
+            if np.abs(prev_pen_llk - c_pen_llk) < conv_tol*np.abs(c_pen_llk):
+                if progress_bar:
+                    iterator.set_description_str(desc="Converged!", refresh=True)
+                    iterator.close()
+                break
+            
+        # We need the penalized likelihood of the model at this point for convergence control (step 2 in Wood, 2017 based on step 4 in Wood, Goude, & Shaw, 2016)
+        prev_pen_llk = c_pen_llk
+
+        # Compute cholesky of V without pre-conditioning.
+        LVp, Pr, code = cpp_cholP(scp.sparse.csc_array(V))
+        if code != 0:
+            raise ValueError("Failed to solve cholesky of V.")
+        LV = apply_eigen_perm(Pr,LVp).T
+        
+        # Given new coefficients compute lgdetDs and bsbs - needed for EFS step
+        lgdetDs = []
+        bsbs = []
+        lam_delta = []
+        for lti,lTerm in enumerate(gamlss_pen):
+
+            lt_rank = None
+            if FS_use_rank[lti]:
+                lt_rank = lTerm.rank
+
+            lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
+            dLam = step_fellner_schall_sparse(lgdetD,(LV@lTerm.D_J_emb).power(2).sum(),bsb[0,0],lTerm.lam,1)
+            if extend_lambda:
+                dLam,extend_by,was_extended = extend_lambda_step(lti,lTerm.lam,dLam,extend_by,was_extended,"nesterov")
+            lTerm.lam += dLam
+
+            lam_delta.append(dLam)
+            lgdetDs.append(lgdetD)
+            bsbs.append(bsb)
+        
+        # Compute approximate!!! gradient of REML with respect to lambda
+        # to check if step size needs to be reduced (part of step 6 in Wood, 2017).
+        total_edf,term_edfs, Bs = calculate_edf(None,None,LV,gamlss_pen,lgdetDs,n_coef,n_c)
+        lam_grad = [grad_lambda(lgdetDs[lti],Bs[lti],bsbs[lti],1) for lti in range(len(gamlss_pen))]
+        lam_grad = np.array(lam_grad).reshape(-1,1) 
+        check = lam_grad.T @ lam_delta
+
+        # Step size control for smoothing parameters. Not obvious - because we have only approximate REMl
+        # and approximate derivative, because we drop the last term involving the derivative of the negative penalized
+        # Hessian with respect to the smoothing parameters (see section 4 in Wood & Fasiolo, 2017). However, what we
+        # can do is at least undo the acceleration if we over-shoot the approximate derivative...
+        if check[0] < 0:
+            for lti,lTerm in enumerate(gamlss_pen):
+                if was_extended[lti]:
+                    lTerm.lam -= extend_by["acc"][lti]
+
+        # Build new penalties
+        S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
+
+        #print([lterm.lam for lterm in gamlss_pen])
+    
+    # "Residuals"
+    wres = y - Xs[0]@split_coef[0]
+
+    # Total penalty
+    penalty = coef.T@S_emb@coef
+    
+    return coef,etas,mus,wres,LV,total_edf,term_edfs,penalty

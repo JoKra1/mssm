@@ -5,7 +5,7 @@
 
 ## Description
 
-``mssm`` is a toolbox to estimate Generalized Additive Mixed Models (GAMMs) and more general smooth models such as semi Markov-switching GAMMs (sMs-GAMMs; experimental) and sMs Impulse Response GAMMs (sMs-IR-GAMMs; experimental). The ``main`` branch is updated frequently to reflect new developments. The ``stable`` branch should reflect the latest releases. If you don't need the newest functionality, you should install from the ``stable`` branch (see below for instructions).
+``mssm`` is a toolbox to estimate Generalized Additive Mixed Models (GAMMs), Generalized Additive Mixed Models of Location Scale and Shape (GAMMLSS), and more general smooth models such as semi Markov-switching GAMMs (sMs-GAMMs; experimental) and sMs Impulse Response GAMMs (sMs-IR-GAMMs; experimental). The ``main`` branch is updated frequently to reflect new developments. The ``stable`` branch should reflect the latest releases. If you don't need the newest functionality, you should install from the ``stable`` branch (see below for instructions).
 
 ## Installation
 

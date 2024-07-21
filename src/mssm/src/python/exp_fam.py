@@ -52,6 +52,34 @@ class Logit(Link):
       """
       return 1 / ((1 - mu) * mu)
 
+class Identity(Link):
+   def f(self, mu):
+      # Canonical link for normal distribution
+      # mu = eta
+      return mu
+
+   def fi(self,eta):
+      return eta
+   
+   def dy1(self,mu):
+      return np.ones_like(mu)
+   
+   def dy2(self,mu):
+      return np.zeros_like(mu)
+   
+class LOG(Link):
+   # Log link
+   def f(self,mu):
+      return np.log(mu)
+   
+   def fi(self,eta):
+      return np.exp(eta)
+   
+   def dy1(self,mu):
+      return 1/mu
+   
+   def dy2(self,mu):
+      return -1*(1/np.power(mu,2))
 
 def est_scale(res,rows_X,total_edf):
    """
@@ -162,3 +190,37 @@ class Gaussian(Family):
       res = y - mu
       rss = res.T @ res
       return rss[0,0]
+   
+class GAMLSSFamily:
+   def __init__(self,pars:int,links:[Link]) -> None:
+      self.n_par = pars
+      self.links = links
+      self.d1 = [] # list with functions to evaluate derivative of llk with respect to corresponding mean
+      self.d2 = [] # list with function to evaluate pure second derivative of llk with respect to corresponding mean
+      self.d2m = [] # list with functions to evaluate mixed second derivative of llk. Order is 12,13,1k,23,24,...
+      self.mean_init_fam:Family or None = None # Family to fit for the mean model to initialize coef.
+
+   def llk(self,y,*args):
+      # log-likelihood of y under this family
+      pass
+   
+   def lp(self,y,*args):
+      # Log-probability of observing every value in y under this family
+      pass
+
+class GAUMLSS(GAMLSSFamily):
+   def __init__(self, links: [Link]) -> None:
+      super().__init__(2, links)
+
+      # All derivatives taken from gamlss.dist: https://github.com/gamlss-dev/gamlss.dist
+      # see also: Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
+      self.d1 = [lambda y, mu, sigma: (1/np.power(sigma,2))*(y-mu),lambda y, mu, sigma: (np.power(y-mu,2)-np.power(sigma,2))/(np.power(sigma,3))]
+      self.d2 = [lambda y, mu, sigma: -(1/np.power(sigma,2)), lambda y, mu, sigma: -(2/np.power(sigma,2))]
+      self.d2m = [lambda y, mu, sigma: np.zeros_like(y)]
+      self.mean_init_fam = Gaussian()
+   
+   def lp(self,y,mu,sigma):
+      return scp.stats.norm.logpdf(y,loc=mu,scale=sigma)
+   
+   def llk(self,y,mu,sigma):
+      return sum(self.lp(y,mu,sigma))[0]

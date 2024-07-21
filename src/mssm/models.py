@@ -2,10 +2,10 @@ import numpy as np
 import scipy as scp
 import copy
 from collections.abc import Callable
-from .src.python.formula import Formula,PFormula,PTerm,build_sparse_matrix_from_formula,VarType,lhs,ConstType,Constraint,pd
-from .src.python.exp_fam import Link,Logit,Family,Binomial,Gaussian
+from .src.python.formula import Formula,PFormula,PTerm,build_sparse_matrix_from_formula,VarType,lhs,ConstType,Constraint,pd,embed_shared_penalties
+from .src.python.exp_fam import Link,Logit,Identity,LOG,Family,Binomial,Gaussian,GAMLSSFamily,GAUMLSS
 from .src.python.sem import anneal_temps_zero,const_temps,compute_log_probs,pre_ll_sms_gamm,se_step_sms_gamm,decode_local,se_step_sms_dc_gamm,pre_ll_sms_IR_gamm,init_states_IR,compute_hsmm_probabilities
-from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2
+from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2,solve_gammlss_sparse
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 from .src.python.penalties import PenType
 from .src.python.utils import sample_MVN,REML
@@ -39,8 +39,8 @@ class MSSM:
         self.cpus=cpus
 
         # Current estimates
-        self.__coef = None
-        self.__scale = None
+        self.coef = None
+        self.scale = None
         self.__TR = None
         self.__pi = None
     
@@ -109,7 +109,7 @@ class GAMM(MSSM):
 
     def get_pars(self):
         """ Returns a tuple. The first entry is a np.array with all estimated coefficients. The second entry is the estimated scale parameter. Will contain Nones before fitting."""
-        return self.__coef,self.__scale
+        return self.coef,self.scale
     
     def get_llk(self,penalized:bool=True,ext_scale:float or None=None):
         """Get the (penalized) log-likelihood of the estimated model given the trainings data. LLK can optionally be evaluated for an external scale parameter ``ext_scale``."""
@@ -122,7 +122,7 @@ class GAMM(MSSM):
             if isinstance(self.family,Gaussian) == False:
                 mu = self.family.link.fi(self.pred)
             if self.family.twopar:
-                scale = self.__scale
+                scale = self.scale
                 if not ext_scale is None:
                     scale = ext_scale
                 return self.family.llk(self.formula.y_flat[self.formula.NOT_NA_flat],mu,scale) - pen
@@ -233,16 +233,16 @@ class GAMM(MSSM):
         if not isinstance(self.family,Gaussian):
             raise TypeError("REML score can currently only be obtained for Gaussian additive models. It can be computed via the REML function in mssm.src.python.utils when H=X.T@W@X is formed manually.")
         
-        if self.__coef is None or self.formula.penalties is None:
+        if self.coef is None or self.formula.penalties is None:
             raise ValueError("Model needs to be estimated before evaluating the REML score. Call model.fit()")
         
         scale = self.family.scale
         if self.family.twopar:
-            scale = self.__scale # Estimated scale
+            scale = self.scale # Estimated scale
         
         X = self.get_mmat()
         llk = self.get_llk(False)
-        reml = REML(llk,(X.T@X).tocsc(),self.__coef,scale,self.formula.penalties)
+        reml = REML(llk,(X.T@X).tocsc(),self.coef,scale,self.formula.penalties)
         
         return reml
                 
@@ -358,8 +358,8 @@ class GAMM(MSSM):
                                                                                        len(self.formula.discretize) == 0,
                                                                                        progress_bar,n_cores)
         
-        self.__coef = coef
-        self.__scale = scale # ToDo: scale name is used in another context for more general mssm..
+        self.coef = coef
+        self.scale = scale # ToDo: scale name is used in another context for more general mssm..
         self.pred = eta
         self.res = wres
         self.edf = edf
@@ -386,9 +386,9 @@ class GAMM(MSSM):
         :param use_post: The indices corresponding to coefficients for which to actually obtain samples.
         """
         if deviations:
-            post = sample_MVN(n_ps,0,self.__scale,P=None,L=None,LI=self.lvi,use=use_post,seed=seed)
+            post = sample_MVN(n_ps,0,self.scale,P=None,L=None,LI=self.lvi,use=use_post,seed=seed)
         else:
-            post = sample_MVN(n_ps,self.__coef,self.__scale,P=None,L=None,LI=self.lvi,use=use_post,seed=seed)
+            post = sample_MVN(n_ps,self.coef,self.scale,P=None,L=None,LI=self.lvi,use=use_post,seed=seed)
         
         return post
     
@@ -399,7 +399,7 @@ class GAMM(MSSM):
         self.coef +- b gives point-wise interval, so for interval to be whole-interval
         1-alpha% of posterior samples should fall completely within these boundaries.
 
-        From section 6.10 in Wood (2017) we have that *coef | y, lambda ~ N(coef,V), where V is self.lvi.T @ self.lvi * self.__scale.
+        From section 6.10 in Wood (2017) we have that *coef | y, lambda ~ N(coef,V), where V is self.lvi.T @ self.lvi * self.scale.
         Implication is that deviations [*coef - coef] | y, lambda ~ N(0,V). In line with definition above, 1-alpha% of
         predi_mat@[*coef - coef] should fall within [b,-b]. Wood (2017) suggests to find a so that [a*b,a*-b] achieves this.
 
@@ -521,12 +521,12 @@ class GAMM(MSSM):
                                                      state_est,use_only=use_terms)
         
         # Now we calculate the prediction
-        pred = predi_mat @ self.__coef
+        pred = predi_mat @ self.coef
 
         # Optionally calculate the boundary for a 1-alpha CI
         if ci:
             # Wood (2017) 6.10
-            c = predi_mat @ self.lvi.T @ self.lvi * self.__scale @ predi_mat.T
+            c = predi_mat @ self.lvi.T @ self.lvi * self.scale @ predi_mat.T
             c = c.diagonal()
             b = scp.stats.norm.ppf(1-(alpha/2)) * np.sqrt(c)
 
@@ -582,10 +582,10 @@ class GAMM(MSSM):
         pmat_diff = pmat1 - pmat2
         
         # Predicted difference
-        diff = pmat_diff @ self.__coef
+        diff = pmat_diff @ self.coef
         
         # Difference CI
-        c = pmat_diff @ self.lvi.T @ self.lvi * self.__scale @ pmat_diff.T
+        c = pmat_diff @ self.lvi.T @ self.lvi * self.scale @ pmat_diff.T
         c = c.diagonal()
         b = scp.stats.norm.ppf(1-(alpha/2)) * np.sqrt(c)
 
@@ -596,3 +596,229 @@ class GAMM(MSSM):
             b = self.__adjust_CI(n_ps,b,pmat_diff,use_terms,alpha,seed)
 
         return diff,b
+
+class GAMLSS(GAMM):
+    """
+    Class to fit Generalized Additive Mixed Models of Location Scale and Shape.
+
+    References:
+    - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
+    - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
+    - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models. https://doi.org/10.1111/j.1467-9868.2010.00749.x
+    - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+    - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+    
+    Parameters:
+    :param formulas: A list of formulas for the GAMMLS model
+    :type variables: Formula
+    :param family: A GAMLSS family. Currently only ``Gaussian`` is implemented.
+    :type Family
+    """
+    def __init__(self, formulas: [Formula], family: GAMLSSFamily):
+        super().__init__(formulas[0], family)
+        self.formulas = copy.deepcopy(formulas) # self.formula can hold formula for single parameter later on for predictions.
+        self.overall_lvi = None
+        self.__overall_coef = None
+        self.__overall_preds = None # etas
+
+    
+    def get_pars(self):
+        """ Returns a list containing the coef vector for each parameter of the distribution. Will contain Nones before fitting."""
+        return self.__overall_coef
+    
+
+    def get_llk(self,penalized:bool=True):
+        """Get the (penalized) log-likelihood of the estimated model given the trainings data."""
+
+        pen = 0
+        if penalized:
+            pen = self.penalty
+        if self.pred is not None:
+            mus = [self.family.links[i].fi(self.__overall_preds[i]) for i in range(self.family.n_par)]
+            return self.family.llk(self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat],*mus) - pen
+
+        return None
+
+    def get_mmat(self):
+        raise NotImplementedError("Not yet supported.")
+    
+    def print_smooth_terms(self,pen_cutoff=0.2):
+        raise NotImplementedError("Not yet supported.")
+                        
+    def get_reml(self):
+        raise NotImplementedError("Not yet supported.")
+    
+    def fit(self,max_outer=50,max_inner=50,min_inner=1,conv_tol=1e-7,extend_lambda=True,progress_bar=True,n_cores=10):
+        """
+        Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
+
+        Parameters:
+
+        :param max_outer: The maximum number of fitting iterations.
+        :type max_outer: int,optional
+        :param max_inner: The maximum number of fitting iterations to use by the inner Newton step for coefficients.
+        :type max_inner: int,optional
+        :param min_inner: The minimum number of fitting iterations to use by the inner Newton step for coefficients.
+        :type min_inner: int,optional
+        :param conv_tol: The relative (change in penalized deviance is compared against ``conv_tol`` * previous penalized deviance) criterion used to determine convergence.
+        :type conv_tol: float,optional
+        :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the number of new smoothing penalty proposals necessary. Enabled by default.
+        :type extend_lambda: bool,optional
+        :param progress_bar: Whether progress should be displayed (convergence info and time estimate). Defaults to True.
+        :type progress_bar: bool,optional
+        :param n_cores: Number of cores to use during parts of the estimation that can be done in parallel. Defaults to 10.
+        :type n_cores: int,optional
+        """
+        
+        # Get y
+        y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
+
+        # Build penalties and model matrices for all formulas
+        Xs = []
+        for form in self.formulas:
+            mod = GAMM(form,family=Gaussian())
+            form.build_penalties()
+            Xs.append(mod.get_mmat())
+
+        # Fit mean model
+        if self.family.mean_init_fam is not None:
+            mean_model = GAMM(self.formulas[0],family=self.family.mean_init_fam)
+            mean_model.fit(progress_bar=False,restart=True)
+            m_coef,_ = mean_model.get_pars()
+        else:
+            m_coef = scp.stats.norm.rvs(size=self.formulas[0].n_coef).reshape(-1,1)
+
+        # Get GAMLSS penalties
+        shared_penalties = embed_shared_penalties(self.formulas)
+        gamlss_pen = [pen for pens in shared_penalties for pen in pens]
+
+        # Start with much weaker penalty than for GAMs
+        for pen_i in range(len(gamlss_pen)):
+            gamlss_pen[pen_i].lam = 0.01
+
+        # Initialize overall coefficients
+        form_n_coef = [form.n_coef for form in self.formulas]
+        coef = np.concatenate((m_coef.reshape(-1,1),
+                            *[np.ones((self.formulas[ix].n_coef)).reshape(-1,1) for ix in range(1,self.family.n_par)]))
+        coef_split_idx = form_n_coef[:-1]
+
+        coef,etas,mus,wres,LV,total_edf,term_edfs,penalty = solve_gammlss_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,
+                                                                                 gamlss_pen,max_outer,max_inner,min_inner,conv_tol,
+                                                                                 extend_lambda,progress_bar,n_cores)
+        
+        self.__overall_coef = coef
+        self.__overall_preds = etas
+        self.res = wres
+        self.edf = total_edf
+        self.term_edf = term_edfs
+        self.penalty = penalty
+        self.coef_split_idx = coef_split_idx
+        self.overall_lvi = LV
+    
+
+    def predict(self, par, use_terms, n_dat, alpha=0.05, ci=False, whole_interval=False, n_ps=10000, seed=None):
+        """
+        Make a prediction using the fitted model for new data ``n_dat`` using only the terms indexed by ``use_terms`` and for distribution parameter ``par``.
+
+        References:
+        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+        - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
+
+        Parameters:
+
+        :param par: The index corresponding to the parameter for which to make the prediction (e.g., 0 = mean)
+        :type par: int
+        :param use_terms: The indices corresponding to the terms that should be used to obtain the prediction or ``None``
+        in which case all terms will be used.
+        :type use_terms: list[int] or None
+        :param n_dat: A pandas DataFrame containing new data for which to make the prediction. Importantly, all variables present in
+        the data used to fit the model also need to be present in this DataFrame. Additionally, factor variables must only include levels
+        also present in the data used to fit the model. If you want to exclude a specific factor from the prediction (for example the factor
+        subject) don't include the terms that involve it in the ``use_terms`` argument.
+        :type n_dat: pd.DataFrame
+        :param alpha: The alpha level to use for the standard error calculation. Specifically, 1 - (``alpha``/2) will be used to determine the critical cut-off value according to a N(0,1).
+        :type alpha: float, optional
+        :param ci: Whether the standard error ``se`` for credible interval (CI; see  Wood, 2017) calculation should be returned. The CI is then [``pred`` - ``se``, ``pred`` + ``se``]
+        :type ci: bool, optional
+        :param whole_interval: Whether or not to adjuste the point-wise CI to behave like whole-interval (based on Wood, 2017; section 6.10.2 and Simpson, 2016). Defaults to False. The CI is then [``pred`` - ``se``, ``pred`` + ``se``]
+        :type whole_interval: bool, optional
+        :param n_ps: How many samples to draw from the posterior in case the point-wise CI is adjusted to behave like a whole-interval CI.
+        :type n_ps: int, optional
+        :param seed: Can be used to provide a seed for the posterior sampling step in case the point-wise CI is adjusted to behave like a whole-interval CI.
+        :type seed: int or None, optional
+
+
+        Returns:
+        :return: A tuple with 3 entries. The first entry is the prediction ``pred`` based on the new data ``n_dat``. The second entry is the model
+        matrix built for ``n_dat`` that was post-multiplied with the model coefficients to obtain ``pred``. The third entry is ``None`` if ``ci``==``False`` else
+        the standard error ``se`` in the prediction.
+        :rtype: tuple
+        
+        """
+        # Prepare so that we can just call gamm.predict()
+        self.formula = self.formulas[par]
+        split_coef = np.split(self.__overall_coef,self.coef_split_idx)
+        self.coef = split_coef[par]
+        self.scale=1
+        start = 0
+        
+        end = self.coef_split_idx[0]
+        for pari in range(0,par):
+            start = end
+            end += self.coef_split_idx[pari]
+        self.lvi = self.overall_lvi[:,start:end]
+
+        return super().predict(use_terms, n_dat, alpha, ci, whole_interval, n_ps, seed)
+    
+    def predict_diff(self, dat1, dat2, par, use_terms, alpha=0.05, whole_interval=False, n_ps=10000, seed=None):
+        """
+        Get the difference in the predictions for two datasets and for distribution parameter ``par``. Useful to compare a smooth estimated for
+        one level of a factor to the smooth estimated for another level of a factor. In that case, ``dat1`` and
+        ``dat2`` should only differ in the level of said factor.
+
+        References:
+        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+        - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
+        - ``get_difference`` function from ``itsadug`` R-package: https://rdrr.io/cran/itsadug/man/get_difference.html
+
+        Parameters:
+
+        :param dat1: A pandas DataFrame containing new data for which to make the prediction. Importantly, all variables present in
+        the data used to fit the model also need to be present in this DataFrame. Additionally, factor variables must only include levels
+        also present in the data used to fit the model. If you want to exclude a specific factor from the prediction (for example the factor
+        subject) don't include the terms that involve it in the ``use_terms`` argument.
+        :type n_dat: pd.DataFrame
+        :param dat2: A second pandas DataFrame for which to also make a prediction. The difference in the prediction between this ``dat1`` will be returned.
+        :type dat2: pd.DataFrame
+        :param par: The index corresponding to the parameter for which to make the prediction (e.g., 0 = mean)
+        :type par: int
+        :param use_terms: The indices corresponding to the terms that should be used to obtain the prediction or ``None``
+        in which case all terms will be used.
+        :type use_terms: list[int] or None
+        :param alpha: The alpha level to use for the standard error calculation. Specifically, 1 - (``alpha``/2) will be used to determine the critical cut-off value according to a N(0,1).
+        :type alpha: float, optional
+        :param whole_interval: Whether or not to adjuste the point-wise CI to behave like whole-interval (based on Wood, 2017; section 6.10.2 and Simpson, 2016). Defaults to False.
+        :type whole_interval: bool, optional
+        :param n_ps: How many samples to draw from the posterior in case the point-wise CI is adjusted to behave like a whole-interval CI.
+        :type n_ps: int, optional
+        :param seed: Can be used to provide a seed for the posterior sampling step in case the point-wise CI is adjusted to behave like a whole-interval CI.
+        :type seed: int or None, optional
+
+        Returns:
+        :return: A tuple with 2 entries. The first entry is the predicted difference (between the two data sets ``dat1`` & ``dat2``) ``diff``. The second entry is the standard error ``se`` of the predicted difference. The difference CI is then [``diff`` - ``se``, ``diff`` + ``se``]
+        :rtype: tuple
+        """
+        # Prepare so that we can just call gamm.predict_diff()
+        self.formula = self.formulas[par]
+        split_coef = np.split(self.__overall_coef,self.coef_split_idx)
+        self.coef = split_coef[par]
+        self.scale=1
+        start = 0
+        
+        end = self.coef_split_idx[0]
+        for pari in range(0,par):
+            start = end
+            end += self.coef_split_idx[pari]
+        self.lvi = self.overall_lvi[:,start:end]
+
+        return super().predict_diff(dat1, dat2, use_terms, alpha, whole_interval, n_ps, seed)
