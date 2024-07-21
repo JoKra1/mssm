@@ -436,13 +436,16 @@ def compute_Linv(L,n_c=10):
 
 
 def calculate_edf(LP,Pr,InvCholXXS,penalties,lgdetDs,colsX,n_c):
+   # Follows steps outlined by Wood & Fasiolo (2017) to compute total degrees of freedom by the model.
+   # Generates the B matrix also required for the derivative of the log-determinant of X.T@X+S_\lambda. This
+   # is either done exactly - as described by Wood & Fasiolo (2017) - or approximately. The latter is much faster
    total_edf = colsX
    Bs = []
    term_edfs = []
 
    for lti,lTerm in enumerate(penalties):
       if not InvCholXXS is None:
-         B = InvCholXXS @ lTerm.D_J_emb # Needed for Fellner Schall update (Wood & Fasiolo, 2016)
+         B = InvCholXXS @ lTerm.D_J_emb # Needed for Fellner Schall update (Wood & Fasiolo, 2017)
          Bps = B.power(2).sum()
       else:
          Bps = compute_B(LP,compute_eigen_perm(Pr),lTerm,n_c)

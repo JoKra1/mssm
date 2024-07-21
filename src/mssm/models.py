@@ -112,7 +112,7 @@ class GAMM(MSSM):
         return self.__coef,self.__scale
     
     def get_llk(self,penalized:bool=True,ext_scale:float or None=None):
-        """Get the (penalized) log-likelihood of the estimated model given the trainings data."""
+        """Get the (penalized) log-likelihood of the estimated model given the trainings data. LLK can optionally be evaluated for an external scale parameter ``ext_scale``."""
 
         pen = 0
         if penalized:
@@ -132,7 +132,9 @@ class GAMM(MSSM):
 
     def get_mmat(self):
         """
-        Returns exaclty the model matrix used for fitting as a scipy.sparse.csc_array.
+        Returns exaclty the model matrix used for fitting as a scipy.sparse.csc_array. Will throw an error when called for a model for which the model
+        matrix was never former completely - i.e., when X.T@X was formed iteratively for estimation, by setting the ``file_paths`` argument of the ``Formula`` to
+        a non-empty list.
         """
         if self.formula.penalties is None:
             raise ValueError("Model matrix cannot be returned if penalties have not been initialized. Call model.fit() or model.formula.build_penalties() first.")
@@ -165,7 +167,14 @@ class GAMM(MSSM):
             return model_mat
     
     def print_smooth_terms(self,pen_cutoff=0.2):
-        """Prints the name of the smooth terms included in the model. After fitting, the estimated degrees of freedom per term are printed as well."""
+        """Prints the name of the smooth terms included in the model. After fitting, the estimated degrees of freedom per term are printed as well.
+        Smooth terms with edf. < ``pen_cutoff`` will be highlighted. This only makes sense when extra Kernel penalties are placed on smooth terms to enable
+        penalizing them to a constant zero. In that case edf. < ``pen_cutoff`` can then be taken as evidence that the smooth has all but notationally disappeared
+        from the model, i.e., it does not contribute meaningfully to the model fit. This can be used as an alternative form of model selection - see Marra & Wood (2011).
+
+        References:
+         - Marra & Wood (2011). Practical variable selection for generalized additive models.
+        """
         term_names = np.array(self.formula.get_term_names())
         smooth_names = [*term_names[self.formula.get_smooth_term_idx()],
                         *term_names[self.formula.get_random_term_idx()]]
@@ -215,7 +224,11 @@ class GAMM(MSSM):
                         
     def get_reml(self):
         """
-        Get's the REML (Restrcited Maximum Likelihood) score for the estimated lambda values (e.g., Wood, 2011).
+        Get's the REML (Restrcited Maximum Likelihood) score for the estimated lambda values (see Wood, 2011).
+        Currently only supported for strictly additive models.
+
+        References:
+         - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models.
         """
         if not isinstance(self.family,Gaussian):
             raise TypeError("REML score can currently only be obtained for Gaussian additive models. It can be computed via the REML function in mssm.src.python.utils when H=X.T@W@X is formed manually.")
@@ -235,9 +248,9 @@ class GAMM(MSSM):
                 
     ##################################### Fitting #####################################
     
-    def fit(self,maxiter=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=True,extension_method_lam = "nesterov",restart=False,progress_bar=True,n_cores=10):
+    def fit(self,maxiter=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=False,extension_method_lam = "nesterov",restart=False,progress_bar=True,n_cores=10):
         """
-        Fit the specified model.
+        Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
         Parameters:
 
@@ -249,8 +262,14 @@ class GAMM(MSSM):
         :type extend_lambda: bool,optional
         :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for actually improving the Restricted maximum likelihood of the model. Can lower the number of new smoothing penalty proposals necessary. Enabled by default.
         :type extend_lambda: bool,optional
+        :param exclude_lambda: Whether selective lambda terms should be excluded heuristically from updates. Can make each iteration a bit cheaper but is problematic when using additional Kernel penalties on terms. Thus, disabled by default.
+        :type exclude_lambda: bool,optional
         :param restart: Whether fitting should be resumed. Only possible if the same model has previously completed at least one fitting iteration.
         :type restart: bool,optional
+        :param progress_bar: Whether progress should be displayed (convergence info and time estimate). Defaults to True.
+        :type progress_bar: bool,optional
+        :param n_cores: Number of cores to use during parts of the estimation that can be done in parallel. Defaults to 10.
+        :type n_cores: int,optional
         """
         # We need to initialize penalties
         if not restart:
@@ -446,7 +465,14 @@ class GAMM(MSSM):
         :param alpha: The alpha level to use for the standard error calculation. Specifically, 1 - (``alpha``/2) will be used to determine the critical cut-off value according to a N(0,1).
         :type alpha: float, optional
         :param ci: Whether the standard error ``se`` for credible interval (CI; see  Wood, 2017) calculation should be returned. The CI is then [``pred`` - ``se``, ``pred`` + ``se``]
-        :type alpha: bool, optional
+        :type ci: bool, optional
+        :param whole_interval: Whether or not to adjuste the point-wise CI to behave like whole-interval (based on Wood, 2017; section 6.10.2 and Simpson, 2016). Defaults to False. The CI is then [``pred`` - ``se``, ``pred`` + ``se``]
+        :type whole_interval: bool, optional
+        :param n_ps: How many samples to draw from the posterior in case the point-wise CI is adjusted to behave like a whole-interval CI.
+        :type n_ps: int, optional
+        :param seed: Can be used to provide a seed for the posterior sampling step in case the point-wise CI is adjusted to behave like a whole-interval CI.
+        :type seed: int or None, optional
+
 
         Returns:
         :return: A tuple with 3 entries. The first entry is the prediction ``pred`` based on the new data ``n_dat``. The second entry is the model
@@ -539,9 +565,15 @@ class GAMM(MSSM):
         :type use_terms: list[int] or None
         :param alpha: The alpha level to use for the standard error calculation. Specifically, 1 - (``alpha``/2) will be used to determine the critical cut-off value according to a N(0,1).
         :type alpha: float, optional
+        :param whole_interval: Whether or not to adjuste the point-wise CI to behave like whole-interval (based on Wood, 2017; section 6.10.2 and Simpson, 2016). Defaults to False.
+        :type whole_interval: bool, optional
+        :param n_ps: How many samples to draw from the posterior in case the point-wise CI is adjusted to behave like a whole-interval CI.
+        :type n_ps: int, optional
+        :param seed: Can be used to provide a seed for the posterior sampling step in case the point-wise CI is adjusted to behave like a whole-interval CI.
+        :type seed: int or None, optional
 
         Returns:
-        :return: A tuple with 2 entries. The first entry is the predicted difference (between the two data sets ``dat1`` & ``dat2``) ``pred``. The second entry is the standard error ``se`` of the predicted difference..
+        :return: A tuple with 2 entries. The first entry is the predicted difference (between the two data sets ``dat1`` & ``dat2``) ``diff``. The second entry is the standard error ``se`` of the predicted difference. The difference CI is then [``diff`` - ``se``, ``diff`` + ``se``]
         :rtype: tuple
         """
         _,pmat1,_ = self.predict(use_terms,dat1)

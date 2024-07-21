@@ -49,21 +49,14 @@ class Constraint:
   f_i(x) overlap in their support and because the support of each individual f_i(x) is narrow, i.e., f_i(x) is sparse itself.
 
   However, this is not a true centering constraint: f(x) will not necessarily be orthogonal to the intercept, i.e., 1.T @ f(x) will not necessarily be 0. Hence, confidence intervals will usually
-  be wider when using ConstType.DIFF (also when using ConstType.DROP, for the same reason) instead of ConstType.QR! Simulations reveal that for the same smoothing problem, the difference
-  between ConstType.DIFF and ConstType.QR becomes smaller when increasing the number of basis functions. Intuitively, with many basis functions the dependency of the estimated f(x) on the
-  intercept is usually reduced suffciently, so that the confidence intervals obtained with ConstType.DIFF match those achieved with ConstType.QR. In that case, the CIs achieved with ConstType.QR
-  and ConstType.DIFF are usually substantially narrower than those obtained with ConstType.DROP.
-
-  From this, it follows that:
-    - ConstType.QR is preferred if computational efficiency is not crucial
-    - ConstType.DROP is preferred if k is small (5-15) and computational efficiency is crucial
-    - ConstType.DIFF is preferred if k is large (> 15) and computational efficiency is crucial
+  be wider when using ConstType.DIFF (also when using ConstType.DROP, for the same reason) instead of ConstType.QR (see Wood; 2017,2020)!
 
   A final note regards the use of tensor smooths when te==False. Since the value of any constant estimated for a smooth depends on the type of constraint used, the mmarginal functions estimated
   for the "main effects" (f(x),f(z)) and "interaction effect" (f(x,z)) in a model: y = a + f(x) + f(z) + f(x,z) will differ depending on the type of constraint used. The "Anova-like" decomposition
   described in detail in Wood (2017) is achievable only when using ConstType.QR.
 
   References:
+  - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
   - Wood, S. N. (2020). Inference and computation with generalized additive models and their extensions. TEST, 29(2), 307–339. https://doi.org/10.1007/s11749-020-00711-5
   - Eilers, P. H. C., & Marx, B. D. (1996). Flexible smoothing with B-splines and penalties. Statistical Science, 11(2), 89–121. https://doi.org/10.1214/ss/1038425655
 

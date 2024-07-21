@@ -29,7 +29,7 @@ class GammTerm():
 
 class i(GammTerm):
     """
-    An intercept/offset term. In a model y = a + f(x) it reflects a.
+    An intercept/offset term. In a model \mu = a + f(x) it reflects a.
 
     Parameters:
 
@@ -46,10 +46,10 @@ class i(GammTerm):
 class f(GammTerm):
     """
     A univariate or tensor interaction smooth term. If ``variables`` only contains a
-    single variable 'x', this term will represent a univariate f(x) in a model y = a + f(x). If
+    single variable 'x', this term will represent a univariate f(x) in a model \mu = a + f(x). If
     ``variables`` contains two variables 'x' and 'y', then this term will either represent
     the tensor interaction f(x,y) in a model a + f(x) + f(y) + f(x,y) or in a model a + f(x,y).
-    The first behavior is achieved by setting ``te=False``. In that case it is thus necessary
+    The first behavior is achieved by setting ``te=False``. In that case it is necessary
     to add 'main effect' ``f()`` terms for 'x' and 'y'. In other words, the behavior then mimicks
     the ``ti()`` term available in mgcv (Wood, 2017). If ``te=True``, the term instead behaves like
     a ``te()`` term in mgcv, so no separate smooth effects for the main effects need to be included.
@@ -60,7 +60,7 @@ class f(GammTerm):
     ``nk`` can either bet set to a single value or to a list containing the number of basis functions
     that should be used to setup the spline matrix for every variable. The former implies that the same
     number of coefficients should be used for all variables. Keyword arguments that change the computation of
-    the spline basis can be passed via a dictionary to the ``basis_kwargs`` argument. Importantly, if
+    the spline basis can be passed along via a dictionary to the ``basis_kwargs`` argument. Importantly, if
     multiple variables are present and a list is passed to ``nk``, a list of dictionaries with keyword arguments
     of the same length needs to be passed to ``basis_kwargs`` as well.
 
@@ -74,7 +74,7 @@ class f(GammTerm):
     - Eilers, P., & Marx, B. (2010). Splines, knots, and penalties. https://doi.org/10.1002/WICS.125
     - Marra, G., & Wood, S. N. (2011). Practical variable selection for generalized additive models.
     Computational Statistics & Data Analysis, 55(7), 2372–2387. https://doi.org/10.1016/j.csda.2011.02.004
-    - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.). Chapman and Hall/CRC.
+    - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
     Parameters:
 
@@ -97,9 +97,11 @@ class f(GammTerm):
     :param te: For tensor interaction terms only. If set to false, the term mimics the behavior of ti() in mgcv (Wood, 2017).
     Otherwise, the term behaves like a te() term in mgcv - i.e., the marginal basis functions are not removed from the interaction.
     :type te: bool, optional
+    :param rp: Experimental - will currently break for tensor smooths or in case ``by`` is provided. Whether or not to re-parameterize the term - see src.python.formula.reparam for details. Defaults to no re-parameterization.
+    :type rp: int, optional
     :param constraint: What kind of identifiability constraints should be absorbed by the terms (if they are to be identifiable). Either QR-based
-    constraints (default, well-behaved, expensive infill), by means of column-dropping (no infill, not so well-behaved for large k), or by means of
-    difference re-coding (little infill, not so well behaved for small k).
+    constraints (default, well-behaved), by means of column-dropping (no infill, not so well-behaved), or by means of
+    difference re-coding (little infill, not so well behaved either).
     :type constraint: mssm.src.constraints.ConstType, optional
     :param identifiable: Whether or not the constant should be removed from the space of functions this term can
     fit. Achieved by enforcing that 1.T @ X = 0 (X here is the spline matrix computed for the observed data;
@@ -112,7 +114,7 @@ class f(GammTerm):
     For the B-spline basis the following arguments (with default values) are available: ``convolve``=``False``,
     ``min_c``=``None``, ``max_c``=``None``, ``deg``=``3``. See ``src.smooths.B_spline_basis`` for details, but the default should work for most cases.
     :type basis_kwargs: dict, optional
-    :param by_latent: Should an overall f(``variables``) be added or one "by_latent" stage
+    :param by_latent: Experimental. Should an overall f(``variables``) be added or one "by_latent" stage
     :type by_latent: bool, optional
     :param is_penalized: Should the term be left unpenalized or not. There are rarely good reasons to set this to False.
     :type is_penalized: bool, optional
@@ -218,14 +220,29 @@ class f(GammTerm):
 
 class fs(f):
    """
-    Essentially a ``f()`` term with ``by``=``rf``, ``id`` != None, ``penalize_null`` = True, and ``pen_kwargs`` = ``[{"m":1}]``.
+    Essentially a ``f()`` term with ``by``=``rf``, ``id`` != None, ``penalize_null`` = True, and ``pen_kwargs`` = ``[{"m":1}]`` and ``rp=1``.
     This term approximates the "factor-smooth interaction" basis "fs" with ``m``= 1 available in mgcv (Wood, 2017). It is however
-    not equivalent (mgcv by default uses a different basis and the ``m`` key-word has a different functionality).
+    not equivalent (mgcv by default uses a different basis for which the ``m`` key-word has a different functionality).
     
-    Specifically, here ``m``= 1 implies that the only function left unpenalized by the default (difference) penalty is the constant. Thus,
+    Specifically, here ``m``= 1 implies that the only function left unpenalized by the default (difference) penalty is the constant (Eilers & Marx, 2010). Thus,
     a linear ``f(``variables``)`` is penalized by the same default penalty that also penalizes smoothness (and not by a separate penalty as
-    is the case in mgcv when ``m``=1)! Any constant ``f(``variables``)`` is penalized by the null-space penalty (in both mgcv and mssm;
+    is the case in mgcv when ``m=1`` for the default basis)! Any constant ``f(``variables``)`` is penalized by the null-space penalty (in both mgcv and mssm;
     see Marra & Wood, 2011) - the term thus shrinks towards zero (Wood, 2017).
+
+    The factor smooth basis in mgcv allows to let the penalty be different for different levels of an additional factor (by additionally specifying
+    the ``by`` argument for a smooth with basis "fs"). I.e., s(Time,Subject,by='condition',bs='fs') would estimate a non-linear random smooth of time
+    per level of the subject & condition interaction - with the same penalty being placed on all random smooth terms within the same condition level.
+    This can be achieved here by adding multiple ``fs`` terms to the formula and utilising the ``by_subgroup`` argument. This needs to be set to a list
+    where the first element identifies the additional factor variable (e.g., "condition") and the second element corresponds to a level of said factor variable.
+    E.g., *[fs(["Time],rf="subject_cond",by_subgroup=["cond",cl]) for cl in np.unique(dat["cond"])]. Importantly, "subject_cond" is the interaction of "subject"
+    and "condition" - not just the "subject variable in the data.
+
+    Model estimation can become quite expensive for fs terms, when the factor variable for ``rf`` has many levels. (> 10000) In that case, approximate derivative
+    evaluation can speed things up considerably. To enforce this, the ``approx_deriv`` argument needs to be specified with a dict, having the following structure:
+    ``{"no_disc":[str],"excl":[str],"split_by":[str],"restarts":int}``. "no_disc" should usually be set to an empty list, and should in general only contain names of
+    continuous variables included in the formula. Any variable mentioned here will not be discretized before clustering - this will make the approximation a bit more
+    accurate but also require more time. Similarly, "excl" specifies any continuous variables that should be excluded for clustering. "split_by" should generally be set
+    to a list containing all categorical variables present in the formula. "restarts" indicates the number of times to re-produce the clustering (40 seems to be a good number).
 
     References:
     - Eilers, P., & Marx, B. (2010). Splines, knots, and penalties. https://doi.org/10.1002/WICS.125
@@ -234,7 +251,6 @@ class fs(f):
     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.). Chapman and Hall/CRC.
 
     Parameters:
-
     :param variables: A list of the variables (strings) of which the term is a function.
     Need to exist in ``data`` passed to ``Formula``. Need to be continuous.
     :type variables: list[str]
@@ -248,10 +264,6 @@ class fs(f):
     identifiability constraints. This is the opposite to how this is handled in mgcv: specifying nk=10 for "fixed" univariate smooths
     results in 9 basis functions being available. However, for a smooth in mgcv with basis='fs', 10 basis functions will remain available.
     :type nk: int or list[int], optional
-    :param constraint: What kind of identifiability constraints should be absorbed by the terms (if they are to be identifiable). Either QR-based
-    constraints (default, well-behaved, expensive infill), by means of column-dropping (no infill, not so well-behaved for large k), or by means of
-    difference re-coding (little infill, not so well behaved for small k).
-    :type constraint: mssm.src.constraints.ConstType, optional
     :param basis: The basis functions to use to construct the spline matrix. By default a B-spline basis
     (Eilers & Marx, 2010) implemented in ``src.smooths.B_spline_basis``.
     :type basis: Callable, optional
@@ -261,6 +273,10 @@ class fs(f):
     :type basis_kwargs: dict, optional
     :param by_latent: Should an overall f(``variables``) be added or one "by_latent" stage
     :type by_latent: bool, optional
+    :param by_subgroup: List including a factor variable and specific level of said variable. Allows for separate penalties as described above.
+    :type by_subgroup: [str,str], optional
+    :param approx_deriv: Dict holding important info for the clustering algorithm. Structure: ``{"no_disc":[str],"excl":[str],"split_by":[str],"restarts":int}``
+    :type approx_deriv: dict, optional
     """
    
    def __init__(self,
@@ -271,14 +287,13 @@ class fs(f):
                 rp:int = 1,
                 by_subgroup:[str,str]or None = None,
                 approx_deriv:dict or None = None,
-                constraint:penalties.ConstType=penalties.ConstType.QR,
                 basis: Callable = smooths.B_spline_basis,
                 basis_kwargs: dict = {},
                 by_latent: bool = False):
 
       penalty = [penalties.PenType.DIFFERENCE]
       pen_kwargs = [{"m":m}]
-      super().__init__(variables, rf, None, 99, nk+1, False, rp, constraint, False,
+      super().__init__(variables, rf, None, 99, nk+1, False, rp, penalties.ConstType.QR, False,
                        basis, basis_kwargs, by_latent,
                        True, True, penalty, pen_kwargs)
       
@@ -355,7 +370,7 @@ class l(GammTerm):
          formula = Formula(lhs("y),terms=[i(),l(["cond"]),l(["x"]),l(["cond","x"])])
    
     This formula will estimate the following model:
-         y_hat = a + b1*c + b2*x + b3*c*x
+         \mu = a + b1*c + b2*x + b3*c*x
          with: c = binary predictor variable created so that it is 1 if "cond"=2 else 0
          b3 is the coefficient that is added because l(["cond","x"]) is included in the terms.
 
@@ -363,13 +378,13 @@ class l(GammTerm):
          formula = Formula(lhs("y),terms=[i(),l(["cond"]),l(["x"])])
 
     This formula will estimate:
-         y_hat = a + b1*c + b2*x
+         \mu = a + b1*c + b2*x
 
     Parameters:
 
     :param variables: A list of the variables (strings) for which linear predictors should be included
     :type variables: list[str]
-    :param by_latent: Should linear terms be added separately "by_latent" stage or not
+    :param by_latent: Experimental. Should linear terms be added separately "by_latent" stage or not
     :type by_latent: bool, optional
     """
     def __init__(self,
@@ -394,20 +409,20 @@ def li(variables:list[str],by_latent:bool=False):
     Note, the use of the "*" operator to unpack the individual terms returned from li!
    
     This formula will still estimate the following model:
-         y_hat = a + b1*c + b2*x + b3*c*x
+         \mu = a + b1*c + b2*x + b3*c*x
          with: c = binary predictor variable created so that it is 1 if "cond"=2 else 0
 
     To get a model with only main effects for "cond" and "x" ``li()`` cannot be used and ``l()`` needs to be used instead:
          formula = Formula(lhs("y),terms=[i(),l(["cond"]),l(["x"])])
 
     This formula will estimate:
-         y_hat = a + b1*c + b2*x
+         \mu = a + b1*c + b2*x
 
     Parameters:
 
     :param variables: A list of the variables (strings) for which linear predictors should be included
     :type variables: list[str]
-    :param by_latent: Should linear terms be added separately "by_latent" stage or not
+    :param by_latent: Experimental. Should linear terms be added separately "by_latent" stage or not
     :type by_latent: bool, optional
     """
    
@@ -435,7 +450,7 @@ class ri(GammTerm):
     :param variable: A factor variable. For every level of this factor a random intercept will be estimated. The random
     intercepts are assumed to follow a normal distribution centered around zero.
     :type variable: str
-    :param by_latent: Should random intercepts be added separately "by_latent" stage or not
+    :param by_latent: Experimental. Should random intercepts be added separately "by_latent" stage or not
     :type by_latent: bool, optional
     """
     def __init__(self,
@@ -465,7 +480,7 @@ class rs(GammTerm):
       formula = Formula(lhs("y),terms=[i(),l(["cond"]),rs(["cond"],rf="subject")])
    
     This formula will estimate the following model:
-         y^hat_i = a + b1*c_i + a_{j(i),cc(i)}
+         \mu = a + b1*c_i + a_{j(i),cc(i)}
          with: c = binary predictor variable created so that it is 1 if "cond"=2 for observation i else 0
          and:  cc(i) corresponding to the level of "cond" at observation i
          and:  j(i) corresponding to the level of "subject" at observation i
@@ -484,7 +499,7 @@ class rs(GammTerm):
       formula = Formula(lhs("y),terms=[i(),l(["x"]),rs(["x"],rf="subject")])
    
     This formula will estimate the following model:
-         y^hat_i = a + b*x_i + b_j(i) * x_i
+         \mu = a + b*x_i + b_j(i) * x_i
          with: j(i) corresponding to the level of "subject" at observation i
          and:  b_j(i) identifying the random slope (the subject-specific slope adjustment for "b") for variable "x" estimated
          for subject j. The b_j(i) are assumed to be from a **single** normal distribution N(0,sigma_b)
@@ -494,7 +509,7 @@ class rs(GammTerm):
       with: another continuous variable "z"
     
     This corresponds to the model:
-      y^hat_i = a + b1*x_i + b2*z_i + b3*x_i*z_i + b_j(i)*x_i*z_i
+      \mu = a + b1*x_i + b2*z_i + b3*x_i*z_i + b_j(i)*x_i*z_i
       with: j(i) corresponding to the level of "subject" at observation i
       and:  b_j(i) identifying the random slope (the subject-specific slope adjustment for "b3") for the interaction of
       variables "x" and "z" estimated for subject j. The b_j(i) are assumed to be from a **single** normal distribution N(0,sigma_b)
@@ -517,7 +532,7 @@ class rs(GammTerm):
       formula = Formula(lhs("y),terms=[i(),*li(["x","cond"]),rs(["x","cond"],rf="subject")])
 
     This formula will estimate the following model:
-         y^hat_i = a + b1*c_i + b2*x_i + b3*x_i*c_i + b_{j(i),cc(i)}*x_i
+         \mu = a + b1*c_i + b2*x_i + b3*x_i*c_i + b_{j(i),cc(i)}*x_i
          with: c = binary predictor variable created so that it is 1 if "cond"=2 for observation i else 0
          and:  cc(i) corresponding to the level of "cond" at observation i
          and:  j(i) corresponding to the level of "subject" at observation i
@@ -534,7 +549,7 @@ class rs(GammTerm):
     :type variables: list[str]
     :param rf: A factor variable. Identifies the random factor in the data.
     :type rf: str
-    :param by_latent: Should random slopes be added separately "by_latent" stage or not
+    :param by_latent: Experimental. Should random slopes be added separately "by_latent" stage or not
     :type by_latent: bool, optional
     """
     def __init__(self,

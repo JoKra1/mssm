@@ -974,15 +974,29 @@ class Formula():
     :type terms: list[GammTerm]
     :param data: A pandas dataframe (with header!) of the data which should be used to estimate the model. The variable specified for ``lhs`` as
     well as all variables included for a ``term`` in ``terms`` need to be present in the data, otherwise the call to Formula will throw an error.
-    :type data: pd.DataFrame
+    :type data: pd.DataFrame or None
+    :param p_formula: Experimental.
+    :type p_formula: PFormula or None=None
     :param series_id: A tring identifying the individual experimental units. Usually a unique trial identifier. Can only be ignored if a
    ``mssm.models.GAMM`` is to be estimated.
     :type series_id: str, optional
-    :param split_scale: Whether or not a separate Gamm (including sseparate scale parameters) should be estimated per latent state. Only relevant
+    :param split_scale: Experimental. Whether or not a separate Gamm (including sseparate scale parameters) should be estimated per latent state. Only relevant
     if a ``mssm.models.sMsGAMM`` is to be estimated.
     :type split_scale: bool, optional
-    :param n_j: Number of latent states to estimate. Only relevant if a ``mssm.models.sMsGAMM`` is to be estimated.
+    :param n_j: Experimental. Number of latent states to estimate. Only relevant if a ``mssm.models.sMsGAMM`` is to be estimated.
     :type n_j: int, optional
+    :param codebook: Codebook - keys should correspond to factor variable names specified in terms. Values should again be a ``dict``, with keys for each of K levels of the factor and value corresponding to an integer in {0,K}.
+    :type codebook: dict or None
+    :param print_warn: Whether warnings should be printed. Useful when fitting models from terminal. Defaults to True.
+    :type print_warn: bool,optional
+    :param keep_cov: Whether or not the internal encoding structure of all predictor variables should be created when forming X.T@X iteratively instead of forming X directly. Can speed up estimation but increases memory footprint. Defaults to True.
+    :type keep_cov: bool,optional
+    :param file_paths: A list of paths to .csv files from which X.T@X and X.T@y should be created iteratively. Setting this to a non-empty list will prevent fitting X as a whole. ``data`` should then be set to ``None``. Defaults to an empty list.
+    :type file_paths: [str],optional
+    :param file_loading_nc: How many cores to use to a) accumulate X in parallel (if ``data`` is not ``None`` and ``file_paths`` is an empty list) or b) to accumulate X.T@X and X.T@y (and \eta during estimation) (if ``data`` is ``None`` and ``file_paths`` is a non-empty list). For case b, this should really be set to the maimum number of cores available. For a this only really speeds up accumulating X if X has many many columns and/or rows. Defaults to 1.
+    :type file_loading_nc: int,optional
+    :param file_loading_kwargs: Any key-word arguments to pass to pandas.read_csv when X.T@X and X.T@y should be created iteratively (if ``data`` is ``None`` and ``file_paths`` is a non-empty list). Defaults to ``{"header":0,"index_col":False}``.
+    :type file_loading_kwargs: dict,optional
     """
     def __init__(self,
                  lhs:lhs,

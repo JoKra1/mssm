@@ -173,9 +173,9 @@ def REML(llk,H,coef,scale,penalties):
         P = scp.sparse.diags(Sdiag,format='csc')
 
         L,code = cpp_chol(PI@S_rep@PI)
-        
+
         if code == 0:
-            ldetSI = np.log((L@P).power(2).diagonal()).sum()*Sj_reps[SJ_term_idx[Si][0]].rep_sj
+            ldetSI = (2*np.log((L@P).diagonal()).sum())*Sj_reps[SJ_term_idx[Si][0]].rep_sj
         else:
             warnings.warn("Cholesky for log-determinant to compute REML failed. Falling back on QR.")
             R = np.linalg.qr(S_rep.toarray(),mode='r')
@@ -197,7 +197,7 @@ def REML(llk,H,coef,scale,penalties):
    if code != 0:
        raise ValueError("Failed to compute REML.")
   
-   lgdetXXS = np.log((L@P).power(2).diagonal()).sum()
+   lgdetXXS = 2*np.log((L@P).diagonal()).sum()
 
    # Done
    return reml + lgdetS/2 - lgdetXXS/2 + Mp/2*np.log(2*np.pi)
