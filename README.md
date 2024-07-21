@@ -1,8 +1,11 @@
-# mssm: Markov-switching Spline Models
+# mssm: Massive Sparse Smooth Models
+
+![GitHub CI Stable](https://github.com/jokra1/mssm/actions/workflows/python-package.yml/badge.svg?branch=stable)
+[![codecov](https://codecov.io/gh/JoKra1/mssm/graph/badge.svg?token=B2NZBO4XJ3)](https://codecov.io/gh/JoKra1/mssm)
 
 ## Description
 
-``mssm`` is a toolbox to estimate Generalized Additive Mixed Models (GAMMs) semi Markov-switching GAMMs (sMs-GAMMs) and sMs Impulse Response GAMMs (sMs-IR-GAMMs). The ``main`` branch is updated frequently to reflect new developments. The ``stable`` branch should reflect the latest releases. If you don't need the newest functionality, you should install from the ``stable`` branch (see below for instructions).
+``mssm`` is a toolbox to estimate Generalized Additive Mixed Models (GAMMs), Generalized Additive Mixed Models of Location Scale and Shape (GAMMLSS), and more general smooth models such as semi Markov-switching GAMMs (sMs-GAMMs; experimental) and sMs Impulse Response GAMMs (sMs-IR-GAMMs; experimental). The ``main`` branch is updated frequently to reflect new developments. The ``stable`` branch should reflect the latest releases. If you don't need the newest functionality, you should install from the ``stable`` branch (see below for instructions).
 
 ## Installation
 
@@ -33,10 +36,8 @@ pip install .
 
 ## To get started
 
- - With GAMMs: Take a look at tutorial 1 in the tutorial folder.
- - With sms-IR-GAMMs: Take a look at tutorial 2.
- - With sms-GAMMs: Take a look at tutorial 3.
+Take a look at the tutorials provided in this [repository](https://github.com/JoKra1/mssm_tutorials)!
 
 ## Contributing
 
-Contributions are welcome! Feel free to open issues or make pull-requests to main. Some problems that could use work are listed below.
+Contributions are welcome! Feel free to open issues or make pull-requests to main.

@@ -2,12 +2,13 @@ import numpy as np
 import scipy as scp
 import copy
 from collections.abc import Callable
-from .src.python.formula import Formula,PFormula,PTerm,build_sparse_matrix_from_formula,VarType,lhs,ConstType,Constraint,pd
-from .src.python.exp_fam import Link,Logit,Family,Binomial,Gaussian
+from .src.python.formula import Formula,PFormula,PTerm,build_sparse_matrix_from_formula,VarType,lhs,ConstType,Constraint,pd,embed_shared_penalties
+from .src.python.exp_fam import Link,Logit,Identity,LOG,Family,Binomial,Gaussian,GAMLSSFamily,GAUMLSS
 from .src.python.sem import anneal_temps_zero,const_temps,compute_log_probs,pre_ll_sms_gamm,se_step_sms_gamm,decode_local,se_step_sms_dc_gamm,pre_ll_sms_IR_gamm,init_states_IR,compute_hsmm_probabilities
-from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2
+from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2,solve_gammlss_sparse
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 from .src.python.penalties import PenType
+from .src.python.utils import sample_MVN,REML
 
 ##################################### Base Class #####################################
 
@@ -38,8 +39,8 @@ class MSSM:
         self.cpus=cpus
 
         # Current estimates
-        self.__coef = None
-        self.__scale = None
+        self.coef = None
+        self.scale = None
         self.__TR = None
         self.__pi = None
     
@@ -108,10 +109,10 @@ class GAMM(MSSM):
 
     def get_pars(self):
         """ Returns a tuple. The first entry is a np.array with all estimated coefficients. The second entry is the estimated scale parameter. Will contain Nones before fitting."""
-        return self.__coef,self.__scale
+        return self.coef,self.scale
     
-    def get_llk(self,penalized:bool=True):
-        """Get the (penalized) log-likelihood of the estimated model given the trainings data."""
+    def get_llk(self,penalized:bool=True,ext_scale:float or None=None):
+        """Get the (penalized) log-likelihood of the estimated model given the trainings data. LLK can optionally be evaluated for an external scale parameter ``ext_scale``."""
 
         pen = 0
         if penalized:
@@ -121,14 +122,19 @@ class GAMM(MSSM):
             if isinstance(self.family,Gaussian) == False:
                 mu = self.family.link.fi(self.pred)
             if self.family.twopar:
-                return self.family.llk(self.formula.y_flat[self.formula.NOT_NA_flat],mu,self.__scale) - pen
+                scale = self.scale
+                if not ext_scale is None:
+                    scale = ext_scale
+                return self.family.llk(self.formula.y_flat[self.formula.NOT_NA_flat],mu,scale) - pen
             else:
                 return self.family.llk(self.formula.y_flat[self.formula.NOT_NA_flat],mu) - pen
         return None
 
     def get_mmat(self):
         """
-        Returns exaclty the model matrix used for fitting as a scipy.sparse.csc_array.
+        Returns exaclty the model matrix used for fitting as a scipy.sparse.csc_array. Will throw an error when called for a model for which the model
+        matrix was never former completely - i.e., when X.T@X was formed iteratively for estimation, by setting the ``file_paths`` argument of the ``Formula`` to
+        a non-empty list.
         """
         if self.formula.penalties is None:
             raise ValueError("Model matrix cannot be returned if penalties have not been initialized. Call model.fit() or model.formula.build_penalties() first.")
@@ -161,7 +167,14 @@ class GAMM(MSSM):
             return model_mat
     
     def print_smooth_terms(self,pen_cutoff=0.2):
-        """Prints the name of the smooth terms included in the model. After fitting, the estimated degrees of freedom per term are printed as well."""
+        """Prints the name of the smooth terms included in the model. After fitting, the estimated degrees of freedom per term are printed as well.
+        Smooth terms with edf. < ``pen_cutoff`` will be highlighted. This only makes sense when extra Kernel penalties are placed on smooth terms to enable
+        penalizing them to a constant zero. In that case edf. < ``pen_cutoff`` can then be taken as evidence that the smooth has all but notationally disappeared
+        from the model, i.e., it does not contribute meaningfully to the model fit. This can be used as an alternative form of model selection - see Marra & Wood (2011).
+
+        References:
+         - Marra & Wood (2011). Practical variable selection for generalized additive models.
+        """
         term_names = np.array(self.formula.get_term_names())
         smooth_names = [*term_names[self.formula.get_smooth_term_idx()],
                         *term_names[self.formula.get_random_term_idx()]]
@@ -209,13 +222,35 @@ class GAMM(MSSM):
             elif pen_out > 1:
                 print(f"\n{pen_out} terms have been effectively penalized to zero and are marked with a '*'")
                         
+    def get_reml(self):
+        """
+        Get's the REML (Restrcited Maximum Likelihood) score for the estimated lambda values (see Wood, 2011).
+        Currently only supported for strictly additive models.
 
+        References:
+         - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models.
+        """
+        if not isinstance(self.family,Gaussian):
+            raise TypeError("REML score can currently only be obtained for Gaussian additive models. It can be computed via the REML function in mssm.src.python.utils when H=X.T@W@X is formed manually.")
+        
+        if self.coef is None or self.formula.penalties is None:
+            raise ValueError("Model needs to be estimated before evaluating the REML score. Call model.fit()")
+        
+        scale = self.family.scale
+        if self.family.twopar:
+            scale = self.scale # Estimated scale
+        
+        X = self.get_mmat()
+        llk = self.get_llk(False)
+        reml = REML(llk,(X.T@X).tocsc(),self.coef,scale,self.formula.penalties)
+        
+        return reml
                 
     ##################################### Fitting #####################################
     
-    def fit(self,maxiter=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=True,restart=False,progress_bar=True,n_cores=10):
+    def fit(self,maxiter=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=False,extension_method_lam = "nesterov",restart=False,progress_bar=True,n_cores=10):
         """
-        Fit the specified model.
+        Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
         Parameters:
 
@@ -227,8 +262,14 @@ class GAMM(MSSM):
         :type extend_lambda: bool,optional
         :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for actually improving the Restricted maximum likelihood of the model. Can lower the number of new smoothing penalty proposals necessary. Enabled by default.
         :type extend_lambda: bool,optional
+        :param exclude_lambda: Whether selective lambda terms should be excluded heuristically from updates. Can make each iteration a bit cheaper but is problematic when using additional Kernel penalties on terms. Thus, disabled by default.
+        :type exclude_lambda: bool,optional
         :param restart: Whether fitting should be resumed. Only possible if the same model has previously completed at least one fitting iteration.
         :type restart: bool,optional
+        :param progress_bar: Whether progress should be displayed (convergence info and time estimate). Defaults to True.
+        :type progress_bar: bool,optional
+        :param n_cores: Number of cores to use during parts of the estimation that can be done in parallel. Defaults to 10.
+        :type n_cores: int,optional
         """
         # We need to initialize penalties
         if not restart:
@@ -264,20 +305,45 @@ class GAMM(MSSM):
                 print("NAs were excluded for fitting.")
 
             # Build the model matrix with all information from the formula
-            model_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
-                                                         ltx,irstx,stx,rtx,var_types,var_map,
-                                                         var_mins,var_maxs,factor_levels,
-                                                         cov_flat,cov,n_j,state_est_flat,state_est)
+            if self.formula.file_loading_nc == 1:
+                model_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
+                                                            ltx,irstx,stx,rtx,var_types,var_map,
+                                                            var_mins,var_maxs,factor_levels,
+                                                            cov_flat,cov,n_j,state_est_flat,state_est)
+            
+            else:
+                # Build row sets of model matrix in parallel:
+                for sti in stx:
+                    if terms[sti].should_rp:
+                        for rpi in range(len(terms[sti].RP)):
+                            # Don't need to pass those down to the processes.
+                            terms[sti].RP[rpi].X = None
+                            terms[sti].RP[rpi].cov = None
+                
+                cov_split = np.array_split(cov_flat,self.formula.file_loading_nc,axis=0)
+                with mp.Pool(processes=self.formula.file_loading_nc) as pool:
+                    # Build the model matrix with all information from the formula - but only for sub-set of rows
+                    Xs = pool.starmap(build_sparse_matrix_from_formula,zip(repeat(terms),repeat(has_intercept),repeat(has_scale_split),
+                                                                           repeat(ltx),repeat(irstx),repeat(stx),repeat(rtx),
+                                                                           repeat(var_types),repeat(var_map),repeat(var_mins),
+                                                                           repeat(var_maxs),repeat(factor_levels),cov_split,
+                                                                           repeat(cov),repeat(n_j),repeat(state_est_flat),
+                                                                           repeat(state_est)))
+                    
+                    model_mat = scp.sparse.vstack(Xs,format='csc')
+
 
             # Get initial estimate of mu based on family:
             init_mu_flat = self.family.init_mu(y_flat)
 
             # Now we have to estimate the model
-            coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,y_flat,
-                                                                             model_mat,penalties,self.formula.n_coef,
-                                                                             self.family,maxiter,"svd",
-                                                                             conv_tol,extend_lambda,control_lambda,
-                                                                             exclude_lambda,progress_bar,n_cores)
+            coef,eta,wres,scale,LVI,edf,term_edf,penalty,fit_info = solve_gamm_sparse(init_mu_flat,y_flat,
+                                                                                      model_mat,penalties,self.formula.n_coef,
+                                                                                      self.family,maxiter,"svd",
+                                                                                      conv_tol,extend_lambda,control_lambda,
+                                                                                      exclude_lambda,extension_method_lam,
+                                                                                      len(self.formula.discretize) == 0,
+                                                                                      progress_bar,n_cores)
         
         else:
             # Iteratively build model matrix.
@@ -285,29 +351,106 @@ class GAMM(MSSM):
             if isinstance(self.family,Gaussian) == False:
                 raise ValueError("Iteratively building the model matrix is currently only supported for Normal models.")
             
-            coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse2(self.formula,penalties,self.formula.n_coef,
-                                                                              self.family,maxiter,"svd",
-                                                                              conv_tol,extend_lambda,control_lambda,
-                                                                              exclude_lambda,progress_bar,n_cores)
+            coef,eta,wres,scale,LVI,edf,term_edf,penalty,fit_info = solve_gamm_sparse2(self.formula,penalties,self.formula.n_coef,
+                                                                                       self.family,maxiter,"svd",
+                                                                                       conv_tol,extend_lambda,control_lambda,
+                                                                                       exclude_lambda,extension_method_lam,
+                                                                                       len(self.formula.discretize) == 0,
+                                                                                       progress_bar,n_cores)
         
-        self.__coef = coef
-        self.__scale = scale # ToDo: scale name is used in another context for more general mssm..
+        self.coef = coef
+        self.scale = scale # ToDo: scale name is used in another context for more general mssm..
         self.pred = eta
         self.res = wres
         self.edf = edf
         self.term_edf = term_edf
         self.penalty = penalty
-
+        self.info = fit_info
         self.lvi = LVI
     
     ##################################### Prediction #####################################
 
-    def predict(self, use_terms, n_dat,alpha=0.05,ci=False):
+    def sample_post(self,n_ps,use_post=None,deviations=False,seed=None):
+        """
+        Obtain ``n_ps`` samples from posterior [\boldsymbol{\beta} - \hat{\boldsymbol{\beta}}] | y,\lambda ~ N(0,V),
+        where V is [X.T@X + S_\lambda]^{-1}*scale (see Wood, 2017; section 6.10). To obtain samples for \boldsymbol{\beta},
+        simply set ``deviations`` to false.
+
+        see ``sample_MVN`` in ``mssm.src.python.utils.py`` for more details.
+
+        References:
+        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+        Parameters:
+
+        :param use_post: The indices corresponding to coefficients for which to actually obtain samples.
+        """
+        if deviations:
+            post = sample_MVN(n_ps,0,self.scale,P=None,L=None,LI=self.lvi,use=use_post,seed=seed)
+        else:
+            post = sample_MVN(n_ps,self.coef,self.scale,P=None,L=None,LI=self.lvi,use=use_post,seed=seed)
+        
+        return post
+    
+    def __adjust_CI(self,n_ps,b,predi_mat,use_terms,alpha,seed):
+        """
+        Adjusts point-wise CI to behave like whole-interval (based on Wood, 2017; section 6.10.2 and Simpson, 2016):
+
+        self.coef +- b gives point-wise interval, so for interval to be whole-interval
+        1-alpha% of posterior samples should fall completely within these boundaries.
+
+        From section 6.10 in Wood (2017) we have that *coef | y, lambda ~ N(coef,V), where V is self.lvi.T @ self.lvi * self.scale.
+        Implication is that deviations [*coef - coef] | y, lambda ~ N(0,V). In line with definition above, 1-alpha% of
+        predi_mat@[*coef - coef] should fall within [b,-b]. Wood (2017) suggests to find a so that [a*b,a*-b] achieves this.
+
+        To do this, we find a for every predi_mat@[*coef - coef] and then select the final one so that 1-alpha% of samples had an equal or lower
+        one. The consequence: 1-alpha% of samples drawn should fall completely within the modified boundaries.
+
+        References:
+        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+        - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
+        """
+        use_post = None
+        if not use_terms is None:
+            # If we have many random factor levels, but want to make predictions only
+            # for fixed effects, it's wasteful to sample all coefficients from posterior.
+            # The code below performs a selection of the coefficients to be sampled.
+            use_post = predi_mat.sum(axis=0) != 0
+            use_post = np.arange(0,predi_mat.shape[1])[use_post]
+
+        # Sample deviations [*coef - coef] from posterior of GAMM
+        post = self.sample_post(n_ps,use_post,deviations=True,seed=seed)
+
+        # To make computations easier take the abs of predi_mat@[*coef - coef], because [b,-b] is symmetric we can
+        # simply check whether abs(predi_mat@[*coef - coef]) < b by computing abs(predi_mat@[*coef - coef])/b. The max of
+        # this ratio, over rows of predi_mat, is a for this sample. If a<=1, no extension is necessary for this series.
+        if use_post is None:
+            fpost = np.abs(predi_mat@post)
+        else:
+            fpost = np.abs(predi_mat[:,use_post]@post)
+
+        # Compute ratio between abs(predi_mat@[*coef - coef])/b for every sample.
+        fpost = fpost / b[:,None]
+
+        # Then compute max of this ratio, over rows of predi_mat, for every sample. np.max(fpost,axis=0) now is a vector
+        # with n_ps elements, holding for each sample the multiplicative adjustment a, necessary to ensure that predi_mat@[*coef - coef]
+        # falls completely between [a*b,a*-b].
+        # The final multiplicative adjustment bmadq is selected from this vector to be high enough so that in 1-(alpha) simulations
+        # we have an equal or lower a.
+        bmadq = np.quantile(np.max(fpost,axis=0),1-alpha)
+
+        # Then adjust b
+        b *= bmadq
+
+        return b
+
+    def predict(self, use_terms, n_dat,alpha=0.05,ci=False,whole_interval=False,n_ps=10000,seed=None):
         """
         Make a prediction using the fitted model for new data ``n_dat`` using only the terms indexed by ``use_terms``.
 
         References:
         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+        - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
 
         Parameters:
 
@@ -322,7 +465,14 @@ class GAMM(MSSM):
         :param alpha: The alpha level to use for the standard error calculation. Specifically, 1 - (``alpha``/2) will be used to determine the critical cut-off value according to a N(0,1).
         :type alpha: float, optional
         :param ci: Whether the standard error ``se`` for credible interval (CI; see  Wood, 2017) calculation should be returned. The CI is then [``pred`` - ``se``, ``pred`` + ``se``]
-        :type alpha: bool, optional
+        :type ci: bool, optional
+        :param whole_interval: Whether or not to adjuste the point-wise CI to behave like whole-interval (based on Wood, 2017; section 6.10.2 and Simpson, 2016). Defaults to False. The CI is then [``pred`` - ``se``, ``pred`` + ``se``]
+        :type whole_interval: bool, optional
+        :param n_ps: How many samples to draw from the posterior in case the point-wise CI is adjusted to behave like a whole-interval CI.
+        :type n_ps: int, optional
+        :param seed: Can be used to provide a seed for the posterior sampling step in case the point-wise CI is adjusted to behave like a whole-interval CI.
+        :type seed: int or None, optional
+
 
         Returns:
         :return: A tuple with 3 entries. The first entry is the prediction ``pred`` based on the new data ``n_dat``. The second entry is the model
@@ -333,10 +483,15 @@ class GAMM(MSSM):
         """
         var_map = self.formula.get_var_map()
         var_keys = var_map.keys()
+        sub_group_vars = self.formula.get_subgroup_variables()
 
         for k in var_keys:
-            if k not in n_dat.columns:
-                raise IndexError(f"Variable {k} is missing in new data.")
+            if k in sub_group_vars:
+                if k.split(":")[0] not in n_dat.columns:
+                    raise IndexError(f"Variable {k.split(':')[0]} is missing in new data.")
+            else:
+                if k not in n_dat.columns:
+                    raise IndexError(f"Variable {k} is missing in new data.")
         
         # Encode test data
         _,pred_cov_flat,_,_,_,_,_ = self.formula.encode_data(n_dat,prediction=True)
@@ -366,19 +521,26 @@ class GAMM(MSSM):
                                                      state_est,use_only=use_terms)
         
         # Now we calculate the prediction
-        pred = predi_mat @ self.__coef
+        pred = predi_mat @ self.coef
 
         # Optionally calculate the boundary for a 1-alpha CI
         if ci:
             # Wood (2017) 6.10
-            c = predi_mat @ self.lvi.T @ self.lvi * self.__scale @ predi_mat.T
+            c = predi_mat @ self.lvi.T @ self.lvi * self.scale @ predi_mat.T
             c = c.diagonal()
             b = scp.stats.norm.ppf(1-(alpha/2)) * np.sqrt(c)
+
+            # Whole-interval CI (section 6.10.2 in Wood, 2017), the same idea was also
+            # explored by Simpson (2016) who performs very similar computations to compute
+            # such intervals. See __adjust_CI function.
+            if whole_interval:
+                b = self.__adjust_CI(n_ps,b,predi_mat,use_terms,alpha,seed)
+
             return pred,predi_mat,b
 
         return pred,predi_mat,None
     
-    def predict_diff(self,dat1,dat2,use_terms,alpha=0.05):
+    def predict_diff(self,dat1,dat2,use_terms,alpha=0.05,whole_interval=False,n_ps=10000,seed=None):
         """
         Get the difference in the predictions for two datasets. Useful to compare a smooth estimated for
         one level of a factor to the smooth estimated for another level of a factor. In that case, ``dat1`` and
@@ -386,6 +548,7 @@ class GAMM(MSSM):
 
         References:
         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+        - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
         - ``get_difference`` function from ``itsadug`` R-package: https://rdrr.io/cran/itsadug/man/get_difference.html
 
         Parameters:
@@ -402,9 +565,15 @@ class GAMM(MSSM):
         :type use_terms: list[int] or None
         :param alpha: The alpha level to use for the standard error calculation. Specifically, 1 - (``alpha``/2) will be used to determine the critical cut-off value according to a N(0,1).
         :type alpha: float, optional
+        :param whole_interval: Whether or not to adjuste the point-wise CI to behave like whole-interval (based on Wood, 2017; section 6.10.2 and Simpson, 2016). Defaults to False.
+        :type whole_interval: bool, optional
+        :param n_ps: How many samples to draw from the posterior in case the point-wise CI is adjusted to behave like a whole-interval CI.
+        :type n_ps: int, optional
+        :param seed: Can be used to provide a seed for the posterior sampling step in case the point-wise CI is adjusted to behave like a whole-interval CI.
+        :type seed: int or None, optional
 
         Returns:
-        :return: A tuple with 2 entries. The first entry is the predicted difference (between the two data sets ``dat1`` & ``dat2``) ``pred``. The second entry is the standard error ``se`` of the predicted difference..
+        :return: A tuple with 2 entries. The first entry is the predicted difference (between the two data sets ``dat1`` & ``dat2``) ``diff``. The second entry is the standard error ``se`` of the predicted difference. The difference CI is then [``diff`` - ``se``, ``diff`` + ``se``]
         :rtype: tuple
         """
         _,pmat1,_ = self.predict(use_terms,dat1)
@@ -413,936 +582,243 @@ class GAMM(MSSM):
         pmat_diff = pmat1 - pmat2
         
         # Predicted difference
-        diff = pmat_diff @ self.__coef
+        diff = pmat_diff @ self.coef
         
         # Difference CI
-        c = pmat_diff @ self.lvi.T @ self.lvi * self.__scale @ pmat_diff.T
+        c = pmat_diff @ self.lvi.T @ self.lvi * self.scale @ pmat_diff.T
         c = c.diagonal()
         b = scp.stats.norm.ppf(1-(alpha/2)) * np.sqrt(c)
 
+        # Whole-interval CI (section 6.10.2 in Wood, 2017), the same idea was also
+        # explored by Simpson (2016) who performs very similar computations to compute
+        # such intervals. See __adjust_CI function.
+        if whole_interval:
+            b = self.__adjust_CI(n_ps,b,pmat_diff,use_terms,alpha,seed)
+
         return diff,b
 
-class sMsGAMM(MSSM):
-    # Class to fit semi-Markov-switching Generalized Additive Mixed Models.
-    # see: Langrock, R., Kneib, T., Glennie, R., & Michelot, T. (2017). Markov-switching generalized additive models. https://doi.org/10.1007/s11222-015-9620-3
-    # and: Haji-Maghsoudi, S., Bulla, J., Sadeghifar, M., Roshanaei, G., & Mahjub, H. (2021). Generalized linear mixed hidden semi-Markov models in longitudinal settings: A Bayesian approach. https://doi.org/10.1002/sim.8908
-    # for an introduction to similar models.
+class GAMLSS(GAMM):
+    """
+    Class to fit Generalized Additive Mixed Models of Location Scale and Shape.
 
-    def __init__(self,
-                 formula: Formula,
-                 family: Family,
-                 end_points:list,
-                 pre_llk_fun=pre_ll_sms_gamm,
-                 estimate_pi: bool = True,
-                 estimate_TR: bool = True,
-                 pi=None,
-                 TR=None,
-                 mvar_by=None,
-                 cpus: int = 1):
-        
-        super().__init__(formula,
-                         family,
-                         pre_llk_fun,
-                         estimate_pi,
-                         estimate_TR,
-                         cpus)
-        
-        # Multivariate indicator factor.
-        self.mvar_by = mvar_by
-        if not self.mvar_by is None:
-            if not self.mvar_by in self.formula.get_var_types():
-                raise KeyError(f"Multivariate factor {self.mvar_by} does not exist in the data.")
-            if self.formula.get_var_types()[self.mvar_by] != VarType.FACTOR:
-                raise ValueError(f"Multivariate variable {self.mvar_by} is not a factor.")
-        
-        self.end_points= end_points
-        self.n_j = formula.get_nj()
-        
-        # Check the sojourn time distributions provided
-        self.pds:list[PTerm] = None
-        self.__check_pds()
+    References:
+    - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
+    - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
+    - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models. https://doi.org/10.1111/j.1467-9868.2010.00749.x
+    - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+    - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+    
+    Parameters:
+    :param formulas: A list of formulas for the GAMMLS model
+    :type variables: Formula
+    :param family: A GAMLSS family. Currently only ``Gaussian`` is implemented.
+    :type Family
+    """
+    def __init__(self, formulas: [Formula], family: GAMLSSFamily):
+        super().__init__(formulas[0], family)
+        self.formulas = copy.deepcopy(formulas) # self.formula can hold formula for single parameter later on for predictions.
+        self.overall_lvi = None
+        self.__overall_coef = None
+        self.__overall_preds = None # etas
 
-        # Create starting TR & pi
-        if estimate_pi == False and pi is None:
-            raise ValueError("If estimate_pi==False, pi needs to be provided.")
-        if estimate_TR == False and TR is None:
-            raise ValueError("If estimate_TR==False, TR needs to be provided.")
-        
-        self.__init_tr_pi(pi,TR)
-        self.__coef = None
-        self.__scale = None
-
-    ##################################### Getters #####################################
-
+    
     def get_pars(self):
-        return self.__coef,self.__scale,self.__TR,self.__pi
+        """ Returns a list containing the coef vector for each parameter of the distribution. Will contain Nones before fitting."""
+        return self.__overall_coef
     
-    ##################################### Inits & Checks #####################################
 
-    def __init_tr_pi(self,prov_pi,prov_TR):
-        # Initialize initial distribution of states to
-        # equal probability to be in any state
-        # and transition matrix to have equal likelihood to transition
-        # anywhere.
-        if self.estimate_pi:
-            self.__pi = np.zeros(self.n_j) + 1 / self.n_j
-        else:
-            self.__pi = prov_pi
+    def get_llk(self,penalized:bool=True):
+        """Get the (penalized) log-likelihood of the estimated model given the trainings data."""
 
-        if self.estimate_TR:
-            self.__TR = np.zeros((self.n_j,self.n_j)) + 1 / (self.n_j - 1)
-            for j in range(self.n_j):
-                self.__TR[j,j] = 0
-        else:
-            self.__TR = prov_TR
+        pen = 0
+        if penalized:
+            pen = self.penalty
+        if self.pred is not None:
+            mus = [self.family.links[i].fi(self.__overall_preds[i]) for i in range(self.family.n_par)]
+            return self.family.llk(self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat],*mus) - pen
+
+        return None
+
+    def get_mmat(self):
+        raise NotImplementedError("Not yet supported.")
     
-    def __check_pds(self):
-        # Perform some check on the sojourn time
-        # distributions passed to the constructor.
-        # Also set the number of levels associated with
-        # by_split factor variables!
-        self.pds = self.p_formula.get_terms()
-        var_types = self.formula.get_var_types()
-        var_levels = self.formula.get_factor_levels()
-
-        if len(self.pds) != self.n_j:
-            raise ValueError("A sojourn time distribution for every state needs to be provided.")
-
-        # Check that splt_by vars exist in the variable structure of formula.
-        for pTerm in self.pds:
-            if not pTerm.split_by is None:
-                if pTerm.split_by not in var_types:
-                    raise KeyError(f"Variable {pTerm.split_by} used as split_by argument does not exist in data.")
-                if var_types[pTerm.split_by] != VarType.FACTOR:
-                    raise ValueError(f"Variable {pTerm.split_by} used as split_by argument is not a factor variable.")
-                pTerm.n_by = len(var_levels[pTerm.split_by])
+    def print_smooth_terms(self,pen_cutoff=0.2):
+        raise NotImplementedError("Not yet supported.")
+                        
+    def get_reml(self):
+        raise NotImplementedError("Not yet supported.")
     
-    def get_mmat_full(self):
+    def fit(self,max_outer=50,max_inner=50,min_inner=1,conv_tol=1e-7,extend_lambda=True,progress_bar=True,n_cores=10):
         """
-        Returns the full model matrix for all collected observations as a scipy.sparse.csc_array.
+        Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
+
+        Parameters:
+
+        :param max_outer: The maximum number of fitting iterations.
+        :type max_outer: int,optional
+        :param max_inner: The maximum number of fitting iterations to use by the inner Newton step for coefficients.
+        :type max_inner: int,optional
+        :param min_inner: The minimum number of fitting iterations to use by the inner Newton step for coefficients.
+        :type min_inner: int,optional
+        :param conv_tol: The relative (change in penalized deviance is compared against ``conv_tol`` * previous penalized deviance) criterion used to determine convergence.
+        :type conv_tol: float,optional
+        :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the number of new smoothing penalty proposals necessary. Enabled by default.
+        :type extend_lambda: bool,optional
+        :param progress_bar: Whether progress should be displayed (convergence info and time estimate). Defaults to True.
+        :type progress_bar: bool,optional
+        :param n_cores: Number of cores to use during parts of the estimation that can be done in parallel. Defaults to 10.
+        :type n_cores: int,optional
         """
-        has_scale_split = self.formula.has_scale_split()
+        
+        # Get y
+        y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
 
-        if self.formula.penalties is None:
-            raise ValueError("Model matrix cannot be returned if penalties have not been initialized. Call model.fit() or model.formula.build_penalties() first.")
+        # Build penalties and model matrices for all formulas
+        Xs = []
+        for form in self.formulas:
+            mod = GAMM(form,family=Gaussian())
+            form.build_penalties()
+            Xs.append(mod.get_mmat())
+
+        # Fit mean model
+        if self.family.mean_init_fam is not None:
+            mean_model = GAMM(self.formulas[0],family=self.family.mean_init_fam)
+            mean_model.fit(progress_bar=False,restart=True)
+            m_coef,_ = mean_model.get_pars()
         else:
-            # Model matrix parameters that remain constant are specified.
-            # And then we need to build the model matrix once for the entire
-            # data so that we can later get observation probabilities for the
-            # entire data.
-            terms = self.formula.get_terms()
-            has_intercept = self.formula.has_intercept()
-            ltx = self.formula.get_linear_term_idx()
-            irstx = []
-            stx = self.formula.get_smooth_term_idx()
-            rtx = self.formula.get_random_term_idx()
-            var_types = self.formula.get_var_types()
-            var_map = self.formula.get_var_map()
-            var_mins = self.formula.get_var_mins()
-            var_maxs = self.formula.get_var_maxs()
-            factor_levels = self.formula.get_factor_levels()
-            NOT_NA_flat = self.formula.NOT_NA_flat
-            cov_flat = self.formula.cov_flat
+            m_coef = scp.stats.norm.rvs(size=self.formulas[0].n_coef).reshape(-1,1)
 
-            model_mat_full = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
-                                                            ltx,irstx,stx,rtx,var_types,var_map,
-                                                            var_mins,var_maxs,factor_levels,
-                                                            cov_flat[NOT_NA_flat],None,self.n_j,
-                                                            None,None)
-            
-            return model_mat_full
+        # Get GAMLSS penalties
+        shared_penalties = embed_shared_penalties(self.formulas)
+        gamlss_pen = [pen for pens in shared_penalties for pen in pens]
 
-    ##################################### Fitting #####################################
-    
-    def __propose_all_states(self,pool,cov,temp,pi,TR,log_o_probs,log_dur_probs,var_map):
-        # MP code to propose states for every series
-        args = zip(repeat(self.n_j),repeat(temp),cov,self.end_points,repeat(pi),
-                   repeat(TR),log_o_probs,repeat(log_dur_probs),repeat(self.pds),
-                   repeat(self.pre_llk_fun),repeat(var_map))
+        # Start with much weaker penalty than for GAMs
+        for pen_i in range(len(gamlss_pen)):
+            gamlss_pen[pen_i].lam = 0.01
+
+        # Initialize overall coefficients
+        form_n_coef = [form.n_coef for form in self.formulas]
+        coef = np.concatenate((m_coef.reshape(-1,1),
+                            *[np.ones((self.formulas[ix].n_coef)).reshape(-1,1) for ix in range(1,self.family.n_par)]))
+        coef_split_idx = form_n_coef[:-1]
+
+        coef,etas,mus,wres,LV,total_edf,term_edfs,penalty = solve_gammlss_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,
+                                                                                 gamlss_pen,max_outer,max_inner,min_inner,conv_tol,
+                                                                                 extend_lambda,progress_bar,n_cores)
         
-        state_durs_new, states_new, llks = zip(*pool.starmap(se_step_sms_gamm,args))
-        return list(state_durs_new),list(states_new),list(llks)
-    
-    def __decode_all_states(self,pool,cov,pi,TR,log_o_probs,log_dur_probs,var_map):
-        # MP code to decode final states for every series
-        args = zip(repeat(self.n_j),cov,repeat(pi),repeat(TR),log_o_probs,
-                   repeat(log_dur_probs),repeat(self.pds),repeat(var_map))
-        
-        state_durs_decoded, states_decoded, llks_decoded = zip(*pool.starmap(decode_local,args))
-        return list(state_durs_decoded),list(states_decoded),list(llks_decoded)
-    
-    def compute_all_probs(self,pool,cov,pi,TR,log_o_probs,log_dur_probs,var_map):
-        # MP code to decode final states for every series
-        args = zip(repeat(self.n_j),cov,repeat(pi),repeat(TR),log_o_probs,
-                   repeat(log_dur_probs),repeat(self.pds),repeat(var_map),repeat(True))
-        
-        llks_decoded, etas, gammas, smoothed = zip(*pool.starmap(compute_hsmm_probabilities,args))
-        return list(etas),list(gammas),list(smoothed),list(llks_decoded)
-    
-    def fit(self,burn_in=100,maxiter_inner=30,m_avg=15,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=False,init_scale=100,t0=0.25,r=0.925,progress_bar=True):
-        # Performs Stochastic Expectation maiximization based on Nielsen (2002) see also the sem.py file for
-        # more details as well as:
-        # Ref:
-        # 1. Allassonnière, S., & Chevallier, J. (2021). A new class of stochastic EM algorithms. Escaping local maxima and handling intractable sampling. https://doi.org/10.1016/j.csda.2020.107159
-        # 2. Celeux, G., Chauveau, D., & Diebolt, J. (1992). On Stochastic Versions of the EM Algorithm. https://doi.org/10.1177/075910639203700105
-        # 3. Delyon, B., Lavielle, M., & Moulines, E. (1999). Convergence of a stochastic approximation version of the EM algorithm. https://doi.org/10.1214/aos/1018031103
-        
-        has_scale_split = self.formula.has_scale_split()
-        
-        # Penalties need to be initialized and copied for each stage
-        self.formula.build_penalties()
-        
-        if has_scale_split:
-            penalties = [copy.deepcopy(self.formula.penalties) for j in range(self.n_j)]
-        else:
-            penalties = self.formula.penalties
-
-        self.state_penalties = penalties
-
-        # Model matrix parameters that remain constant are specified.
-        # And then we need to build the model matrix once for the entire
-        # data so that we can later get observation probabilities for the
-        # entire data.
-        terms = self.formula.get_terms()
-        has_intercept = self.formula.has_intercept()
-        ltx = self.formula.get_linear_term_idx()
-        irstx = []
-        stx = self.formula.get_smooth_term_idx()
-        rtx = self.formula.get_random_term_idx()
-        var_types = self.formula.get_var_types()
-        var_map = self.formula.get_var_map()
-        var_mins = self.formula.get_var_mins()
-        var_maxs = self.formula.get_var_maxs()
-        factor_levels = self.formula.get_factor_levels()
-        NOT_NA_flat = self.formula.NOT_NA_flat
-        cov_flat = self.formula.cov_flat
-        y_flat = self.formula.y_flat
-        cov = self.formula.cov
-        n_series = len(self.formula.y)
-        n_obs = len(y_flat)
-
-        model_mat_full = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
-                                                          ltx,irstx,stx,rtx,var_types,var_map,
-                                                          var_mins,var_maxs,factor_levels,
-                                                          cov_flat[NOT_NA_flat],None,self.n_j,
-                                                          None,None)
-
-        # Now we need to iteratively improve the model estimates (GAMM parameters and
-        # sojourn distribution parameters). So we start by maximizing the latter given
-        # the current state & state dur estimates and then obtain the next set of state
-        # & state dur parameters given these new model parameters.
-        state_coef = [scp.stats.norm.rvs(size=model_mat_full.shape[1]) for j in range(self.n_j)]
-        state_scales = [init_scale for j in range(self.n_j)]
-        state_penalties = []
-        state_LVIs = []
-        llk_hist = []
-
-        n_pi = self.__pi
-        n_TR = self.__TR
-        
-        # For state proposals we utilize a temparature schedule. This is similar to the idea of simulated annealing proposed
-        # by Kirkpatrick, Gelatt and Vecchi (1983). However, the mechanism here is closer to simulated
-        # tempering than annealing (Marinari & Parisi 1992; Allassonnière & Chevallier, 2021). Specifically,
-        # at every iteration iter we sample noise from a normal distribution with sd=temp_schedule[iter] and add
-        # that to the smoothed probabilities used to propose new steps. The idea is that as long as
-        # sd=temp_schedule[iter] > 0 we promote exploring new state sequence candidates, so that we (hopefully)
-        # further reduce the chance of ending up with a local maximum. Of course, if we set sd=temp_schedule[iter]
-        # too extreme, we will not get anywhere since the noise dominates the smoothed probabilities. So this
-        # likely requires some tuning.
-        # see: Marinari, E., & Parisi, G. (1992). Simulated Tempering: A New Monte Carlo Scheme. https://doi.org/10.1209/0295-5075/19/6/002
-        temp_schedule = anneal_temps_zero(burn_in,t0,r)
-
-        iterator = range(burn_in + m_avg)
-        if progress_bar:
-            iterator = tqdm(iterator,desc="Fitting",leave=True)
-        
-        for iter in iterator:
-
-            ### Stochastic Expectation ###
-
-            # Propose new states based on all updated parameters.
-            # First we need the probability of stage durations for every stage (i.e., under every sojourn dist.).
-            s_log_o_probs,dur_log_probs = compute_log_probs(self.n_j,n_obs,has_scale_split,
-                                                            model_mat_full,state_coef,
-                                                            state_scales,self.pds,y_flat,
-                                                            NOT_NA_flat,self.formula.sid,
-                                                            self.family,factor_levels,
-                                                            self.mvar_by)
-            
-            # Now we can propose a new set of states and state_durs for every series.
-            with mp.Pool(processes=self.cpus) as pool:
-                # After the burn-in period, we do not add noise to the state probabilities, since
-                # we no longer want to explore unnecessarily.
-                temp = 0
-                if iter < burn_in:
-                    temp = temp_schedule[iter]
-
-                durs,states,llks = self.__propose_all_states(pool,cov,temp,n_pi,n_TR,s_log_o_probs,dur_log_probs,var_map)
-
-                if not self.mvar_by is None:
-                    states_flat = np.array([st for s in states for _ in range(len(factor_levels[self.mvar_by])) for st in s],dtype=int)
-                else:
-                    states_flat = np.array([st for s in states for st in s],dtype=int)
-            
-            ### Convergence control ###
-
-            # Convergence control is best based on plotting the change in penalized likelihood over iterations.
-            # Once we start oscillating around a constant value the chain has likely converged ~ see Nielsen (2002).
-            if iter > 0:
-                pen_llk = np.sum(llks) - np.sum(state_penalties)
-                llk_hist.append(pen_llk)
-
-            ### Maximization ###
-
-            # First update all GAMM parameters - if scale_split==True, do so for every state separately
-            if has_scale_split:
-                for j in range(self.n_j):
-                    
-                    state_NOT_NA = NOT_NA_flat[states_flat == j]
-                    state_y = y_flat[states_flat == j][state_NOT_NA]
-                    state_cov = cov_flat[states_flat == j,:][state_NOT_NA]
-                    
-                    # Build the model matrix with all information from the formula for state j
-                    model_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
-                                                                ltx,irstx,stx,rtx,var_types,var_map,
-                                                                var_mins,var_maxs,factor_levels,
-                                                                state_cov,None,self.n_j,None,None)
-                    
-                    # Get initial estimate of mu based on family:
-                    if isinstance(self.family,Gaussian): #or iter == 0
-                        #init_mu_flat = self.family.init_mu(state_y)
-                        init_mu_flat = self.family.init_mu(model_mat @ state_coef[j])
-                    else: # Use last coefficient set for mu estimate. Penalties carry over as well.
-                        init_mu_flat = self.family.link.fi(model_mat @ state_coef[j])
-
-                    # Now we have to estimate the model for the current state j
-                    coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,state_y,
-                                                                                    model_mat,penalties[j],self.formula.n_coef,
-                                                                                    self.family,maxiter_inner,"svd",
-                                                                                    conv_tol,extend_lambda,control_lambda,
-                                                                                    exclude_lambda,False,self.cpus)
-                    
-                    
-                    
-                    # Collect coefficients, penalties, Invs and scale parameter 
-                    if iter == 0:
-                        state_penalties.append(penalty)
-                        state_LVIs.append(LVI)
-                    else:
-                        state_penalties[j] = penalty
-                        state_LVIs[j] = LVI
-
-                    state_coef[j] = coef
-                    state_scales[j] = scale
-            else:
-                raise NotImplementedError("has_scale_split==False is not yet implemented.")
-
-            # Next update all sojourn time distribution parameters as well as TR and pi.
-            if self.estimate_pi:
-                n_pi = np.zeros(self.n_j)
-            
-            if self.estimate_TR:
-                n_TR = np.zeros((self.n_j,self.n_j))
-
-            # Iterate over every series to get the durations from every state in that series
-            j_dur = [[] for j in range(self.n_j)]
-            j_cov = [[] for j in range(self.n_j)]
-            for s in range(n_series):
-                if self.estimate_pi:
-                    # For given state sequences optimal estimate for pi
-                    # is the percentage of being in state j at time 0 over
-                    # all series. Follows direclty from sub-equation 1 in Yu (2011)
-                    # for complete data case.
-                    n_pi[durs[s][0,0]] += 1
-                
-                if self.estimate_TR:
-                    # For given state sequences, optimal estimate
-                    # for the transition probability from i -> j
-                    # is: n(i -> j)/n(i -> any not i)
-                    # where n() gives the number of occurences across
-                    # all sequences. Follows direclty from sub-equation 2 in Yu (2011)
-                    # for complete data case.
-                    for tr in range(1,durs[s].shape[0]):
-                        n_TR[durs[s][tr-1,0],durs[s][tr,0]] += 1
-                
-                # Durations for every state put in a list
-                sd = durs[s]
-                s_durs = [sd[sd[:,0] == j,1] for j in range(self.n_j)]
-                for j in range(self.n_j):
-                    j_dur[j].extend(s_durs[j])
-                    pd_split = self.pds[j].split_by
-                    if pd_split is not None:
-                        c_s = cov[s] # Encoded variables from this series
-                        c_s_j = c_s[0,var_map[pd_split]] # Factor variables are assumed constant so we can take first element.
-                        j_cov[j].extend([c_s_j for _ in s_durs[j]])
-
-            # Maximize sojourn time distribution parameters by obtaining MLE
-            # for the proposed stage durations.
-            for j in range(self.n_j):
-                j_dur[j] = np.array(j_dur[j])
-                pd_j = self.pds[j]
-
-                if pd_j.split_by is not None:
-                    j_cov[j] = np.array(j_cov[j])
-                    for ci in range(pd_j.n_by):
-                        pd_j.fit(j_dur[j][j_cov[j] == ci],ci)
-                else:
-                    pd_j.fit(j_dur[j])
-
-            # Counts -> Probs for pi and TR
-            if self.estimate_pi:
-                n_pi /= n_series
-            
-            if self.estimate_TR:
-                for j in range(self.n_j):
-                    n_TR[j,:] /= np.sum(n_TR[j,:])
-            
-            # We average over the last m parameter sets after convergence to
-            # get the final estimate (Nielsen, 2002).
-            if iter == burn_in:
-                self.__TR = n_TR
-                self.__pi = n_pi
-                self.__scale = [state_scales[j] for j in range(self.n_j)]
-                self.__coef = [state_coef[j] for j in range(self.n_j)]
-                pd_params = [np.array(pd_j.params) for pd_j in self.pds]
-                self.lvi = [state_LVIs[j] for j in range(self.n_j)]
-
-            elif iter > burn_in:
-                self.__TR += n_TR
-                self.__pi += n_pi
-                for j in range(self.n_j):
-                    self.__scale[j] += state_scales[j]
-                    self.__coef[j] += state_coef[j]
-                    self.lvi[j] += state_LVIs[j]
-                    pd_params[j] += self.pds[j].params
-
-        # Now we have to finalize the average over the last m parameters and to decode
-        # the state sequence given those parameters.
-        self.__TR /= m_avg
-        self.__pi /= m_avg
-
-        # We have to normalize since the rows will not necessarily sum to one after averaging
-        self.__TR /= np.sum(self.__TR,axis=1)
-        self.__pi /= np.sum(self.__pi)
-
-        for j in range(self.n_j):
-            self.__scale[j] /= m_avg
-            self.__coef[j] /= m_avg
-            self.lvi[j] /= m_avg
-            pd_params[j] /= m_avg
-            # Overwrite duration dist. parameters with average ones
-            self.pds[j].params = pd_params[j]
-
-        # We need to compute the log observation and duration probs one last time for decoding.
-        # This time we use the max parameters we obtained for calculation stored in self.
-        s_log_o_probs,dur_log_probs = compute_log_probs(self.n_j,n_obs,has_scale_split,
-                                                            model_mat_full,self.__coef,
-                                                            self.__scale,self.pds,y_flat,
-                                                            NOT_NA_flat,self.formula.sid,
-                                                            self.family,factor_levels,
-                                                            self.mvar_by)
-        
-        # Now we can decode.
-        with mp.Pool(processes=self.cpus) as pool:
-            _,states_max,_ = self.__decode_all_states(pool,cov,self.__pi,self.__TR,s_log_o_probs,dur_log_probs,var_map)
-
-            if not self.mvar_by is None:
-                max_states_flat = np.array([st for s in states_max for _ in range(len(factor_levels[self.mvar_by])) for st in s],dtype=int)
-            else:
-                max_states_flat = np.array([st for s in states_max for st in s],dtype=int)
-        
-        return llk_hist,max_states_flat
-            
-##################################### Prediction #####################################
-
-    def predict(self, j, use_terms, n_dat,alpha=0.05,ci=False):
-        # Basically GAMM.predict() but with an aditional j argument, based on
-        # which the coefficients and scale parameters are selected.
-        var_map = self.formula.get_var_map()
-        var_keys = var_map.keys()
-
-        for k in var_keys:
-            if k not in n_dat.columns:
-                raise IndexError(f"Variable {k} is missing in new data.")
-        
-        # Encode test data
-        _,pred_cov_flat,_,_,pred_cov,_,_ = self.formula.encode_data(n_dat,prediction=True)
-
-        # Then, we need to build the model matrix - but only for the terms which should
-        # be included in the prediction!
-        terms = self.formula.get_terms()
-        has_intercept = self.formula.has_intercept()
-        has_scale_split = False
-        ltx = self.formula.get_linear_term_idx()
-        irstx = []
-        stx = self.formula.get_smooth_term_idx()
-        rtx = self.formula.get_random_term_idx()
-        var_types = self.formula.get_var_types()
-        var_mins = self.formula.get_var_mins()
-        var_maxs = self.formula.get_var_maxs()
-        factor_levels = self.formula.get_factor_levels()
-        n_j = None
-        state_est_flat = None
-        state_est = None
-
-        # So we pass the desired terms to the use_only argument
-        predi_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
-                                                     ltx,irstx,stx,rtx,var_types,var_map,
-                                                     var_mins,var_maxs,factor_levels,
-                                                     pred_cov_flat,pred_cov,n_j,state_est_flat,
-                                                     state_est,use_only=use_terms)
-        
-        # Now we calculate the prediction
-        pred = predi_mat @ self.__coef[j]
-
-        # Optionally calculate the boundary for a 1-alpha CI
-        if ci:
-            # Wood (2017) 6.10
-            c = predi_mat @ self.lvi[j].T @ self.lvi[j] * self.__scale[j] @ predi_mat.T
-            c = c.diagonal()
-            b = scp.stats.norm.ppf(1-(alpha/2)) * np.sqrt(c)
-            return pred,predi_mat,b
-
-        return pred,predi_mat,None
-
-
-class sMsIRGAMM(sMsGAMM):
-
-    def __init__(self,
-                 formula: Formula,
-                 family: Family,
-                 end_points: list,
-                 fix:None or list[list[int,int]] = None,
-                 pre_llk_fun=pre_ll_sms_IR_gamm,
-                 cpus: int = 1):
-
-        super().__init__(formula,
-                         family,
-                         end_points,
-                         pre_llk_fun,
-                         False,
-                         False,
-                         np.zeros(formula.get_nj()),
-                         np.zeros((formula.get_nj(),
-                                   formula.get_nj())),
-                         None,
-                         cpus)
-        
-        # Define which events should be fixed and at which sample.
-        if not fix is None:
-            self.fix = [event[0] for event in fix]
-            self.fix_at = [event[1] for event in fix]
-        else:
-            self.fix = None
-            self.fix_at = None
-
-        self.__coef = None
-        self.__scale = None
-        self.penalty = 0
-
-    ##################################### Getters #####################################
-
-    def get_pars(self):
-        return self.__coef,self.__scale
-    
-    ##################################### Fitting #####################################
-
-    def __init_all_states(self,pool,end_points):
-
-        # MP code to propose initial state for every series
-        args = zip(end_points,repeat(self.n_j),repeat(self.pre_llk_fun),
-                   repeat(self.fix),repeat(self.fix_at))
-        
-        state_durs_new, states_new = zip(*pool.starmap(init_states_IR,args))
-        return list(state_durs_new),list(states_new)
-    
-    def __propose_all_states(self,pool,temp,y,NOT_NAs,end_points,cov,state_durs,states,coef,scale,
-                        log_o_probs,var_map,terms,has_intercept,ltx,irstx,
-                        stx,rtx,var_types,var_mins,var_maxs,factor_levels,
-                        prop_sd,n_prop,use_only):
-        
-        # MP code to propose states for every series
-        args = zip(repeat(self.n_j),repeat(temp),y,NOT_NAs,end_points,cov,state_durs,states,
-                   repeat(coef),repeat(scale),log_o_probs,repeat(self.pds),
-                   repeat(self.pre_llk_fun),repeat(var_map),repeat(self.family),repeat(terms),
-                   repeat(has_intercept),repeat(ltx),repeat(irstx),repeat(stx),
-                   repeat(rtx),repeat(var_types),repeat(var_mins),repeat(var_maxs),
-                   repeat(factor_levels),repeat(self.fix),repeat(self.fix_at),repeat(prop_sd),
-                   repeat(n_prop),repeat(use_only))
-        
-        state_durs_new, states_new, llks = zip(*pool.starmap(se_step_sms_dc_gamm,args))
-        return list(state_durs_new),list(states_new), list(llks)
-    
-    def fit(self,maxiter_outer=100,maxiter_inner=30,conv_tol=1e-6,extend_lambda=True,control_lambda=True,exclude_lambda=True,t0=1,r=0.925,schedule="anneal",n_prop=None,prop_sd=2,progress_bar=True,mmat_MP=True):
-        # Performs something like Stochastic Expectation maiximization (e.g., Nielsen, 2002) see the sem.py file for
-        # more details.
-        
-        # Penalties need to be initialized
-        self.formula.build_penalties()
-        
-        penalties = self.formula.penalties
-
-        # Propose an initial set of states and state_durs for every series.
-        with mp.Pool(processes=self.cpus) as pool:
-            durs,states = self.__init_all_states(pool,self.end_points)
-
-        # Model matrix parameters that remain constant are specified.
-        # And then we need to build the model matrix for the start estimates to get start coefficients.
-        terms = self.formula.get_terms()
-        has_intercept = self.formula.has_intercept()
-        ltx = self.formula.get_linear_term_idx()
-        irstx = self.formula.get_ir_smooth_term_idx()
-        stx = self.formula.get_smooth_term_idx()
-        rtx = self.formula.get_random_term_idx()
-        var_types = self.formula.get_var_types()
-        var_map = self.formula.get_var_map()
-        var_mins = self.formula.get_var_mins()
-        var_maxs = self.formula.get_var_maxs()
-        factor_levels = self.formula.get_factor_levels()
-        NOT_NA_flat = self.formula.NOT_NA_flat
-        cov_flat = self.formula.cov_flat
-        y_flat = self.formula.y_flat
-        n_series = len(self.formula.y)
-        n_obs = len(y_flat)
-
-        # We use a heuristic to determine the number of samples that should be drawn when proposing new states.
-        if n_prop is None:
-            n_prop = int(n_series*0.05)
-
-        # For the IR GAMM we need the cov object split by series id
-        # Importantly, we must not exclude any rows for with the dependent variable is
-        # NA at this point, to make sure that the convolution is calculated accurately.
-        cov = self.formula.cov
-        
-        if mmat_MP:
-            with mp.Pool(processes=self.cpus) as pool:
-                model_mat_full = build_sparse_matrix_from_formula(terms,has_intercept,False,
-                                                                ltx,irstx,stx,rtx,var_types,var_map,
-                                                                var_mins,var_maxs,factor_levels,
-                                                                cov_flat,cov,None,
-                                                                None,states,pool=pool)
-        else:
-            model_mat_full = build_sparse_matrix_from_formula(terms,has_intercept,False,
-                                                                ltx,irstx,stx,rtx,var_types,var_map,
-                                                                var_mins,var_maxs,factor_levels,
-                                                                cov_flat,cov,None,
-                                                                None,states,pool=None)
-        
-        # Only now can we remove the NAs
-        model_mat_full = model_mat_full[NOT_NA_flat,]
-        
-        # And estimate the model
-
-        # Get initial estimate of mu based on family:
-        init_mu_flat = self.family.init_mu(y_flat[NOT_NA_flat])
-
-        coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,y_flat[NOT_NA_flat],
-                                                                        model_mat_full,penalties,self.formula.n_coef,
-                                                                        self.family,maxiter_inner,"svd",
-                                                                        conv_tol,extend_lambda,control_lambda,
-                                                                        exclude_lambda,False,self.cpus)
-
-        # For state proposals we can utilize a temparature schedule. See sMsGamm.fit().
-        if schedule == "anneal":
-            temp_schedule = anneal_temps_zero(maxiter_outer,t0,r)
-        else:
-            temp_schedule = const_temps(maxiter_outer)
-
-        last_llk = None
-        llk_hist = []
-
-        iterator = range(maxiter_outer)
-        if progress_bar:
-            iterator = tqdm(iterator,desc="Fitting",leave=True)
-
-        for iter in iterator:
-            ### Stochastic Expectation ###
-
-            # Propose new states based on all updated parameters.
-
-            # For IR GAMM we only need the probability of observing every
-            # series under the model.
-            log_o_probs = np.zeros(n_obs)
-
-            
-            # Handle observation probabilities
-            mu = (model_mat_full @ coef).reshape(-1,1)
-
-            if not isinstance(self.family,Gaussian):
-                mu = self.family.link.fi(mu)
-
-            if not self.family.twopar:
-                log_o_probs[NOT_NA_flat] = np.ndarray.flatten(self.family.lp(y_flat[NOT_NA_flat],mu))
-            else:
-                log_o_probs[NOT_NA_flat] = np.ndarray.flatten(self.family.lp(y_flat[NOT_NA_flat],mu,scale))
-            log_o_probs[NOT_NA_flat == False] = np.nan
-
-            # We need to split the observation probabilities by series
-            s_log_o_probs = np.split(log_o_probs,self.formula.sid[1:],axis=0)
-            
-            # Now we can propose a new set of states and state_durs for every series.
-            with mp.Pool(processes=self.cpus) as pool:
-                durs,states,llks = self.__propose_all_states(pool,temp_schedule[iter],self.formula.y,
-                                                             self.formula.NOT_NA,self.end_points,
-                                                             cov,durs,states,coef,scale,s_log_o_probs,
-                                                             var_map,terms,has_intercept,ltx,irstx,
-                                                             stx,rtx,var_types,var_mins,var_maxs,
-                                                             factor_levels,prop_sd,n_prop,None)
-            
-            ### Convergence control ###
-
-            # Convergence control is based on the change in penalized complete data likelihood
-            if iter > 0:
-                pen_llk = np.sum(llks) - penalty
-
-                if iter > 1:
-                    # Also check convergence
-                    llk_diff = abs(pen_llk - last_llk)
-
-                    if progress_bar:
-                        iterator.set_description_str(desc="Fitting - Conv.: " + "{:.2e}".format(llk_diff - conv_tol*abs(pen_llk)), refresh=True)
-
-                    if llk_diff < conv_tol*abs(pen_llk):
-                        if progress_bar:
-                            iterator.set_description_str(desc="Converged!", refresh=True)
-                            iterator.close()
-                        break
-
-                last_llk = pen_llk
-                llk_hist.append(pen_llk)
-
-            ### Maximization ###
-
-            # First update all GAMM parameters
-            if mmat_MP:
-                with mp.Pool(processes=self.cpus) as pool:
-                    model_mat_full = build_sparse_matrix_from_formula(terms,has_intercept,False,
-                                                                    ltx,irstx,stx,rtx,var_types,var_map,
-                                                                    var_mins,var_maxs,factor_levels,
-                                                                    cov_flat,cov,None,
-                                                                    None,states,pool=pool)
-            else:
-                model_mat_full = build_sparse_matrix_from_formula(terms,has_intercept,False,
-                                                                    ltx,irstx,stx,rtx,var_types,var_map,
-                                                                    var_mins,var_maxs,factor_levels,
-                                                                    cov_flat,cov,None,
-                                                                    None,states,pool=None)
-                
-            model_mat_full = model_mat_full[NOT_NA_flat,]
-
-            # Use last coefficient set for mu estimate. Penalties carry over as well.
-            if isinstance(self.family,Gaussian):
-                init_mu_flat = model_mat_full @ coef
-            else: 
-                init_mu_flat = self.family.link.fi(model_mat_full @ coef)
-
-            # Now fit the model again.
-            coef,eta,wres,scale,LVI,edf,term_edf,penalty = solve_gamm_sparse(init_mu_flat,y_flat[NOT_NA_flat],
-                                                                             model_mat_full,penalties,self.formula.n_coef,
-                                                                             self.family,maxiter_inner,"svd",
-                                                                             conv_tol,extend_lambda,control_lambda,
-                                                                             exclude_lambda,False,self.cpus)
-
-            # Next update all sojourn time distribution parameters
-
-            # Iterate over every series to get the durations from every state in that series
-            j_dur = [[] for j in range(self.n_j)]
-            j_cov = [[] for j in range(self.n_j)]
-            for s in range(n_series):
-
-                # Durations for every state put in a list
-                sd = durs[s]
-                s_durs = [sd[sd[:,0] == j,1] for j in range(self.n_j)]
-                for j in range(self.n_j):
-                    j_dur[j].extend(s_durs[j])
-                    pd_split = self.pds[j].split_by
-                    if pd_split is not None:
-                        c_s = cov[s] # Encoded variables from this series
-                        c_s_j = c_s[0,var_map[pd_split]] # Factor variables are assumed constant so we can take first element.
-                        j_cov[j].extend([c_s_j for _ in s_durs[j]])
-
-            # Maximize sojourn time distribution parameters by obtaining MLE
-            # for the proposed stage durations.
-            for j in range(self.n_j):
-
-                # We do not need to maximize for states that have a fixed event.
-                if not self.fix is None and j in self.fix:
-                    continue
-                j_dur[j] = np.array(j_dur[j])
-                pd_j = self.pds[j]
-
-                if pd_j.split_by is not None:
-                    j_cov[j] = np.array(j_cov[j])
-                    for ci in range(pd_j.n_by):
-                        pd_j.fit(j_dur[j][j_cov[j] == ci],ci)
-                else:
-                    pd_j.fit(j_dur[j])
-        
-        # Collect final state sequence in the same format returned by sMsGamm
-        # and in trial-level format needed for prediction.
-        states_flat = []
-        for s in range(n_series):
-            sd = durs[s]
-            s_states_flat = []
-            for st in range(sd.shape[0]):
-                if sd[st,1] != 0:
-                    for d in range(sd[st,1]):
-                        s_states_flat.append(st)
-            states_flat.append(s_states_flat)
-
-        # Save final coefficients
-        self.__scale = scale
-        self.__coef = coef
-        self.lvi = LVI
-        self.penalty = penalty
-        self.pred = eta
+        self.__overall_coef = coef
+        self.__overall_preds = etas
         self.res = wres
-        self.edf = edf
-        self.term_edf = term_edf
-
-        return llk_hist,states_flat,states
-
-    def predict(self, states, use_terms, n_dat,alpha=0.05,ci=False):
-        # Basically GAMM.predict() but with states.
-        var_map = self.formula.get_var_map()
-        var_keys = var_map.keys()
-
-        for k in var_keys:
-            if k not in n_dat.columns:
-                raise IndexError(f"Variable {k} is missing in new data.")
-        
-        # Encode test data
-        _,pred_cov_flat,_,_,pred_cov,_,_ = self.formula.encode_data(n_dat,prediction=True)
-
-        # Then, we need to build the model matrix - but only for the terms which should
-        # be included in the prediction!
-        terms = self.formula.get_terms()
-        has_intercept = self.formula.has_intercept()
-        has_scale_split = False
-        ltx = self.formula.get_linear_term_idx()
-        irstx = self.formula.get_ir_smooth_term_idx()
-        stx = self.formula.get_smooth_term_idx()
-        rtx = self.formula.get_random_term_idx()
-        var_types = self.formula.get_var_types()
-        var_mins = self.formula.get_var_mins()
-        var_maxs = self.formula.get_var_maxs()
-        factor_levels = self.formula.get_factor_levels()
-        n_j = None
-        state_est_flat = None
-
-        # So we pass the desired terms to the use_only argument
-        predi_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
-                                                     ltx,irstx,stx,rtx,var_types,var_map,
-                                                     var_mins,var_maxs,factor_levels,
-                                                     pred_cov_flat,pred_cov,n_j,state_est_flat,
-                                                     [states],use_only=use_terms)
-        
-        # Now we calculate the prediction
-        pred = predi_mat @ self.__coef
-
-        # Optionally calculate the boundary for a 1-alpha CI
-        if ci:
-            # Wood (2017) 6.10
-            c = predi_mat @ self.lvi.T @ self.lvi * self.__scale @ predi_mat.T
-            c = c.diagonal()
-            b = scp.stats.norm.ppf(1-(alpha/2)) * np.sqrt(c)
-            return pred,predi_mat,b
-
-        return pred,predi_mat,None
+        self.edf = total_edf
+        self.term_edf = term_edfs
+        self.penalty = penalty
+        self.coef_split_idx = coef_split_idx
+        self.overall_lvi = LV
     
-    def predict_llk(self, use_terms, n_dat, n_endpoints,conv_tol=1e-6,t0=1,r=0.925,n_prop=500,prop_sd=2):
-        # Estimates best state sequence given model for new data and returns the CDL under this
-        # state sequence, the model, and given the new data.
-        var_map = self.formula.get_var_map()
-        var_keys = var_map.keys()
 
-        for k in var_keys:
-            if k not in n_dat.columns:
-                raise IndexError(f"Variable {k} is missing in new data.")
+    def predict(self, par, use_terms, n_dat, alpha=0.05, ci=False, whole_interval=False, n_ps=10000, seed=None):
+        """
+        Make a prediction using the fitted model for new data ``n_dat`` using only the terms indexed by ``use_terms`` and for distribution parameter ``par``.
+
+        References:
+        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+        - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
+
+        Parameters:
+
+        :param par: The index corresponding to the parameter for which to make the prediction (e.g., 0 = mean)
+        :type par: int
+        :param use_terms: The indices corresponding to the terms that should be used to obtain the prediction or ``None``
+        in which case all terms will be used.
+        :type use_terms: list[int] or None
+        :param n_dat: A pandas DataFrame containing new data for which to make the prediction. Importantly, all variables present in
+        the data used to fit the model also need to be present in this DataFrame. Additionally, factor variables must only include levels
+        also present in the data used to fit the model. If you want to exclude a specific factor from the prediction (for example the factor
+        subject) don't include the terms that involve it in the ``use_terms`` argument.
+        :type n_dat: pd.DataFrame
+        :param alpha: The alpha level to use for the standard error calculation. Specifically, 1 - (``alpha``/2) will be used to determine the critical cut-off value according to a N(0,1).
+        :type alpha: float, optional
+        :param ci: Whether the standard error ``se`` for credible interval (CI; see  Wood, 2017) calculation should be returned. The CI is then [``pred`` - ``se``, ``pred`` + ``se``]
+        :type ci: bool, optional
+        :param whole_interval: Whether or not to adjuste the point-wise CI to behave like whole-interval (based on Wood, 2017; section 6.10.2 and Simpson, 2016). Defaults to False. The CI is then [``pred`` - ``se``, ``pred`` + ``se``]
+        :type whole_interval: bool, optional
+        :param n_ps: How many samples to draw from the posterior in case the point-wise CI is adjusted to behave like a whole-interval CI.
+        :type n_ps: int, optional
+        :param seed: Can be used to provide a seed for the posterior sampling step in case the point-wise CI is adjusted to behave like a whole-interval CI.
+        :type seed: int or None, optional
+
+
+        Returns:
+        :return: A tuple with 3 entries. The first entry is the prediction ``pred`` based on the new data ``n_dat``. The second entry is the model
+        matrix built for ``n_dat`` that was post-multiplied with the model coefficients to obtain ``pred``. The third entry is ``None`` if ``ci``==``False`` else
+        the standard error ``se`` in the prediction.
+        :rtype: tuple
         
-        # Encode test data
-        pred_y_flat,pred_cov_flat,pred_NOT_NAs_flat,pred_y,pred_cov,pred_NOT_NAs,pred_sid = self.formula.encode_data(n_dat,prediction=False)
-
-        # Propose an initial set of states and state_durs for every new series.
-        with mp.Pool(processes=self.cpus) as pool:
-            durs,states = self.__init_all_states(pool,n_endpoints)
-
-
-        # Then, we need to build the model matrix - but only for the terms which should
-        # be included in the prediction!
-        terms = self.formula.get_terms()
-        has_intercept = self.formula.has_intercept()
-        has_scale_split = False
-        ltx = self.formula.get_linear_term_idx()
-        irstx = self.formula.get_ir_smooth_term_idx()
-        stx = self.formula.get_smooth_term_idx()
-        rtx = self.formula.get_random_term_idx()
-        var_types = self.formula.get_var_types()
-        var_mins = self.formula.get_var_mins()
-        var_maxs = self.formula.get_var_maxs()
-        factor_levels = self.formula.get_factor_levels()
-        n_j = None
-        state_est_flat = None
-        n_obs = len(pred_y_flat)
-
-        # Setup temp schedule.
-        temp_schedule = anneal_temps_zero(n_prop,t0,r)
+        """
+        # Prepare so that we can just call gamm.predict()
+        self.formula = self.formulas[par]
+        split_coef = np.split(self.__overall_coef,self.coef_split_idx)
+        self.coef = split_coef[par]
+        self.scale=1
+        start = 0
         
-        last_llk = None
-        llk_hist = []
-        for iter in range(n_prop):
+        end = self.coef_split_idx[0]
+        for pari in range(0,par):
+            start = end
+            end += self.coef_split_idx[pari]
+        self.lvi = self.overall_lvi[:,start:end]
 
-            # We pass the desired terms to the use_only argument
-            predi_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
-                                                        ltx,irstx,stx,rtx,var_types,var_map,
-                                                        var_mins,var_maxs,factor_levels,
-                                                        pred_cov_flat,pred_cov,n_j,state_est_flat,
-                                                        states,use_only=use_terms)
-            
-            # Only now can we remove the NAs
-            predi_mat = predi_mat[pred_NOT_NAs_flat,]
+        return super().predict(use_terms, n_dat, alpha, ci, whole_interval, n_ps, seed)
+    
+    def predict_diff(self, dat1, dat2, par, use_terms, alpha=0.05, whole_interval=False, n_ps=10000, seed=None):
+        """
+        Get the difference in the predictions for two datasets and for distribution parameter ``par``. Useful to compare a smooth estimated for
+        one level of a factor to the smooth estimated for another level of a factor. In that case, ``dat1`` and
+        ``dat2`` should only differ in the level of said factor.
 
-            # Propose new states, basically copied from IR GAMM.fit()
+        References:
+        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+        - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
+        - ``get_difference`` function from ``itsadug`` R-package: https://rdrr.io/cran/itsadug/man/get_difference.html
 
-            # Handle observation probabilities
-            log_o_probs = np.zeros(n_obs)
-            
-            mu = (predi_mat @ self.__coef).reshape(-1,1)
+        Parameters:
 
-            if not isinstance(self.family,Gaussian):
-                mu = self.family.link.fi(mu)
+        :param dat1: A pandas DataFrame containing new data for which to make the prediction. Importantly, all variables present in
+        the data used to fit the model also need to be present in this DataFrame. Additionally, factor variables must only include levels
+        also present in the data used to fit the model. If you want to exclude a specific factor from the prediction (for example the factor
+        subject) don't include the terms that involve it in the ``use_terms`` argument.
+        :type n_dat: pd.DataFrame
+        :param dat2: A second pandas DataFrame for which to also make a prediction. The difference in the prediction between this ``dat1`` will be returned.
+        :type dat2: pd.DataFrame
+        :param par: The index corresponding to the parameter for which to make the prediction (e.g., 0 = mean)
+        :type par: int
+        :param use_terms: The indices corresponding to the terms that should be used to obtain the prediction or ``None``
+        in which case all terms will be used.
+        :type use_terms: list[int] or None
+        :param alpha: The alpha level to use for the standard error calculation. Specifically, 1 - (``alpha``/2) will be used to determine the critical cut-off value according to a N(0,1).
+        :type alpha: float, optional
+        :param whole_interval: Whether or not to adjuste the point-wise CI to behave like whole-interval (based on Wood, 2017; section 6.10.2 and Simpson, 2016). Defaults to False.
+        :type whole_interval: bool, optional
+        :param n_ps: How many samples to draw from the posterior in case the point-wise CI is adjusted to behave like a whole-interval CI.
+        :type n_ps: int, optional
+        :param seed: Can be used to provide a seed for the posterior sampling step in case the point-wise CI is adjusted to behave like a whole-interval CI.
+        :type seed: int or None, optional
 
-            if not self.family.twopar:
-                log_o_probs[pred_NOT_NAs_flat] = np.ndarray.flatten(self.family.lp(pred_y_flat[pred_NOT_NAs_flat],mu))
-            else:
-                log_o_probs[pred_NOT_NAs_flat] = np.ndarray.flatten(self.family.lp(pred_y_flat[pred_NOT_NAs_flat],mu,self.__scale))
-            log_o_probs[pred_NOT_NAs_flat == False] = np.nan
+        Returns:
+        :return: A tuple with 2 entries. The first entry is the predicted difference (between the two data sets ``dat1`` & ``dat2``) ``diff``. The second entry is the standard error ``se`` of the predicted difference. The difference CI is then [``diff`` - ``se``, ``diff`` + ``se``]
+        :rtype: tuple
+        """
+        # Prepare so that we can just call gamm.predict_diff()
+        self.formula = self.formulas[par]
+        split_coef = np.split(self.__overall_coef,self.coef_split_idx)
+        self.coef = split_coef[par]
+        self.scale=1
+        start = 0
+        
+        end = self.coef_split_idx[0]
+        for pari in range(0,par):
+            start = end
+            end += self.coef_split_idx[pari]
+        self.lvi = self.overall_lvi[:,start:end]
 
-            # We need to split the observation probabilities by the predicted series
-            s_log_o_probs = np.split(log_o_probs,pred_sid[1:],axis=0)
-            
-            # Now we can propose a new set of states and state_durs for every series.
-            # Basically - we propose only one new candidate, which is either accepted or not.
-            # In the long run we should find the best state sequence for the new data given the
-            # models parameters. We return the CDL of these sequences.
-            with mp.Pool(processes=self.cpus) as pool:
-                durs,states,llks = self.__propose_all_states(pool,temp_schedule[iter],pred_y,
-                                                                pred_NOT_NAs,n_endpoints,
-                                                                pred_cov,durs,states,self.__coef,self.__scale,s_log_o_probs,
-                                                                var_map,terms,has_intercept,ltx,irstx,
-                                                                stx,rtx,var_types,var_mins,var_maxs,
-                                                                factor_levels,prop_sd,1,use_terms)
-            
-            # Held-out LLK
-            LO_llk = sum(llks)
-            if iter > 0:
-                # Also check convergence
-                if abs(LO_llk - last_llk) < conv_tol*abs(LO_llk):
-                    print("Converged",iter)
-                    break
-
-            last_llk = LO_llk
-            llk_hist.append(LO_llk)
-
-        return LO_llk
-
+        return super().predict_diff(dat1, dat2, use_terms, alpha, whole_interval, n_ps, seed)

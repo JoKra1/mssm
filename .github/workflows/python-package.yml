@@ -103,6 +103,9 @@ jobs:
         with:
           name: wheels
           path: ./wheelhouse/
+
+      - name: Print wheel content
+        run: ls ./wheelhouse
         
       - name: Create GitHub Release
         env:
@@ -141,9 +144,6 @@ jobs:
         with:
           name: wheels
           path: ./wheelhouse/
-      
-      - name: Print wheel content
-        run: ls ./wheelhouse
           
       - name: Publish wheels to test-pypi
         uses: pypa/gh-action-pypi-publish@release/v1

@@ -62,25 +62,23 @@ def B_spline_basis(i, cov, state_est, nk, drop_outer_k=False, convolve=False, mi
 
   if not min_c is None:
     xl = min_c
-
+    
   # ndx is equal to n in Eilers & Marx (2011)
   # So there will be n-1 knots (without expansion)
   # n + 1 + 2*deg knots with expansion
   # and nk basis functions computed.
-  # drop_outer is experimental.
-  if drop_outer_k:
-    ndx = (nk - deg + 2*deg)
-     
-  else:
-    ndx = nk - deg
+  ndx = nk - deg
 
-  dx = (xr-xl) / ndx
-  knots = np.linspace(xl - dx * deg, xr + dx * deg,ndx + 1 + 2 * deg)
+  if convolve:
+    # For the IR GAMM, the ***outer***-most knots should be close to min_c and max_c.
+    # Hence, we simply provide n + 1 + 2*deg (see above) equally spaced knots from min_c to max_c.
+    dx = (xr-xl) / (ndx + 2 * deg)
+    knots = np.linspace(min_c, max_c, ndx + 1 + 2 * deg)
+  else:
+    dx = (xr-xl) / ndx
+    knots = np.linspace(xl - dx * deg, xr + dx * deg,ndx + 1 + 2 * deg)
 
   B = bbase(cov,knots,dx,deg)
-
-  if drop_outer_k:
-     B = B[:,deg:-deg]
 
   if convolve:
     o_restr = np.zeros(B.shape)

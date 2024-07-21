@@ -6,12 +6,13 @@ import scipy as scp
 import pandas as pd
 from enum import Enum
 import math
+from tqdm import tqdm
 from .smooths import TP_basis_calc
-from .terms import GammTerm,i,l,f,irf,ri,rs
+from .terms import GammTerm,i,l,f,irf,ri,rs,fs
 from .penalties import PenType,id_dist_pen,diff_pen,TP_pen,LambdaTerm,translate_sparse,ConstType,Constraint,Reparameterization
-from .file_loading import read_cov, read_cor_cov_single, read_unique,read_dtype,setup_cache,clear_cache,mp,repeat,os
+from .file_loading import read_cov, read_cor_cov_single, read_cov_no_cor ,read_unique,read_dtype,setup_cache,clear_cache,mp,repeat,os
 import cpp_solvers
-
+import sys
 
 class VarType(Enum):
     NUMERIC = 1
@@ -39,7 +40,9 @@ def map_csc_to_eigen(X):
       raise TypeError(f"Format of sparse matrix passed to c++ MUST be 'csc' but is {X.getformat()}")
 
    rows, cols = X.shape
-   return rows, cols, X.nnz, X.data, X.indptr, X.indices
+
+   # Cast to int64 here, since that's what the c++ side expects to be stored in the buffers
+   return rows, cols, X.nnz, X.data, X.indptr.astype(np.int64), X.indices.astype(np.int64)
 
 def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
    """
@@ -54,6 +57,9 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
        computed and each ratio is rounded to the nearest integer. Then ``ratio`` samples
        are obtained from each bin. That way, imbalance in the covariate is approximately preserved when
        forming the QR.
+       4. Transform term-specific S_\lambda based on section Wood (2011) and section 6.2.7 in Wood (2017)
+       so that they are full-rank and their log-determinant can be computed safely. In that case, only S needs
+       to be provided and has to be a list holding the penalties to be transformed
     
     If ``QR==True`` then X is decomposed into Q @ R directly via QR decomposition. Alternatively, we first
     form X.T @ X and then compute the cholesky L of this product - note that L.T = R. Overall the latter
@@ -76,7 +82,22 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
     In ``mgcv`` the transformed model matrix and penalty can optionally be scaled by the root mean square value of the transformed
     model matrix (see the nat.param function in mgcv). This is done here if ``scale=True``.
 
+    Option 4 enforces re-parameterization of term-specific S_\lambda based on section Wood (2011) and section 6.2.7 in Wood (2017).
+    In ``mssm`` multiple penalties can be placed on individual terms (i.e., tensor terms, random smooths, Kernel penalty) but
+    it is not always the case that the term-specific S_\lambda - i.e., the sum over all those individual penalties multiplied with
+    their \lambda parameters, is of full rank. If we need to form the inverse of the term-specific S_\lambda this is problematic.
+    It is also probelmatic, as discussed by Wood (2011), if the different \lambda are all of different magnitude in which case forming
+    the term-specific log(|S_\lambda|+) becomes numerically difficult.
+
+    The re-parameterization implemented by option 4, based on Appendix B in Wood (2011), solves these issues. After this re-parameterization a
+    term-specific S_\lambda has been formed that is full rank. And log(|S_\lambda|) - no longer just a generalized determinant - can be
+    computed without running into numerical problems.
+
+    The strategy by Wood (2011) is more general and could be applied to form an overall - not just term-specific - S_\lambda with these properties.
+    However, in ``mssm`` penalties currently cannot overlap, so this is not necessary at the moment.
+
     References:
+      - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
       - Wood, S. N., Scheipl, F., & Faraway, J. J. (2013). Straightforward intermediate rank tensor product smoothing in mixed models.
       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
       - mgcv source code (accessed 2024). smooth.R file, nat.param function.
@@ -110,7 +131,7 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
       # Now decompose X = Q @ R
       if QR:
          _,R = scp.linalg.qr(X.toarray(),mode='economic')
-         R = scp.sparse.csc_array(R)
+         R = scp.sparse.csr_array(R)
          
       else:
          XX = (X.T @ X).tocsc()
@@ -186,7 +207,222 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
 
       # Done, return
       return C, Srp, Drp, IRrp, rms1, rms2, rank
+   
+   elif option == 4:
+      # Reparameterize S_\lambda for safe REML evaluation - based on section 6.2.7 in Wood (2017)
+      # S needs to be list holding penalties.
 
+      # We first sort S into term-specific groups of penalties
+      SJs = [] # SJs groups per term
+      ljs = [] # Lambda groups per term
+      SJ_reps = [] # How often should SJ be stacked
+      SJ_term_idx = [] # Penalty index of every SJ
+      SJ_idx = [] # start index of every SJ
+      SJ_coef = [] # Number of coef in the term penalized by a (sum of) SJ
+      SJ_idx_max = 0 # Max starting index - used to decide whether a new SJ should be added.
+      SJ_idx_len = 0 # Number of separate SJ blocks.
+
+      # Build S_emb and collect every block for pinv(S_emb)
+      for lti,lTerm in enumerate(S):
+         #print(f"pen: {lti}")
+
+         # Now collect the S_J for the pinv calculation in the next step.
+         if lti == 0 or lTerm.start_index > SJ_idx_max:
+            SJs.append([lTerm.S_J])
+            ljs.append([lTerm.lam])
+            SJ_term_idx.append([lti])
+            SJ_reps.append(lTerm.rep_sj)
+            SJ_coef.append(lTerm.S_J.shape[1])
+            SJ_idx.append(lTerm.start_index)
+            SJ_idx_max = lTerm.start_index
+            SJ_idx_len += 1
+
+         else: # A term with the same starting index exists already - so add the Sjs to the corresponding list
+            idx_match = [idx for idx in range(SJ_idx_len) if SJ_idx[idx] == lTerm.start_index]
+            #print(idx_match,lTerm.start_index)
+            if len(idx_match) > 1:
+               raise ValueError("Penalty index matches multiple previous locations.")
+            
+            SJs[idx_match[0]].append(lTerm.S_J)
+            ljs[idx_match[0]].append(lTerm.lam)
+            SJ_term_idx[idx_match[0]].append(lti)
+
+            if SJ_reps[idx_match[0]] != lTerm.rep_sj:
+               raise ValueError("Repeat Number for penalty does not match previous penalties repeat number.")
+      
+      # Now we can re-parameterize SJ groups of length > 1
+      Sj_reps = [] # Will hold transformed S_J
+      Q_reps = []
+      QT_reps = []
+      for pen in S:
+         Sj_reps.append(LambdaTerm(S_J=copy.deepcopy(pen.S_J),rep_sj=pen.rep_sj,lam=pen.lam,type=pen.type,rank=pen.rank,term=pen.term,start_index=pen.start_index))
+
+      S_reps = [] # Term specific S_\lambda
+      eps = sys.float_info.epsilon**0.7
+      Mp = Sj_reps[0].start_index # Number of un-penalized dimensions (Kernel space dimension of total S_\lambda; Wood, 2011)
+      for grp_idx,SJgroup,LJgroup in zip(SJ_term_idx,SJs,ljs):
+
+
+         normed_SJ = [SJ_mat/scp.sparse.linalg.norm(SJ_mat,ord='fro') for SJ_mat in SJgroup]
+         normed_S = normed_SJ[0]
+         for j in range(1,len(normed_SJ)):
+            normed_S += normed_SJ[j]
+
+         D, U = scp.linalg.eigh(normed_S.toarray())
+
+         # Decreasing magnitude for ease of indexing..
+         D = np.flip(D)
+         U = scp.sparse.csc_array(np.flip(U,axis=1))
+
+         Ur = U[:,D > max(D)*eps]
+         r = Ur.shape[1] # Range dimension
+         Mp += (normed_S.shape[1] - r)
+
+         # Initial re-parameterization as discussed by Wood (2011)
+         if r < normed_S.shape[1]:
+            SJbar = [Ur.T@SJ_mat@Ur for SJ_mat in SJgroup]
+
+            if not X is None:
+               Q_rep0 = copy.deepcopy(Ur) # Need to account for this when computing Q matrix.
+         else:
+            SJbar = copy.deepcopy(SJgroup)
+            Q_rep0 = None
+            
+         if len(SJgroup) == 1: # No further re-parameterization necessary
+            Sj_reps[grp_idx[0]].S_J = SJbar[0]
+            S_reps.append(SJbar[0]*LJgroup[0])
+
+            if not X is None:
+               if not Q_rep0 is None:
+                  Q_reps.append(scp.sparse.csc_array(Q_rep0))
+                  QT_reps.append(scp.sparse.csc_array(Q_rep0.T))
+               else:
+                  Q_reps.append(scp.sparse.eye(r,format='csc'))
+                  QT_reps.append(scp.sparse.eye(r,format='csc'))
+            continue
+
+         S_Jrep = copy.deepcopy(SJbar) # Original S_J transformed 
+         S_rep = None
+         Q_rep = None
+
+         # Initialization as described by Wood (2011)
+         K = 0
+         Q = r
+         rem_idx = np.arange(0,len(SJbar),dtype=int)
+
+         while True:
+            # Find max norm
+            norm_group = [scp.sparse.linalg.norm(SJ_mat*SJ_lam,ord='fro') for SJ_mat,SJ_lam in zip([SJbar[idx] for idx in rem_idx],[LJgroup[idx] for idx in rem_idx])]
+            
+            am_norm = np.argmax(norm_group)
+
+            # Find Sk = S_J with max norm, in Wood (2011) this can be multiple but we just use the max. as discussed in Wood (2017)
+            Sk = SJbar[rem_idx[am_norm]]*LJgroup[rem_idx[am_norm]]
+
+            # De-compose Sk - form Ur and Un
+            D, U =scp.linalg.eigh(Sk.toarray())
+
+            # Decreasing magnitude for ease of indexing..
+            D = np.flip(D)
+            U = scp.sparse.csc_array(np.flip(U,axis=1))
+            r = len(D[D > max(D)*eps]) # r is known in advance here almost every-time but we need to de-compose anyway..
+            
+            if r == Q:
+                  break
+            
+            # Seperate U into kernel and rank space of Sk
+            n = U.shape[1] - r
+            Un = U[:,r:]
+            Un = Un.reshape(Sk.shape[1],-1)
+
+            Ur = U[:,:r]
+            Ur = Ur.reshape(Sk.shape[1],-1)
+
+            Dr = np.diag(D[:r])
+            
+            # Sum up Sjk - remaining S_J not Sk
+            Sjk = None
+            for j in rem_idx:
+                  if j == rem_idx[am_norm]:
+                     continue
+
+                  if Sjk is None:
+                     Sjk = SJbar[j]*LJgroup[j]
+                  else:
+                     Sjk += SJbar[j]*LJgroup[j]
+            
+            if not Sjk is None:
+                  Sjk = Sjk.toarray()
+            else:
+                  raise ValueError("Problem during re-parameterization.")
+                  
+            # Compute C' in Wood (2011)
+
+            # Transform Sk
+            Sk = Dr + Ur.T@Sjk@Ur
+            
+            # Fill C' in Wood (2011)
+            #print(Sk.shape,(Ur.T@Sjk@Un).shape,(Un.T@Sjk@Ur).shape,(Un.T@Sjk@Un).shape)
+
+            C = np.concatenate((np.concatenate((Sk,Un.T@Sjk@Ur),axis=0),
+                                          np.concatenate((Ur.T@Sjk@Un,Un.T@Sjk@Un),axis=0)),axis=1)
+            
+            #print(C.shape)
+
+            # Form S' in Wood (2011)
+            if S_rep is None:
+                  S_rep = C
+                  Ta = np.concatenate((Ur.toarray(),np.zeros((Ur.shape[0],n))),axis=1)
+                  Tg = U.toarray()
+                  
+                  if not X is None:
+                     Q_rep = U.toarray()
+            else:
+                  A = S_rep[:K,:K]
+                  B = S_rep[:K,:Q]
+                  BU = B @ U
+                  S_rep = np.concatenate((np.concatenate((A,BU.T),axis=0),
+                                          np.concatenate((BU,C),axis=0)),axis=1)
+                  
+                  Ta = np.concatenate((np.concatenate((np.identity(K),np.zeros((K,r+n))),axis=1),
+                                       np.concatenate((np.zeros((Ur.shape[0],K)),Ur.toarray(),np.zeros(Ur.shape[0],n)),axis=1)),axis=0)
+                  
+                  Tb = np.concatenate((np.concatenate((np.identity(K),np.zeros((K,r+n))),axis=1),
+                                       np.concatenate((np.zeros((U.shape[0],K)),U.toarray()),axis=1)),axis=0)
+                  
+                  if not X is None:
+                     Q_rep = Tb @ Q_rep
+
+            #print(Ta.shape,Tg.shape)
+            # Transform remaining terms that made up Sjk
+            for j in rem_idx:
+                  if j == rem_idx[am_norm]:
+                     S_Jrep[j] = Ta.T@S_Jrep[j]@Ta
+                     continue
+                  SJbar[j] = scp.sparse.csc_array(Un.T@SJbar[j]@Un)
+                  S_Jrep[j] = Tg.T@S_Jrep[j]@Tg
+
+            K += r
+            Q -= r
+            rem_idx = np.delete(rem_idx,am_norm)
+
+
+         for j in range(len(grp_idx)):
+            
+            Sj_reps[grp_idx[j]].S_J = scp.sparse.csc_array(S_Jrep[j])
+         
+         S_reps.append(scp.sparse.csc_array(S_rep))
+
+         if not X is None:
+            if not Q_rep0 is None:
+               Q_reps.append(scp.sparse.csc_array(Q_rep0@Q_rep))
+               QT_reps.append(scp.sparse.csc_array(Q_rep.T@Q_rep0.T))
+            else:
+               Q_reps.append(scp.sparse.csc_array(Q_rep))
+               QT_reps.append(scp.sparse.csc_array(Q_rep.T))
+         
+      return Sj_reps,S_reps,SJ_term_idx,SJ_idx,SJ_coef,Q_reps,QT_reps,Mp
+         
    else:
       raise NotImplementedError(f"Requested option {option} for reparameterization is not implemented.")
    
@@ -493,9 +729,9 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
         pen_cols,\
         chol_data,\
         chol_rows,\
-        chol_cols,rank = TP_pen(scp.sparse.csc_array((pen_data,(pen_rows,pen_cols)),shape=(id_k,id_k)),
-                                scp.sparse.csc_array((chol_data,(chol_rows,chol_cols)),shape=(id_k,id_k)),
-                                penid % len(vars),sterm.nk,constraint,rank)
+        chol_cols = TP_pen(scp.sparse.csc_array((pen_data,(pen_rows,pen_cols)),shape=(id_k,id_k)),
+                           scp.sparse.csc_array((chol_data,(chol_rows,chol_cols)),shape=(id_k,id_k)),
+                           penid % len(vars),sterm.nk,constraint)
         
         # For te/ti terms, penalty dim are nk_1 * nk_2 * ... * nk_j over all j variables
         id_k = np.prod(sterm.nk)
@@ -509,6 +745,11 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
     lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,id_k,cur_pen_idx)
     lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,id_k,cur_pen_idx)
     lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,id_k)
+    
+    # Compute rank for TP penalty
+    if len(vars) > 1:
+      D = scp.linalg.eigh(lTerm.S_J.toarray(),eigvals_only=True)
+      rank = len(D[D > max(D)*sys.float_info.epsilon**0.7])
     lTerm.rank = rank
     
         
@@ -622,9 +863,9 @@ def build_irf_penalties(penalties,cur_pen_idx,
         pen_cols,\
         chol_data,\
         chol_rows,\
-        chol_cols,rank = TP_pen(scp.sparse.csc_array((pen_data,(pen_rows,pen_cols)),shape=(id_k,id_k)),
-                                scp.sparse.csc_array((chol_data,(chol_rows,chol_cols)),shape=(id_k,id_k)),
-                                penid % len(vars),irsterm.nk,constraint,rank)
+        chol_cols = TP_pen(scp.sparse.csc_array((pen_data,(pen_rows,pen_cols)),shape=(id_k,id_k)),
+                           scp.sparse.csc_array((chol_data,(chol_rows,chol_cols)),shape=(id_k,id_k)),
+                           penid % len(vars),irsterm.nk,constraint)
         
         # For te terms, penalty dim are nk_1 * nk_2 * ... * nk_j over all j variables
         id_k = np.prod(irsterm.nk)
@@ -638,6 +879,11 @@ def build_irf_penalties(penalties,cur_pen_idx,
     lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,id_k,cur_pen_idx)
     lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,id_k,cur_pen_idx)
     lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,id_k)
+
+    # Compute rank for TP penalty
+    if len(vars) > 1:
+      D = scp.linalg.eigh(lTerm.S_J.toarray(),eigvals_only=True)
+      rank = len(D[D > max(D)*sys.float_info.epsilon**0.7])
     lTerm.rank = rank
         
     if irsterm.by is not None:
@@ -728,15 +974,29 @@ class Formula():
     :type terms: list[GammTerm]
     :param data: A pandas dataframe (with header!) of the data which should be used to estimate the model. The variable specified for ``lhs`` as
     well as all variables included for a ``term`` in ``terms`` need to be present in the data, otherwise the call to Formula will throw an error.
-    :type data: pd.DataFrame
+    :type data: pd.DataFrame or None
+    :param p_formula: Experimental.
+    :type p_formula: PFormula or None=None
     :param series_id: A tring identifying the individual experimental units. Usually a unique trial identifier. Can only be ignored if a
    ``mssm.models.GAMM`` is to be estimated.
     :type series_id: str, optional
-    :param split_scale: Whether or not a separate Gamm (including sseparate scale parameters) should be estimated per latent state. Only relevant
+    :param split_scale: Experimental. Whether or not a separate Gamm (including sseparate scale parameters) should be estimated per latent state. Only relevant
     if a ``mssm.models.sMsGAMM`` is to be estimated.
     :type split_scale: bool, optional
-    :param n_j: Number of latent states to estimate. Only relevant if a ``mssm.models.sMsGAMM`` is to be estimated.
+    :param n_j: Experimental. Number of latent states to estimate. Only relevant if a ``mssm.models.sMsGAMM`` is to be estimated.
     :type n_j: int, optional
+    :param codebook: Codebook - keys should correspond to factor variable names specified in terms. Values should again be a ``dict``, with keys for each of K levels of the factor and value corresponding to an integer in {0,K}.
+    :type codebook: dict or None
+    :param print_warn: Whether warnings should be printed. Useful when fitting models from terminal. Defaults to True.
+    :type print_warn: bool,optional
+    :param keep_cov: Whether or not the internal encoding structure of all predictor variables should be created when forming X.T@X iteratively instead of forming X directly. Can speed up estimation but increases memory footprint. Defaults to True.
+    :type keep_cov: bool,optional
+    :param file_paths: A list of paths to .csv files from which X.T@X and X.T@y should be created iteratively. Setting this to a non-empty list will prevent fitting X as a whole. ``data`` should then be set to ``None``. Defaults to an empty list.
+    :type file_paths: [str],optional
+    :param file_loading_nc: How many cores to use to a) accumulate X in parallel (if ``data`` is not ``None`` and ``file_paths`` is an empty list) or b) to accumulate X.T@X and X.T@y (and \eta during estimation) (if ``data`` is ``None`` and ``file_paths`` is a non-empty list). For case b, this should really be set to the maimum number of cores available. For a this only really speeds up accumulating X if X has many many columns and/or rows. Defaults to 1.
+    :type file_loading_nc: int,optional
+    :param file_loading_kwargs: Any key-word arguments to pass to pandas.read_csv when X.T@X and X.T@y should be created iteratively (if ``data`` is ``None`` and ``file_paths`` is a non-empty list). Defaults to ``{"header":0,"index_col":False}``.
+    :type file_loading_kwargs: dict,optional
     """
     def __init__(self,
                  lhs:lhs,
@@ -746,9 +1006,11 @@ class Formula():
                  series_id:str or None=None,
                  split_scale:bool=False,
                  n_j:int=3,
+                 codebook:dict or None=None,
                  print_warn=True,
+                 keep_cov = False,
                  file_paths = [],
-                 file_loading_nc = 10,
+                 file_loading_nc = 1,
                  file_loading_kwargs: dict = {"header":0,"index_col":False}) -> None:
         
         self.__lhs = lhs
@@ -761,6 +1023,7 @@ class Formula():
         self.print_warn = print_warn
         if self.__split_scale and self.print_warn:
            warnings.warn("split_scale==True! All terms will be estimted per latent stage, independent of terms' by_latent status.")
+        self.keep_cov = keep_cov # For iterative X.T@X building, whether the encoded data should be kept or read in from file again during every iteration.
         self.file_paths = file_paths # If this will not be empty, we accumulate t(X)@X directly without forming X. Only useful if model is normal.
         self.file_loading_nc = file_loading_nc
         self.file_loading_kwargs = file_loading_kwargs
@@ -771,6 +1034,7 @@ class Formula():
         self.__var_types = {}
         self.__var_mins = {}
         self.__var_maxs = {}
+        self.__subgroup_variables = []
         self.__term_names = []
         self.__linear_terms = []
         self.__smooth_terms = []
@@ -797,6 +1061,8 @@ class Formula():
         self.sid = None
         # Penalties
         self.penalties = None
+        # Discretization?
+        self.discretize = {}
         
         # Perform input checks first for LHS/Dependent variable.
         if len(self.file_paths) == 0 and self.__lhs.variable not in self.__data.columns:
@@ -832,6 +1098,16 @@ class Formula():
                if term.by_latent:
                   self.__has_by_latent = True
             
+            if isinstance(term,fs):
+               if not term.approx_deriv is None:
+                  self.discretize[ti] = term.approx_deriv
+
+                  # Make sure all categorical split variables end up being encoded since
+                  # they do not necessarily have to be in the formula in case of
+                  # sub-groups.
+                  for split_by_fac in self.discretize[ti]["split_by"]:
+                     cvi = self.__encode_var(split_by_fac,'O',cvi,codebook)
+            
             # All variables must exist in data
             for var in term.variables:
 
@@ -844,7 +1120,7 @@ class Formula():
                      vartype = read_dtype(var,self.file_paths[0],self.file_loading_kwargs)
 
                 # Store information for all variables once.
-                cvi = self.__encode_var(var,vartype,cvi)
+                cvi = self.__encode_var(var,vartype,cvi,codebook)
                 
                 # Smooth-term variables must all be continuous
                 if isinstance(term, f) or isinstance(term, irf):
@@ -873,9 +1149,32 @@ class Formula():
                     if len(self.file_paths) > 0 and read_dtype(t_by,self.file_paths[0],self.file_loading_kwargs) in ['float64','int64']:
                         raise KeyError(f"Data-type of By-variable '{t_by}' attributed to term {ti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'.")
                     
-                     # Store information for by variables as well.
-                    cvi = self.__encode_var(t_by,'O',cvi)
+                    
+                    t_by_subgroup = None
+                    # Handle sub-cluster for factor smooth term.
+                    if isinstance(term, fs) and not term.by_subgroup is None:
 
+                       t_by_subgroup = term.by_subgroup
+
+                       if len(self.file_paths) == 0 and not t_by_subgroup[0] in self.__data.columns:
+                           raise KeyError(f"Sub-group by-variable '{t_by_subgroup}' attributed to term {ti} does not exist in dataframe.")
+                        
+                       if len(self.file_paths) == 0 and data[t_by_subgroup[0]].dtype in ['float64','int64']:
+                           raise KeyError(f"Data-type of sub-group by-variable '{t_by_subgroup[0]}' attributed to term {ti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'.")
+                        
+                       if len(self.file_paths) > 0 and read_dtype(t_by_subgroup[0],self.file_paths[0],self.file_loading_kwargs) in ['float64','int64']:
+                           raise KeyError(f"Data-type of sub-group by-variable '{t_by_subgroup[0]}' attributed to term {ti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'.")
+                       
+                       # Make sure sub-group variable is also encoded.
+                       cvi = self.__encode_var(t_by_subgroup[0],'O',cvi,codebook)
+
+                     # Store information for by variables as well.
+                    cvi = self.__encode_var(t_by,'O',cvi,codebook,by_subgroup=t_by_subgroup)
+                    
+                    # If no error was raised we can now over-write the by variable for the factor smooth
+                    if isinstance(term, fs) and  not t_by_subgroup is None:
+                        term.by += ":" + t_by_subgroup[1]
+                    
                     if isinstance(term, f) and not term.binary is None:
                         term.binary_level = self.__factor_codings[t_by][term.binary[1]]
 
@@ -891,7 +1190,7 @@ class Formula():
                if data[pt_by].dtype in ['float64','int64']:
                   raise KeyError(f"Data-type of By-variable '{pt_by}' attributed to P-term {pti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'.")
                
-               cvi = self.__encode_var(pt_by,'O',cvi)
+               cvi = self.__encode_var(pt_by,'O',cvi,codebook)
             
         if self.__n_irf > 0:
            self.__has_irf = True
@@ -906,7 +1205,7 @@ class Formula():
         self.__get_coef_info()
         
         # Encode data into columns usable by the model
-        if len(self.file_paths) == 0:
+        if len(self.file_paths) == 0 or self.keep_cov:
             y_flat,cov_flat,NAs_flat,y,cov,NAs,sid = self.encode_data(self.__data)
 
             # Store encoding
@@ -917,6 +1216,28 @@ class Formula():
             self.cov = cov
             self.NOT_NA = NAs
             self.sid = sid
+        
+        if len(self.discretize) > 0:
+           if self.series_id is None:
+               raise ValueError(f"The identifier column for unique series must be provided when requesting to approximate the derivative of one or more factor smooth terms.")
+    
+           if len(self.file_paths) != 0 and self.keep_cov == False:
+              # Need to create cov_flat (or at least figure out the correct dimensions) and sid after all
+              #sid_var_cov_flat = read_cov(self.__lhs.variable,self.series_id,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+              #self.cov_flat = np.zeros((len(sid_var_cov_flat),len(self.__var_to_cov.keys())),dtype=int)
+
+              #_, id = np.unique(sid_var_cov_flat,return_index=True)
+              #self.sid = np.sort(id)
+              raise ValueError("``Formula.keep.cov`` must be set to ``True`` when reading data from file AND approximating the derivative for factor smooths.")
+           
+           for sti in self.discretize.keys():
+               self.__cluster_discretize(*self.__split_discretize(self.__discretize(sti),sti),sti)
+           
+           #if len(self.file_paths) != 0 and self.keep_cov == False:
+           #   # Clean up
+           #   self.cov_flat = None
+           #   self.sid = None
+           #   self.series_id = None
 
         # Absorb any constraints for model terms
         if len(self.file_paths) == 0:
@@ -926,8 +1247,13 @@ class Formula():
 
         #print(self.n_coef,len(self.coef_names))
    
-    def __encode_var(self,var,vartype,cvi):
+    def __encode_var(self,var,vartype,cvi,codebook,by_subgroup=None):
       # Store information for all variables once.
+      if not by_subgroup is None:
+         _org_var = var
+         var += ":" + by_subgroup[1]
+         self.__subgroup_variables.append(var)
+
       if not var in self.__var_to_cov:
          self.__var_to_cov[var] = cvi
 
@@ -947,19 +1273,34 @@ class Formula():
             self.__var_mins[var] = None
             self.__var_maxs[var] = None
 
-            # Code factor variables into integers for example for easy dummy coding
+            # Code factor variables into integers for easy dummy coding
             if len(self.file_paths) == 0:
-               levels = np.unique(self.__data[var])
+               if by_subgroup is None:
+                  levels = np.unique(self.__data[var])
+               else:
+                  levels = np.unique(self.__data.loc[self.__data[by_subgroup[0]] == by_subgroup[1],_org_var])
             else:
-               levels = read_unique(var,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+               if by_subgroup is None:
+                  levels = read_unique(var,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+               else:
+                  rf_fac = read_cov(self.__lhs.variable,_org_var,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+                  #print(len(rf_fac))
+                  sub_fac = read_cov(self.__lhs.variable,by_subgroup[0],self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+                  #print(len(rf_fac[sub_fac == by_subgroup[1]]))
+                  levels = np.unique(rf_fac[sub_fac == by_subgroup[1]])
+                  
 
             self.__factor_codings[var] = {}
             self.__coding_factors[var] = {}
             self.__factor_levels[var] = levels
             
             for ci,c in enumerate(levels):
-               self.__factor_codings[var][c] = ci
-               self.__coding_factors[var][ci] = c
+               if not codebook is None and var in codebook:
+                  self.__factor_codings[var][c] = codebook[var][c]
+                  self.__coding_factors[var][codebook[var][c]] = c
+               else:
+                  self.__factor_codings[var][c] = ci
+                  self.__coding_factors[var][ci] = c
 
          cvi += 1
 
@@ -1100,16 +1441,26 @@ class Formula():
          NAs = None
          NAs_flat = None
       else:
-         NAs_flat = np.isnan(data[self.get_lhs().variable]) == False
+         if data is None:
+            # read in dep var - without NA correction!
+            y_flat = read_cov_no_cor(self.get_lhs().variable,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+            NAs_flat = np.isnan(y_flat) == False
+         else:
+            NAs_flat = np.isnan(data[self.get_lhs().variable]) == False
 
-      if not prediction and data.shape[0] != data[NAs_flat].shape[0] and self.print_warn:
-         warnings.warn(f"{data.shape[0] - data[NAs_flat].shape[0]} {self.get_lhs().variable} values ({round((data.shape[0] - data[NAs_flat].shape[0]) / data.shape[0] * 100,ndigits=2)}%) are NA.")
-
-      n_y = data.shape[0]
+      if not data is None:
+         if not prediction and data.shape[0] != data[NAs_flat].shape[0] and self.print_warn:
+            warnings.warn(f"{data.shape[0] - data[NAs_flat].shape[0]} {self.get_lhs().variable} values ({round((data.shape[0] - data[NAs_flat].shape[0]) / data.shape[0] * 100,ndigits=2)}%) are NA.")
+         n_y = data.shape[0]
+      else:
+         n_y = len(y_flat)
 
       id_col = None
       if not self.series_id is None:
-         id_col = np.array(data[self.series_id])
+         if data is None:
+            id_col = read_cov_no_cor(self.series_id,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+         else:
+            id_col = np.array(data[self.series_id])
 
       var_map = self.get_var_map()
       n_var = len(var_map)
@@ -1130,7 +1481,8 @@ class Formula():
          y = None
       else:
          # Collect entire y column
-         y_flat = np.array(data[self.get_lhs().variable]).reshape(-1,1)
+         if not data is None:
+            y_flat = np.array(data[self.get_lhs().variable]).reshape(-1,1)
          
          # Then split by seried id
          y = None
@@ -1145,14 +1497,27 @@ class Formula():
       cov_flat = np.zeros((n_y,n_var),dtype=float) # Treating all predictors as floats has important implications for factors and requires special care!
 
       for c in var_keys:
-         c_raw = np.array(data[c])
+         if data is None:
+            if c in self.__subgroup_variables:
+               c_raw = read_cov_no_cor(c.split(":")[0],self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+            else:
+               c_raw = read_cov_no_cor(c,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+         else:
+            if c in self.__subgroup_variables:
+               c_raw = np.array(data[c.split(":")[0]])
+            else:
+               c_raw = np.array(data[c])
 
          if var_types[c] == VarType.FACTOR:
 
             c_coding = factor_coding[c]
 
             # Code factor variable
-            c_code = [c_coding[cr] for cr in c_raw]
+            if c in self.__subgroup_variables:
+               # Set level to -1 which will be ignored later when building the factor smooth.
+               c_code = [c_coding[cr] if cr in c_coding else -1 for cr in c_raw]
+            else:
+               c_code = [c_coding[cr] for cr in c_raw]
 
             cov_flat[:,var_map[c]] = c_code
 
@@ -1166,6 +1531,206 @@ class Formula():
 
       return y_flat,cov_flat,NAs_flat,y,cov,NAs,sid
     
+    def __discretize(self,sti):
+      dig_cov_flat = np.zeros_like(self.cov_flat)
+      var_types = self.get_var_types()
+      var_map = self.get_var_map()
+      
+      collected = []
+
+      for var in var_types.keys():
+         # Skip variables that should be ignored all together.
+         # Useful if one or more continuous variables can be split into
+         # categorical factor passed along via "split_by"
+         if var in self.discretize[sti]["excl"] or var_types[var] == VarType.FACTOR:
+            continue
+
+         if var not in self.discretize[sti]["no_disc"]:
+            # Discretize continuous variable into k**0.5 bins, where k is the number of unique values this variable
+            # took on in the training set (based on, Wood et al., 2017 "Gams for Gigadata").
+            values = np.linspace(min(self.cov_flat[:,var_map[var]]),
+                                 max(self.cov_flat[:,var_map[var]]),
+                                 int(len(np.unique(self.cov_flat[:,var_map[var]]))**0.5))
+            dig_cov_flat[:,var_map[var]] = np.digitize(self.cov_flat[:,var_map[var]],values)
+            collected.append(var_map[var])
+
+         # Also collect continuous variables that should not be discretized
+         else:
+            dig_cov_flat[:,var_map[var]] = self.cov_flat[:,var_map[var]]
+            collected.append(var_map[var])
+
+      return dig_cov_flat[:,collected]
+
+    
+    def __split_discretize(self,dig_cov_flat_all,sti):
+      var_map = self.get_var_map()
+      factor_codings = self.get_factor_codings()
+
+      # Create seried id column in ascending order:
+      id_col = np.zeros(dig_cov_flat_all.shape[0],dtype=int)
+      id_splits = np.split(id_col,self.sid[1:])
+      id_splits = [split + i for i,split in enumerate(id_splits)]
+      id_col = np.concatenate(id_splits)
+
+      if not self.__terms[sti].by_subgroup is None:
+         # Adjust for fact that this factor smooth is fitted for separate level of sub-group.
+         sub_group_fact = self.__terms[sti].by_subgroup[0]
+         sub_group_lvl = self.__terms[sti].by_subgroup[1]
+
+         # Build index vector corresponding only to series of sub-group level
+         sub_lvl_idx = self.cov_flat[:,var_map[sub_group_fact]] == factor_codings[sub_group_fact][sub_group_lvl]
+
+         # Just take what belongs to the sub-group from the disceretized matrix
+         dig_cov_flat_all = dig_cov_flat_all[sub_lvl_idx,:]
+
+         # For id col a bit more work is necessary..
+         # First take again what belongs to sub-group. Now the problem is that series will no longer go from 0-S. So we
+         # have to reset the values in id_col to start from zero and then increment towards the number of series included
+         # in this sub-group.
+         id_col = id_col[sub_lvl_idx]
+         # Split based on indices
+         _, id = np.unique(id_col,return_index=True)
+         sub_sid = np.sort(id)
+
+         # Reset index
+         id_splits = np.split(id_col,sub_sid[1:])
+         for i,_ in enumerate(id_splits):
+            id_splits[i][:] = i
+
+         # And merge again
+         id_col = np.concatenate(id_splits)
+
+      if len(self.discretize[sti]["split_by"]) == 0:
+         # Don't actually split
+         return [dig_cov_flat_all],[id_col]
+
+      # Now split dig_cov_flat_all per level of combination of all factor variables used for splitting, again correcting for any
+      # potential sub-grouping
+      if self.__terms[sti].by_subgroup is None:
+         unq_fact_comb,unq_fact_comb_memb = np.unique(self.cov_flat[:,[var_map[fact] for fact in self.discretize[sti]["split_by"]]],
+                                                      axis=0,return_inverse=True)
+      else:
+         unq_fact_comb,unq_fact_comb_memb = np.unique(self.cov_flat[sub_lvl_idx,[var_map[fact] for fact in self.discretize[sti]["split_by"]]],
+                                                      axis=0,return_inverse=True)
+      # Split series id column per level
+      fact_series = [id_col[unq_fact_comb_memb == fact] for fact in range(len(unq_fact_comb))]
+
+      # Split dig_cov_flat_all per level
+      dig_cov_flats = [dig_cov_flat_all[unq_fact_comb_memb == fact,:] for fact in range(len(unq_fact_comb))]
+
+      return dig_cov_flats, fact_series
+    
+    def __cluster_discretize(self,dig_cov_flats, fact_series, sti):
+      best_series = None
+      best_weights = None
+      best_error = None
+
+      iterator = range(self.discretize[sti]["restarts"])
+      if self.print_warn:
+         iterator = tqdm(iterator,desc="Clustering",leave=True)
+
+      for rep in iterator:
+         clust_max_series = []
+         weights = []
+         error = 0
+
+         for dig_cov_flat,fact_s in zip(dig_cov_flats,fact_series):
+
+            # Create a simple index vector for each unique series in this factor split.
+            _,fact_s_idx = np.unique(fact_s,return_index=True)
+            sid_idx = fact_s[fact_s_idx]
+
+            # Now compute the number of unique rows across the discretized matrix.
+            dig_cov_flat_unq = np.unique(dig_cov_flat,axis=0)
+
+            # Also compute, for each column, the inverse - telling us for each row in the discretized data
+            # to which unique value on the corresponding **variable** it belongs.
+            dig_cov_flat_unq_memb = np.zeros_like(dig_cov_flat,dtype=int)
+
+            dig_cov_unq_counts = []
+
+            for vari in range(dig_cov_flat.shape[1]):
+               dig_var_flat_unq,dig_var_flat_unq_memb = np.unique(dig_cov_flat[:,vari],return_inverse=True)
+
+               if vari > 0:
+                  dig_var_flat_unq_memb += dig_cov_unq_counts[-1]
+
+               dig_cov_unq_counts.append(len(dig_var_flat_unq))
+               dig_cov_flat_unq_memb[:,vari] = dig_var_flat_unq_memb[:]
+
+            # Now we prepare the cluster structure:
+            # Every series now gets represented by a row vector with sum(dig_cov_unq_counts) entries
+            # Every column in these vectors corresponds to a unique value of an individual discretized
+            # (or not) co-variate. The first dig_cov_unq_counts[0] columns correspond to the unique values
+            # of covariate 1, the next dig_cov_unq_counts[1] columns correspond to covariate 2, and so on.
+            # Each column gets assigned the number of times the corresponding unique value exists for the series to
+            # which the vector belongs.
+            clust = np.zeros((len(sid_idx),sum(dig_cov_unq_counts)))
+
+            # To compute this we just split the inverse per unique series
+            # s_split_unq_memb is a list of 2d arrays, each array corresponding to a series
+            # with the number of rows matching the number of observations collected for that series.
+            # the number of columns matches the number of collected (and potentially discretized) covariates.
+            s_split_unq_memb = np.split(dig_cov_flat_unq_memb,fact_s_idx[1:])
+
+            # Now we flatten that 2d array and collect the unique values and how often they occur. This gives us
+            # for every series the indices in the cluster structure that will be non-zero and the value we need to
+            # store in each non-zero cell.
+            s_split_unq_cnts = [np.unique(s_dig,return_counts=True) for s_dig in s_split_unq_memb]
+
+            # Then loop over each series and add the counts of the corresponding rows to the cluster structure
+            for sidx,(udr,cnts) in enumerate(s_split_unq_cnts):
+               clust[sidx,udr] += cnts
+
+            # Use heuristic to determine the number of clusters also used to discretize individual covariates
+            # Then cluster - for estimation this only has to do once before starting the actual fitting routine
+            clust_centroids,clust_lab = scp.cluster.vq.kmeans2(clust,int((dig_cov_flat_unq.shape[1]*dig_cov_flat_unq.shape[0])**0.5),minit='++')
+
+            # Compute clustering loss, according to scipy docs: https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.vq.kmeans2.html
+            # Simply pick the cluster set out of all repetitions that minimizes the loss
+            for k in range(clust_centroids.shape[0]):
+               error += np.power(clust[clust_lab == k,:] - clust_centroids[k,:],2).sum()
+
+            # Find ordering of series ids based on assigned cluster labels
+            arg_sort_clust = np.argsort(clust_lab)
+
+            # Sort cluster labels in ascending order for easy split of cluster ordered
+            # ids into cluster groups
+            sort_clust = clust_lab[arg_sort_clust]
+            idx_clust_sort = np.arange(0,len(clust_lab),dtype=int)[arg_sort_clust]
+
+            # Find cluster split points
+            _, cid = np.unique(sort_clust,return_index=True)
+            csid = np.sort(cid)
+
+            # Now collect all series ids of a particular cluster into a separate array
+            idx_grouped = np.split(idx_clust_sort,csid[1:])
+
+            # Find the (ideally, this is done heuristically after all) most complex series in every cluster:
+            # Compute the number of unique rows for each series in a cluster, then pick the maximum.
+            # Compute complexity weights for all series in the cluster relative to that maximum.
+            # These act as a a proxy of how similar each series is to the cluster prototype/maximum.
+            
+            for k,clu in enumerate(idx_grouped):
+               clu_sums = np.sum(clust[clu,:],axis=1)
+               clust_max_series.append(sid_idx[clu[np.argmax(clu_sums)]])
+               weights.append(clu_sums/np.max(clu_sums))
+
+               #
+               #clust_distances = np.power(clust[clu,:] - clust_centroids[k,:],2).sum(axis=1) + 1
+            
+               #clust_max_series.append(sid_idx[clu[np.argmin(clust_distances)]])
+               #clust_rel_distances = clu_sums/clu_sums[np.argmin(clust_distances)]
+               #weights.append(clust_rel_distances/np.max(clust_rel_distances))
+
+         if (rep == 0) or (error < best_error):
+            best_series = np.array(clust_max_series)
+            best_weights = weights
+            best_error = error
+
+      self.discretize[sti]["clust_series"] = best_series
+      self.discretize[sti]["clust_weights"] = best_weights
+
     def __absorb_constraints2(self):
       
       for sti in self.get_smooth_term_idx():
@@ -1437,6 +2002,13 @@ class Formula():
                                                               penalties,cur_pen_idx,
                                                               pen,penid,sti,sterm,vars,
                                                               by_levels,n_coef,col_S)
+
+               
+               # Add necessary info for derivative approx. for factor smooth penalties
+               if isinstance(sterm,fs):
+                  if not sterm.approx_deriv is None:
+                     penalties[-1].clust_series = self.discretize[sti]["clust_series"]
+                     penalties[-1].clust_weights = self.discretize[sti]["clust_weights"]
 
                if sterm.has_null_penalty:
 
@@ -1751,6 +2323,10 @@ class Formula():
     def get_term_names(self) -> list:
        """Returns a copy of the list with the names of the terms specified for this formula."""
        return copy.deepcopy(self.__term_names)
+   
+    def get_subgroup_variables(self) -> list:
+       """Returns a copy of sub-group variables for factor smooths."""
+       return copy.deepcopy(self.__subgroup_variables)
 
 def embed_in_S_sparse(pen_data,pen_rows,pen_cols,S_emb,S_col,SJ_col,cIndex):
    """Embed a term-specific penalty matrix (provided as elements, row and col indices) into the across-term penalty matrix (see Wood, 2017) """
@@ -1777,6 +2353,48 @@ def embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,Sj,SJ_col):
       
    return Sj
 
+def embed_shared_penalties(formulas):
+    """
+    Embed penalties from individual model into overall penalties for GAMLSS models.
+    """
+
+    shared_penalties = [copy.deepcopy(form.penalties) for form in formulas]
+
+    for fi,form in enumerate(formulas):
+        for ofi,other_form in enumerate(formulas):
+            if fi == ofi:
+                continue
+
+            if ofi < fi:
+                for lterm in shared_penalties[fi]:
+                    lterm.S_J_emb = scp.sparse.vstack([scp.sparse.csc_array((other_form.n_coef,form.n_coef)),
+                                                    lterm.S_J_emb])
+                    lterm.D_J_emb = scp.sparse.vstack([scp.sparse.csc_array((other_form.n_coef,form.n_coef)),
+                                                    lterm.D_J_emb])
+                    
+                    lterm.S_J_emb = scp.sparse.hstack([scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef)),
+                                                    lterm.S_J_emb])
+                    
+                    lterm.D_J_emb = scp.sparse.hstack([scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef)),
+                                                    lterm.D_J_emb])
+                    
+                    lterm.start_index += other_form.n_coef
+            
+            elif ofi > fi:
+                for lterm in shared_penalties[fi]:
+                    lterm.S_J_emb = scp.sparse.vstack([lterm.S_J_emb,
+                                                    scp.sparse.csc_array((other_form.n_coef,form.n_coef))])
+                    
+                    lterm.D_J_emb = scp.sparse.vstack([lterm.D_J_emb,
+                                                    scp.sparse.csc_array((other_form.n_coef,form.n_coef))])
+                    
+                    lterm.S_J_emb = scp.sparse.hstack([lterm.S_J_emb,
+                                                    scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef))])
+                    
+                    lterm.D_J_emb = scp.sparse.hstack([lterm.D_J_emb,
+                                                    scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef))])
+                
+    return shared_penalties
 
 def build_linear_term_matrix(ci,n_y,has_intercept,lti,lterm,var_types,var_map,factor_levels,ridx,cov_flat,use_only):
    """Parameterize model matrix for a linear term."""
@@ -2218,7 +2836,7 @@ def build_sparse_matrix_from_formula(terms,has_intercept,
    elements = []
    rows = []
    cols = []
-   ridx = np.array([ri for ri in range(n_y)])
+   ridx = np.array([ri for ri in range(n_y)]) #ToDo: dtype=int?
 
    ci = 0
    for lti in ltx:

@@ -23,7 +23,7 @@ def const_temps(iter):
 ##################################### HsMM functions #####################################
 
 def forward_eta(n_j,n_t,pi,TR,log_dur_mat,log_obs_mat):
-   # Forward pass for HsMM based on math in Yu (2011) and inspired by
+   # Forward pass for HsMM based on math in Yu (2011) and based on
    # implementation in edhsmm (https://github.com/poypoyan/edhsmm).
    # see: Yu, S.-Z. (2010). Hidden semi-Markov models. https://doi.org/10.1016/j.artint.2009.11.011
 
@@ -95,7 +95,7 @@ def forward_eta(n_j,n_t,pi,TR,log_dur_mat,log_obs_mat):
    return scp.special.logsumexp(alpha_t), etas, u
 
 def backward_eta(n_j,n_t,TR,log_dur_mat,etas,u):
-   # Backward pass based on math in Yu (2011) and inspired by
+   # Backward pass based on math in Yu (2011) and based on
    # implementation in edhsmm (https://github.com/poypoyan/edhsmm).
 
    # Gets the partially computed etas from the forward_eta() function. Since we have already
