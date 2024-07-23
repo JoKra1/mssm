@@ -6,7 +6,7 @@ from itertools import permutations,product,repeat
 import copy
 from ..python.gamm_solvers import cpp_backsolve_tr,compute_S_emb_pinv_det,cpp_chol,cpp_solve_coef,update_scale_edf,compute_Linv,apply_eigen_perm,tqdm,managers,shared_memory,cpp_solve_coefXX
 from ..python.formula import reparam,map_csc_to_eigen,mp
-from ..python.exp_fam import Family,Gaussian
+from ..python.exp_fam import Family,Gaussian, Identity
 
 def sample_MVN(n,mu,scale,P,L,LI=None,use=None,seed=None):
     """
@@ -104,7 +104,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties):
    See REML function below for more details.
    """
 
-   if not isinstance(family,Gaussian):
+   if not isinstance(family,Gaussian) or isinstance(family.link,Identity) == False:
        raise TypeError("REML computation for a specific lambda candidate is currently only implemented for Gaussian additive models.")
 
    S_emb,_,_ = compute_S_emb_pinv_det(X.shape[1],penalties,"svd")
@@ -309,7 +309,7 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
     Vs = []
     coefs = []
 
-    if X.shape[1] < 2000 and isinstance(family,Gaussian) and n_c > 1: # Parallelize grid search
+    if X.shape[1] < 2000 and isinstance(family,Gaussian) and isinstance(family.link,Identity) and n_c > 1: # Parallelize grid search
         with managers.SharedMemoryManager() as manager, mp.Pool(processes=n_c) as pool:
             # Create shared memory copies of data, indptr, and indices for X, XX, and y
 
@@ -391,7 +391,7 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
     ws = scp.special.softmax(remls)
 
     # Now compute \hat{cov(\boldsymbol{\beta}|y)}
-    if X.shape[1] < 2000 and isinstance(family,Gaussian) and n_c > 1:
+    if X.shape[1] < 2000 and isinstance(family,Gaussian) and isinstance(family.link,Identity) and n_c > 1:
         # E_{p|y}[V_\boldsymbol{\beta}(\lambda)] + E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] in Greven & Scheipl (2017)
         Vr1 = ws[0]* ((Linvs[0].T@Linvs[0]*scales[0]) + (coefs[0]@coefs[0].T))
 

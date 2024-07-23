@@ -2,7 +2,7 @@ import numpy as np
 import scipy as scp
 import math
 from .formula import build_sparse_matrix_from_formula
-from .exp_fam import Gaussian
+from .exp_fam import Gaussian, Identity
 
 ##################################### Temperature functions #####################################
 
@@ -200,7 +200,7 @@ def compute_log_probs(n_j,n_obs,has_scale_split,
          # Handle observation probabilities
          j_mu = (model_mat @ state_coef[j]).reshape(-1,1)
 
-         if not isinstance(family,Gaussian):
+         if not isinstance(family,Gaussian) or isinstance(family.link,Identity) == False:
             j_mu = family.link.fi(j_mu)
 
          # Prediction for y series according to state specific GAMM
@@ -567,7 +567,7 @@ def se_step_sms_dc_gamm(n_j,temp,series,NOT_NAs,end_point,cov,
 
          mu = (model_mat_s @ coef).reshape(-1,1)
 
-         if not isinstance(family,Gaussian):
+         if not isinstance(family,Gaussian) or isinstance(family.link,Identity) == False:
             mu = family.link.fi(mu)
 
          if not family.twopar:

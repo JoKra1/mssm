@@ -119,7 +119,7 @@ class GAMM(MSSM):
             pen = self.penalty
         if self.pred is not None:
             mu = self.pred
-            if isinstance(self.family,Gaussian) == False:
+            if isinstance(self.family,Gaussian) == False or isinstance(self.family.link,Identity) == False:
                 mu = self.family.link.fi(self.pred)
             if self.family.twopar:
                 scale = self.scale
@@ -301,6 +301,10 @@ class GAMM(MSSM):
             cov_flat = self.formula.cov_flat[self.formula.NOT_NA_flat]
             y_flat = self.formula.y_flat[self.formula.NOT_NA_flat]
 
+            if not self.formula.get_lhs().f is None:
+                # Optionally apply function to dep. var. before fitting.
+                y_flat = self.formula.get_lhs().f(y_flat)
+
             if y_flat.shape[0] != self.formula.y_flat.shape[0] and progress_bar:
                 print("NAs were excluded for fitting.")
 
@@ -348,7 +352,10 @@ class GAMM(MSSM):
         else:
             # Iteratively build model matrix.
             # Follows steps in "Generalized additive models for large data sets" (2015) by Wood, Goude, and Shaw
-            if isinstance(self.family,Gaussian) == False:
+            if not self.formula.get_lhs().f is None:
+                raise ValueError("Cannot apply function to dep. var. when building model matrix iteratively. Consider creating a modified variable in the data-frame.")
+            
+            if isinstance(self.family,Gaussian) == False or isinstance(self.family.link,Identity) == False:
                 raise ValueError("Iteratively building the model matrix is currently only supported for Normal models.")
             
             coef,eta,wres,scale,LVI,edf,term_edf,penalty,fit_info = solve_gamm_sparse2(self.formula,penalties,self.formula.n_coef,
@@ -722,6 +729,10 @@ class GAMLSS(GAMM):
         
         # Get y
         y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
+
+        if not self.formulas[0].get_lhs().f is None:
+            # Optionally apply function to dep. var. before fitting. Not sure why that would be desirable for this model class...
+            y = self.formulas[0].get_lhs().f(y)
 
         # Build penalties and model matrices for all formulas
         Xs = []

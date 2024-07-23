@@ -172,7 +172,7 @@ class Binomial(Family):
       return D[0]
 
 class Gaussian(Family):
-   def __init__(self, link: Link=None, scale: float = None) -> None:
+   def __init__(self, link: Link=Identity(), scale: float = None) -> None:
       super().__init__(link, True, scale)
 
    def V(self,mu):
@@ -190,7 +190,36 @@ class Gaussian(Family):
       res = y - mu
       rss = res.T @ res
       return rss[0,0]
+
+class Gamma(Family):
+   def __init__(self, link: Link= LOG(), scale: float = None) -> None:
+      super().__init__(link, True, scale)
    
+   def V(self,mu):
+      # Faraway (2016)
+      return np.power(mu,2)
+   
+   def lp(self,y,mu,scale=1):
+      # Need to transform from mean and scale to \alpha & \beta
+      # From https://en.wikipedia.org/wiki/Gamma_distribution, we have that:
+      # \beta = 1/scale
+      # mean = \alpha/\beta
+      # \alpha = mean*\beta
+      # \alpha = mean/scale
+      # scipy docs, say to set scale to 1/\beta, so we can just set it to scale.
+      # see: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.gamma.html 
+      return scp.stats.gamma.logpdf(y,a=mu/scale,scale=scale)
+   
+   def llk(self,y,mu,scale = 1):
+      return sum(self.lp(y,mu,scale))[0]
+   
+   def deviance(self,y,mu):
+      # Based on Faraway (2016)
+      diff = (y - mu)/mu
+      ratio = -(np.log(y) - np.log(mu))
+      dev = 2*np.sum(ratio + diff)
+      return dev
+
 class GAMLSSFamily:
    def __init__(self,pars:int,links:[Link]) -> None:
       self.n_par = pars

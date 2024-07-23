@@ -1,7 +1,7 @@
 import numpy as np
 import scipy as scp
 import warnings
-from .exp_fam import Family,Gaussian,est_scale,GAMLSSFamily
+from .exp_fam import Family,Gaussian,est_scale,GAMLSSFamily,Identity
 from .penalties import PenType,id_dist_pen,translate_sparse,dataclass
 from .formula import build_sparse_matrix_from_formula,setup_cache,clear_cache,cpp_solvers,pd,Formula,mp,repeat,os,map_csc_to_eigen,math,tqdm,sys
 from functools import reduce
@@ -227,7 +227,7 @@ def update_PIRLS(y,yb,mu,eta,X,Xb,family):
    z = None
    Wr = None
 
-   if isinstance(family,Gaussian) == False:
+   if isinstance(family,Gaussian) == False or isinstance(family.link,Identity) == False:
       # Compute weights and pseudo-dat
       z, w = PIRLS_pdat_weights(y,mu,eta,family)
 
@@ -514,7 +514,7 @@ def update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,pen
    
    # Calculate Pearson residuals for GAMM (Wood, 3.1.7)
    # Standard residuals for AMM
-   if isinstance(family,Gaussian) == False:
+   if isinstance(family,Gaussian) == False or isinstance(family.link,Identity) == False:
       wres = Wr @ (z - eta)
    else:
       wres = y - eta
@@ -587,7 +587,7 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,S_pinv,FS_use_
 
    mu = eta
 
-   if isinstance(family,Gaussian) == False:
+   if isinstance(family,Gaussian) == False or isinstance(family.link,Identity) == False:
       mu = family.link.fi(eta)
 
    # Update scale parameter
@@ -685,7 +685,7 @@ def correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,n_pen
 
       mu = eta
 
-      if isinstance(family,Gaussian) == False:
+      if isinstance(family,Gaussian) == False or isinstance(family.link,Identity) == False:
          mu = family.link.fi(eta)
       
       # Update deviance
@@ -922,7 +922,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    mu = mu_init
    eta = mu
 
-   if isinstance(family,Gaussian) == False:
+   if isinstance(family,Gaussian) == False or isinstance(family.link,Identity) == False:
       eta = family.link.f(mu)
 
    # Compute starting estimates
