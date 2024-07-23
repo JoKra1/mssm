@@ -634,14 +634,24 @@ class GAMLSS(GAMM):
         pen = 0
         if penalized:
             pen = self.penalty
-        if self.pred is not None:
+        if self.__overall_preds is not None:
             mus = [self.family.links[i].fi(self.__overall_preds[i]) for i in range(self.family.n_par)]
             return self.family.llk(self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat],*mus) - pen
 
         return None
 
     def get_mmat(self):
-        raise NotImplementedError("Not yet supported.")
+        """
+        Returns exaclty the model matrices used for fitting as a ``scipy.sparse.csc_array``. Will raise an error when fitting was not completed before calling this function.
+        """
+        Xs = []
+        for form in self.formulas:
+            if form.penalties is None:
+                raise ValueError("Model matrices cannot be returned if penalties have not been initialized. Call model.fit() first.")
+            
+            mod = GAMM(form,family=Gaussian())
+            Xs.append(mod.get_mmat())
+        return Xs
     
     def print_smooth_terms(self, pen_cutoff=0.2):
         """Prints the name of the smooth terms included in the model. After fitting, the estimated degrees of freedom per term are printed as well.
@@ -672,7 +682,21 @@ class GAMLSS(GAMM):
             super().print_smooth_terms(pen_cutoff)
                         
     def get_reml(self):
-        raise NotImplementedError("Not yet supported.")
+        """
+        Get's the Laplcae approximate REML (Restrcited Maximum Likelihood) score for the estimated lambda values (see Wood, 2011).
+
+        References:
+         - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models.
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+        """
+
+        if self.__overall_coef is None or self.__hessian is None:
+            raise ValueError("Model needs to be estimated before evaluating the REML score. Call model.fit()")
+        
+        llk = self.get_llk(False)
+        
+        reml = REML(llk,-1*self.__hessian,self.__overall_coef,1,self.overall_penalties)
+        return reml
     
     def fit(self,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,progress_bar=True,n_cores=10):
         """
@@ -729,7 +753,7 @@ class GAMLSS(GAMM):
                             *[np.ones((self.formulas[ix].n_coef)).reshape(-1,1) for ix in range(1,self.family.n_par)]))
         coef_split_idx = form_n_coef[:-1]
 
-        coef,etas,mus,wres,LV,total_edf,term_edfs,penalty = solve_gammlss_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,
+        coef,etas,mus,wres,H,LV,total_edf,term_edfs,penalty = solve_gammlss_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,
                                                                                  gamlss_pen,max_outer,max_inner,min_inner,conv_tol,
                                                                                  extend_lambda,progress_bar,n_cores)
         
@@ -741,6 +765,7 @@ class GAMLSS(GAMM):
         self.penalty = penalty
         self.coef_split_idx = coef_split_idx
         self.overall_lvi = LV
+        self.__hessian = H
     
 
     def predict(self, par, use_terms, n_dat, alpha=0.05, ci=False, whole_interval=False, n_ps=10000, seed=None):

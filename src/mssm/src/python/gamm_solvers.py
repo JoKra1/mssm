@@ -1774,7 +1774,7 @@ def update_coef_gen_smooth(family,mus,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer
          c_llk = family.llk(y,*mus)
          c_pen_llk = c_llk - coef.T@S_emb@coef
    
-   return coef,split_coef,mus,etas,LV,c_llk,c_pen_llk
+   return coef,split_coef,mus,etas,H,LV,c_llk,c_pen_llk
     
 def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
                          max_outer=50,max_inner=30,min_inner=1,conv_tol=1e-7,
@@ -1809,11 +1809,26 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
     for outer in iterator:
 
         # Update coefficients:
-        coef,split_coef,mus,etas,LV,c_llk,c_pen_llk = update_coef_gen_smooth(family,mus,y,Xs,coef,
+        coef,split_coef,mus,etas,H,LV,c_llk,c_pen_llk = update_coef_gen_smooth(family,mus,y,Xs,coef,
                                                                              coef_split_idx,S_emb,
                                                                              c_llk,outer,max_inner,
                                                                              min_inner,conv_tol)
         
+        # Given new coefficients compute lgdetDs, ldetHS, and bsbs - needed for efs step
+        lgdetDs = []
+        bsbs = []
+        for lti,lTerm in enumerate(gamlss_pen):
+
+            lt_rank = None
+            if FS_use_rank[lti]:
+                lt_rank = lTerm.rank
+
+            lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
+            lgdetDs.append(lgdetD)
+            bsbs.append(bsb)
+
+        total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,gamlss_pen,lgdetDs,n_coef,n_c)
+
         # Check overall convergence
         if outer > 0:
 
@@ -1828,52 +1843,70 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
             
         # We need the penalized likelihood of the model at this point for convergence control (step 2 in Wood, 2017 based on step 4 in Wood, Goude, & Shaw, 2016)
         prev_pen_llk = c_pen_llk
-
-        # Compute cholesky of V without pre-conditioning.
-        #LVp, Pr, code = cpp_cholP(scp.sparse.csc_array(V))
-        #if code != 0:
-        #    raise ValueError("Failed to solve cholesky of V.")
-        #LV = apply_eigen_perm(Pr,LVp).T
         
-        # Given new coefficients compute lgdetDs and bsbs - needed for EFS step
-        lgdetDs = []
-        bsbs = []
+        # Now compute EFS step
         lam_delta = []
         for lti,lTerm in enumerate(gamlss_pen):
 
-            lt_rank = None
-            if FS_use_rank[lti]:
-                lt_rank = lTerm.rank
-
-            lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
-            #print(lgdetD-(LV@lTerm.D_J_emb).power(2).sum())
-            dLam = step_fellner_schall_sparse(lgdetD,(LV@lTerm.D_J_emb).power(2).sum(),bsb[0,0],lTerm.lam,1)
+            lgdetD = lgdetDs[lti]
+            ldetHS = ldetHSs[lti]
+            bsb = bsbs[lti]
+            
+            #print(lgdetD-ldetHS)
+            dLam = step_fellner_schall_sparse(lgdetD,ldetHS,bsb[0,0],lTerm.lam,1)
             if extend_lambda:
                 dLam,extend_by,was_extended = extend_lambda_step(lti,lTerm.lam,dLam,extend_by,was_extended,"nesterov")
             lTerm.lam += dLam
 
             lam_delta.append(dLam)
-            lgdetDs.append(lgdetD)
-            bsbs.append(bsb)
-        
-        # Compute approximate!!! gradient of REML with respect to lambda
-        # to check if step size needs to be reduced (part of step 6 in Wood, 2017).
-        total_edf,term_edfs, Bs = calculate_edf(None,None,LV,gamlss_pen,lgdetDs,n_coef,n_c)
-        lam_grad = [grad_lambda(lgdetDs[lti],Bs[lti],bsbs[lti],1) for lti in range(len(gamlss_pen))]
-        lam_grad = np.array(lam_grad).reshape(-1,1) 
-        check = lam_grad.T @ lam_delta
-
-        # Step size control for smoothing parameters. Not obvious - because we have only approximate REMl
-        # and approximate derivative, because we drop the last term involving the derivative of the negative penalized
-        # Hessian with respect to the smoothing parameters (see section 4 in Wood & Fasiolo, 2017). However, what we
-        # can do is at least undo the acceleration if we over-shoot the approximate derivative...
-        if check[0] < 0 and extend_lambda:
-            for lti,lTerm in enumerate(gamlss_pen):
-                if was_extended[lti]:
-                    lTerm.lam -= extend_by["acc"][lti]
 
         # Build new penalties
         S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
+
+        if extend_lambda:
+            # Step size control for smoothing parameters. Not obvious - because we have only approximate REMl
+            # and approximate derivative, because we drop the last term involving the derivative of the negative penalized
+            # Hessian with respect to the smoothing parameters (see section 4 in Wood & Fasiolo, 2017). However, what we
+            # can do is at least undo the acceleration if we over-shoot the approximate derivative...
+
+            # First re-compute coef
+            next_coef,_,_,_,_,LV,_,next_pen_llk = update_coef_gen_smooth(family,mus,y,Xs,coef,
+                                                            coef_split_idx,S_emb,
+                                                            c_llk,outer,max_inner,
+                                                            min_inner,conv_tol)
+            
+            # Now re-compute lgdetDs, ldetHS, and bsbs
+            lgdetDs = []
+            bsbs = []
+            for lti,lTerm in enumerate(gamlss_pen):
+
+                  lt_rank = None
+                  if FS_use_rank[lti]:
+                     lt_rank = lTerm.rank
+
+                  lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,next_coef)
+                  lgdetDs.append(lgdetD)
+                  bsbs.append(bsb)
+
+            total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,gamlss_pen,lgdetDs,n_coef,n_c)
+            
+            # Compute approximate!!! gradient of REML with respect to lambda
+            # to check if step size needs to be reduced (part of step 6 in Wood, 2017).
+            lam_grad = [grad_lambda(lgdetDs[lti],ldetHSs[lti],bsbs[lti],1) for lti in range(len(gamlss_pen))]
+            lam_grad = np.array(lam_grad).reshape(-1,1) 
+            check = lam_grad.T @ lam_delta
+
+            # Now undo the acceleration if overall direction is **very** off - don't just check against 0 because
+            # our criterion is approximate, so we can be more lenient (see Wood et al., 2017). 
+            
+            if check[0] < 1e-3*-abs(prev_pen_llk):
+               for lti,lTerm in enumerate(gamlss_pen):
+                  if was_extended[lti]:
+
+                     lTerm.lam -= extend_by["acc"][lti]
+
+               # Rebuild penalties
+               S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
 
         #print([lterm.lam for lterm in gamlss_pen])
     
@@ -1886,4 +1919,4 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
     # Calculate actual term-specific edf
     term_edfs = calculate_term_edf(gamlss_pen,term_edfs)
     
-    return coef,etas,mus,wres,LV,total_edf,term_edfs,penalty
+    return coef,etas,mus,wres,H,LV,total_edf,term_edfs,penalty
