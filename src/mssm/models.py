@@ -620,6 +620,7 @@ class GAMLSS(GAMM):
         self.overall_lvi = None
         self.__overall_coef = None
         self.__overall_preds = None # etas
+        self.overall_penalties = None
 
     
     def get_pars(self):
@@ -642,13 +643,38 @@ class GAMLSS(GAMM):
     def get_mmat(self):
         raise NotImplementedError("Not yet supported.")
     
-    def print_smooth_terms(self,pen_cutoff=0.2):
-        raise NotImplementedError("Not yet supported.")
+    def print_smooth_terms(self, pen_cutoff=0.2):
+        """Prints the name of the smooth terms included in the model. After fitting, the estimated degrees of freedom per term are printed as well.
+        Smooth terms with edf. < ``pen_cutoff`` will be highlighted. This only makes sense when extra Kernel penalties are placed on smooth terms to enable
+        penalizing them to a constant zero. In that case edf. < ``pen_cutoff`` can then be taken as evidence that the smooth has all but notationally disappeared
+        from the model, i.e., it does not contribute meaningfully to the model fit. This can be used as an alternative form of model selection - see Marra & Wood (2011).
+
+        References:
+         - Marra & Wood (2011). Practical variable selection for generalized additive models.
+        """
+        idx = 0
+        start_idx = -1
+        pen_idx = 0
+        n_coef = 0
+        for form in self.formulas:
+            # Prepare formula, term_edf so that we can just call GAMM.print_smooth_terms()
+            n_coef += form.n_coef
+            self.term_edf = []
+            for peni in range(pen_idx,len(self.overall_penalties)):
+                if self.overall_penalties[peni].start_index >= n_coef:
+                    break
+                elif self.overall_penalties[peni].start_index > start_idx:
+                    self.term_edf.append(self.overall_term_edf[idx])
+                    idx += 1
+                    start_idx = self.overall_penalties[peni].start_index
+                pen_idx += 1
+            self.formula = form
+            super().print_smooth_terms(pen_cutoff)
                         
     def get_reml(self):
         raise NotImplementedError("Not yet supported.")
     
-    def fit(self,max_outer=50,max_inner=50,min_inner=1,conv_tol=1e-7,extend_lambda=True,progress_bar=True,n_cores=10):
+    def fit(self,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,progress_bar=True,n_cores=10):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -691,6 +717,7 @@ class GAMLSS(GAMM):
         # Get GAMLSS penalties
         shared_penalties = embed_shared_penalties(self.formulas)
         gamlss_pen = [pen for pens in shared_penalties for pen in pens]
+        self.overall_penalties = gamlss_pen
 
         # Start with much weaker penalty than for GAMs
         for pen_i in range(len(gamlss_pen)):
@@ -710,7 +737,7 @@ class GAMLSS(GAMM):
         self.__overall_preds = etas
         self.res = wres
         self.edf = total_edf
-        self.term_edf = term_edfs
+        self.overall_term_edf = term_edfs
         self.penalty = penalty
         self.coef_split_idx = coef_split_idx
         self.overall_lvi = LV
@@ -763,9 +790,9 @@ class GAMLSS(GAMM):
         start = 0
         
         end = self.coef_split_idx[0]
-        for pari in range(0,par):
+        for pari in range(1,par+1):
             start = end
-            end += self.coef_split_idx[pari]
+            end += self.formulas[pari].n_coef
         self.lvi = self.overall_lvi[:,start:end]
 
         return super().predict(use_terms, n_dat, alpha, ci, whole_interval, n_ps, seed)
@@ -816,9 +843,9 @@ class GAMLSS(GAMM):
         start = 0
         
         end = self.coef_split_idx[0]
-        for pari in range(0,par):
+        for pari in range(1,par+1):
             start = end
-            end += self.coef_split_idx[pari]
+            end += self.formulas[pari].n_coef
         self.lvi = self.overall_lvi[:,start:end]
 
         return super().predict_diff(dat1, dat2, use_terms, alpha, whole_interval, n_ps, seed)

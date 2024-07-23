@@ -1637,7 +1637,7 @@ def deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs):
                         h_vals.append(d2beta)
 
             hc_idx += Xs[etaj].shape[1]
-        hr_idx += Xs[etaj].shape[1]
+        hr_idx += Xs[etai].shape[1]
     
     hessian = scp.sparse.csc_array((h_vals,(h_rows,h_cols)))
     return np.array(grad).reshape(-1,1),hessian
@@ -1668,25 +1668,27 @@ def newton_coef_smooth(coef,grad,H,S_emb):
     while code != 0:
 
         Lp, Pr, code = cpp_cholP(nH2+eps*scp.sparse.identity(nH2.shape[1],format='csc'))
+
+        if code != 0:
+            # Adjust identity added to nH
+            if eps == 0:
+               eps += 1e-14
+            else:
+               eps *= 2
+            continue
+        
         LVp = compute_Linv(Lp,10)
         LV = apply_eigen_perm(Pr,LVp)
         V = LV.T @ LV
 
-        if code == 0:
-            continue
-        
-        if eps == 0:
-            eps += 1e-14
-        else:
-            eps *= 2
-
     # Undo conditioning.
     V = D@V@D
+    LV = LV@D
 
     # Update coef
     n_coef = coef + (V@pgrad)
 
-    return n_coef,V,eps
+    return n_coef,LV,eps
 
 def correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb):
     """
@@ -1775,7 +1777,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
             # Update coef and perform step size control
             if outer > 0 or inner > 0:
                 # Update Coefficients
-                next_coef,V,eps = newton_coef_smooth(coef,grad,H,S_emb)
+                next_coef,LV,eps = newton_coef_smooth(coef,grad,H,S_emb)
 
                 # Prepare to check convergence
                 prev_llk_cur_pen = c_llk - coef.T@S_emb@coef
@@ -1790,7 +1792,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
                     break # end inner loop and immediately optimize lambda again.
             else:
                 # Simply accept next coef step on first iteration
-                coef,V,_ = newton_coef_smooth(coef,grad,H,S_emb)
+                coef,LV,_ = newton_coef_smooth(coef,grad,H,S_emb)
                 split_coef = np.split(coef,coef_split_idx)
                 etas = [Xs[i]@split_coef[i] for i in range(family.n_par)]
                 mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
@@ -1813,10 +1815,10 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
         prev_pen_llk = c_pen_llk
 
         # Compute cholesky of V without pre-conditioning.
-        LVp, Pr, code = cpp_cholP(scp.sparse.csc_array(V))
-        if code != 0:
-            raise ValueError("Failed to solve cholesky of V.")
-        LV = apply_eigen_perm(Pr,LVp).T
+        #LVp, Pr, code = cpp_cholP(scp.sparse.csc_array(V))
+        #if code != 0:
+        #    raise ValueError("Failed to solve cholesky of V.")
+        #LV = apply_eigen_perm(Pr,LVp).T
         
         # Given new coefficients compute lgdetDs and bsbs - needed for EFS step
         lgdetDs = []
@@ -1849,7 +1851,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
         # and approximate derivative, because we drop the last term involving the derivative of the negative penalized
         # Hessian with respect to the smoothing parameters (see section 4 in Wood & Fasiolo, 2017). However, what we
         # can do is at least undo the acceleration if we over-shoot the approximate derivative...
-        if check[0] < 0:
+        if check[0] < 0 and extend_lambda:
             for lti,lTerm in enumerate(gamlss_pen):
                 if was_extended[lti]:
                     lTerm.lam -= extend_by["acc"][lti]
@@ -1864,5 +1866,8 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
 
     # Total penalty
     penalty = coef.T@S_emb@coef
+
+    # Calculate actual term-specific edf
+    term_edfs = calculate_term_edf(gamlss_pen,term_edfs)
     
     return coef,etas,mus,wres,LV,total_edf,term_edfs,penalty
