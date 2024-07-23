@@ -1732,6 +1732,49 @@ def correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk
     
     return next_coef,next_split_coef,next_mus,next_etas,next_llk,next_pen_llk
     
+def update_coef_gen_smooth(family,mus,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,max_inner,min_inner,conv_tol):
+   """
+   Repeatedly perform Newton update with step length control to the coefficient vector - based on
+   steps outlined by WPS (2016).
+
+   References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+   """
+   # Update coefficients:
+   for inner in range(max_inner):
+      
+      # Get derivatives with respect to eta
+      d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,mus,family)
+
+      # Get derivatives with respect to coef
+      grad,H = deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs)
+
+      # Update coef and perform step size control
+      if outer > 0 or inner > 0:
+         # Update Coefficients
+         next_coef,LV,eps = newton_coef_smooth(coef,grad,H,S_emb)
+
+         # Prepare to check convergence
+         prev_llk_cur_pen = c_llk - coef.T@S_emb@coef
+
+         # Perform step length control
+         coef,split_coef,mus,etas,c_llk,c_pen_llk = correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb)
+
+         if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
+            break
+
+         if eps <= 0 and outer > 0 and inner >= (min_inner-1):
+            break # end inner loop and immediately optimize lambda again.
+      else:
+         # Simply accept next coef step on first iteration
+         coef,LV,_ = newton_coef_smooth(coef,grad,H,S_emb)
+         split_coef = np.split(coef,coef_split_idx)
+         etas = [Xs[i]@split_coef[i] for i in range(family.n_par)]
+         mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
+         c_llk = family.llk(y,*mus)
+         c_pen_llk = c_llk - coef.T@S_emb@coef
+   
+   return coef,split_coef,mus,etas,LV,c_llk,c_pen_llk
     
 def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
                          max_outer=50,max_inner=30,min_inner=1,conv_tol=1e-7,
@@ -1766,38 +1809,10 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
     for outer in iterator:
 
         # Update coefficients:
-        for inner in range(max_inner):
-            
-            # Get derivatives with respect to eta
-            d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,mus,family)
-
-            # Get derivatives with respect to coef
-            grad,H = deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs)
-
-            # Update coef and perform step size control
-            if outer > 0 or inner > 0:
-                # Update Coefficients
-                next_coef,LV,eps = newton_coef_smooth(coef,grad,H,S_emb)
-
-                # Prepare to check convergence
-                prev_llk_cur_pen = c_llk - coef.T@S_emb@coef
-
-                # Perform step length control
-                coef,split_coef,mus,etas,c_llk,c_pen_llk = correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb)
-
-                if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
-                    break
-            
-                if eps <= 0 and outer > 0 and inner >= (min_inner-1):
-                    break # end inner loop and immediately optimize lambda again.
-            else:
-                # Simply accept next coef step on first iteration
-                coef,LV,_ = newton_coef_smooth(coef,grad,H,S_emb)
-                split_coef = np.split(coef,coef_split_idx)
-                etas = [Xs[i]@split_coef[i] for i in range(family.n_par)]
-                mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
-                c_llk = family.llk(y,*mus)
-                c_pen_llk = c_llk - coef.T@S_emb@coef
+        coef,split_coef,mus,etas,LV,c_llk,c_pen_llk = update_coef_gen_smooth(family,mus,y,Xs,coef,
+                                                                             coef_split_idx,S_emb,
+                                                                             c_llk,outer,max_inner,
+                                                                             min_inner,conv_tol)
         
         # Check overall convergence
         if outer > 0:
@@ -1831,6 +1846,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
                 lt_rank = lTerm.rank
 
             lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
+            #print(lgdetD-(LV@lTerm.D_J_emb).power(2).sum())
             dLam = step_fellner_schall_sparse(lgdetD,(LV@lTerm.D_J_emb).power(2).sum(),bsb[0,0],lTerm.lam,1)
             if extend_lambda:
                 dLam,extend_by,was_extended = extend_lambda_step(lti,lTerm.lam,dLam,extend_by,was_extended,"nesterov")
