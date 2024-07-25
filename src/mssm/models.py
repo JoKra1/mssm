@@ -3,7 +3,7 @@ import scipy as scp
 import copy
 from collections.abc import Callable
 from .src.python.formula import Formula,PFormula,PTerm,build_sparse_matrix_from_formula,VarType,lhs,ConstType,Constraint,pd,embed_shared_penalties
-from .src.python.exp_fam import Link,Logit,Identity,LOG,Family,Binomial,Gaussian,GAMLSSFamily,GAUMLSS
+from .src.python.exp_fam import Link,Logit,Identity,LOG,Family,Binomial,Gaussian,GAMLSSFamily,GAUMLSS,Gamma
 from .src.python.sem import anneal_temps_zero,const_temps,compute_log_probs,pre_ll_sms_gamm,se_step_sms_gamm,decode_local,se_step_sms_dc_gamm,pre_ll_sms_IR_gamm,init_states_IR,compute_hsmm_probabilities
 from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2,solve_gammlss_sparse
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
@@ -101,7 +101,7 @@ class GAMM(MSSM):
         self.res = None
         self.edf = None
         self.term_edf = None
-
+        self.Wr = None
         self.lvi = None
         self.penalty = 0
 
@@ -224,14 +224,13 @@ class GAMM(MSSM):
                         
     def get_reml(self):
         """
-        Get's the REML (Restrcited Maximum Likelihood) score for the estimated lambda values (see Wood, 2011).
-        Currently only supported for strictly additive models.
+        Get's the (Laplace approximate) REML (Restricted Maximum Likelihood) score for the estimated lambda values (see Wood, 2011).
 
         References:
          - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models.
         """
-        if not isinstance(self.family,Gaussian):
-            raise TypeError("REML score can currently only be obtained for Gaussian additive models. It can be computed via the REML function in mssm.src.python.utils when H=X.T@W@X is formed manually.")
+        if (not isinstance(self.family,Gaussian) or isinstance(self.family.link,Identity) == False) and self.Wr is None:
+            raise TypeError("Model is not Normal and pseudo-dat weights are not avilable. Call model.fit() first!")
         
         if self.coef is None or self.formula.penalties is None:
             raise ValueError("Model needs to be estimated before evaluating the REML score. Call model.fit()")
@@ -242,9 +241,52 @@ class GAMM(MSSM):
         
         X = self.get_mmat()
         llk = self.get_llk(False)
-        reml = REML(llk,(X.T@X).tocsc(),self.coef,scale,self.formula.penalties)
+
+        # Compute negative Hessian of llk (Wood, 2011)
+        if not isinstance(self.family,Gaussian) or isinstance(self.family.link,Identity) == False:
+            W = self.Wr@self.Wr
+            nH = (X.T@W@X).tocsc() 
+        else:
+            nH = (X.T@X).tocsc() 
+            
+
+        reml = REML(llk,nH,self.coef,scale,self.formula.penalties)
         
         return reml
+    
+    def get_resid(self,type='Pearson'):
+        """
+        Returns the residuals \epsilon_i = y_i - \mu_i for additive models and (by default) the Pearson residuals w_i^{0.5}*(z_i - \eta_i) (see Wood, 2017 sections 3.1.5 & 3.1.7) for
+        generalized additive models. Here w_i are the Fisher scoring weights, z_i the pseudo-data point for each observation, and \eta_i is the linear prediction (i.e., g(\mu_i) - where g()
+        is the link function) for each observation.
+
+        If ``type= "Deviance"``, the deviance residuals are returned, which are equivalent to sign(y_i - \mu_i)*D_i^{0.5}, where \sum_{i=1,...N} D_i equals the model deviance (see Wood 2017, section 3.1.7).
+
+        Throws an error if called before model was fitted.
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+        Parameters:
+
+        :param type: The type of residual to return for a Generalized model, "Pearson" by default, but can be set to "Deviance" as well. Ignorred for additive models with identity link.
+        :type maxiter: str,optional
+        """
+        if self.res is None or self.pred is None:
+            raise ValueError("Model needs to be estimated before evaluating the residuals. Call model.fit()")
+        
+        if type == "Pearson" or (isinstance(self.family,Gaussian) == True and isinstance(self.family.link,Identity) == True):
+            return self.res
+        else:
+            # Deviance residual requires computing quantity D_i, which is the amount each data-point contributes to
+            # overall deviance. Implemented by the family members.
+            mu = self.pred
+            y = self.formula.y_flat[self.formula.NOT_NA_flat]
+
+            if not isinstance(self.family,Gaussian) or isinstance(self.family.link,Identity) == False:
+                mu = self.family.link.fi(mu)
+
+            return np.sign(y - mu) * np.sqrt(self.family.D(y,mu))
                 
     ##################################### Fitting #####################################
     
@@ -341,13 +383,15 @@ class GAMM(MSSM):
             init_mu_flat = self.family.init_mu(y_flat)
 
             # Now we have to estimate the model
-            coef,eta,wres,scale,LVI,edf,term_edf,penalty,fit_info = solve_gamm_sparse(init_mu_flat,y_flat,
+            coef,eta,wres,Wr,scale,LVI,edf,term_edf,penalty,fit_info = solve_gamm_sparse(init_mu_flat,y_flat,
                                                                                       model_mat,penalties,self.formula.n_coef,
                                                                                       self.family,maxiter,"svd",
                                                                                       conv_tol,extend_lambda,control_lambda,
                                                                                       exclude_lambda,extension_method_lam,
                                                                                       len(self.formula.discretize) == 0,
                                                                                       progress_bar,n_cores)
+            
+            self.Wr = Wr
         
         else:
             # Iteratively build model matrix.

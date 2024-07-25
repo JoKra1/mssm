@@ -1,6 +1,7 @@
 import numpy as np
 import scipy as scp
 import math
+import sys
 
 class Link:
    
@@ -131,6 +132,12 @@ class Family:
       """
       pass
 
+   def D(self,y,mu):
+      """
+      Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
+      """
+      pass
+
 class Binomial(Family):
    """
    Dependent variables specified in formula needs to hold proportions.
@@ -169,7 +176,15 @@ class Binomial(Family):
    
    def deviance(self,y,mu):
       D = 2 * (self.__max_llk - self.llk(y,mu))
-      return D[0]
+      return D
+   
+   def D(self,y,mu):
+      # Based on Table 3.1 in Wood (2017)
+      # Adds float_min**0.9 to log terms that could potentially be zero..
+      k = y*self.n
+      kmu = mu*self.n
+      return 2 * (k*(np.log(k + np.power(sys.float_info.min,0.9)) - np.log(kmu)) + (self.n-k) * (np.log(self.n-k + np.power(sys.float_info.min,0.9)) - np.log(self.n-kmu)))
+
 
 class Gaussian(Family):
    def __init__(self, link: Link=Identity(), scale: float = None) -> None:
@@ -190,6 +205,10 @@ class Gaussian(Family):
       res = y - mu
       rss = res.T @ res
       return rss[0,0]
+   
+   def D(self,y,mu):
+      res = y - mu
+      return np.power(res,2)
 
 class Gamma(Family):
    def __init__(self, link: Link= LOG(), scale: float = None) -> None:
@@ -201,23 +220,31 @@ class Gamma(Family):
    
    def lp(self,y,mu,scale=1):
       # Need to transform from mean and scale to \alpha & \beta
+      # From Wood (2017), we have that
+      # \phi = 1/\alpha
+      # so \alpha = 1/\phi
       # From https://en.wikipedia.org/wiki/Gamma_distribution, we have that:
-      # \beta = 1/scale
-      # mean = \alpha/\beta
-      # \alpha = mean*\beta
-      # \alpha = mean/scale
-      # scipy docs, say to set scale to 1/\beta, so we can just set it to scale.
-      # see: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.gamma.html 
-      return scp.stats.gamma.logpdf(y,a=mu/scale,scale=scale)
+      # \mu = \alpha/\beta
+      # \mu = 1/\phi/\beta
+      # \beta = 1/\phi/\mu
+      # scipy docs, say to set scale to 1/\beta.
+      # see: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.gamma.html
+      alpha = 1/scale
+      beta = alpha/mu  
+      return scp.stats.gamma.logpdf(y,a=alpha,scale=(1/beta))
    
    def llk(self,y,mu,scale = 1):
       return sum(self.lp(y,mu,scale))[0]
    
-   def deviance(self,y,mu):
-      # Based on Faraway (2016)
+   def D(self,y,mu):
+      # Based on Table 3.1 in Wood (2017)
       diff = (y - mu)/mu
       ratio = -(np.log(y) - np.log(mu))
-      dev = 2*np.sum(ratio + diff)
+      return 2 * (diff + ratio)
+   
+   def deviance(self,y,mu):
+      # Based on Table 3.1 in Wood (2017)
+      dev = np.sum(self.D(y,mu))
       return dev
 
 class GAMLSSFamily:

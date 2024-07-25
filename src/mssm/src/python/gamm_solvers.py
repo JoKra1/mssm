@@ -512,7 +512,7 @@ def update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,pen
    # are computed as well - they are returned because they are needed for the
    # lambda step proposal anyway.
    
-   # Calculate Pearson residuals for GAMM (Wood, 3.1.7)
+   # Calculate Pearson residuals for GAMM (Wood, 3.1.5 & 3.1.7)
    # Standard residuals for AMM
    if isinstance(family,Gaussian) == False or isinstance(family.link,Identity) == False:
       wres = Wr @ (z - eta)
@@ -1047,7 +1047,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
       InvCholXXSP = compute_Linv(Lp,n_c)
       InvCholXXS = apply_eigen_perm(Pr,InvCholXXSP)
 
-   return coef,eta,wres,scale,InvCholXXS,total_edf,term_edfs,penalty,fit_info
+   return coef,eta,wres,Wr,scale,InvCholXXS,total_edf,term_edfs,penalty,fit_info
 
 ################################################ Iterative GAMM building code ################################################
 
