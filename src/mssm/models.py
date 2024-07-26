@@ -434,7 +434,9 @@ class GAMM(MSSM):
 
         Parameters:
 
-        :param use_post: The indices corresponding to coefficients for which to actually obtain samples.
+        :param use_post: The indices corresponding to coefficients for which to actually obtain samples. By default all coefficients
+        are sampled.
+        :type use_post: [int],optional
         """
         if deviations:
             post = sample_MVN(n_ps,0,self.scale,P=None,L=None,LI=self.lvi,use=use_post,seed=seed)
@@ -822,6 +824,47 @@ class GAMLSS(GAMM):
         self.overall_lvi = LV
         self.__hessian = H
     
+    def sample_post(self, n_ps, use_post=None, deviations=False, seed=None, par=0):
+        """
+        Obtain ``n_ps`` samples from posterior [\boldsymbol{\beta} - \hat{\boldsymbol{\beta}}] | y,\lambda ~ N(0,V),
+        where V is [-H + S_\lambda]^{-1} (see Wood et al., 2016; Wood 2017, section 6.10). H here is the hessian of
+        the penalized likelihood (Wood et al., 2016;). To obtain samples for \boldsymbol{\beta}, simply set ``deviations`` to false.
+
+        see ``sample_MVN`` in ``mssm.src.python.utils.py`` for more details.
+
+        References:
+        - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+        Parameters:
+        
+        :param par: The index corresponding to the parameter for which to make the prediction (e.g., 0 = mean)
+        :type par: int
+        :param use_post: The indices corresponding to coefficients for which to actually obtain samples. By default all coefficients
+        are sampled.
+        :type use_post: [int],optional
+        """
+        # Prepare so that we can just call gamm.sample_post()
+        if self.coef is None: # Prevent problems when this is called from .predict()
+            self.formula = self.formulas[par]
+            split_coef = np.split(self.__overall_coef,self.coef_split_idx)
+            self.coef = np.ndarray.flatten(split_coef[par])
+            self.scale=1
+            start = 0
+            
+            end = self.coef_split_idx[0]
+            for pari in range(1,par+1):
+                start = end
+                end += self.formulas[pari].n_coef
+            self.lvi = self.overall_lvi[:,start:end]
+        
+        post = super().sample_post(n_ps, use_post, deviations, seed)
+
+        # Clean up
+        self.coef = None
+        self.scale = None
+        self.lvi = None
+        return post
 
     def predict(self, par, use_terms, n_dat, alpha=0.05, ci=False, whole_interval=False, n_ps=10000, seed=None):
         """
@@ -865,7 +908,7 @@ class GAMLSS(GAMM):
         # Prepare so that we can just call gamm.predict()
         self.formula = self.formulas[par]
         split_coef = np.split(self.__overall_coef,self.coef_split_idx)
-        self.coef = split_coef[par]
+        self.coef = np.ndarray.flatten(split_coef[par])
         self.scale=1
         start = 0
         
@@ -875,7 +918,14 @@ class GAMLSS(GAMM):
             end += self.formulas[pari].n_coef
         self.lvi = self.overall_lvi[:,start:end]
 
-        return super().predict(use_terms, n_dat, alpha, ci, whole_interval, n_ps, seed)
+        pred = super().predict(use_terms, n_dat, alpha, ci, whole_interval, n_ps, seed)
+
+        # Clean up
+        self.coef = None
+        self.scale = None
+        self.lvi = None
+
+        return pred
     
     def predict_diff(self, dat1, dat2, par, use_terms, alpha=0.05, whole_interval=False, n_ps=10000, seed=None):
         """
@@ -918,7 +968,7 @@ class GAMLSS(GAMM):
         # Prepare so that we can just call gamm.predict_diff()
         self.formula = self.formulas[par]
         split_coef = np.split(self.__overall_coef,self.coef_split_idx)
-        self.coef = split_coef[par]
+        self.coef = np.ndarray.flatten(split_coef[par])
         self.scale=1
         start = 0
         
@@ -928,4 +978,11 @@ class GAMLSS(GAMM):
             end += self.formulas[pari].n_coef
         self.lvi = self.overall_lvi[:,start:end]
 
-        return super().predict_diff(dat1, dat2, use_terms, alpha, whole_interval, n_ps, seed)
+        pred_diff = super().predict_diff(dat1, dat2, use_terms, alpha, whole_interval, n_ps, seed)
+
+        # Clean up
+        self.coef = None
+        self.scale = None
+        self.lvi = None
+
+        return pred_diff
