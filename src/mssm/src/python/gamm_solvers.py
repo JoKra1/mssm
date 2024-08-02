@@ -1614,6 +1614,7 @@ def deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs):
                 d2 = d2meta[mixed_idx]
                 mixed_idx += 1
 
+            #print(etai,etaj,mixed_idx)
                 
             for coefi in range(Xs[etai].shape[1]):
                 for coefj in range(Xs[etaj].shape[1]):
@@ -1627,7 +1628,7 @@ def deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs):
                     # could even skip these loops but that might get a bit tricky with sparse matrix set up- for now
                     # I just leave it like this...
                     d2beta = ((d2*Xs[etai][:,[coefi]]).T @ Xs[etaj][:,[coefj]])[0,0]
-
+                    #print(hr_idx+coefi,hc_idx+coefj)
                     h_rows.append(hr_idx+coefi)
                     h_cols.append(hc_idx+coefj)
                     h_vals.append(d2beta)

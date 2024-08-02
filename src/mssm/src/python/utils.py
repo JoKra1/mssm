@@ -10,7 +10,7 @@ from ..python.exp_fam import Family,Gaussian, Identity
 
 def sample_MVN(n,mu,scale,P,L,LI=None,use=None,seed=None):
     """
-    Draw n samples x from multivariate normal with mean mu and covariance matrix Sigma so that Sigma/scale = LI.T@LI, LI = L^{-1}, and
+    Draw n samples x from multivariate normal with mean ``mu`` and covariance matrix Sigma so that Sigma/scale = LI.T@LI, LI = L^{-1}, and
     finally L@L.T = {Sigma/scale}^{-1}. In other words, L*(1/scale)^{0.5} is the cholesky for the precision matrix corresponding to Sigma.
     Notably, L (and LI) have actually be computed for P@[X.T@X+S_\lambda]@P.T (see Wood \& Fasiolo, 2017), hence for sampling we need to correct
     for permutation matrix ``P``. if ``LI`` is provided, then ``P`` can be omitted and is assumed to have been applied to ``LI already``
@@ -18,15 +18,19 @@ def sample_MVN(n,mu,scale,P,L,LI=None,use=None,seed=None):
     Used to sample the uncorrected posterior \beta|y,\lambda ~ N(\boldsymbol{\beta},(X.T@X+S_\lambda)^{-1}\phi) for a GAMM (see Wood, 2017).
 
     Based on section 7.4 in Gentle (2009), assuming Sigma is p*p and covariance matrix of uncorrected posterior:
+
         x = mu + P.T@LI.T*scale^{0.5}@z where z_i ~ N(0,1) for all i = 1,...,p
 
     Notably, we can rely on the fact of equivalence that:
+
         L.T*(1/scale)^{0.5} @ P@x = z
     
     ...and then first solve for y in:
+
         L.T*(1/scale)^{0.5} @ y = z
     
     ...followed by computing:
+
         y = P@x
         x = P.T@y
     
@@ -42,6 +46,7 @@ def sample_MVN(n,mu,scale,P,L,LI=None,use=None,seed=None):
     If ``mu`` is set to any integer (i.e., not a Numpy array/list) it is treated as 0. 
     
     References:
+
      - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
      - Gentle, J. (2009). Computational Statistics.
     """
@@ -135,8 +140,9 @@ def REML(llk,H,coef,scale,penalties):
    Evaluated after applying stabilizing reparameterization discussed by Wood (2011).
 
    References:
-   - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
-   - Wood, S. N., Pya, N., Saefken, B., (2016). Smoothing Parameter and Model Selection for General Smooth Models
+
+    - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
+    - Wood, S. N., Pya, N., Saefken, B., (2016). Smoothing Parameter and Model Selection for General Smooth Models
    """ 
 
    # Compute S_\lambda before any re-parameterization
@@ -279,10 +285,11 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
     the latter can get very expensive quite quickly.
 
     References:
-    - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
-    - Wood, S. N., Pya, N., Saefken, B., (2016). Smoothing Parameter and Model Selection for General Smooth Models
-    - Greven, S., & Scheipl, F. (2016). Comment on: Smoothing Parameter and Model Selection for General Smooth Models
-    - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+     - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
+     - Wood, S. N., Pya, N., Saefken, B., (2016). Smoothing Parameter and Model Selection for General Smooth Models
+     - Greven, S., & Scheipl, F. (2016). Comment on: Smoothing Parameter and Model Selection for General Smooth Models
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
     """
 
     nPen = len(model.formula.penalties)

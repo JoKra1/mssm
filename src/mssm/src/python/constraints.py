@@ -23,7 +23,8 @@ class Constraint:
   difference re-coding deserves some explanation. Consider the model:
 
   y = f(x)
-    = b_1*f_1(x) + b_2*f_2(x) + b_3*f_3(x) + b_4*f_4(x) + b_5*f_5(x)
+  
+  y = b_1*f_1(x) + b_2*f_2(x) + b_3*f_3(x) + b_4*f_4(x) + b_5*f_5(x)
   
   In ``mssm`` f(x) will be parameterized via five B-spline basis functions f_i(x), each weighted by a coefficient b_i. Each of the f_i(x) has
   support only over a small range of x - resulting in a sparse model matrix X. This desirable property is lost when enforcing the conventional
@@ -31,9 +32,12 @@ class Constraint:
   one can enforce a coefficients-sum-to-zero constraint (Wood, 2020) by re-coding instead:
 
   Set b_1 = -b_2
-  Re-write y = -b_2 * f_1(x) + b_2 * f_2(x) + b_3 * f_3(x) - b_3 * f_2(x) + b_4 * f_4(x) - b_4 * f_3(x) + b_5 * f_5(x) - b_5 * f_4(x)
-             = -b_2 * f_1(x) + (b_2 - b_3) * f_2(x) + (b_3 - b_4) * f_3(x) + (b_4 - b_5) * f_4(x) + b_5 * f_5(x)
-             = b_2 * (f_2(x) - f_1(x)) + b_3 * (f_3(x) - f_2(x)) + b_4 * (f_4(x) - f_3(x)) + b_5 * (f_5(x) - f_4(x))
+
+  Re-write:
+  
+  - y = -b_2 * f_1(x) + b_2 * f_2(x) + b_3 * f_3(x) - b_3 * f_2(x) + b_4 * f_4(x) - b_4 * f_3(x) + b_5 * f_5(x) - b_5 * f_4(x)
+  - y = -b_2 * f_1(x) + (b_2 - b_3) * f_2(x) + (b_3 - b_4) * f_3(x) + (b_4 - b_5) * f_4(x) + b_5 * f_5(x)
+  - y = b_2 * (f_2(x) - f_1(x)) + b_3 * (f_3(x) - f_2(x)) + b_4 * (f_4(x) - f_3(x)) + b_5 * (f_5(x) - f_4(x))
 
   Line 3 shows how the constraint can be absorbed for model fitting by first computing new bases (f_i(x) - f_{i-1}(x)) and then estimating
   the coefficients based on those (this is implemented in mgcv's ``smoothCon`` function when setting ``sparse.cons=2``). Note that the constrained

@@ -3,7 +3,7 @@ import scipy as scp
 import copy
 from collections.abc import Callable
 from .src.python.formula import Formula,PFormula,PTerm,build_sparse_matrix_from_formula,VarType,lhs,ConstType,Constraint,pd,embed_shared_penalties
-from .src.python.exp_fam import Link,Logit,Identity,LOG,Family,Binomial,Gaussian,GAMLSSFamily,GAUMLSS,Gamma
+from .src.python.exp_fam import Link,Logit,Identity,LOG,Family,Binomial,Gaussian,GAMLSSFamily,GAUMLSS,Gamma,MULNOMLSS
 from .src.python.sem import anneal_temps_zero,const_temps,compute_log_probs,pre_ll_sms_gamm,se_step_sms_gamm,decode_local,se_step_sms_dc_gamm,pre_ll_sms_IR_gamm,init_states_IR,compute_hsmm_probabilities
 from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2,solve_gammlss_sparse
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
@@ -65,15 +65,15 @@ class MSSM:
 ##################################### GAMM class #####################################
 
 class GAMM(MSSM):
-    """
-    Class to fit Generalized Additive Mixed Models.
+    """Class to fit Generalized Additive Mixed Models.
 
     References:
-    - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
-    - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models. https://doi.org/10.1111/j.1467-9868.2010.00749.x
-    - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
-    Parameters:
+     - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
+     - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models. https://doi.org/10.1111/j.1467-9868.2010.00749.x
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+    
     :param formula: A formula for the GAMM model
     :type variables: Formula
     :param family: An exponential family. Currently only ``Gaussian`` or ``Binomial`` are implemented.
@@ -112,7 +112,7 @@ class GAMM(MSSM):
         return self.coef,self.scale
     
     def get_llk(self,penalized:bool=True,ext_scale:float or None=None):
-        """Get the (penalized) log-likelihood of the estimated model given the trainings data. LLK can optionally be evaluated for an external scale parameter ``ext_scale``."""
+        """Get the (penalized) log-likelihood of the estimated model (float or None) given the trainings data. LLK can optionally be evaluated for an external scale parameter ``ext_scale``."""
 
         pen = 0
         if penalized:
@@ -173,6 +173,7 @@ class GAMM(MSSM):
         from the model, i.e., it does not contribute meaningfully to the model fit. This can be used as an alternative form of model selection - see Marra & Wood (2011).
 
         References:
+
          - Marra & Wood (2011). Practical variable selection for generalized additive models.
         """
         term_names = np.array(self.formula.get_term_names())
@@ -227,6 +228,7 @@ class GAMM(MSSM):
         Get's the (Laplace approximate) REML (Restricted Maximum Likelihood) score for the estimated lambda values (see Wood, 2011).
 
         References:
+
          - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models.
         """
         if (not isinstance(self.family,Gaussian) or isinstance(self.family.link,Identity) == False) and self.Wr is None:
@@ -265,10 +267,10 @@ class GAMM(MSSM):
         Throws an error if called before model was fitted.
 
         References:
+
          - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
-        Parameters:
-
+    
         :param type: The type of residual to return for a Generalized model, "Pearson" by default, but can be set to "Deviance" as well. Ignorred for additive models with identity link.
         :type maxiter: str,optional
         """
@@ -293,8 +295,6 @@ class GAMM(MSSM):
     def fit(self,maxiter=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=False,extension_method_lam = "nesterov",restart=False,progress_bar=True,n_cores=10):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
-
-        Parameters:
 
         :param maxiter: The maximum number of fitting iterations.
         :type maxiter: int,optional
@@ -430,13 +430,14 @@ class GAMM(MSSM):
         see ``sample_MVN`` in ``mssm.src.python.utils.py`` for more details.
 
         References:
-        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
-        Parameters:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
         :param use_post: The indices corresponding to coefficients for which to actually obtain samples. By default all coefficients
         are sampled.
         :type use_post: [int],optional
+        :returns: An np.array of dimension [n_used_coef,n_ps] containing the posterior samples. Can simply be post-multiplied with model matrix X to generate posterior sample curves.
+        :rtype: [float]
         """
         if deviations:
             post = sample_MVN(n_ps,0,self.scale,P=None,L=None,LI=self.lvi,use=use_post,seed=seed)
@@ -460,8 +461,9 @@ class GAMM(MSSM):
         one. The consequence: 1-alpha% of samples drawn should fall completely within the modified boundaries.
 
         References:
-        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-        - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
+
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
         """
         use_post = None
         if not use_terms is None:
@@ -498,22 +500,32 @@ class GAMM(MSSM):
         return b
 
     def predict(self, use_terms, n_dat,alpha=0.05,ci=False,whole_interval=False,n_ps=10000,seed=None):
-        """
-        Make a prediction using the fitted model for new data ``n_dat`` using only the terms indexed by ``use_terms``.
+        """Make a prediction using the fitted model for new data ``n_dat``.
+         
+        But only using the terms indexed by ``use_terms``. Importantly, predictions and standard errors are always returned on the scale of the linear predictor.
+        When estimating a Generalized Additive Model, the mean predictions and standard errors (often referred to as the 'response'-scale predictions) can be obtained
+        by applying the link inverse function to the predictions and the CI-bounds on the linear predictor scale (DO NOT transform the standard error first and then add it to the
+        transformed predictions - only on the scale of the linear predictor is the standard error additive)::
+
+            gamma_model = GAMM(gamma_formula,Gamma()) # A true GAM
+            gamma_model.fit()
+            # Now get predictions on the scale of the linear predictor
+            pred,_,b = gamma_model.predict(None,new_dat,ci=True)
+            # Then transform to the response scale
+            mu_pred = gamma_model.family.link.fi(pred)
+            mu_upper_CI = gamma_model.family.link.fi(pred + b)
+            mu_lower_CI = gamma_model.family.link.fi(pred - b)
 
         References:
-        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-        - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
 
-        Parameters:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
 
         :param use_terms: The indices corresponding to the terms that should be used to obtain the prediction or ``None``
         in which case all terms will be used.
         :type use_terms: list[int] or None
-        :param n_dat: A pandas DataFrame containing new data for which to make the prediction. Importantly, all variables present in
-        the data used to fit the model also need to be present in this DataFrame. Additionally, factor variables must only include levels
-        also present in the data used to fit the model. If you want to exclude a specific factor from the prediction (for example the factor
-        subject) don't include the terms that involve it in the ``use_terms`` argument.
+        :param n_dat: A pandas DataFrame containing new data for which to make the prediction. Importantly, all variables present in the data used to fit the model also need to be present in this DataFrame. Additionally, factor variables must only include levels
+        also present in the data used to fit the model. If you want to exclude a specific factor from the prediction (for example the factor subject) don't include the terms that involve it in the ``use_terms`` argument.
         :type n_dat: pd.DataFrame
         :param alpha: The alpha level to use for the standard error calculation. Specifically, 1 - (``alpha``/2) will be used to determine the critical cut-off value according to a N(0,1).
         :type alpha: float, optional
@@ -525,14 +537,9 @@ class GAMM(MSSM):
         :type n_ps: int, optional
         :param seed: Can be used to provide a seed for the posterior sampling step in case the point-wise CI is adjusted to behave like a whole-interval CI.
         :type seed: int or None, optional
-
-
-        Returns:
-        :return: A tuple with 3 entries. The first entry is the prediction ``pred`` based on the new data ``n_dat``. The second entry is the model
-        matrix built for ``n_dat`` that was post-multiplied with the model coefficients to obtain ``pred``. The third entry is ``None`` if ``ci``==``False`` else
-        the standard error ``se`` in the prediction.
+        :return: A tuple with 3 entries. The first entry is the prediction ``pred`` based on the new data ``n_dat``. The second entry is the model matrix built for ``n_dat`` that was post-multiplied with the model coefficients to obtain ``pred``.
+        The third entry is ``None`` if ``ci``==``False`` else the standard error ``se`` in the prediction.
         :rtype: tuple
-        
         """
         var_map = self.formula.get_var_map()
         var_keys = var_map.keys()
@@ -594,22 +601,21 @@ class GAMM(MSSM):
         return pred,predi_mat,None
     
     def predict_diff(self,dat1,dat2,use_terms,alpha=0.05,whole_interval=False,n_ps=10000,seed=None):
-        """
-        Get the difference in the predictions for two datasets. Useful to compare a smooth estimated for
-        one level of a factor to the smooth estimated for another level of a factor. In that case, ``dat1`` and
-        ``dat2`` should only differ in the level of said factor.
+        """Get the difference in the predictions for two datasets.
+        
+        Useful to compare a smooth estimated for one level of a factor to the smooth estimated for another
+        level of a factor. In that case, ``dat1`` and ``dat2`` should only differ in the level of said factor.
+        Importantly, predictions and standard errors are again always returned on the scale of the linear predictor - 
+        see the :func:`predict` method for details.
 
         References:
-        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-        - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
-        - ``get_difference`` function from ``itsadug`` R-package: https://rdrr.io/cran/itsadug/man/get_difference.html
 
-        Parameters:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
+         - ``get_difference`` function from ``itsadug`` R-package: https://rdrr.io/cran/itsadug/man/get_difference.html
 
-        :param dat1: A pandas DataFrame containing new data for which to make the prediction. Importantly, all variables present in
-        the data used to fit the model also need to be present in this DataFrame. Additionally, factor variables must only include levels
-        also present in the data used to fit the model. If you want to exclude a specific factor from the prediction (for example the factor
-        subject) don't include the terms that involve it in the ``use_terms`` argument.
+        :param dat1: A pandas DataFrame containing new data for which to make the prediction. Importantly, all variables present in the data used to fit the model also need to be present in this DataFrame. Additionally, factor variables must only include levels
+        also present in the data used to fit the model. If you want to exclude a specific factor from the prediction (for example the factor subject) don't include the terms that involve it in the ``use_terms`` argument.
         :type n_dat: pd.DataFrame
         :param dat2: A second pandas DataFrame for which to also make a prediction. The difference in the prediction between this ``dat1`` will be returned.
         :type dat2: pd.DataFrame
@@ -624,8 +630,6 @@ class GAMM(MSSM):
         :type n_ps: int, optional
         :param seed: Can be used to provide a seed for the posterior sampling step in case the point-wise CI is adjusted to behave like a whole-interval CI.
         :type seed: int or None, optional
-
-        Returns:
         :return: A tuple with 2 entries. The first entry is the predicted difference (between the two data sets ``dat1`` & ``dat2``) ``diff``. The second entry is the standard error ``se`` of the predicted difference. The difference CI is then [``diff`` - ``se``, ``diff`` + ``se``]
         :rtype: tuple
         """
@@ -655,13 +659,14 @@ class GAMLSS(GAMM):
     Class to fit Generalized Additive Mixed Models of Location Scale and Shape.
 
     References:
-    - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
-    - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
-    - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models. https://doi.org/10.1111/j.1467-9868.2010.00749.x
-    - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-    - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+     - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
+     - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
+     - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models. https://doi.org/10.1111/j.1467-9868.2010.00749.x
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
     
-    Parameters:
+    
     :param formulas: A list of formulas for the GAMMLS model
     :type variables: Formula
     :param family: A GAMLSS family. Currently only ``Gaussian`` is implemented.
@@ -677,12 +682,12 @@ class GAMLSS(GAMM):
 
     
     def get_pars(self):
-        """ Returns a list containing the coef vector for each parameter of the distribution. Will contain Nones before fitting."""
+        """ Returns a list containing the coef vector for each parameter of the distribution. Will return None if called before fitting was completed."""
         return self.__overall_coef
     
 
     def get_llk(self,penalized:bool=True):
-        """Get the (penalized) log-likelihood of the estimated model given the trainings data."""
+        """Get the (penalized) log-likelihood of the estimated model given the data used to estimate it."""
 
         pen = 0
         if penalized:
@@ -695,7 +700,7 @@ class GAMLSS(GAMM):
 
     def get_mmat(self):
         """
-        Returns exaclty the model matrices used for fitting as a ``scipy.sparse.csc_array``. Will raise an error when fitting was not completed before calling this function.
+        Returns a list containing exaclty the model matrices used for fitting as a ``scipy.sparse.csc_array``. Will raise an error when fitting was not completed before calling this function.
         """
         Xs = []
         for form in self.formulas:
@@ -713,6 +718,7 @@ class GAMLSS(GAMM):
         from the model, i.e., it does not contribute meaningfully to the model fit. This can be used as an alternative form of model selection - see Marra & Wood (2011).
 
         References:
+
          - Marra & Wood (2011). Practical variable selection for generalized additive models.
         """
         idx = 0
@@ -739,6 +745,7 @@ class GAMLSS(GAMM):
         Get's the Laplcae approximate REML (Restrcited Maximum Likelihood) score for the estimated lambda values (see Wood, 2011).
 
         References:
+
          - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models.
          - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
         """
@@ -754,8 +761,6 @@ class GAMLSS(GAMM):
     def fit(self,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,progress_bar=True,n_cores=10):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
-
-        Parameters:
 
         :param max_outer: The maximum number of fitting iterations.
         :type max_outer: int,optional
@@ -810,6 +815,9 @@ class GAMLSS(GAMM):
                             *[np.ones((self.formulas[ix].n_coef)).reshape(-1,1) for ix in range(1,self.family.n_par)]))
         coef_split_idx = form_n_coef[:-1]
 
+        for coef_i in range(1,len(coef_split_idx)):
+            coef_split_idx[coef_i] += coef_split_idx[coef_i-1]
+
         coef,etas,mus,wres,H,LV,total_edf,term_edfs,penalty = solve_gammlss_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,
                                                                                  gamlss_pen,max_outer,max_inner,min_inner,conv_tol,
                                                                                  extend_lambda,progress_bar,n_cores)
@@ -833,16 +841,17 @@ class GAMLSS(GAMM):
         see ``sample_MVN`` in ``mssm.src.python.utils.py`` for more details.
 
         References:
-        - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
-        Parameters:
-        
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
         :param par: The index corresponding to the parameter for which to make the prediction (e.g., 0 = mean)
         :type par: int
         :param use_post: The indices corresponding to coefficients for which to actually obtain samples. By default all coefficients
         are sampled.
         :type use_post: [int],optional
+        :returns: An np.array of dimension [n_used_coef,n_ps] containing the posterior samples. Can simply be post-multiplied with model matrix X to generate posterior sample curves.
+        :rtype: [float]
         """
         # Prepare so that we can just call gamm.sample_post()
         if self.coef is None: # Prevent problems when this is called from .predict()
@@ -870,21 +879,36 @@ class GAMLSS(GAMM):
         """
         Make a prediction using the fitted model for new data ``n_dat`` using only the terms indexed by ``use_terms`` and for distribution parameter ``par``.
 
-        References:
-        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-        - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
+        Importantly, predictions and standard errors are always returned on the scale of the linear predictor. For the Gaussian GAMMLSS model, the 
+        predictions for the standard deviation will thus reflect the log of the standard deviation. To get the predictions on the standard deviation scale,
+        one can apply the inverse log-link function to the predictions and the CI-bounds on the scale of the respective linear predictor.::
 
-        Parameters:
+            model = GAMLSS(formulas,GAUMLSS([Identity(),LOG()])) # Fit a Gaussian GAMMLSS model
+            model.fit()
+            # Mean predictions don't have to be transformed since the Identity link is used for this predictor.
+            mu_mean,_,b_mean = model.predict(0,None,new_dat,ci=True)
+            mean_upper_CI = mu_mean + b_mean
+            mean_lower_CI = mu_mean - b_mean
+            # Standard deviation predictions do have to be transformed - by default they are on the log-scale.
+            eta_sd,_,b_sd = model.predict(1,None,new_dat,ci=True)
+            mu_sd = model.family.links[1].fi(eta_sd) # Index to `links` is 1 because the sd is the second parameter!
+            sd_upper_CI = model.family.links[1].fi(eta_sd + b_sd)
+            sd_lower_CI = model.family.links[1].fi(eta_sd - b_sd)
+
+        Standard errors cannot currently be computed for Multinomial GAMMLSS models - attempting to set ``ci=True`` for such a model will result in an error.
+
+        References:
+
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
 
         :param par: The index corresponding to the parameter for which to make the prediction (e.g., 0 = mean)
         :type par: int
         :param use_terms: The indices corresponding to the terms that should be used to obtain the prediction or ``None``
         in which case all terms will be used.
         :type use_terms: list[int] or None
-        :param n_dat: A pandas DataFrame containing new data for which to make the prediction. Importantly, all variables present in
-        the data used to fit the model also need to be present in this DataFrame. Additionally, factor variables must only include levels
-        also present in the data used to fit the model. If you want to exclude a specific factor from the prediction (for example the factor
-        subject) don't include the terms that involve it in the ``use_terms`` argument.
+        :param n_dat: A pandas DataFrame containing new data for which to make the prediction. Importantly, all variables present in the data used to fit the model also need to be present in this DataFrame. Additionally, factor variables must only include levels
+        also present in the data used to fit the model. If you want to exclude a specific factor from the prediction (for example the factor subject) don't include the terms that involve it in the ``use_terms`` argument.
         :type n_dat: pd.DataFrame
         :param alpha: The alpha level to use for the standard error calculation. Specifically, 1 - (``alpha``/2) will be used to determine the critical cut-off value according to a N(0,1).
         :type alpha: float, optional
@@ -896,16 +920,15 @@ class GAMLSS(GAMM):
         :type n_ps: int, optional
         :param seed: Can be used to provide a seed for the posterior sampling step in case the point-wise CI is adjusted to behave like a whole-interval CI.
         :type seed: int or None, optional
-
-
-        Returns:
-        :return: A tuple with 3 entries. The first entry is the prediction ``pred`` based on the new data ``n_dat``. The second entry is the model
-        matrix built for ``n_dat`` that was post-multiplied with the model coefficients to obtain ``pred``. The third entry is ``None`` if ``ci``==``False`` else
-        the standard error ``se`` in the prediction.
+        :raises ValueError: An error is raised in case the standard error is to be computed for a Multinomial GAMMLSS model, which is currently not supported.
+        :return: A tuple with 3 entries. The first entry is the prediction ``pred`` based on the new data ``n_dat``. The second entry is the model matrix built for ``n_dat`` that was post-multiplied with the model coefficients to obtain ``pred``.
+        The third entry is ``None`` if ``ci``==``False`` else the standard error ``se`` in the prediction.
         :rtype: tuple
-        
         """
-        # Prepare so that we can just call gamm.predict()
+        if isinstance(self.family,MULNOMLSS) and ci == True:
+            raise ValueError("Standard error computation for Multinomial model is not currently supported.")
+        
+        # Prepare so that we can just call gamm.predict()    
         self.formula = self.formulas[par]
         split_coef = np.split(self.__overall_coef,self.coef_split_idx)
         self.coef = np.ndarray.flatten(split_coef[par])
@@ -931,28 +954,26 @@ class GAMLSS(GAMM):
         """
         Get the difference in the predictions for two datasets and for distribution parameter ``par``. Useful to compare a smooth estimated for
         one level of a factor to the smooth estimated for another level of a factor. In that case, ``dat1`` and
-        ``dat2`` should only differ in the level of said factor.
+        ``dat2`` should only differ in the level of said factor. Importantly, predictions and standard errors are again always returned on the scale of the linear predictor - 
+        see the :func:`predict` method for details.
 
         References:
-        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-        - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
-        - ``get_difference`` function from ``itsadug`` R-package: https://rdrr.io/cran/itsadug/man/get_difference.html
 
-        Parameters:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
+         - ``get_difference`` function from ``itsadug`` R-package: https://rdrr.io/cran/itsadug/man/get_difference.html
 
-        :param dat1: A pandas DataFrame containing new data for which to make the prediction. Importantly, all variables present in
-        the data used to fit the model also need to be present in this DataFrame. Additionally, factor variables must only include levels
-        also present in the data used to fit the model. If you want to exclude a specific factor from the prediction (for example the factor
-        subject) don't include the terms that involve it in the ``use_terms`` argument.
-        :type n_dat: pd.DataFrame
-        :param dat2: A second pandas DataFrame for which to also make a prediction. The difference in the prediction between this ``dat1`` will be returned.
+        :param dat1: A pandas DataFrame containing new data for which to make the prediction. Importantly, all variables present in the data used to fit the model also need to be present in this DataFrame. Additionally, factor variables must only include levels also present
+        in the data used to fit the model. If you want to exclude a specific factor from the prediction (for example the factor subject) don't include the terms that involve it in the `use_terms` argument.
+        :type dat1: pd.DataFrame
+        :param dat2: A second pandas DataFrame for which to also make a prediction. The difference in the prediction between this `dat1` will be returned.
         :type dat2: pd.DataFrame
         :param par: The index corresponding to the parameter for which to make the prediction (e.g., 0 = mean)
         :type par: int
         :param use_terms: The indices corresponding to the terms that should be used to obtain the prediction or ``None``
         in which case all terms will be used.
         :type use_terms: list[int] or None
-        :param alpha: The alpha level to use for the standard error calculation. Specifically, 1 - (``alpha``/2) will be used to determine the critical cut-off value according to a N(0,1).
+        :param alpha: The alpha level to use for the standard error calculation. Specifically, 1 - (`alpha`/2) will be used to determine the critical cut-off value according to a N(0,1).
         :type alpha: float, optional
         :param whole_interval: Whether or not to adjuste the point-wise CI to behave like whole-interval (based on Wood, 2017; section 6.10.2 and Simpson, 2016). Defaults to False.
         :type whole_interval: bool, optional
@@ -960,8 +981,6 @@ class GAMLSS(GAMM):
         :type n_ps: int, optional
         :param seed: Can be used to provide a seed for the posterior sampling step in case the point-wise CI is adjusted to behave like a whole-interval CI.
         :type seed: int or None, optional
-
-        Returns:
         :return: A tuple with 2 entries. The first entry is the predicted difference (between the two data sets ``dat1`` & ``dat2``) ``diff``. The second entry is the standard error ``se`` of the predicted difference. The difference CI is then [``diff`` - ``se``, ``diff`` + ``se``]
         :rtype: tuple
         """

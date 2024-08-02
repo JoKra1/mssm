@@ -17,9 +17,9 @@ def compare_CDL(model1:GAMM,
                 grid='JJJ',
                 verbose=False):
     
-    """
-    (Optionally) performs an approximate GLRT on twice the difference in unpenalized likelihood between model1 and model2 (see Wood, 2017). Also computes the AIC difference (see Wood et al., 2016).
-    For the GLRT to be appropriate model1 should be set to the model containing more effects and model2 should be a nested, simpler, variant of model1.
+    """(Optionally) performs an approximate GLRT on twice the difference in unpenalized likelihood between ``model1`` and ``model2`` (see Wood, 2017).
+    
+    Also computes the AIC difference (see Wood et al., 2016). For the GLRT to be appropriate model1 should be set to the model containing more effects and model2 should be a nested, simpler, variant of model1.
     
     For the degrees of freedom for the test, the expected degrees of freedom (EDF) of each model are used (i.e., this is the conditional test discussed in Wood (2017: 6.12.4)).
     The difference between the models in EDF serves as DoF for computing the Chi-Square statistic. Similarly, for each model 2*edf is added to twice the negative (conditional) likelihood to
@@ -37,12 +37,25 @@ def compare_CDL(model1:GAMM,
     (see Wood, 2017: 6.12.4).
 
     References:
+    
      - Marra, G., & Wood, S. N. (2011) Practical variable selection for generalized additive models.
      - Wood, S. N., Pya, N., Saefken, B., (2016). Smoothing Parameter and Model Selection for General Smooth Models
      - Greven, S., & Scheipl, F. (2016). Comment on: Smoothing Parameter and Model Selection for General Smooth Models
      - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
      - ``compareML`` function from ``itsadug`` R-package: https://rdrr.io/cran/itsadug/man/compareML.html
      - ``anova.gam`` function from ``mgcv``, see: https://www.rdocumentation.org/packages/mgcv/versions/1.9-1/topics/anova.gam
+
+    :param model1: GAMM model 1.
+    :type model1: GAMM
+    :param model2: GAMM model 2.
+    :type model2: GAMM
+    :param alpha: alpha level of the GLRT.
+    :type model1: GAMM
+    :raises ValueError: If both models are from different families.
+    :raises ValueError: If ``perform_GLRT=True`` and ``model1`` has fewer coef than ``model2`` - i.e., ``model1`` has to be the notationally more complex one.
+    :return: A dictionary with outcomes of all tests. Key ``H1`` will be a bool indicating whether Null hypothesis was rejected or not, ``p`` will be the p-value, ``chi^2`` will be the test statistic used,
+    ``Res. DOF`` will be the degrees of freedom used by the test, ``aic1`` and ``aic2`` will be the aic scores for both models.
+    :rtype: dict
     """
 
     if type(model1.family) != type(model2.family):
