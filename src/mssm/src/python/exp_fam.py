@@ -744,7 +744,7 @@ class GAMLSSFamily:
       self.d2m = [] # list with functions to evaluate mixed second derivative of llk. Order is 12,13,1k,23,24,...
       self.mean_init_fam:Family or None = None # Family to fit for the mean model to initialize coef.
 
-   def llk(self,y,*args):
+   def llk(self,y,*mus):
       """log-probability of data under given model. Essentially sum over all elements in the vector returned by the ``lp`` method.
 
       References:
@@ -753,15 +753,15 @@ class GAMLSSFamily:
 
       :param y: The vector containing each observation.
       :type y: [float]
-      :param args: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains
+      :param mus: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains
       the expected value for a particular parmeter for each of the N observations.
-      :type args: [[float]]
+      :type mus: [[float]]
       :return: The log-probability of observing all data under the current model.
       :rtype: float
       """
       pass
    
-   def lp(self,y,*args):
+   def lp(self,y,*mus):
       """Log-probability of observing every proportion in y under their respective Gamma with mean=\mu.
 
       References:
@@ -770,13 +770,33 @@ class GAMLSSFamily:
 
       :param y: The vector containing each observed value.
       :type y: [float]
-      :param args: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains
+      :param mus: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains
       the expected value for a particular parmeter for each of the N observations.
-      :type args: [[float]]
+      :type mus: [[float]]
       :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
       :rtype: [float]
       """
       pass
+
+   def get_resid(self,y,*mus):
+      """Get standardized residuals for a GAMMLSS model (Rigby & Stasinopoulos, 2005).
+
+      References:
+
+       - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+
+      :param y: The vector containing each observed value.
+      :type y: [float]
+      :param mus: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains
+      the expected value for a particular parmeter for each of the N observations.
+      :type mus: [[float]]
+      :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
+      :rtype: [float]
+      """
+      pass
+
 
 class GAUMLSS(GAMLSSFamily):
    """Family for a Normal GAMMLSS model (Rigby & Stasinopoulos, 2005).
@@ -841,6 +861,26 @@ class GAUMLSS(GAMLSSFamily):
       :rtype: float
       """
       return sum(self.lp(y,mu,sigma))[0]
+   
+   def get_resid(self,y,mu,sigma):
+      """Get standardized residuals for a Normal GAMMLSS model (Rigby & Stasinopoulos, 2005).
+      
+      Essentially, each residual should reflect a realization of a normal with mean zero and observation-specific standard deviation.
+      After scaling each residual by their observation-specific standard deviation we should end up with standardized
+      residuals that can be expected to be i.i.d N(0,1) - assuming that our model is correct.
+
+      :param y: The vector containing each observation.
+      :type y: [float]
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      :param sigma: The vector containing the predicted stdandard deviation for the response distribution corresponding to each observation.
+      :type sigma: [float]
+      :return: A list of standardized residuals that should be ~ N(0,1) if the model is correct.
+      :rtype: [float]
+      """
+      res = y - mu
+      res /= sigma
+      return res
 
 class MULNOMLSS(GAMLSSFamily):
    """Family for a Multinomial GAMMLSS model (Rigby & Stasinopoulos, 2005).
@@ -940,6 +980,8 @@ class MULNOMLSS(GAMLSSFamily):
       """
       return sum(self.lp(y,*mus))[0]
    
+   def get_resid(self,y,*mus):
+      pass
 
 class GAMMALS(GAMLSSFamily):
    """Family for a GAMMA GAMMLSS model (Rigby & Stasinopoulos, 2005).
@@ -1015,3 +1057,29 @@ class GAMMALS(GAMLSSFamily):
       :rtype: float
       """
       return sum(self.lp(y,mu,scale))[0]
+   
+   def get_resid(self,y,mu,scale):
+      """Get standardized residuals for a Gamma GAMMLSS model (Rigby & Stasinopoulos, 2005).
+      
+      Essentially, to get a standaridzed residual vector we first have to account for the mean-variance relationship of our RVs
+      (which we also have to do for the :class:`Gamma` family) - for this we can simply compute deviance residuals again (see Wood, 2017).
+      These should be ~ N(0,\scale) - so if we divide each of those by the observation-specific scale we can expect the resulting
+      standardized residuals to be ~ N(0,1) if the model is correct.
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+
+      :param y: The vector containing each observation.
+      :type y: [float]
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      :param scale: The vector containing the predicted scale parameter for the response distribution corresponding to each observation.
+      :type scale: [float]
+      :return: A list of standardized residuals that should be ~ N(0,1) if the model is correct.
+      :rtype: [float]
+      """
+      res = np.sign(y - mu) * np.sqrt(Gamma().D(y,mu))
+      res /= scale
+      return res

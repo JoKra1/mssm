@@ -656,7 +656,7 @@ class GAMM(MSSM):
 
 class GAMLSS(GAMM):
     """
-    Class to fit Generalized Additive Mixed Models of Location Scale and Shape.
+    Class to fit Generalized Additive Mixed Models of Location Scale and Shape (see Rigby & Stasinopoulos, 2005).
 
     References:
 
@@ -676,14 +676,15 @@ class GAMLSS(GAMM):
         super().__init__(formulas[0], family)
         self.formulas = copy.deepcopy(formulas) # self.formula can hold formula for single parameter later on for predictions.
         self.overall_lvi = None
-        self.__overall_coef = None
-        self.__overall_preds = None # etas
+        self.overall_coef = None
+        self.overall_preds = None # etas
         self.overall_penalties = None
+        self.overall_mus = None # Expected values for each parameter of response distribution
 
     
     def get_pars(self):
         """ Returns a list containing the coef vector for each parameter of the distribution. Will return None if called before fitting was completed."""
-        return self.__overall_coef
+        return self.overall_coef
     
 
     def get_llk(self,penalized:bool=True):
@@ -692,8 +693,8 @@ class GAMLSS(GAMM):
         pen = 0
         if penalized:
             pen = self.penalty
-        if self.__overall_preds is not None:
-            mus = [self.family.links[i].fi(self.__overall_preds[i]) for i in range(self.family.n_par)]
+        if self.overall_preds is not None:
+            mus = [self.family.links[i].fi(self.overall_preds[i]) for i in range(self.family.n_par)]
             return self.family.llk(self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat],*mus) - pen
 
         return None
@@ -750,14 +751,43 @@ class GAMLSS(GAMM):
          - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
         """
 
-        if self.__overall_coef is None or self.__hessian is None:
+        if self.overall_coef is None or self.__hessian is None:
             raise ValueError("Model needs to be estimated before evaluating the REML score. Call model.fit()")
         
         llk = self.get_llk(False)
         
-        reml = REML(llk,-1*self.__hessian,self.__overall_coef,1,self.overall_penalties)
+        reml = REML(llk,-1*self.__hessian,self.overall_coef,1,self.overall_penalties)
         return reml
     
+    def get_resid(self):
+        """ Returns standarized residuals for GAMMLSS models (Rigby & Stasinopoulos, 2005).
+
+        The computation of the residual vector will differ a lot between different GAMMLSS models and is thus implemented
+        as a method by each GAMMLSS family. These should be consulted to get more details. In general, if the
+        model is specified correctly, the returned vector should approximately look like what could be expected from
+        taking N independent samples from N(0,1)
+
+        References:
+         
+         - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+
+        :raises ValueError: An error is raised in case the residuals are to be computed for a Multinomial GAMMLSS model, which is currently not supported.
+        :raises ValueError: An error is raised in case the residuals are requested before the model has been fit.
+        :return: A list of standardized residuals that should be ~ N(0,1) if the model is correct.
+        :rtype: [float]
+        """
+
+        if self.overall_coef is None or self.__hessian is None:
+            raise ValueError("Model needs to be estimated before evaluating the residuals. Call model.fit()")
+
+        if isinstance(self.family,MULNOMLSS):
+            raise ValueError("Residual computation for Multinomial model is not currently supported.")
+        
+        return self.family.get_resid(self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat],*self.overall_mus)
+        
+
     def fit(self,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,progress_bar=True,n_cores=10):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
@@ -822,8 +852,9 @@ class GAMLSS(GAMM):
                                                                                  gamlss_pen,max_outer,max_inner,min_inner,conv_tol,
                                                                                  extend_lambda,progress_bar,n_cores)
         
-        self.__overall_coef = coef
-        self.__overall_preds = etas
+        self.overall_coef = coef
+        self.overall_preds = etas
+        self.overall_mus = mus
         self.res = wres
         self.edf = total_edf
         self.overall_term_edf = term_edfs
@@ -856,7 +887,7 @@ class GAMLSS(GAMM):
         # Prepare so that we can just call gamm.sample_post()
         if self.coef is None: # Prevent problems when this is called from .predict()
             self.formula = self.formulas[par]
-            split_coef = np.split(self.__overall_coef,self.coef_split_idx)
+            split_coef = np.split(self.overall_coef,self.coef_split_idx)
             self.coef = np.ndarray.flatten(split_coef[par])
             self.scale=1
             start = 0
@@ -930,7 +961,7 @@ class GAMLSS(GAMM):
         
         # Prepare so that we can just call gamm.predict()    
         self.formula = self.formulas[par]
-        split_coef = np.split(self.__overall_coef,self.coef_split_idx)
+        split_coef = np.split(self.overall_coef,self.coef_split_idx)
         self.coef = np.ndarray.flatten(split_coef[par])
         self.scale=1
         start = 0
@@ -981,12 +1012,16 @@ class GAMLSS(GAMM):
         :type n_ps: int, optional
         :param seed: Can be used to provide a seed for the posterior sampling step in case the point-wise CI is adjusted to behave like a whole-interval CI.
         :type seed: int or None, optional
+        :raises ValueError: An error is raised in case the predicted difference is to be computed for a Multinomial GAMMLSS model, which is currently not supported.
         :return: A tuple with 2 entries. The first entry is the predicted difference (between the two data sets ``dat1`` & ``dat2``) ``diff``. The second entry is the standard error ``se`` of the predicted difference. The difference CI is then [``diff`` - ``se``, ``diff`` + ``se``]
         :rtype: tuple
         """
+        if isinstance(self.family,MULNOMLSS):
+            raise ValueError("Standard error computation for Multinomial model is not currently supported.")
+        
         # Prepare so that we can just call gamm.predict_diff()
         self.formula = self.formulas[par]
-        split_coef = np.split(self.__overall_coef,self.coef_split_idx)
+        split_coef = np.split(self.overall_coef,self.coef_split_idx)
         self.coef = np.ndarray.flatten(split_coef[par])
         self.scale=1
         start = 0
