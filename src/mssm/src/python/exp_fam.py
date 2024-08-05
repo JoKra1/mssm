@@ -939,3 +939,79 @@ class MULNOMLSS(GAMLSSFamily):
       :rtype: float
       """
       return sum(self.lp(y,*mus))[0]
+   
+
+class GAMMALS(GAMLSSFamily):
+   """Family for a GAMMA GAMMLSS model (Rigby & Stasinopoulos, 2005).
+
+   This Family follows the :class:`Gamma` family, in that we assume: Y_i \sim \Gamma(\mu_i,\phi_i). The difference to the :class:`Gamma` family
+   is that we now also model \phi as an additive combination of smooth variables and other parametric terms. The Gamma distribution is usually
+   not expressed in terms of the mean and scale (\phi) parameter but rather in terms of a shape and rate parameter - called \alpha and \beta
+   respectively. Wood (2017) provides \alpha = 1/\phi. With this we can obtain \beta = 1/\phi/\mu (see the source-code for :func:`lp` method
+   of the :class:`Gamma` family for details).
+
+   References:
+
+    - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
+    - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+
+   :param links: Link functions for the mean and standard deviation. Standard would be `links=[LOG(),LOG()]`.
+   :type links: [Link]
+   """
+
+   def __init__(self,links: [Link]) -> None:
+      super().__init__(2, links)
+      # All derivatives based on gamlss.dist: https://github.com/gamlss-dev/gamlss.dist, but adjusted so that \phi (the scale) is \sigma^2.
+      # see also: Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
+      self.d1 = [lambda y, mu, scale: (y-mu)/(scale*np.power(mu,2)),lambda y, mu, scale: (2/(scale*np.sqrt(scale)))*((y/mu)-np.log(y)+np.log(mu)+np.log(scale)-1+scp.special.digamma(1/(scale)))]
+      self.d2 = [lambda y, mu, scale:  -1/(scale*np.power(mu,2)), lambda y, mu, scale: (4/np.power(scale,2))-(4/np.power(scale,3))*scp.special.polygamma(1,1/scale)]
+      self.d2m = [lambda y, mu, scale: np.zeros_like(y)]
+      self.mean_init_fam = Gamma()
+   
+   def lp(self,y,mu,scale):
+      """Log-probability of observing every proportion in y under their respective Gamma with mean=\mu and scale=\phi.
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param y: The vector containing each observed value.
+      :type y: [float]
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      :param scale: The vector containing the predicted scale parameter for the response distribution corresponding to each observation.
+      :type scale: [float]
+      :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
+      :rtype: [float]
+      """
+      # Need to transform from mean and scale to \alpha & \beta
+      # From Wood (2017), we have that
+      # \phi = 1/\alpha
+      # so \alpha = 1/\phi
+      # From https://en.wikipedia.org/wiki/Gamma_distribution, we have that:
+      # \mu = \alpha/\beta
+      # \mu = 1/\phi/\beta
+      # \beta = 1/\phi/\mu
+      # scipy docs, say to set scale to 1/\beta.
+      # see: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.gamma.html
+      alpha = 1/scale
+      beta = alpha/mu  
+      return scp.stats.gamma.logpdf(y,a=alpha,scale=(1/beta))
+   
+   def llk(self,y,mu,scale):
+      """log-probability of data under given model. Essentially sum over all elements in the vector returned by the ``lp`` method.
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param y: The vector containing each observation.
+      :type y: [float]
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      :param scale: The vector containing the predicted scale parameter for the response distribution corresponding to each observation.
+      :type scale: [float]
+      :return: The log-probability of observing all data under the current model.
+      :rtype: float
+      """
+      return sum(self.lp(y,mu,scale))[0]
