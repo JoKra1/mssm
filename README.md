@@ -7,6 +7,8 @@
 
 ``mssm`` is a toolbox to estimate Generalized Additive Mixed Models (GAMMs), Generalized Additive Mixed Models of Location Scale and Shape (GAMMLSS), and more general smooth models such as semi Markov-switching GAMMs (sMs-GAMMs; experimental) and sMs Impulse Response GAMMs (sMs-IR-GAMMs; experimental). The ``main`` branch is updated frequently to reflect new developments. The ``stable`` branch should reflect the latest releases. If you don't need the newest functionality, you should install from the ``stable`` branch (see below for instructions).
 
+Plotting code to visualize and validate `mssm` models is provided in this [repository](https://github.com/JoKra1/mssm_tutorials) together with a tutorial for `mssm`!
+
 ## Installation
 
 The easiest option is to install from pypi via ``pip``.
@@ -23,7 +25,7 @@ pip install mssm
 pip install matplotlib # Only needed for tutorials
 ```
 
-The fourth line, installing ``matplotlib`` is only necessary if you want to run the tutorials. Note: pypi will only reflect releases (Basically, the state of the stable branch). If you urgently need a feature currently only available on the main branch, consider building from source.
+The fourth line, installing ``matplotlib`` is only necessary if you want to run the tutorial. Note: pypi will only reflect releases (Basically, the state of the stable branch). If you urgently need a feature currently only available on the main branch, consider building from source.
 
 ### Building from source
 
@@ -33,10 +35,6 @@ You can also build directly from source. This requires ``conda`` or an installat
 ```
 pip install .
 ```
-
-## To get started
-
-Take a look at the tutorials provided in this [repository](https://github.com/JoKra1/mssm_tutorials)!
 
 ## Contributing
 

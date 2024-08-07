@@ -369,10 +369,10 @@ class Family:
 
 class Binomial(Family):
    """
-   Binomial family. For this implementation we assume that we have collected proportions of success, i.e., the dependent variables specified in the model Formula needs to hold observed proportions and not counts!
-   If we assume that each observation reflects a single independent draw from a binomial, (``n=1``) then the dependent variable should either hold 1 or 0. If we have multiple independent draws
-   from the binomial per observation, then ``n`` should be a vector, reflecting the number of draws per observation so that p_i*n_i = k_i, where k_i is the number of successes and p_i is the observed
-   proportion for observation i. 0 <= p_i <= 1 for all i.
+   Binomial family. For this implementation we assume that we have collected proportions of success, i.e., the dependent variables specified in the model `Formula` needs to hold observed proportions and not counts!
+   If we assume that each observation $y_i$ reflects a single independent draw from a binomial, (with $n=1$, and $p_i$ being the probability that the result is 1) then the dependent variable should either hold 1 or 0.
+   If we have multiple independent draws from the binomial per observation (i.e., row in our data-frame), then $n$ will usually differ between observations/rows in our data-frame (i.e., we observe $k_i$ counts of success
+   out of $n_i$ draws - so that $y_i=k_i/n_i$). In that case, the `Binomial()` family accepts a vector for argument `n` (which is simply set to 1 by default, assuming binary data), containing $n_i$ for every observation $y_i$.
 
    By default the scale parameter is kept fixed/known at 1, but setting ``scale=None`` allows to estimate it.
 
@@ -384,6 +384,8 @@ class Binomial(Family):
    :type link: Link
    :param scale: Known scale parameter for this family - by default set to 1.
    :type scale: float or None, optional
+   :param n: Number of independent draws from a Binomial per observation/row of data-frame. For binary data this can simply be set to 1, which is the default.
+   :type n: int or [int], optional
    """
    
    def __init__(self, link: Link=Logit(), scale: float = 1, n: int or [int] = 1) -> None:
@@ -610,7 +612,7 @@ class Gamma(Family):
 
     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
-   :param link: The link function to be used by the model of the mean of this family. By default set to the canonical identity link.
+   :param link: The link function to be used by the model of the mean of this family. By default set to the log link.
    :type link: Link
    :param scale: Known scale parameter for this family - by default set to None so that the scale parameter is estimated.
    :type scale: float or None, optional

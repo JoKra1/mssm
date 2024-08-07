@@ -127,7 +127,7 @@ def compare_CDL(model1:GAMM,
         H1 = p <= alpha
 
     # Also correct AIC for GAM (see Wood et al., 2017)
-    if correct_t1:
+    if correct_V and correct_t1:
         aic1 = -2*llk1 + 2*aic_DOF1
         aic2 = -2*llk2 + 2*aic_DOF2
     else:
