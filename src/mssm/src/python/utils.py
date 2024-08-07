@@ -346,8 +346,13 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
     provided covering the prior on \lambda (see Wood 2011 for the relation between smoothness penalties and this prior). For ``mssm`` the
     limits on this are 1e-7 and 1e7. However, as the authors already conclude, covering the entire prior range is not that efficient.
     Hence we provide an alternative way to set-up the grid, based on first forming marginal grids for each \lambda that contain nR equally-spaced
-    samples from \lambda/lr to \lambda*lr. This is done when argument grid_type = 'JJJ'. Otherwise, the G&S strategy is employed - forming a grid over
-    the full space (from 1e-7 to 1e7, again evaluated for nR equally-spaced values and then permuted for the number of \lambda parameters). Note that
+    samples from \lambda/lr to \lambda*lr, while all other lambda values remain fixed at their estimated values. This neglects quite a bit
+    of the prior space (since we never explore uncertainty associated with varying multiple lambda parameters). To adjust for this - in a cost
+    efficient manner - we additionally create all possible permutations of the marginal \lambda grids. However, instead of exploring them all -
+    which would again result in a complexity explosion - we only evaluate a random sub-set of those.
+    
+    This is done when argument grid_type = 'JJJ'. Otherwise, the G&S strategy is employed - forming a grid over the full space (from 1e-7 to 1e7,
+    again evaluated for nR equally-spaced values and then permuted for the number of \lambda parameters). Note that
     the latter can get very expensive quite quickly.
 
     References:
@@ -367,9 +372,28 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
         rGrid = np.array(list(product(*rGrid)))
     else:
         # Set up grid of nR equidistant values based on marginal grids that cover range from \lambda/lr to \lambda*lr
-        rGrid = [np.exp(np.linspace(np.log(max([1e-7,pen.lam/lR])),np.log(min([1e7,pen.lam*lR])),nR))for pen in rPen]
-        rGrid = np.array(list(product(*rGrid)))
+        # conditional on all estimated penalty values except the current one.
+        
+        rGrid = []
+        for pi,pen in enumerate(rPen):
+            
+            # Set up marginal grid from \lambda/lr to \lambda*lr
+            mGrid = np.exp(np.linspace(np.log(max([1e-7,pen.lam/lR])),np.log(min([1e7,pen.lam*lR])),nR))
+            
+            # Now create penalty candidates conditional on estimates for all other penalties except current one
+            for val in mGrid:
+                rGrid.append(np.array([val if pii == pi else pen.lam for pii,pen in enumerate(rPen)]))
+        
+        rGrid = np.array(rGrid)
+        
+        # Now enrich by sampling from full grid - based again on marginals
+        fGrid = [np.exp(np.linspace(np.log(max([1e-7,pen.lam/lR])),np.log(min([1e7,pen.lam*lR])),nR))for pen in rPen]
+        fGrid = np.array(list(product(*fGrid)))
+        sel = np.random.choice(len(fGrid),size=int(nR*len(rPen)))
+        fGrid = fGrid[sel]
+        rGrid = np.concatenate((rGrid,fGrid),axis=0)
 
+            
     y = model.formula.y_flat[model.formula.NOT_NA_flat]
     X = model.get_mmat()
     family = model.family
