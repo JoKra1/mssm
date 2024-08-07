@@ -4,7 +4,7 @@ import math
 import warnings
 from itertools import permutations,product,repeat
 import copy
-from ..python.gamm_solvers import cpp_backsolve_tr,compute_S_emb_pinv_det,cpp_chol,cpp_solve_coef,update_scale_edf,compute_Linv,apply_eigen_perm,tqdm,managers,shared_memory,cpp_solve_coefXX
+from ..python.gamm_solvers import cpp_backsolve_tr,compute_S_emb_pinv_det,cpp_chol,cpp_solve_coef,update_scale_edf,compute_Linv,apply_eigen_perm,tqdm,managers,shared_memory,cpp_solve_coefXX,update_PIRLS,correct_coef_step
 from ..python.formula import reparam,map_csc_to_eigen,mp
 from ..python.exp_fam import Family,Gaussian, Identity
 
@@ -109,28 +109,94 @@ def compute_reml_candidate_GAMM(family,y,X,penalties):
    See REML function below for more details.
    """
 
-   if not isinstance(family,Gaussian) or isinstance(family.link,Identity) == False:
-       raise TypeError("REML computation for a specific lambda candidate is currently only implemented for Gaussian additive models.")
-
    S_emb,_,_ = compute_S_emb_pinv_det(X.shape[1],penalties,"svd")
-   LP, Pr, coef, code = cpp_solve_coef(y,X,S_emb)
 
-   if code != 0:
-       raise ValueError("Forming coefficients for specified penalties was not possible.")
-   
-   eta = (X @ coef).reshape(-1,1)
-   
+   # Need pseudo-data only in case of GAM
+   z = None
+   Wr = None
+
+   if isinstance(family,Gaussian) and isinstance(family.link,Identity):
+        # AMM - directly solve for coef
+        LP, Pr, coef, code = cpp_solve_coef(y,X,S_emb)
+
+        if code != 0:
+            raise ValueError("Forming coefficients for specified penalties was not possible.")
+        
+        eta = (X @ coef).reshape(-1,1)
+        mu = eta
+        nH = (X.T@X).tocsc()
+   else:
+       # GAMM - have to repeat Newton step
+       yb = y
+       Xb = X
+
+       mu = family.init_mu(y)
+       eta = family.link.f(mu)
+       
+       # First pseudo-dat iteration
+       yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta,X,Xb,family)
+
+       # Solve coef
+       LP, Pr, coef, code = cpp_solve_coef(yb,Xb,S_emb)
+
+       if code != 0:
+            raise ValueError("Forming coefficients for specified penalties was not possible.")
+
+       # Update eta & mu
+       eta = (X @ coef).reshape(-1,1)
+       mu = family.link.fi(eta)
+
+       # Compute deviance
+       dev = family.deviance(y,mu)
+
+       # And penalized deviance term
+       c_pen_dev = dev + coef.T @ S_emb @ coef
+       pen_dev = c_pen_dev + 1e7
+
+       # Now repeat until convergence
+       for newt_iter in range(50):
+        
+           # Update pseudo-dat
+           yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta,X,Xb,family)
+
+           LP, Pr, n_coef, code = cpp_solve_coef(yb,Xb,S_emb)
+           
+           if code != 0:
+                raise ValueError("Forming coefficients for specified penalties was not possible.")
+
+           # Update eta & mu
+           eta = (X @ n_coef).reshape(-1,1)
+           mu = family.link.fi(eta)
+
+           # Update deviance
+           dev = family.deviance(y,mu)
+
+           pen_dev = dev + n_coef.T @ S_emb @ n_coef
+
+           # Step-size control:
+           dev,pen_dev,mu,eta,coef = correct_coef_step(coef,n_coef,dev,pen_dev,c_pen_dev,family,eta,mu,y,X,len(penalties),S_emb,None,1)
+
+           # Convergence control
+           if np.abs(pen_dev - c_pen_dev) < 1e-7*pen_dev:
+                break
+           
+           # Prepare next step
+           c_pen_dev = pen_dev
+
+       W = Wr@Wr
+       nH = (X.T@W@X).tocsc() 
+
    # Optionally estimate scale
    if family.twopar:
-        _,_,_,_,_,scale = update_scale_edf(y,None,eta,None,X.shape[0],X.shape[1],LP,None,Pr,None,family,penalties,10)
+        _,_,_,_,_,scale = update_scale_edf(y,z,eta,Wr,X.shape[0],X.shape[1],LP,None,Pr,None,family,penalties,10)
 
-        llk = family.llk(y,eta,scale)
+        llk = family.llk(y,mu,scale)
    else:
         scale = family.scale
-        llk = family.llk(y,eta)
+        llk = family.llk(y,mu)
 
    # Now compute REML for candidate
-   reml = REML(llk,(X.T@X).tocsc(),coef,scale,penalties)
+   reml = REML(llk,nH,coef,scale,penalties)
    return reml,LP,Pr,coef,scale
    
 
