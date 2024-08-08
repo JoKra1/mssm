@@ -3,6 +3,7 @@ import scipy as scp
 import math
 import warnings
 from itertools import permutations,product,repeat
+from matplotlib import pyplot as plt
 import copy
 from ..python.gamm_solvers import cpp_backsolve_tr,compute_S_emb_pinv_det,cpp_chol,cpp_solve_coef,update_scale_edf,compute_Linv,apply_eigen_perm,tqdm,managers,shared_memory,cpp_solve_coefXX,update_PIRLS,correct_coef_step
 from ..python.formula import reparam,map_csc_to_eigen,mp
@@ -382,14 +383,20 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
             
             # Now create penalty candidates conditional on estimates for all other penalties except current one
             for val in mGrid:
-                rGrid.append(np.array([val if pii == pi else pen.lam for pii,pen in enumerate(rPen)]))
+                if abs(val - pen.lam) <= 1e-7:
+                    continue
+
+                rGrid.append(np.array([val if pii == pi else pen2.lam for pii,pen2 in enumerate(rPen)]))
+        
+        # Make sure actual estimate is included once.
+        rGrid.append(np.array([pen2.lam for pen2 in rPen]))
         
         rGrid = np.array(rGrid)
         
         # Now enrich by sampling from full grid - based again on marginals
         fGrid = [np.exp(np.linspace(np.log(max([1e-7,pen.lam/lR])),np.log(min([1e7,pen.lam*lR])),nR))for pen in rPen]
         fGrid = np.array(list(product(*fGrid)))
-        sel = np.random.choice(len(fGrid),size=int(nR*len(rPen)))
+        sel = np.random.choice(len(fGrid),size=int(nR*nR*len(rPen)),replace=False)
         fGrid = fGrid[sel]
         rGrid = np.concatenate((rGrid,fGrid),axis=0)
 

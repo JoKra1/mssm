@@ -29,7 +29,7 @@ def compare_CDL(model1:GAMM,
     correction (see Greven & Scheipl, 2016 and the ``correct_VB`` function in the utils module) which will take quite some time for reasonably large models with more than 3-4 smoothing parameters.
     In that case relying on CIs and penalty-based comparisons might be preferable (see Marra & Wood, 2011 for details on the latter).
 
-    In case ``correct_t1=True`` and ``correct_V=True`` the EDF will be set to the smoothness uncertainty corrected and smoothness bias corrected exprected degrees of freedom (t1 in section 6.1.2 of Wood, 2017),
+    In case ``correct_t1=True`` the EDF will be set to the (smoothness uncertainty corrected in case ``correct_V=True``) and smoothness bias corrected exprected degrees of freedom (t1 in section 6.1.2 of Wood, 2017),
     for the GLRT (based on reccomendation given in section 6.12.4 in Wood, 2017). The AIC (Wood, 2017) of both models will still be based on the regular (smoothness uncertainty corrected) edf.
 
     The computation here is different to the one performed by the ``compareML`` function in the R-package ``itsadug`` - which rather performs a version of the marginal GLRT
@@ -82,6 +82,23 @@ def compare_CDL(model1:GAMM,
     else:
         DOF1 = model1.edf
         DOF2 = model2.edf
+        
+        if correct_t1:
+            # Compute uncertainty uncorrected but smoothness bias corrected edf (t1 in section 6.1.2 of Wood, 2017)
+            X1 = model1.get_mmat()
+            X2 = model2.get_mmat()
+            V1 = model1.lvi.T @ model1.lvi
+            V2 = model2.lvi.T @ model2.lvi
+            F1 = V1@(X1.T@X1)
+            F2 = V2@(X2.T@X2)
+            DOF12 = 2*DOF1 - (F1@F1).trace()
+            DOF22 = 2*DOF2 - (F2@F2).trace()
+
+            aic_DOF1 = DOF1
+            aic_DOF2 = DOF2
+            DOF1 = DOF12
+            DOF2 = DOF22
+
 
     # Compute un-penalized likelihood based on scale estimate of more complex (in terms of edf - so actually more complex) model if a scale was estimated (see section 3.1.4, Wood, 2017).
     ext_scale = None
@@ -127,7 +144,7 @@ def compare_CDL(model1:GAMM,
         H1 = p <= alpha
 
     # Also correct AIC for GAM (see Wood et al., 2017)
-    if correct_V and correct_t1:
+    if correct_t1:
         aic1 = -2*llk1 + 2*aic_DOF1
         aic2 = -2*llk2 + 2*aic_DOF2
     else:
