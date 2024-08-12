@@ -3,7 +3,6 @@ import scipy as scp
 import math
 import warnings
 from itertools import permutations,product,repeat
-from matplotlib import pyplot as plt
 import copy
 from ..python.gamm_solvers import cpp_backsolve_tr,compute_S_emb_pinv_det,cpp_chol,cpp_solve_coef,update_scale_edf,compute_Linv,apply_eigen_perm,tqdm,managers,shared_memory,cpp_solve_coefXX,update_PIRLS,correct_coef_step
 from ..python.formula import reparam,map_csc_to_eigen,mp
@@ -187,18 +186,18 @@ def compute_reml_candidate_GAMM(family,y,X,penalties):
        W = Wr@Wr
        nH = (X.T@W@X).tocsc() 
 
-   # Optionally estimate scale
-   if family.twopar:
-        _,_,_,_,_,scale = update_scale_edf(y,z,eta,Wr,X.shape[0],X.shape[1],LP,None,Pr,None,family,penalties,10)
+   # Get edf and optionally estimate scale
+   _,_,edf,_,_,scale = update_scale_edf(y,z,eta,Wr,X.shape[0],X.shape[1],LP,None,Pr,None,family,penalties,10)
 
+   if family.twopar:
         llk = family.llk(y,mu,scale)
    else:
-        scale = family.scale
         llk = family.llk(y,mu)
 
    # Now compute REML for candidate
    reml = REML(llk,nH,coef,scale,penalties)
-   return reml,LP,Pr,coef,scale
+
+   return reml,LP,Pr,coef,scale,edf,llk
    
 
 def REML(llk,H,coef,scale,penalties):
@@ -275,6 +274,33 @@ def REML(llk,H,coef,scale,penalties):
    # Done
    return reml + lgdetS/2 - lgdetXXS/2 + Mp/2*np.log(2*np.pi)
 
+def estVp(ep,remls,rGrid):
+    """Estimate covariance matrix of log(\lambda). REML scores are used to
+    approximate expectation, similar to what was suggested by Greven & Scheipl (2016).
+
+    References:
+     - https://en.wikipedia.org/wiki/Estimation_of_covariance_matrices
+     - Greven, S., & Scheipl, F. (2016). Comment on: Smoothing Parameter and Model Selection for General Smooth Models
+
+    :param ep: Model estimate log(\lambda), i.e., the expectation over rGrid
+    :type ep: [float]
+    :param remls: REML score associated with each \lambda candidate in rGrid
+    :type remls: [float]
+    :param rGrid: A 2d array, holding all \lambda samples considered so far. Each row is one sample
+    :type rGrid: [float]
+    :return: An estimate of the covariance matrix of log(\lambda) - 2d array of shape len(mp)*len(mp).
+    :rtype: [float]
+    """
+    ws = scp.special.softmax(remls)
+    wp = (np.log(rGrid[0]).reshape(-1,1) - ep)
+    # Vp = E[(wp-ep)(wp-ep)^T] - see Wikipedia
+    Vp = ws[0]*(wp @ wp.T)
+    for ridx,r in enumerate(rGrid):
+        wp = (np.log(r).reshape(-1,1) - ep)
+        Vp += ws[ridx]*(wp @ wp.T)
+    
+    return Vp
+
 def _compute_VB_corr_terms_MP(family,address_y,address_dat,address_ptr,address_idx,address_datXX,address_ptrXX,address_idxXX,shape_y,shape_dat,shape_ptr,shape_datXX,shape_ptrXX,rows,cols,rPen,r):
    """
    Multi-processing code for Grevel & Scheipl correction for Gaussian additive model - see ``correct_VB`` for details.
@@ -313,7 +339,7 @@ def _compute_VB_corr_terms_MP(family,address_y,address_dat,address_ptr,address_i
    
    # Optionally estimate scale
    if family.twopar:
-        _,_,_,_,_,scale = update_scale_edf(y,None,eta,None,X.shape[0],X.shape[1],LP,None,Pr,None,family,rPen,10)
+        _,_,edf,_,_,scale = update_scale_edf(y,None,eta,None,X.shape[0],X.shape[1],LP,None,Pr,None,family,rPen,10)
 
         llk = family.llk(y,eta,scale)
    else:
@@ -329,7 +355,7 @@ def _compute_VB_corr_terms_MP(family,address_y,address_dat,address_ptr,address_i
    Linv = apply_eigen_perm(Pr,LPinv)
 
    # Now collect what we need for the remaining terms
-   return Linv,coef,reml,scale
+   return Linv,coef,reml,scale,edf,llk
 
 def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t1=False,verbose=False):
     """
@@ -347,10 +373,13 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
     provided covering the prior on \lambda (see Wood 2011 for the relation between smoothness penalties and this prior). For ``mssm`` the
     limits on this are 1e-7 and 1e7. However, as the authors already conclude, covering the entire prior range is not that efficient.
     Hence we provide an alternative way to set-up the grid, based on first forming marginal grids for each \lambda that contain nR equally-spaced
-    samples from \lambda/lr to \lambda*lr, while all other lambda values remain fixed at their estimated values. This neglects quite a bit
-    of the prior space (since we never explore uncertainty associated with varying multiple lambda parameters). To adjust for this - in a cost
-    efficient manner - we additionally create all possible permutations of the marginal \lambda grids. However, instead of exploring them all -
-    which would again result in a complexity explosion - we only evaluate a random sub-set of those.
+    samples from \lambda/lr to \lambda*lr, while all other lambda values are set to random samples between the prior limits. This neglects quite a bit
+    of the prior space. So we use these initial samples to estimate V_p, so that log(\lambda)|y ~ N(log(\hat{\lambda}),V_p,) - see Wood et al. (2016).
+    We then repeatedly sample new \lambda vectors from this normal, followed by updating out estimate of the normal (i.e., V_p) given these samples (
+    using the REML weights to approximate the expectation for estimating V_p, based on Greven & Scheipl; 2016). Note that until the last sampling step we
+    add small values to the diagonal of V_p to promote exploration. The idea is that this should help us to better explore and with less samples, locally
+    around \hat{\lambda}, the uncertainty than if we would just sample from a grid. We then also later re-compute the REML weights from this normal and
+    then follow the steps outlined by (Greven & Scheipl; 2016) to compute V, rather than computing the approximation suggested by Wood et al. (2016).
     
     This is done when argument grid_type = 'JJJ'. Otherwise, the G&S strategy is employed - forming a grid over the full space (from 1e-7 to 1e7,
     again evaluated for nR equally-spaced values and then permuted for the number of \lambda parameters). Note that
@@ -385,21 +414,12 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
             for val in mGrid:
                 if abs(val - pen.lam) <= 1e-7:
                     continue
-
-                rGrid.append(np.array([val if pii == pi else pen2.lam for pii,pen2 in enumerate(rPen)]))
+                
+                rGrid.append(np.array([val if pii == pi else np.random.choice(np.exp(np.linspace(np.log(max([1e-7,pen2.lam/lR])),np.log(min([1e7,pen2.lam*lR])),nR)),size=1)[0] for pii,pen2 in enumerate(rPen)]))
         
         # Make sure actual estimate is included once.
         rGrid.append(np.array([pen2.lam for pen2 in rPen]))
-        
         rGrid = np.array(rGrid)
-        
-        # Now enrich by sampling from full grid - based again on marginals
-        fGrid = [np.exp(np.linspace(np.log(max([1e-7,pen.lam/lR])),np.log(min([1e7,pen.lam*lR])),nR))for pen in rPen]
-        fGrid = np.array(list(product(*fGrid)))
-        sel = np.random.choice(len(fGrid),size=int(nR*nR*len(rPen)),replace=False)
-        fGrid = fGrid[sel]
-        rGrid = np.concatenate((rGrid,fGrid),axis=0)
-
             
     y = model.formula.y_flat[model.formula.NOT_NA_flat]
     X = model.get_mmat()
@@ -412,6 +432,9 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
     remls = []
     Vs = []
     coefs = []
+    edfs = []
+    llks = []
+    aics = []
 
     if X.shape[1] < 2000 and isinstance(family,Gaussian) and isinstance(family.link,Identity) and n_c > 1: # Parallelize grid search
         with managers.SharedMemoryManager() as manager, mp.Pool(processes=n_c) as pool:
@@ -462,7 +485,18 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
                        repeat(ptr_memXX.name),repeat(idx_memXX.name),repeat(shape_y),
                        repeat(shape_dat),repeat(shape_ptr),repeat(shape_datXX),repeat(shape_ptrXX),
                        repeat(rows),repeat(cols),repeat(rPen),rGrid)
-            Linvs, coefs, remls, scales = zip(*pool.starmap(_compute_VB_corr_terms_MP,args))
+            
+            Linvs, coefs, remls, scales, edfs, llks = zip(*pool.starmap(_compute_VB_corr_terms_MP,args))
+            aics = -2*np.array(llks) + 2*np.array(edfs)
+
+            if grid_type == "JJJ":
+                Linvs = list(Linvs)
+                coefs = list(coefs)
+                remls = list(remls)
+                scales = list(scales)
+                edfs = list(edfs)
+                llks = list(llks)
+                aics = list(aics)
 
     else: # Better to parallelize inverse computation necessary to obtain Vb
         enumerator = rGrid
@@ -475,7 +509,7 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
                 rPen[ridx].lam = rc
             
             # Now compute REML - and all other terms needed for correction proposed by Greven & Scheipl (2017)
-            reml,LP,Pr,coef,scale = compute_reml_candidate_GAMM(family,y,X,rPen)
+            reml,LP,Pr,coef,scale,edf,llk = compute_reml_candidate_GAMM(family,y,X,rPen)
             coef = coef.reshape(-1,1)
 
             # Form VB, first solve LP{^-1}
@@ -486,13 +520,170 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
             Vb = Linv.T@Linv*scale
             Vb += coef@coef.T
 
+            # and aic under current penalty
+            aic = -2*llk + 2*edf
+
             # Now collect what we need for the remaining terms
             Vs.append(Vb)
             coefs.append(coef)
             remls.append(reml)
+            edfs.append(edf)
+            llks.append(llk)
+            aics.append(aic)
+
+    if grid_type == "JJJ":
+        # Iteratively estimate Vp - covariance matrix of log(\lambda) to guide further REML grid sampling
+        id_weight = 0.1
+        ep = np.log(np.array([pen.lam for pen in model.formula.penalties]).reshape(-1,1))
+
+        # Get first estimate for Vp based on samples collected so far
+        Vp = estVp(ep,remls,rGrid) + id_weight*np.identity(len(ep))
+
+        # Now continuously update Vp and generate more REML samples in the process
+        n_est = nR
+        
+        if X.shape[1] < 2000 and isinstance(family,Gaussian) and isinstance(family.link,Identity) and n_c > 1: # Parallelize grid search
+            with managers.SharedMemoryManager() as manager, mp.Pool(processes=n_c) as pool:
+                # Create shared memory copies of data, indptr, and indices for X, XX, and y
+
+                # X
+                rows, cols, _, data, indptr, indices = map_csc_to_eigen(X)
+                shape_dat = data.shape
+                shape_ptr = indptr.shape
+                shape_y = y.shape
+
+                dat_mem = manager.SharedMemory(data.nbytes)
+                dat_shared = np.ndarray(shape_dat, dtype=np.double, buffer=dat_mem.buf)
+                dat_shared[:] = data[:]
+
+                ptr_mem = manager.SharedMemory(indptr.nbytes)
+                ptr_shared = np.ndarray(shape_ptr, dtype=np.int64, buffer=ptr_mem.buf)
+                ptr_shared[:] = indptr[:]
+
+                idx_mem = manager.SharedMemory(indices.nbytes)
+                idx_shared = np.ndarray(shape_dat, dtype=np.int64, buffer=idx_mem.buf)
+                idx_shared[:] = indices[:]
+
+                #XX
+                _, _, _, dataXX, indptrXX, indicesXX = map_csc_to_eigen((X.T@X).tocsc())
+                shape_datXX = dataXX.shape
+                shape_ptrXX = indptrXX.shape
+
+                dat_memXX = manager.SharedMemory(dataXX.nbytes)
+                dat_sharedXX = np.ndarray(shape_datXX, dtype=np.double, buffer=dat_memXX.buf)
+                dat_sharedXX[:] = dataXX[:]
+
+                ptr_memXX = manager.SharedMemory(indptrXX.nbytes)
+                ptr_sharedXX = np.ndarray(shape_ptrXX, dtype=np.int64, buffer=ptr_memXX.buf)
+                ptr_sharedXX[:] = indptrXX[:]
+
+                idx_memXX = manager.SharedMemory(indicesXX.nbytes)
+                idx_sharedXX = np.ndarray(shape_datXX, dtype=np.int64, buffer=idx_memXX.buf)
+                idx_sharedXX[:] = indicesXX[:]
+
+                # y
+                y_mem = manager.SharedMemory(y.nbytes)
+                y_shared = np.ndarray(shape_y, dtype=np.double, buffer=y_mem.buf)
+                y_shared[:] = y[:]
+                
+                enumerator = range(nR*len(ep))
+                if verbose:
+                    enumerator = tqdm(enumerator)
+                for sp in enumerator:
+                    # Generate next \lambda values for which to compute REML, and Vb
+                    p_sample = scp.stats.multivariate_normal.rvs(mean=np.ndarray.flatten(ep),cov=Vp,size=n_est)
+                    p_sample = np.exp(p_sample)
+
+                    if n_est == 1:
+                        p_sample = [p_sample]
+                    
+                    # Now compute reml for new candidates in parallel
+                    args = zip(repeat(family),repeat(y_mem.name),repeat(dat_mem.name),
+                            repeat(ptr_mem.name),repeat(idx_mem.name),repeat(dat_memXX.name),
+                            repeat(ptr_memXX.name),repeat(idx_memXX.name),repeat(shape_y),
+                            repeat(shape_dat),repeat(shape_ptr),repeat(shape_datXX),repeat(shape_ptrXX),
+                            repeat(rows),repeat(cols),repeat(rPen),p_sample)
+                    
+                    sample_Linvs, sample_coefs, sample_remls, sample_scales, sample_edfs, sample_llks = zip(*pool.starmap(_compute_VB_corr_terms_MP,args))
+                    sample_aics = -2*np.array(sample_llks) + 2*np.array(sample_edfs)
+
+                    Linvs.extend(list(sample_Linvs))
+                    scales.extend(list(sample_scales))
+                    coefs.extend(list(sample_coefs))
+                    remls.extend(list(sample_remls))
+                    edfs.extend(list(sample_edfs))
+                    llks.extend(list(sample_llks))
+                    aics.extend(list(sample_aics))
+
+                    rGrid = np.concatenate((rGrid,p_sample),axis=0)
+
+                    # Update Vp - based on additional REML scores available now
+                    id_weight *= 0.99
+
+                    # Last step should not involve identity at all.
+                    if sp == (nR-1):
+                        id_weight = 0
+
+                    Vp = estVp(ep,remls,rGrid) + id_weight*np.identity(len(ep))
+            
+        else:
+            enumerator = range(nR*len(ep))
+            if verbose:
+                enumerator = tqdm(enumerator)
+            for sp in enumerator:
+
+                # Generate next \lambda values for which to compute REML, and Vb
+                p_sample = scp.stats.multivariate_normal.rvs(mean=np.ndarray.flatten(ep),cov=Vp,size=n_est)
+                p_sample = np.exp(p_sample)
+
+                if n_est == 1:
+                    p_sample = [p_sample]
+
+                for ps in p_sample:
+                    for ridx,rc in enumerate(ps):
+                        rPen[ridx].lam = rc
+                    
+                    reml,LP,Pr,coef,scale,edf,llk = compute_reml_candidate_GAMM(family,y,X,rPen)
+                    coef = coef.reshape(-1,1)
+
+                    # Form VB, first solve LP{^-1}
+                    LPinv = compute_Linv(LP,n_c)
+                    Linv = apply_eigen_perm(Pr,LPinv)
+
+                    # Can already compute first term from correction
+                    Vb = Linv.T@Linv*scale
+                    Vb += coef@coef.T
+
+                    # and aic under current penalty
+                    aic = -2*llk + 2*edf
+
+                    # Collect all necessary objects for G&S correction.
+                    Vs.append(Vb)
+                    coefs.append(coef)
+                    remls.append(reml)
+                    edfs.append(edf)
+                    llks.append(llk)
+                    aics.append(aic)
+                    rGrid = np.concatenate((rGrid,ps.reshape(1,-1)),axis=0)
+
+                # Update Vp - based on additional REML scores available now
+                id_weight *= 0.99
+
+                # Last step should not involve identity at all.
+                if sp == (nR-1):
+                    id_weight = 0
+
+                Vp = estVp(ep,remls,rGrid) + id_weight*np.identity(len(ep))
 
     # Compute weights proposed by Greven & Scheipl (2017)
     ws = scp.special.softmax(remls)
+    if grid_type == "JJJ":
+        # Use the estimated normal to compute weights instead.
+        ws2 = scp.stats.multivariate_normal.logpdf(np.log(rGrid),mean=np.ndarray.flatten(ep),cov=Vp)
+        ws = scp.special.softmax(ws2)
+
+    # And "Expected aic - over lambda uncertainty"
+    expected_aic = np.sum(ws*aics)
 
     # Now compute \hat{cov(\boldsymbol{\beta}|y)}
     if X.shape[1] < 2000 and isinstance(family,Gaussian) and isinstance(family.link,Identity) and n_c > 1:
@@ -535,4 +726,4 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
     if form_t1:
         total_edf2 = 2*total_edf - (F@F).trace()
 
-    return V,LV,total_edf,total_edf2
+    return V,LV,total_edf,total_edf2,expected_aic

@@ -68,8 +68,8 @@ def compare_CDL(model1:GAMM,
     if correct_V:
         if verbose:
             print("Correcting for uncertainty in lambda estimates...\n")
-        _,_,DOF1,DOF12 = correct_VB(model1,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,verbose=verbose)
-        _,_,DOF2,DOF22 = correct_VB(model2,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,verbose=verbose)
+        _,_,DOF1,DOF12,expected_aic1 = correct_VB(model1,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,verbose=verbose)
+        _,_,DOF2,DOF22,expected_aic2 = correct_VB(model2,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,verbose=verbose)
         
         if correct_t1:
             # Section 6.12.4 suggests replacing t (edf) with t1 (2*t - (F@F).trace()) with F=(X.T@X+S_\llambda)^{-1}@X.T@X for GLRT - with the latter also being corrected for
