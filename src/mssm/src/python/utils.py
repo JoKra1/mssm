@@ -239,12 +239,18 @@ def REML(llk,H,coef,scale,penalties):
    # the diagonal of the cholesky of the term specific S_reps[i], applying conditioning as shown in Appendix B of Wood (2011).
    lgdetS = 0
    for Si,S_rep in enumerate(S_reps):
-
-        Sdiag = np.power(np.abs(S_rep.diagonal()),0.5)
+        # We need to evaluate log(|S_\lambda/\phi|+) after re-parameterization of S_\lambda (so this will be a regular determinant).
+        # We have that (https://en.wikipedia.org/wiki/Determinant):
+        #   det(S_\lambda * 1/\phi) = (1/\phi)^p * det(S_\lambda)
+        # taking logs:
+        #    log(det(S_\lambda * 1/\phi)) = log((1/\phi)^p) + log(det(S_\lambda))
+        # We know that log(det(S_\lambda)) is insensitive to whether or not we re-parameterize, so
+        # we can simply take S_rep/scale and compute log(det()) for that.
+        Sdiag = np.power(np.abs((S_rep/scale).diagonal()),0.5)
         PI = scp.sparse.diags(1/Sdiag,format='csc')
         P = scp.sparse.diags(Sdiag,format='csc')
 
-        L,code = cpp_chol(PI@S_rep@PI)
+        L,code = cpp_chol(PI@(S_rep/scale)@PI)
 
         if code == 0:
             ldetSI = (2*np.log((L@P).diagonal()).sum())*Sj_reps[SJ_term_idx[Si][0]].rep_sj
@@ -272,7 +278,7 @@ def REML(llk,H,coef,scale,penalties):
    lgdetXXS = 2*np.log((L@P).diagonal()).sum()
 
    # Done
-   return reml + lgdetS/2 - lgdetXXS/2 + Mp/2*np.log(2*np.pi)
+   return reml + lgdetS/2 - lgdetXXS/2 + (Mp*np.log(2*np.pi))/2
 
 def estVp(ep,remls,rGrid):
     """Estimate covariance matrix of log(\lambda). REML scores are used to
