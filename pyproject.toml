@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.cibuildwheel]
 before-test = "ls"
-skip = "pp*"
+skip = "pp310-macosx*"
 test-skip = "*-win32 *i686"
 test-requires = ["pytest", "pytest-cov", "mssmViz"]
 test-command = "pytest {project}/tests --cov={project}"
