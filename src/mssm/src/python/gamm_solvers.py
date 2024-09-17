@@ -1656,7 +1656,7 @@ def newton_coef_smooth(coef,grad,H,S_emb):
      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
     """
     
-    pgrad = np.array([grad[i] - (S_emb[i,:]@coef)[0] for i in range(len(grad))])
+    pgrad = np.array([grad[i] - (S_emb[[i],:]@coef)[0] for i in range(len(grad))])
     nH = -1*H + S_emb
 
     # Diagonal pre-conditioning as suggested by WPS (2016)
