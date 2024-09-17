@@ -1779,7 +1779,7 @@ def update_coef_gen_smooth(family,mus,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer
     
 def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
                          max_outer=50,max_inner=30,min_inner=1,conv_tol=1e-7,
-                         extend_lambda=True,progress_bar=True,n_c=10):
+                         extend_lambda=True,control_lambda=True,progress_bar=True,n_c=10):
     """
     Fits a GAMLSS model, following steps outlined by Wood, Pya, & Säfken (2016).
 
@@ -1864,7 +1864,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
         # Build new penalties
         S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
 
-        if extend_lambda:
+        if extend_lambda and control_lambda:
             # Step size control for smoothing parameters. Not obvious - because we have only approximate REMl
             # and approximate derivative, because we drop the last term involving the derivative of the negative penalized
             # Hessian with respect to the smoothing parameters (see section 4 in Wood & Fasiolo, 2017). However, what we
@@ -1920,4 +1920,4 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
     # Calculate actual term-specific edf
     term_edfs = calculate_term_edf(gamlss_pen,term_edfs)
     
-    return coef,etas,mus,wres,H,LV,total_edf,term_edfs,penalty
+    return coef,etas,mus,wres,H,LV,total_edf,term_edfs,penalty[0,0]

@@ -10,7 +10,7 @@ build-backend = "setuptools.build_meta"
 [tool.cibuildwheel]
 before-test = "ls"
 test-skip = "*-win32 pp* *i686"
-test-requires = ["pytest", "pytest-cov"]
+test-requires = ["pytest", "pytest-cov", "mssmViz"]
 test-command = "pytest {project}/tests --cov={project}"
 
 [project]

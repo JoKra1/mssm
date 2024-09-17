@@ -599,6 +599,7 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
                     # Generate next \lambda values for which to compute REML, and Vb
                     p_sample = scp.stats.multivariate_normal.rvs(mean=np.ndarray.flatten(ep),cov=Vp,size=n_est)
                     p_sample = np.exp(p_sample)
+                    p_sample = p_sample[[np.any(np.all(rGrid==lam,axis=1))==False for lam in p_sample]]
 
                     if n_est == 1:
                         p_sample = [p_sample]
@@ -641,6 +642,7 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
                 # Generate next \lambda values for which to compute REML, and Vb
                 p_sample = scp.stats.multivariate_normal.rvs(mean=np.ndarray.flatten(ep),cov=Vp,size=n_est)
                 p_sample = np.exp(p_sample)
+                p_sample = p_sample[[np.any(np.all(rGrid==lam,axis=1))==False for lam in p_sample]]
 
                 if n_est == 1:
                     p_sample = [p_sample]

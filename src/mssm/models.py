@@ -130,11 +130,11 @@ class GAMM(MSSM):
                 return self.family.llk(self.formula.y_flat[self.formula.NOT_NA_flat],mu) - pen
         return None
 
-    def get_mmat(self):
+    def get_mmat(self,use_terms=None):
         """
         Returns exaclty the model matrix used for fitting as a scipy.sparse.csc_array. Will throw an error when called for a model for which the model
         matrix was never former completely - i.e., when X.T@X was formed iteratively for estimation, by setting the ``file_paths`` argument of the ``Formula`` to
-        a non-empty list.
+        a non-empty list. Optionally, all columns not corresponding to terms for which the indices are provided via ``use_terms`` can be zeroed.
         """
         if self.formula.penalties is None:
             raise ValueError("Model matrix cannot be returned if penalties have not been initialized. Call model.fit() or model.formula.build_penalties() first.")
@@ -162,7 +162,7 @@ class GAMM(MSSM):
             model_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
                                                         ltx,irstx,stx,rtx,var_types,var_map,
                                                         var_mins,var_maxs,factor_levels,
-                                                        cov_flat,cov,n_j,state_est_flat,state_est)
+                                                        cov_flat,cov,n_j,state_est_flat,state_est,use_only=use_terms)
             
             return model_mat
     
@@ -303,7 +303,7 @@ class GAMM(MSSM):
         :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the number of new smoothing penalty proposals necessary. Enabled by default.
         :type extend_lambda: bool,optional
         :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for actually improving the Restricted maximum likelihood of the model. Can lower the number of new smoothing penalty proposals necessary. Enabled by default.
-        :type extend_lambda: bool,optional
+        :type control_lambda: bool,optional
         :param exclude_lambda: Whether selective lambda terms should be excluded heuristically from updates. Can make each iteration a bit cheaper but is problematic when using additional Kernel penalties on terms. Thus, disabled by default.
         :type exclude_lambda: bool,optional
         :param restart: Whether fitting should be resumed. Only possible if the same model has previously completed at least one fitting iteration.
@@ -699,7 +699,7 @@ class GAMLSS(GAMM):
 
         return None
 
-    def get_mmat(self):
+    def get_mmat(self,use_terms=None):
         """
         Returns a list containing exaclty the model matrices used for fitting as a ``scipy.sparse.csc_array``. Will raise an error when fitting was not completed before calling this function.
         """
@@ -709,7 +709,7 @@ class GAMLSS(GAMM):
                 raise ValueError("Model matrices cannot be returned if penalties have not been initialized. Call model.fit() first.")
             
             mod = GAMM(form,family=Gaussian())
-            Xs.append(mod.get_mmat())
+            Xs.append(mod.get_mmat(use_terms=use_terms))
         return Xs
     
     def print_smooth_terms(self, pen_cutoff=0.2):
@@ -756,7 +756,7 @@ class GAMLSS(GAMM):
         
         llk = self.get_llk(False)
         
-        reml = REML(llk,-1*self.__hessian,self.overall_coef,1,self.overall_penalties)
+        reml = REML(llk,-1*self.__hessian,self.overall_coef,1,self.overall_penalties)[0,0]
         return reml
     
     def get_resid(self):
@@ -788,7 +788,7 @@ class GAMLSS(GAMM):
         return self.family.get_resid(self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat],*self.overall_mus)
         
 
-    def fit(self,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,progress_bar=True,n_cores=10):
+    def fit(self,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,progress_bar=True,n_cores=10,seed=0):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -802,10 +802,14 @@ class GAMLSS(GAMM):
         :type conv_tol: float,optional
         :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the number of new smoothing penalty proposals necessary. Enabled by default.
         :type extend_lambda: bool,optional
+        :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for whether or not they (approxiately) increase the Laplace approximate restricted maximum likelihood of the model. Enabled by default.
+        :type control_lambda: bool,optional
         :param progress_bar: Whether progress should be displayed (convergence info and time estimate). Defaults to True.
         :type progress_bar: bool,optional
         :param n_cores: Number of cores to use during parts of the estimation that can be done in parallel. Defaults to 10.
         :type n_cores: int,optional
+        :param seed: Seed to use for random parameter initialization. Defaults to 0
+        :type seed: int,optional
         """
         
         # Get y
@@ -828,7 +832,7 @@ class GAMLSS(GAMM):
             mean_model.fit(progress_bar=False,restart=True)
             m_coef,_ = mean_model.get_pars()
         else:
-            m_coef = scp.stats.norm.rvs(size=self.formulas[0].n_coef).reshape(-1,1)
+            m_coef = scp.stats.norm.rvs(size=self.formulas[0].n_coef,random_state=seed).reshape(-1,1)
 
         # Get GAMLSS penalties
         shared_penalties = embed_shared_penalties(self.formulas)
@@ -850,7 +854,7 @@ class GAMLSS(GAMM):
 
         coef,etas,mus,wres,H,LV,total_edf,term_edfs,penalty = solve_gammlss_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,
                                                                                  gamlss_pen,max_outer,max_inner,min_inner,conv_tol,
-                                                                                 extend_lambda,progress_bar,n_cores)
+                                                                                 extend_lambda,control_lambda,progress_bar,n_cores)
         
         self.overall_coef = coef
         self.overall_preds = etas

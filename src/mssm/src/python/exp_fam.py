@@ -1082,6 +1082,5 @@ class GAMMALS(GAMLSSFamily):
       :return: A list of standardized residuals that should be ~ N(0,1) if the model is correct.
       :rtype: [float]
       """
-      res = np.sign(y - mu) * np.sqrt(Gamma().D(y,mu))
-      res /= scale
+      res = np.sign(y - mu) * np.sqrt(Gamma().D(y,mu)/scale)
       return res
