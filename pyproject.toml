@@ -9,8 +9,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.cibuildwheel]
 before-test = "ls"
-test-skip = "*-win32 pp* *i686"
-test-requires = ["pytest", "pytest-cov"]
+skip = ["pp*","cp313-musllinux*"]
+test-skip = "*-win32 *i686"
+test-requires = ["pytest", "pytest-cov", "mssmViz"]
 test-command = "pytest {project}/tests --cov={project}"
 
 [project]
@@ -22,7 +23,7 @@ name = "mssm"
 authors = [
   { name="Joshua Krause", email="jokra001@proton.me" }
 ]
-description = "Toolbox for estimating Generalized additive mixed models (GAMMs), semi-Markov-switching (sms) GAMMs, and Impulse response sms GAMMs."
+description = "Toolbox for estimating Generalized Additive Mixed Models (GAMMs), Generalized Additive Mixed Models of Location Scale and Shape (GAMMLSS), and more general smooth models such as semi Markov-switching GAMMs (sMs-GAMMs; experimental)."
 readme = "README.md"
 requires-python = ">=3.10"
 classifiers = [

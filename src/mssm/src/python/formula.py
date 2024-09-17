@@ -963,10 +963,7 @@ def compute_constraint_single_MP(sterm,vars,lhs_var,file,var_mins,var_maxs,file_
    return C
 
 class Formula():
-    """
-    The formula of a regression equation.
-
-    Parameters:
+    """The formula of a regression equation.
 
     :param lhs: The lhs object defining the dependent variable.
     :type variable: lhs
@@ -1421,19 +1418,12 @@ class Formula():
       Encodes ``data``, which needs to be a ``pd.DataFrame`` and by default (if ``prediction==False``) builds an index
       of which rows in ``data`` are NA in the column of the dependent variable described by ``self.lhs``.
 
-      Parameters:
-
       :param data: The data to encode.
       :type data: pd.DataFrame
       :param prediction: Whether or not a NA index and a column for the dependent variable should be generated.
       :type prediction: bool, optional
-
-      Returns:
-      :return: A tuple with 7 entries: a ``np.array`` of the dependent variable described by ``self.__lhs`` or ``None``, a ``np.array`` with as many columns
-      as there are predictor variables specified in ``self.__terms``, holding the encoded predictor variables (number of rows matches the number of rows of the first entry returned),
-      either a ``np.array`` indicating for each row whether the dependent variable described by ``self.__lhs`` is NA or ``None``, either like the first entry but split into a list of lists by ``self.series_id`` or ``None``,
-      either like the second entry but split into a list of lists by ``self.series_id`` or ``None``, either like the third entry but split into a list of lists by ``self.series_id`` or ``None``, either a
-      ``np.array`` indicating the start and end point for the splits used to split the previous three elements (identifying the start and end point of every level of ``self.series_id``) or ``None``.
+      :return: A tuple with 7 entries: a ``np.array`` of the dependent variable described by ``self.__lhs`` or ``None``, a ``np.array`` with as many columns as there are predictor variables specified in ``self.__terms``, holding the encoded predictor variables (number of rows matches the number of rows of the first entry returned), either a ``np.array`` indicating for each row whether the dependent variable described by ``self.__lhs`` is NA or ``None``,
+      either like the first entry but split into a list of lists by ``self.series_id`` or ``None``, either like the second entry but split into a list of lists by ``self.series_id`` or ``None``, either like the third entry but split into a list of lists by ``self.series_id`` or ``None``, either a ``np.array`` indicating the start and end point for the splits used to split the previous three elements (identifying the start and end point of every level of ``self.series_id``) or ``None``.
       :rtype: tuple
       """
       # Build NA index
@@ -2367,32 +2357,32 @@ def embed_shared_penalties(formulas):
 
             if ofi < fi:
                 for lterm in shared_penalties[fi]:
-                    lterm.S_J_emb = scp.sparse.vstack([scp.sparse.csc_array((other_form.n_coef,form.n_coef)),
-                                                    lterm.S_J_emb])
-                    lterm.D_J_emb = scp.sparse.vstack([scp.sparse.csc_array((other_form.n_coef,form.n_coef)),
-                                                    lterm.D_J_emb])
+                    lterm.S_J_emb = scp.sparse.vstack([scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1])),
+                                                    lterm.S_J_emb]).tocsc()
+                    lterm.D_J_emb = scp.sparse.vstack([scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1])),
+                                                    lterm.D_J_emb]).tocsc()
                     
                     lterm.S_J_emb = scp.sparse.hstack([scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef)),
-                                                    lterm.S_J_emb])
+                                                    lterm.S_J_emb]).tocsc()
                     
                     lterm.D_J_emb = scp.sparse.hstack([scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef)),
-                                                    lterm.D_J_emb])
+                                                    lterm.D_J_emb]).tocsc()
                     
                     lterm.start_index += other_form.n_coef
             
             elif ofi > fi:
                 for lterm in shared_penalties[fi]:
                     lterm.S_J_emb = scp.sparse.vstack([lterm.S_J_emb,
-                                                    scp.sparse.csc_array((other_form.n_coef,form.n_coef))])
+                                                    scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1]))]).tocsc()
                     
                     lterm.D_J_emb = scp.sparse.vstack([lterm.D_J_emb,
-                                                    scp.sparse.csc_array((other_form.n_coef,form.n_coef))])
+                                                    scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1]))]).tocsc()
                     
                     lterm.S_J_emb = scp.sparse.hstack([lterm.S_J_emb,
-                                                    scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef))])
+                                                    scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef))]).tocsc()
                     
                     lterm.D_J_emb = scp.sparse.hstack([lterm.D_J_emb,
-                                                    scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef))])
+                                                    scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef))]).tocsc()
                 
     return shared_penalties
 

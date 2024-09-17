@@ -17,9 +17,9 @@ def compare_CDL(model1:GAMM,
                 grid='JJJ',
                 verbose=False):
     
-    """
-    (Optionally) performs an approximate GLRT on twice the difference in unpenalized likelihood between model1 and model2 (see Wood, 2017). Also computes the AIC difference (see Wood et al., 2016).
-    For the GLRT to be appropriate model1 should be set to the model containing more effects and model2 should be a nested, simpler, variant of model1.
+    """(Optionally) performs an approximate GLRT on twice the difference in unpenalized likelihood between ``model1`` and ``model2`` (see Wood, 2017).
+    
+    Also computes the AIC difference (see Wood et al., 2016). For the GLRT to be appropriate model1 should be set to the model containing more effects and model2 should be a nested, simpler, variant of model1.
     
     For the degrees of freedom for the test, the expected degrees of freedom (EDF) of each model are used (i.e., this is the conditional test discussed in Wood (2017: 6.12.4)).
     The difference between the models in EDF serves as DoF for computing the Chi-Square statistic. Similarly, for each model 2*edf is added to twice the negative (conditional) likelihood to
@@ -29,7 +29,7 @@ def compare_CDL(model1:GAMM,
     correction (see Greven & Scheipl, 2016 and the ``correct_VB`` function in the utils module) which will take quite some time for reasonably large models with more than 3-4 smoothing parameters.
     In that case relying on CIs and penalty-based comparisons might be preferable (see Marra & Wood, 2011 for details on the latter).
 
-    In case ``correct_t1=True`` and ``correct_V=True`` the EDF will be set to the smoothness uncertainty corrected and smoothness bias corrected exprected degrees of freedom (t1 in section 6.1.2 of Wood, 2017),
+    In case ``correct_t1=True`` the EDF will be set to the (smoothness uncertainty corrected in case ``correct_V=True``) and smoothness bias corrected exprected degrees of freedom (t1 in section 6.1.2 of Wood, 2017),
     for the GLRT (based on reccomendation given in section 6.12.4 in Wood, 2017). The AIC (Wood, 2017) of both models will still be based on the regular (smoothness uncertainty corrected) edf.
 
     The computation here is different to the one performed by the ``compareML`` function in the R-package ``itsadug`` - which rather performs a version of the marginal GLRT
@@ -37,12 +37,25 @@ def compare_CDL(model1:GAMM,
     (see Wood, 2017: 6.12.4).
 
     References:
+    
      - Marra, G., & Wood, S. N. (2011) Practical variable selection for generalized additive models.
      - Wood, S. N., Pya, N., Saefken, B., (2016). Smoothing Parameter and Model Selection for General Smooth Models
      - Greven, S., & Scheipl, F. (2016). Comment on: Smoothing Parameter and Model Selection for General Smooth Models
      - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
      - ``compareML`` function from ``itsadug`` R-package: https://rdrr.io/cran/itsadug/man/compareML.html
      - ``anova.gam`` function from ``mgcv``, see: https://www.rdocumentation.org/packages/mgcv/versions/1.9-1/topics/anova.gam
+
+    :param model1: GAMM model 1.
+    :type model1: GAMM
+    :param model2: GAMM model 2.
+    :type model2: GAMM
+    :param alpha: alpha level of the GLRT.
+    :type model1: GAMM
+    :raises ValueError: If both models are from different families.
+    :raises ValueError: If ``perform_GLRT=True`` and ``model1`` has fewer coef than ``model2`` - i.e., ``model1`` has to be the notationally more complex one.
+    :return: A dictionary with outcomes of all tests. Key ``H1`` will be a bool indicating whether Null hypothesis was rejected or not, ``p`` will be the p-value, ``chi^2`` will be the test statistic used,
+    ``Res. DOF`` will be the degrees of freedom used by the test, ``aic1`` and ``aic2`` will be the aic scores for both models.
+    :rtype: dict
     """
 
     if type(model1.family) != type(model2.family):
@@ -55,8 +68,8 @@ def compare_CDL(model1:GAMM,
     if correct_V:
         if verbose:
             print("Correcting for uncertainty in lambda estimates...\n")
-        _,_,DOF1,DOF12 = correct_VB(model1,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,verbose=verbose)
-        _,_,DOF2,DOF22 = correct_VB(model2,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,verbose=verbose)
+        _,_,DOF1,DOF12,expected_aic1 = correct_VB(model1,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,verbose=verbose)
+        _,_,DOF2,DOF22,expected_aic2 = correct_VB(model2,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,verbose=verbose)
         
         if correct_t1:
             # Section 6.12.4 suggests replacing t (edf) with t1 (2*t - (F@F).trace()) with F=(X.T@X+S_\llambda)^{-1}@X.T@X for GLRT - with the latter also being corrected for
@@ -69,6 +82,23 @@ def compare_CDL(model1:GAMM,
     else:
         DOF1 = model1.edf
         DOF2 = model2.edf
+        
+        if correct_t1:
+            # Compute uncertainty uncorrected but smoothness bias corrected edf (t1 in section 6.1.2 of Wood, 2017)
+            X1 = model1.get_mmat()
+            X2 = model2.get_mmat()
+            V1 = model1.lvi.T @ model1.lvi
+            V2 = model2.lvi.T @ model2.lvi
+            F1 = V1@(X1.T@X1)
+            F2 = V2@(X2.T@X2)
+            DOF12 = 2*DOF1 - (F1@F1).trace()
+            DOF22 = 2*DOF2 - (F2@F2).trace()
+
+            aic_DOF1 = DOF1
+            aic_DOF2 = DOF2
+            DOF1 = DOF12
+            DOF2 = DOF22
+
 
     # Compute un-penalized likelihood based on scale estimate of more complex (in terms of edf - so actually more complex) model if a scale was estimated (see section 3.1.4, Wood, 2017).
     ext_scale = None

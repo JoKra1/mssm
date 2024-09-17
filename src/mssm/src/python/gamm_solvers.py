@@ -1,7 +1,7 @@
 import numpy as np
 import scipy as scp
 import warnings
-from .exp_fam import Family,Gaussian,est_scale,GAMLSSFamily
+from .exp_fam import Family,Gaussian,est_scale,GAMLSSFamily,Identity
 from .penalties import PenType,id_dist_pen,translate_sparse,dataclass
 from .formula import build_sparse_matrix_from_formula,setup_cache,clear_cache,cpp_solvers,pd,Formula,mp,repeat,os,map_csc_to_eigen,math,tqdm,sys
 from functools import reduce
@@ -227,7 +227,7 @@ def update_PIRLS(y,yb,mu,eta,X,Xb,family):
    z = None
    Wr = None
 
-   if isinstance(family,Gaussian) == False:
+   if isinstance(family,Gaussian) == False or isinstance(family.link,Identity) == False:
       # Compute weights and pseudo-dat
       z, w = PIRLS_pdat_weights(y,mu,eta,family)
 
@@ -512,9 +512,9 @@ def update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,pen
    # are computed as well - they are returned because they are needed for the
    # lambda step proposal anyway.
    
-   # Calculate Pearson residuals for GAMM (Wood, 3.1.7)
+   # Calculate Pearson residuals for GAMM (Wood, 3.1.5 & 3.1.7)
    # Standard residuals for AMM
-   if isinstance(family,Gaussian) == False:
+   if isinstance(family,Gaussian) == False or isinstance(family.link,Identity) == False:
       wres = Wr @ (z - eta)
    else:
       wres = y - eta
@@ -587,7 +587,7 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,S_pinv,FS_use_
 
    mu = eta
 
-   if isinstance(family,Gaussian) == False:
+   if isinstance(family,Gaussian) == False or isinstance(family.link,Identity) == False:
       mu = family.link.fi(eta)
 
    # Update scale parameter
@@ -685,7 +685,7 @@ def correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,n_pen
 
       mu = eta
 
-      if isinstance(family,Gaussian) == False:
+      if isinstance(family,Gaussian) == False or isinstance(family.link,Identity) == False:
          mu = family.link.fi(eta)
       
       # Update deviance
@@ -922,7 +922,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    mu = mu_init
    eta = mu
 
-   if isinstance(family,Gaussian) == False:
+   if isinstance(family,Gaussian) == False or isinstance(family.link,Identity) == False:
       eta = family.link.f(mu)
 
    # Compute starting estimates
@@ -1047,7 +1047,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
       InvCholXXSP = compute_Linv(Lp,n_c)
       InvCholXXS = apply_eigen_perm(Pr,InvCholXXSP)
 
-   return coef,eta,wres,scale,InvCholXXS,total_edf,term_edfs,penalty,fit_info
+   return coef,eta,wres,Wr,scale,InvCholXXS,total_edf,term_edfs,penalty,fit_info
 
 ################################################ Iterative GAMM building code ################################################
 
@@ -1614,6 +1614,7 @@ def deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs):
                 d2 = d2meta[mixed_idx]
                 mixed_idx += 1
 
+            #print(etai,etaj,mixed_idx)
                 
             for coefi in range(Xs[etai].shape[1]):
                 for coefj in range(Xs[etaj].shape[1]):
@@ -1627,7 +1628,7 @@ def deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs):
                     # could even skip these loops but that might get a bit tricky with sparse matrix set up- for now
                     # I just leave it like this...
                     d2beta = ((d2*Xs[etai][:,[coefi]]).T @ Xs[etaj][:,[coefj]])[0,0]
-
+                    #print(hr_idx+coefi,hc_idx+coefj)
                     h_rows.append(hr_idx+coefi)
                     h_cols.append(hc_idx+coefj)
                     h_vals.append(d2beta)
@@ -1637,7 +1638,7 @@ def deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs):
                         h_vals.append(d2beta)
 
             hc_idx += Xs[etaj].shape[1]
-        hr_idx += Xs[etaj].shape[1]
+        hr_idx += Xs[etai].shape[1]
     
     hessian = scp.sparse.csc_array((h_vals,(h_rows,h_cols)))
     return np.array(grad).reshape(-1,1),hessian
@@ -1655,7 +1656,7 @@ def newton_coef_smooth(coef,grad,H,S_emb):
      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
     """
     
-    pgrad = np.array([grad[i] - (S_emb[i,:]@coef)[0] for i in range(len(grad))])
+    pgrad = np.array([grad[i] - (S_emb[[i],:]@coef)[0] for i in range(len(grad))])
     nH = -1*H + S_emb
 
     # Diagonal pre-conditioning as suggested by WPS (2016)
@@ -1668,25 +1669,27 @@ def newton_coef_smooth(coef,grad,H,S_emb):
     while code != 0:
 
         Lp, Pr, code = cpp_cholP(nH2+eps*scp.sparse.identity(nH2.shape[1],format='csc'))
+
+        if code != 0:
+            # Adjust identity added to nH
+            if eps == 0:
+               eps += 1e-14
+            else:
+               eps *= 2
+            continue
+        
         LVp = compute_Linv(Lp,10)
         LV = apply_eigen_perm(Pr,LVp)
         V = LV.T @ LV
 
-        if code == 0:
-            continue
-        
-        if eps == 0:
-            eps += 1e-14
-        else:
-            eps *= 2
-
     # Undo conditioning.
     V = D@V@D
+    LV = LV@D
 
     # Update coef
     n_coef = coef + (V@pgrad)
 
-    return n_coef,V,eps
+    return n_coef,LV,eps
 
 def correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb):
     """
@@ -1730,10 +1733,53 @@ def correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk
     
     return next_coef,next_split_coef,next_mus,next_etas,next_llk,next_pen_llk
     
+def update_coef_gen_smooth(family,mus,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,max_inner,min_inner,conv_tol):
+   """
+   Repeatedly perform Newton update with step length control to the coefficient vector - based on
+   steps outlined by WPS (2016).
+
+   References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+   """
+   # Update coefficients:
+   for inner in range(max_inner):
+      
+      # Get derivatives with respect to eta
+      d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,mus,family)
+
+      # Get derivatives with respect to coef
+      grad,H = deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs)
+
+      # Update coef and perform step size control
+      if outer > 0 or inner > 0:
+         # Update Coefficients
+         next_coef,LV,eps = newton_coef_smooth(coef,grad,H,S_emb)
+
+         # Prepare to check convergence
+         prev_llk_cur_pen = c_llk - coef.T@S_emb@coef
+
+         # Perform step length control
+         coef,split_coef,mus,etas,c_llk,c_pen_llk = correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb)
+
+         if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
+            break
+
+         if eps <= 0 and outer > 0 and inner >= (min_inner-1):
+            break # end inner loop and immediately optimize lambda again.
+      else:
+         # Simply accept next coef step on first iteration
+         coef,LV,_ = newton_coef_smooth(coef,grad,H,S_emb)
+         split_coef = np.split(coef,coef_split_idx)
+         etas = [Xs[i]@split_coef[i] for i in range(family.n_par)]
+         mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
+         c_llk = family.llk(y,*mus)
+         c_pen_llk = c_llk - coef.T@S_emb@coef
+   
+   return coef,split_coef,mus,etas,H,LV,c_llk,c_pen_llk
     
 def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
                          max_outer=50,max_inner=30,min_inner=1,conv_tol=1e-7,
-                         extend_lambda=True,progress_bar=True,n_c=10):
+                         extend_lambda=True,control_lambda=True,progress_bar=True,n_c=10):
     """
     Fits a GAMLSS model, following steps outlined by Wood, Pya, & Säfken (2016).
 
@@ -1764,39 +1810,26 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
     for outer in iterator:
 
         # Update coefficients:
-        for inner in range(max_inner):
-            
-            # Get derivatives with respect to eta
-            d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,mus,family)
-
-            # Get derivatives with respect to coef
-            grad,H = deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs)
-
-            # Update coef and perform step size control
-            if outer > 0 or inner > 0:
-                # Update Coefficients
-                next_coef,V,eps = newton_coef_smooth(coef,grad,H,S_emb)
-
-                # Prepare to check convergence
-                prev_llk_cur_pen = c_llk - coef.T@S_emb@coef
-
-                # Perform step length control
-                coef,split_coef,mus,etas,c_llk,c_pen_llk = correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb)
-
-                if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
-                    break
-            
-                if eps <= 0 and outer > 0 and inner >= (min_inner-1):
-                    break # end inner loop and immediately optimize lambda again.
-            else:
-                # Simply accept next coef step on first iteration
-                coef,V,_ = newton_coef_smooth(coef,grad,H,S_emb)
-                split_coef = np.split(coef,coef_split_idx)
-                etas = [Xs[i]@split_coef[i] for i in range(family.n_par)]
-                mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
-                c_llk = family.llk(y,*mus)
-                c_pen_llk = c_llk - coef.T@S_emb@coef
+        coef,split_coef,mus,etas,H,LV,c_llk,c_pen_llk = update_coef_gen_smooth(family,mus,y,Xs,coef,
+                                                                             coef_split_idx,S_emb,
+                                                                             c_llk,outer,max_inner,
+                                                                             min_inner,conv_tol)
         
+        # Given new coefficients compute lgdetDs, ldetHS, and bsbs - needed for efs step
+        lgdetDs = []
+        bsbs = []
+        for lti,lTerm in enumerate(gamlss_pen):
+
+            lt_rank = None
+            if FS_use_rank[lti]:
+                lt_rank = lTerm.rank
+
+            lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
+            lgdetDs.append(lgdetD)
+            bsbs.append(bsb)
+
+        total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,gamlss_pen,lgdetDs,n_coef,n_c)
+
         # Check overall convergence
         if outer > 0:
 
@@ -1811,51 +1844,70 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
             
         # We need the penalized likelihood of the model at this point for convergence control (step 2 in Wood, 2017 based on step 4 in Wood, Goude, & Shaw, 2016)
         prev_pen_llk = c_pen_llk
-
-        # Compute cholesky of V without pre-conditioning.
-        LVp, Pr, code = cpp_cholP(scp.sparse.csc_array(V))
-        if code != 0:
-            raise ValueError("Failed to solve cholesky of V.")
-        LV = apply_eigen_perm(Pr,LVp).T
         
-        # Given new coefficients compute lgdetDs and bsbs - needed for EFS step
-        lgdetDs = []
-        bsbs = []
+        # Now compute EFS step
         lam_delta = []
         for lti,lTerm in enumerate(gamlss_pen):
 
-            lt_rank = None
-            if FS_use_rank[lti]:
-                lt_rank = lTerm.rank
-
-            lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
-            dLam = step_fellner_schall_sparse(lgdetD,(LV@lTerm.D_J_emb).power(2).sum(),bsb[0,0],lTerm.lam,1)
+            lgdetD = lgdetDs[lti]
+            ldetHS = ldetHSs[lti]
+            bsb = bsbs[lti]
+            
+            #print(lgdetD-ldetHS)
+            dLam = step_fellner_schall_sparse(lgdetD,ldetHS,bsb[0,0],lTerm.lam,1)
             if extend_lambda:
                 dLam,extend_by,was_extended = extend_lambda_step(lti,lTerm.lam,dLam,extend_by,was_extended,"nesterov")
             lTerm.lam += dLam
 
             lam_delta.append(dLam)
-            lgdetDs.append(lgdetD)
-            bsbs.append(bsb)
-        
-        # Compute approximate!!! gradient of REML with respect to lambda
-        # to check if step size needs to be reduced (part of step 6 in Wood, 2017).
-        total_edf,term_edfs, Bs = calculate_edf(None,None,LV,gamlss_pen,lgdetDs,n_coef,n_c)
-        lam_grad = [grad_lambda(lgdetDs[lti],Bs[lti],bsbs[lti],1) for lti in range(len(gamlss_pen))]
-        lam_grad = np.array(lam_grad).reshape(-1,1) 
-        check = lam_grad.T @ lam_delta
-
-        # Step size control for smoothing parameters. Not obvious - because we have only approximate REMl
-        # and approximate derivative, because we drop the last term involving the derivative of the negative penalized
-        # Hessian with respect to the smoothing parameters (see section 4 in Wood & Fasiolo, 2017). However, what we
-        # can do is at least undo the acceleration if we over-shoot the approximate derivative...
-        if check[0] < 0:
-            for lti,lTerm in enumerate(gamlss_pen):
-                if was_extended[lti]:
-                    lTerm.lam -= extend_by["acc"][lti]
 
         # Build new penalties
         S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
+
+        if extend_lambda and control_lambda:
+            # Step size control for smoothing parameters. Not obvious - because we have only approximate REMl
+            # and approximate derivative, because we drop the last term involving the derivative of the negative penalized
+            # Hessian with respect to the smoothing parameters (see section 4 in Wood & Fasiolo, 2017). However, what we
+            # can do is at least undo the acceleration if we over-shoot the approximate derivative...
+
+            # First re-compute coef
+            next_coef,_,_,_,_,LV,_,next_pen_llk = update_coef_gen_smooth(family,mus,y,Xs,coef,
+                                                            coef_split_idx,S_emb,
+                                                            c_llk,outer,max_inner,
+                                                            min_inner,conv_tol)
+            
+            # Now re-compute lgdetDs, ldetHS, and bsbs
+            lgdetDs = []
+            bsbs = []
+            for lti,lTerm in enumerate(gamlss_pen):
+
+                  lt_rank = None
+                  if FS_use_rank[lti]:
+                     lt_rank = lTerm.rank
+
+                  lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,next_coef)
+                  lgdetDs.append(lgdetD)
+                  bsbs.append(bsb)
+
+            total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,gamlss_pen,lgdetDs,n_coef,n_c)
+            
+            # Compute approximate!!! gradient of REML with respect to lambda
+            # to check if step size needs to be reduced (part of step 6 in Wood, 2017).
+            lam_grad = [grad_lambda(lgdetDs[lti],ldetHSs[lti],bsbs[lti],1) for lti in range(len(gamlss_pen))]
+            lam_grad = np.array(lam_grad).reshape(-1,1) 
+            check = lam_grad.T @ lam_delta
+
+            # Now undo the acceleration if overall direction is **very** off - don't just check against 0 because
+            # our criterion is approximate, so we can be more lenient (see Wood et al., 2017). 
+            
+            if check[0] < 1e-3*-abs(prev_pen_llk):
+               for lti,lTerm in enumerate(gamlss_pen):
+                  if was_extended[lti]:
+
+                     lTerm.lam -= extend_by["acc"][lti]
+
+               # Rebuild penalties
+               S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
 
         #print([lterm.lam for lterm in gamlss_pen])
     
@@ -1864,5 +1916,8 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
 
     # Total penalty
     penalty = coef.T@S_emb@coef
+
+    # Calculate actual term-specific edf
+    term_edfs = calculate_term_edf(gamlss_pen,term_edfs)
     
-    return coef,etas,mus,wres,LV,total_edf,term_edfs,penalty
+    return coef,etas,mus,wres,H,LV,total_edf,term_edfs,penalty[0,0]
