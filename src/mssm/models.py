@@ -3,8 +3,8 @@ import scipy as scp
 import copy
 from collections.abc import Callable
 from .src.python.formula import Formula,PFormula,PTerm,build_sparse_matrix_from_formula,VarType,lhs,ConstType,Constraint,pd,embed_shared_penalties
-from .src.python.exp_fam import Link,Logit,Identity,LOG,Family,Binomial,Gaussian,GAMLSSFamily,GAUMLSS,Gamma,MULNOMLSS,GAMMALS
-from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2,solve_gammlss_sparse
+from .src.python.exp_fam import Link,Logit,Identity,LOG,Family,Binomial,Gaussian,GAMLSSFamily,GAUMLSS,Gamma,MULNOMLSS,GAMMALS,GENSMOOTHFamily
+from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2,solve_gammlss_sparse,solve_generalSmooth_sparse
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 from .src.python.penalties import PenType
 from .src.python.utils import sample_MVN,REML
@@ -129,7 +129,7 @@ class GAMM(MSSM):
                 return self.family.llk(self.formula.y_flat[self.formula.NOT_NA_flat],mu) - pen
         return None
 
-    def get_mmat(self,use_terms=None):
+    def get_mmat(self,use_terms=None,drop_NA=True):
         """
         Returns exaclty the model matrix used for fitting as a scipy.sparse.csc_array. Will throw an error when called for a model for which the model
         matrix was never former completely - i.e., when X.T@X was formed iteratively for estimation, by setting the ``file_paths`` argument of the ``Formula`` to
@@ -150,7 +150,10 @@ class GAMM(MSSM):
             var_mins = self.formula.get_var_mins()
             var_maxs = self.formula.get_var_maxs()
             factor_levels = self.formula.get_factor_levels()
-            cov_flat = self.formula.cov_flat[self.formula.NOT_NA_flat]
+            if drop_NA:
+                cov_flat = self.formula.cov_flat[self.formula.NOT_NA_flat]
+            else:
+                cov_flat = self.formula.cov_flat
 
             cov = None
             n_j = None
@@ -653,7 +656,7 @@ class GAMM(MSSM):
 
         return diff,b
 
-class GAMLSS(GAMM):
+class GAMMLSS(GAMM):
     """
     Class to fit Generalized Additive Mixed Models of Location Scale and Shape (see Rigby & Stasinopoulos, 2005).
 
@@ -668,7 +671,7 @@ class GAMLSS(GAMM):
     
     :param formulas: A list of formulas for the GAMMLS model
     :type variables: Formula
-    :param family: A GAMLSS family. Currently only ``Gaussian`` is implemented.
+    :param family: A GAMMLSS family. Currently only ``Gaussian`` is implemented.
     :type Family
     """
     def __init__(self, formulas: [Formula], family: GAMLSSFamily):
@@ -679,6 +682,7 @@ class GAMLSS(GAMM):
         self.overall_preds = None # etas
         self.overall_penalties = None
         self.overall_mus = None # Expected values for each parameter of response distribution
+        self.hessian = None
 
     
     def get_pars(self):
@@ -698,7 +702,7 @@ class GAMLSS(GAMM):
 
         return None
 
-    def get_mmat(self,use_terms=None):
+    def get_mmat(self,use_terms=None,drop_NA=True):
         """
         Returns a list containing exaclty the model matrices used for fitting as a ``scipy.sparse.csc_array``. Will raise an error when fitting was not completed before calling this function.
         """
@@ -708,7 +712,7 @@ class GAMLSS(GAMM):
                 raise ValueError("Model matrices cannot be returned if penalties have not been initialized. Call model.fit() first.")
             
             mod = GAMM(form,family=Gaussian())
-            Xs.append(mod.get_mmat(use_terms=use_terms))
+            Xs.append(mod.get_mmat(use_terms=use_terms,drop_NA=drop_NA))
         return Xs
     
     def print_smooth_terms(self, pen_cutoff=0.2):
@@ -750,12 +754,12 @@ class GAMLSS(GAMM):
          - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
         """
 
-        if self.overall_coef is None or self.__hessian is None:
+        if self.overall_coef is None or self.hessian is None:
             raise ValueError("Model needs to be estimated before evaluating the REML score. Call model.fit()")
         
         llk = self.get_llk(False)
         
-        reml = REML(llk,-1*self.__hessian,self.overall_coef,1,self.overall_penalties)[0,0]
+        reml = REML(llk,-1*self.hessian,self.overall_coef,1,self.overall_penalties)[0,0]
         return reml
     
     def get_resid(self):
@@ -778,7 +782,7 @@ class GAMLSS(GAMM):
         :rtype: [float]
         """
 
-        if self.overall_coef is None or self.__hessian is None:
+        if self.overall_coef is None or self.hessian is None:
             raise ValueError("Model needs to be estimated before evaluating the residuals. Call model.fit()")
 
         if isinstance(self.family,MULNOMLSS):
@@ -833,7 +837,7 @@ class GAMLSS(GAMM):
         else:
             m_coef = scp.stats.norm.rvs(size=self.formulas[0].n_coef,random_state=seed).reshape(-1,1)
 
-        # Get GAMLSS penalties
+        # Get GAMMLSS penalties
         shared_penalties = embed_shared_penalties(self.formulas)
         gamlss_pen = [pen for pens in shared_penalties for pen in pens]
         self.overall_penalties = gamlss_pen
@@ -864,7 +868,7 @@ class GAMLSS(GAMM):
         self.penalty = penalty
         self.coef_split_idx = coef_split_idx
         self.overall_lvi = LV
-        self.__hessian = H
+        self.hessian = H
     
     def sample_post(self, n_ps, use_post=None, deviations=False, seed=None, par=0):
         """
@@ -917,7 +921,7 @@ class GAMLSS(GAMM):
         predictions for the standard deviation will thus reflect the log of the standard deviation. To get the predictions on the standard deviation scale,
         one can apply the inverse log-link function to the predictions and the CI-bounds on the scale of the respective linear predictor.::
 
-            model = GAMLSS(formulas,GAUMLSS([Identity(),LOG()])) # Fit a Gaussian GAMMLSS model
+            model = GAMMLSS(formulas,GAUMLSS([Identity(),LOG()])) # Fit a Gaussian GAMMLSS model
             model.fit()
             # Mean predictions don't have to be transformed since the Identity link is used for this predictor.
             mu_mean,_,b_mean = model.predict(0,None,new_dat,ci=True)
@@ -1043,3 +1047,146 @@ class GAMLSS(GAMM):
         self.lvi = None
 
         return pred_diff
+    
+
+class GSMM(GAMMLSS):
+    """
+    Class to fit General Smooth/Mixed Models (see Wood, Pya, & Säfken; 2016).
+
+    References:
+
+     - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
+     - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models. https://doi.org/10.1111/j.1467-9868.2010.00749.x
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+    
+    
+    :param formulas: A list of formulas, one per parameter of the likelihood that is to be modeled as a smooth model
+    :type variables: Formula
+    :param family: A GENSMOOTHFamily family.
+    :type GENSMOOTHFamily
+    """
+
+    def __init__(self, formulas: [Formula], family: GENSMOOTHFamily):
+        super().__init__(formulas, family)
+    
+    def get_llk(self,penalized:bool=True,drop_NA=True):
+        """Get the (penalized) log-likelihood of the estimated model given the data used to estimate it."""
+
+        pen = 0
+        if penalized:
+            pen = self.penalty
+        if self.overall_coef is not None:
+
+            y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
+            # Build penalties and model matrices for all formulas
+            Xs = []
+            for form in self.formulas:
+                mod = GAMM(form,family=Gaussian())
+                Xs.append(mod.get_mmat(drop_NA=drop_NA))
+
+            return self.family.llk(self.overall_coef,self.coef_split_idx,y,Xs) - pen
+
+        return None
+
+    def get_reml(self,drop_NA=True):
+        """
+        Get's the Laplcae approximate REML (Restrcited Maximum Likelihood) score for the estimated lambda values (see Wood, 2011).
+
+        References:
+
+         - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models.
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+        """
+
+        if self.overall_coef is None or self.hessian is None:
+            raise ValueError("Model needs to be estimated before evaluating the REML score. Call model.fit()")
+        
+        llk = self.get_llk(False,drop_NA=drop_NA)
+        
+        reml = REML(llk,-1*self.hessian,self.overall_coef,1,self.overall_penalties)[0,0]
+        return reml
+    
+    def get_resid(self):
+        """What qualifies as "residual" will differ vastly between different implementations of this class, so this method simply returns ``None``.
+        """
+        return None
+    
+    def fit(self,init_coef=None,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,progress_bar=True,n_cores=10,seed=0,method="Newton",drop_NA=True):
+        """
+        Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
+
+        :param max_outer: The maximum number of fitting iterations.
+        :type max_outer: int,optional
+        :param max_inner: The maximum number of fitting iterations to use by the inner Newton step for coefficients.
+        :type max_inner: int,optional
+        :param min_inner: The minimum number of fitting iterations to use by the inner Newton step for coefficients.
+        :type min_inner: int,optional
+        :param conv_tol: The relative (change in penalized deviance is compared against ``conv_tol`` * previous penalized deviance) criterion used to determine convergence.
+        :type conv_tol: float,optional
+        :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the number of new smoothing penalty proposals necessary. Enabled by default.
+        :type extend_lambda: bool,optional
+        :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for whether or not they (approxiately) increase the Laplace approximate restricted maximum likelihood of the model. Enabled by default.
+        :type control_lambda: bool,optional
+        :param progress_bar: Whether progress should be displayed (convergence info and time estimate). Defaults to True.
+        :type progress_bar: bool,optional
+        :param n_cores: Number of cores to use during parts of the estimation that can be done in parallel. Defaults to 10.
+        :type n_cores: int,optional
+        :param seed: Seed to use for random parameter initialization. Defaults to 0
+        :type seed: int,optional
+        :param method: Which method to use to estimate the coefficients - supports "Newton" and "BFGS". In case of the former, ``self.family`` needs to implement :func:``gradient`` and :func:``hessian``. Defaults to "Newton"
+        :type method: str,optional
+        :param drop_NA: Whether to drop rows in the **model matrices** corresponding to NAs in the dependent variable vector. Defaults to True.
+        :type drop_NA: bool,optional
+        """
+        
+        # Get y
+        y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
+
+        if not self.formulas[0].get_lhs().f is None:
+            # Optionally apply function to dep. var. before fitting. Not sure why that would be desirable for this model class...
+            y = self.formulas[0].get_lhs().f(y)
+
+        # Build penalties and model matrices for all formulas
+        Xs = []
+        for form in self.formulas:
+            mod = GAMM(form,family=Gaussian())
+            form.build_penalties()
+            Xs.append(mod.get_mmat(drop_NA=drop_NA))
+
+        # Get all penalties
+        shared_penalties = embed_shared_penalties(self.formulas)
+        shared_penalties = [sp for sp in shared_penalties if len(sp) > 0]
+
+        smooth_pen = [pen for pens in shared_penalties for pen in pens]
+        self.overall_penalties = smooth_pen
+
+        # Start with much weaker penalty than for GAMs
+        for pen_i in range(len(smooth_pen)):
+            smooth_pen[pen_i].lam = 0.001
+
+        # Optionally Initialize overall coefficients
+        form_n_coef = [form.n_coef for form in self.formulas]
+        n_coef = np.sum(form_n_coef)
+
+        if not init_coef is None:
+            coef = np.array(init_coef).reshape(-1,1)
+        else:
+            coef = scp.stats.norm.rvs(size=n_coef,random_state=seed).reshape(-1,1)
+
+        coef_split_idx = form_n_coef[:-1]
+        for coef_i in range(1,len(coef_split_idx)):
+            coef_split_idx[coef_i] += coef_split_idx[coef_i-1]
+        
+        # Now fit model
+        coef,H,LV,total_edf,term_edfs,penalty = solve_generalSmooth_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,smooth_pen,
+                                                                           max_outer,max_inner,min_inner,conv_tol,extend_lambda,
+                                                                           control_lambda,progress_bar,n_cores,method)
+        
+        self.overall_coef = coef
+        self.edf = total_edf
+        self.overall_term_edf = term_edfs
+        self.penalty = penalty
+        self.coef_split_idx = coef_split_idx
+        self.overall_lvi = LV
+        self.hessian = H

@@ -1084,3 +1084,71 @@ class GAMMALS(GAMLSSFamily):
       """
       res = np.sign(y - mu) * np.sqrt(Gamma().D(y,mu)/scale)
       return res
+   
+
+class GENSMOOTHFamily:
+   """Base-class for General Smooth "families" as discussed by Wood, Pya, & Säfken (2016).
+
+   Additional parameters needed for likelihood, gradient, or hessian evaluation can be passed along via the ``llkargs``.
+
+
+   References:
+
+    - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+
+   :param pars: Number of parameters of the likelihood.
+   :type pars: int
+   :param links: List of Link functions for each parameter of the likelihood, e.g., `links=[Identity(),LOG()]`.
+   :type links: [Link]
+   
+   """
+   def __init__(self,pars:int,links:[Link],*llkargs) -> None:
+      self.n_par = pars
+      self.links = links
+      self.llkargs = llkargs # Any arguments that need to be passed to evaluate the likelihood/gradiant/hessian
+
+   def llk(self,coef,coef_split_idx,y,Xs):
+      """log-probability of data under given model.
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param coef: The current coefficient estimate (as np.array of shape (-1,) - so it has to be flattened!).
+      :type coef: [float]
+      :param coef_split_idx: A list used to split (via :func:``np.split``) the ``coef`` into the sub-sets associated with each paramter of the llk.
+      :type coef_split_idx: [int]
+      :param y: The vector containing each observation.
+      :type y: [float]
+      :param Xs: A list of sparse model matrices per likelihood parameter.
+      :type Xs: [scp.sparse.csc_array]
+      """
+      pass
+   
+   def gradient(self,coef,coef_split_idx,y,Xs):
+       """Function to evaluate the gradient of the llk at current coefficient estimate ``coef``.
+
+      :param coef: The current coefficient estimate (as np.array of shape (-1,) - so it has to be flattened!).
+      :type coef: [float]
+      :param coef_split_idx: A list used to split (via :func:``np.split``) the ``coef`` into the sub-sets associated with each paramter of the llk.
+      :type coef_split_idx: [int]
+      :param y: The vector containing each observation.
+      :type y: [float]
+      :param Xs: A list of sparse model matrices per likelihood parameter.
+      :type Xs: [scp.sparse.csc_array]
+       """
+       pass
+   
+   def hessian(self,coef,coef_split_idx,y,Xs):
+       """Function to evaluate the hessian of the llk at current coefficient estimate ``coef``.
+
+      :param coef: The current coefficient estimate (as np.array of shape (-1,) - so it has to be flattened!).
+      :type coef: [float]
+      :param coef_split_idx: A list used to split (via :func:``np.split``) the ``coef`` into the sub-sets associated with each paramter of the llk.
+      :type coef_split_idx: [int]
+      :param y: The vector containing each observation.
+      :type y: [float]
+      :param Xs: A list of sparse model matrices per likelihood parameter.
+      :type Xs: [scp.sparse.csc_array]
+       """
+       pass

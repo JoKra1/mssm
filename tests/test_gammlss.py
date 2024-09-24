@@ -26,7 +26,7 @@ class Test_GAUMLS:
     family = GAUMLSS([Identity(),LOG()])
 
     # Now define the model and fit!
-    model = GAMLSS(formulas,family)
+    model = GAMMLSS(formulas,family)
     model.fit()
 
     def test_GAMedf(self):
@@ -76,7 +76,7 @@ class Test_GAMMALS:
     family = GAMMALS([LOG(),LOG()])
 
     # Now define the model and fit!
-    model = GAMLSS(formulas,family)
+    model = GAMMLSS(formulas,family)
     model.fit()
 
     def test_GAMedf(self):

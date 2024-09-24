@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 before-test = "ls"
 skip = ["pp*","cp313-musllinux*"]
 test-skip = "*-win32 *i686"
-test-requires = ["pytest", "pytest-cov", "mssmViz"]
+test-requires = ["pytest", "pytest-cov", "mssmViz", "numdifftools"]
 test-command = "pytest {project}/tests --cov={project}"
 
 [project]
@@ -23,7 +23,7 @@ name = "mssm"
 authors = [
   { name="Joshua Krause", email="jokra001@proton.me" }
 ]
-description = "Toolbox for estimating Generalized Additive Mixed Models (GAMMs), Generalized Additive Mixed Models of Location Scale and Shape (GAMMLSS), and more general smooth models such as semi Markov-switching GAMMs (sMs-GAMMs; experimental)."
+description = "Toolbox for estimating Generalized Additive Mixed Models (GAMMs), Generalized Additive Mixed Models of Location Scale and Shape (GAMMLSS), and more general smooth models."
 readme = "README.md"
 requires-python = ">=3.10"
 classifiers = [

@@ -1,14 +1,14 @@
 import numpy as np
 import scipy as scp
 import math
-from ...models import GAMM,GAMLSS
+from ...models import GAMM,GAMMLSS
 
 
 def generate_mssm_test1(model):
-    """Generates copy-pase code for multiple test-cases for GAMM and GAMLSS models.
+    """Generates copy-pase code for multiple test-cases for GAMM and GAMMLSS models.
 
-    :param model: GAMM or GAMLSS model
-    :type model: GAMM or GAMLSS
+    :param model: GAMM or GAMMLSS model
+    :type model: GAMM or GAMMLSS
     """
 
     # EDF test
@@ -17,7 +17,7 @@ def generate_mssm_test1(model):
     print(edf_test_str,"\n")
 
     # sigma test
-    if isinstance(model,GAMLSS) == False:
+    if isinstance(model,GAMMLSS) == False:
         coef, sigma = model.get_pars()
         sigma_test = f"def test_GAMsigma(self):\n\t_, sigma = self.model.get_pars()\n\tassert round(sigma,ndigits=3) == {round(sigma,ndigits=3)}"
 
@@ -26,7 +26,7 @@ def generate_mssm_test1(model):
         coef = model.overall_coef
 
     # coef test
-    if isinstance(model,GAMLSS) == False:
+    if isinstance(model,GAMMLSS) == False:
         coef_test = "def test_GAMcoef(self):\n\tcoef, _ = self.model.get_pars()\n\tassert np.allclose(coef,np.array(["
     else:
         coef_test = "def test_GAMcoef(self):\n\tcoef = self.model.overall_coef\n\tassert np.allclose(coef,np.array(["
@@ -44,7 +44,7 @@ def generate_mssm_test1(model):
     print(coef_test,"\n")
 
     # Lambda test
-    if isinstance(model,GAMLSS) == False:
+    if isinstance(model,GAMMLSS) == False:
         pens = model.formula.penalties
         lambda_test = "def test_GAMlam(self):\n\tlam = np.array([p.lam for p in self.model.formula.penalties])\n\tassert np.allclose(lam,np.array(["
     else:

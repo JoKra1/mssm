@@ -1691,10 +1691,9 @@ def newton_coef_smooth(coef,grad,H,S_emb):
 
     return n_coef,LV,eps
 
-def correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb):
+def correct_coef_step_gammlss(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb):
     """
-    Apply step size correction to Newton update for general smooth
-    models and GAMLSS models, as discussed by WPS (2016).
+    Apply step size correction to Newton update for GAMLSS models, as discussed by WPS (2016).
 
     References:
      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
@@ -1725,15 +1724,14 @@ def correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk
 
         next_mus = [family.links[i].fi(next_etas[i]) for i in range(family.n_par)]
         
-        # Step size control for newton step. Half it if we do not
-        # observe an increase in penalized likelihood (WPS, 2016)
+        # Re-evaluate penalized likelihood
         next_llk = family.llk(y,*next_mus)
         next_pen_llk = next_llk - next_coef.T@S_emb@next_coef
         n_checks += 1
     
     return next_coef,next_split_coef,next_mus,next_etas,next_llk,next_pen_llk
     
-def update_coef_gen_smooth(family,mus,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,max_inner,min_inner,conv_tol):
+def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,max_inner,min_inner,conv_tol):
    """
    Repeatedly perform Newton update with step length control to the coefficient vector - based on
    steps outlined by WPS (2016).
@@ -1759,7 +1757,7 @@ def update_coef_gen_smooth(family,mus,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer
          prev_llk_cur_pen = c_llk - coef.T@S_emb@coef
 
          # Perform step length control
-         coef,split_coef,mus,etas,c_llk,c_pen_llk = correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb)
+         coef,split_coef,mus,etas,c_llk,c_pen_llk = correct_coef_step_gammlss(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb)
 
          if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
             break
@@ -1810,7 +1808,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
     for outer in iterator:
 
         # Update coefficients:
-        coef,split_coef,mus,etas,H,LV,c_llk,c_pen_llk = update_coef_gen_smooth(family,mus,y,Xs,coef,
+        coef,split_coef,mus,etas,H,LV,c_llk,c_pen_llk = update_coef_gammlss(family,mus,y,Xs,coef,
                                                                              coef_split_idx,S_emb,
                                                                              c_llk,outer,max_inner,
                                                                              min_inner,conv_tol)
@@ -1871,7 +1869,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
             # can do is at least undo the acceleration if we over-shoot the approximate derivative...
 
             # First re-compute coef
-            next_coef,_,_,_,_,LV,_,next_pen_llk = update_coef_gen_smooth(family,mus,y,Xs,coef,
+            next_coef,_,_,_,_,LV,_,next_pen_llk = update_coef_gammlss(family,mus,y,Xs,coef,
                                                             coef_split_idx,S_emb,
                                                             c_llk,outer,max_inner,
                                                             min_inner,conv_tol)
@@ -1921,3 +1919,282 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
     term_edfs = calculate_term_edf(gamlss_pen,term_edfs)
     
     return coef,etas,mus,wres,H,LV,total_edf,term_edfs,penalty[0,0]
+
+################################################ General Smooth model code ################################################
+
+def correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb):
+    """
+    Apply step size correction to Newton update for general smooth models, as discussed by WPS (2016).
+
+    References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+    """
+    
+    # Step size control for newton step.
+    next_llk = family.llk(next_coef,coef_split_idx,y,Xs)
+    
+    # Evaluate improvement of penalized llk under new and old coef - but in both
+    # cases for current lambda (see Wood, Li, Shaddick, & Augustin; 2017)
+    next_pen_llk = next_llk - next_coef.T@S_emb@next_coef
+    prev_llk_cur_pen = c_llk - coef.T@S_emb@coef
+    n_checks = 0
+    while next_pen_llk < prev_llk_cur_pen:
+        if n_checks > 30:
+            next_coef = coef
+            
+        # Half it if we do not observe an increase in penalized likelihood (WPS, 2016)
+        next_coef = (coef + next_coef)/2
+        
+        # Update pen_llk
+        next_llk = family.llk(next_coef,coef_split_idx,y,Xs)
+        next_pen_llk = next_llk - next_coef.T@S_emb@next_coef
+        n_checks += 1
+    
+    return next_coef,next_llk,next_pen_llk
+    
+def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,max_inner,min_inner,conv_tol):
+   """
+   Repeatedly perform Newton update with step length control to the coefficient vector - based on
+   steps outlined by WPS (2016).
+
+   References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+   """
+   # Update coefficients:
+   for inner in range(max_inner):
+      
+      # Get llk derivatives with respect to coef
+      grad = family.gradient(coef,coef_split_idx,y,Xs)
+      H = family.hessian(coef,coef_split_idx,y,Xs)
+
+      # Update coef and perform step size control
+      if outer > 0 or inner > 0:
+         # Update Coefficients
+         next_coef,LV,eps = newton_coef_smooth(coef,grad,H,S_emb)
+
+         # Prepare to check convergence
+         prev_llk_cur_pen = c_llk - coef.T@S_emb@coef
+
+         # Perform step length control
+         coef,c_llk,c_pen_llk = correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb)
+
+         if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
+            break
+
+         if eps <= 0 and outer > 0 and inner >= (min_inner-1):
+            break # end inner loop and immediately optimize lambda again.
+      else:
+         # Simply accept next coef step on first iteration
+         coef,LV,_ = newton_coef_smooth(coef,grad,H,S_emb)
+         c_llk = family.llk(coef,coef_split_idx,y,Xs)
+         c_pen_llk = c_llk - coef.T@S_emb@coef
+   
+   return coef,H,LV,c_llk,c_pen_llk
+
+
+def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smooth_pen,
+                              max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,
+                              extend_lambda=True,control_lambda=True,progress_bar=True,
+                              n_c=10,method="Newton"):
+    """
+    Fits a general smooth model, following steps outlined by Wood, Pya, & Säfken (2016). Essentially,
+    an even more general version of :func:``solve_gammlss_sparse`` that requires only a function to compute
+    the log-likelihood, a function to compute the gradient of said likelihood with respect to the coefficients,
+    and a function to compute the hessian of said likelihood with respect to the coefficients. In case computation
+    of the hessian is too expensive, BFGS ("Broyden, Fletcher, Goldfarb, and Shanno algorithm", see; Nocedal & Wright; 2006)
+    estimation can be substituted for the full Newton step. Note that even though the estimate of the inverse of the Hessian
+    obtained from BFGS could be used for confidence interval computations (and model comparisons) this estimate will not
+    always be close to the actual inverse of the Hessian - resulting in very poor coverage of the ground truth.
+
+    References:
+
+      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+      - Nocedal & Wright (2006). Numerical Optimization. Springer New York.
+    """
+    
+    # total number of coefficients
+    n_coef = np.sum(form_n_coef)
+
+    extend_by = initialize_extension("nesterov",smooth_pen)
+    was_extended = [False for _ in enumerate(smooth_pen)]
+
+    # Build current penalties
+    S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
+
+    # Compute penalized likelihood for current estimate
+    c_llk = family.llk(coef,coef_split_idx,y,Xs)
+    c_pen_llk = c_llk - coef.T@S_emb@coef
+    
+    iterator = range(max_outer)
+    if progress_bar:
+        iterator = tqdm(iterator,desc="Fitting",leave=True)
+
+    if method != "Newton":
+        # Define negative penalized likelihood function to be minimized via BFGS
+        def __neg_pen_llk(coef,coef_split_idx,y,Xs,family,S_emb):
+            neg_llk = -1 * family.llk(coef,coef_split_idx,y,Xs)
+            return neg_llk + coef.T@S_emb@coef
+    
+    for outer in iterator:
+
+        # Update coefficients:
+        if method == "Newton":
+            coef,H,LV,c_llk,c_pen_llk = update_coef_gen_smooth(family,y,Xs,coef,
+                                                            coef_split_idx,S_emb,
+                                                            c_llk,outer,max_inner,
+                                                            min_inner,conv_tol)
+        else:
+            opt = scp.optimize.minimize(__neg_pen_llk,
+                                        np.ndarray.flatten(coef),
+                                        args=(coef_split_idx,y,Xs,family,S_emb),
+                                        method="BFGS",
+                                        options={"maxiter":max_inner,
+                                                 "gtol":conv_tol})
+            
+            # Get coefficient estimate
+            coef = opt["x"].reshape(-1,1)
+
+            # Compute penalized likelihood for current estimate
+            c_llk = family.llk(coef,coef_split_idx,y,Xs)
+            c_pen_llk = c_llk - coef.T@S_emb@coef
+
+            # Get inverse of Hessian of penalized likelihood
+            V = scp.sparse.csc_array(opt["hess_inv"])
+            V.eliminate_zeros()
+
+            # Get Cholesky factor needed for (accelerated) EFS
+            LVPT, P, code = cpp_cholP(V)
+            LVT = apply_eigen_perm(P,LVPT)
+            LV = LVT.T
+        
+        # Given new coefficients compute lgdetDs, ldetHS, and bsbs - needed for efs step
+        lgdetDs = []
+        bsbs = []
+        for lti,lTerm in enumerate(smooth_pen):
+
+            lt_rank = None
+            if FS_use_rank[lti]:
+                lt_rank = lTerm.rank
+
+            lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
+            lgdetDs.append(lgdetD)
+            bsbs.append(bsb)
+
+        total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,smooth_pen,lgdetDs,n_coef,n_c)
+
+        # Check overall convergence
+        if outer > 0:
+
+            if progress_bar:
+                iterator.set_description_str(desc="Fitting - Conv.: " + "{:.2e}".format((np.abs(prev_pen_llk - c_pen_llk) - conv_tol*np.abs(c_pen_llk))[0,0]), refresh=True)
+
+            if np.abs(prev_pen_llk - c_pen_llk) < conv_tol*np.abs(c_pen_llk):
+                if progress_bar:
+                    iterator.set_description_str(desc="Converged!", refresh=True)
+                    iterator.close()
+                break
+        
+        # We need the penalized likelihood of the model at this point for convergence control (step 2 in Wood, 2017 based on step 4 in Wood, Goude, & Shaw, 2016)
+        prev_pen_llk = c_pen_llk
+
+        # Now compute EFS step
+        lam_delta = []
+        for lti,lTerm in enumerate(smooth_pen):
+
+            lgdetD = lgdetDs[lti]
+            ldetHS = ldetHSs[lti]
+            bsb = bsbs[lti]
+            
+            dLam = step_fellner_schall_sparse(lgdetD,ldetHS,bsb[0,0],lTerm.lam,1)
+            #print(lgdetD-ldetHS,dLam)
+
+            if extend_lambda:
+                dLam,extend_by,was_extended = extend_lambda_step(lti,lTerm.lam,dLam,extend_by,was_extended,"nesterov")
+            lTerm.lam += dLam
+
+            lam_delta.append(dLam)
+
+        # Build new penalties
+        S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
+
+        if extend_lambda and control_lambda:
+            # Step size control for smoothing parameters. Not obvious - because we have only approximate REMl
+            # and approximate derivative, because we drop the last term involving the derivative of the negative penalized
+            # Hessian with respect to the smoothing parameters (see section 4 in Wood & Fasiolo, 2017). However, what we
+            # can do is at least undo the acceleration if we over-shoot the approximate derivative...
+
+            # First re-compute coef
+            if method == "Newton":
+                next_coef,_,LV,_,_ = update_coef_gen_smooth(family,y,Xs,coef,
+                                                                coef_split_idx,S_emb,
+                                                                c_llk,outer,max_inner,
+                                                                min_inner,conv_tol)
+            else:
+                opt = scp.optimize.minimize(__neg_pen_llk,
+                                            np.ndarray.flatten(coef),
+                                            args=(coef_split_idx,y,Xs,family,S_emb),
+                                            method="BFGS",
+                                            options={"maxiter":max_inner,
+                                                     "gtol":conv_tol})
+
+                # Get next coefficient estimate
+                next_coef = opt["x"].reshape(-1,1)
+
+                # Get inverse of Hessian of penalized likelihood
+                V = scp.sparse.csc_array(opt["hess_inv"])
+                V.eliminate_zeros()
+
+                # Get Cholesky factor needed for (accelerated) EFS
+                LVPT, P, code = cpp_cholP(V)
+                LVT = apply_eigen_perm(P,LVPT)
+                LV = LVT.T
+            
+            # Now re-compute lgdetDs, ldetHS, and bsbs
+            lgdetDs = []
+            bsbs = []
+            for lti,lTerm in enumerate(smooth_pen):
+
+                lt_rank = None
+                if FS_use_rank[lti]:
+                    lt_rank = lTerm.rank
+
+                lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,next_coef)
+                lgdetDs.append(lgdetD)
+                bsbs.append(bsb)
+
+            total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,smooth_pen,lgdetDs,n_coef,n_c)
+            
+            # Compute approximate!!! gradient of REML with respect to lambda
+            # to check if step size needs to be reduced (part of step 6 in Wood, 2017).
+            lam_grad = [grad_lambda(lgdetDs[lti],ldetHSs[lti],bsbs[lti],1) for lti in range(len(smooth_pen))]
+            lam_grad = np.array(lam_grad).reshape(-1,1) 
+            check = lam_grad.T @ lam_delta
+
+            # Now undo the acceleration if overall direction is **very** off - don't just check against 0 because
+            # our criterion is approximate, so we can be more lenient (see Wood et al., 2017). 
+            if check[0] < 1e-3*-abs(prev_pen_llk):
+                for lti,lTerm in enumerate(smooth_pen):
+                    if was_extended[lti]:
+
+                        lTerm.lam -= extend_by["acc"][lti]
+
+                # Rebuild penalties
+                S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
+
+        #print([lterm.lam for lterm in smooth_pen])
+    
+    # Total penalty
+    penalty = coef.T@S_emb@coef
+
+    # Calculate actual term-specific edf
+    term_edfs = calculate_term_edf(smooth_pen,term_edfs)
+
+    if method != "Newton":
+        # Get an apparoximation of the Hessian of the likelihood
+        LHPT = compute_Linv(LVPT)
+        LHT = apply_eigen_perm(P,LHPT)
+        H = LHT.T@LHT # approximately: negative Hessian of llk + S_emb
+        H -= S_emb # approximately: negative Hessian of llk 
+        H *= -1 # approximately: Hessian of llk 
+
+    return coef,H,LV,total_edf,term_edfs,penalty[0,0]
