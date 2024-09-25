@@ -1112,7 +1112,7 @@ class GSMM(GAMMLSS):
         """
         return None
     
-    def fit(self,init_coef=None,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,progress_bar=True,n_cores=10,seed=0,method="Newton",drop_NA=True):
+    def fit(self,init_coef=None,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,restart=False,progress_bar=True,n_cores=10,seed=0,method="Newton",drop_NA=True):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -1128,6 +1128,8 @@ class GSMM(GAMMLSS):
         :type extend_lambda: bool,optional
         :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for whether or not they (approxiately) increase the Laplace approximate restricted maximum likelihood of the model. Enabled by default.
         :type control_lambda: bool,optional
+        :param restart: Whether fitting should be resumed. Only possible if the same model has previously completed at least one fitting iteration.
+        :type restart: bool,optional
         :param progress_bar: Whether progress should be displayed (convergence info and time estimate). Defaults to True.
         :type progress_bar: bool,optional
         :param n_cores: Number of cores to use during parts of the estimation that can be done in parallel. Defaults to 10.
@@ -1151,7 +1153,8 @@ class GSMM(GAMMLSS):
         Xs = []
         for form in self.formulas:
             mod = GAMM(form,family=Gaussian())
-            form.build_penalties()
+            if self.overall_penalties is None or restart == False:
+                form.build_penalties()
             Xs.append(mod.get_mmat(drop_NA=drop_NA))
 
         # Get all penalties
