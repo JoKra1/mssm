@@ -277,3 +277,55 @@ class Test_Gamma_GAMM:
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
         assert round(llk,ndigits=3) == -4215.695
+
+class Test_Overlap_GAMM:
+    
+    # Simulate time-series based on two events that elicit responses which vary in their overlap.
+    # The summed responses + a random intercept + noise is then the signal.
+    overlap_dat,onsets1,onsets2 = sim7(100,1,2,seed=20)
+
+    # Model below tries to recover the shape of the two responses + the random intercepts:
+    overlap_formula = Formula(lhs("y"),[irf(["time"],onsets1,nk=15,basis_kwargs=[{"max_c":200,"min_c":0,"convolve":True}]),
+                                        irf(["time"],onsets2,nk=15,basis_kwargs=[{"max_c":200,"min_c":0,"convolve":True}]),
+                                        ri("factor")],
+                                        data=overlap_dat,
+                                        series_id="series")
+
+    model = GAMM(overlap_formula,Gaussian())
+    model.fit()
+
+    def test_GAMedf(self):
+        assert round(self.model.edf,ndigits=3) == 54.547 
+
+    def test_GAMsigma(self):
+        _, sigma = self.model.get_pars()
+        assert round(sigma,ndigits=3) == 3.91 
+
+    def test_GAMcoef(self):
+        coef, _ = self.model.get_pars()
+        assert np.allclose(coef,np.array([0.5414381914556667, 0.9027253840593255, 1.2394888139729652, 1.5408974325924492, 1.793282236604561,
+                                        1.9605024352161622, 2.0342513059209852, 2.018245078562129, 1.9481936897353123, 1.8291845270086586,
+                                        1.6414046863148892, 1.3759062972662246, 1.0473698479784739, 0.6781931660932433, 0.2896778273936524,
+                                        5.018807622568596, 8.155536921854802, 9.057658829442943, 8.118583945017296, 6.009795403374646,
+                                        3.4570230629826937, 2.4450369885874026, 2.417918115195418, 3.251836238689801, 3.4258032416231323,
+                                        2.6532468387795594, 2.0300261093566743, 0.731209208180373, -0.5804637873111934, -0.18465710319341722,
+                                        1.0285145982624768, 0.4524899052941147, 0.4005568257213123, -0.823004121469387, -0.6499737442921556,
+                                        -0.8960486421242312, -1.0453212699599603, 0.17551387787392425, -0.17550250699168513, 1.71876796701693,
+                                        1.0220803116075616, 0.7907656543437932, 0.18640800710629646, 0.10229679462403848, -3.032559645373398,
+                                        1.243208243377598, 1.0817416861889755, -0.48123485830242374, 0.031615091580908194, 0.23411521023216836,
+                                        1.4525117994309633, 0.24783178423729385, -1.2968663600345203, -2.358827075195528, -0.7007707103060459,
+                                        -0.943074112905826, 0.7718437972508059, 2.2734085553443526, -0.6620713954858437, -1.3234198671472517,
+                                        0.7227119874087831, -0.9365821180001762, 0.16427911329019607, -1.5908026012661671, -0.9487180564832598,
+                                        1.0573347505186208, 0.999116483922564, -1.09744680946051, 0.7031765530477949, 0.799916646746684])) 
+
+    def test_GAMlam(self):
+        lam = np.array([p.lam for p in self.model.formula.penalties])
+        assert np.allclose(lam,np.array([227.8068139397452, 1.8954868106567002, 3.04743103446127])) 
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        assert round(reml,ndigits=3) == -7346.922 
+
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        assert round(llk,ndigits=3) == -7232.595

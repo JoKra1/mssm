@@ -92,11 +92,13 @@ class GAMM:
         """
         if self.formula.penalties is None:
             raise ValueError("Model matrix cannot be returned if penalties have not been initialized. Call model.fit() or model.formula.build_penalties() first.")
+        elif len(self.formula.file_paths) != 0:
+            raise NotImplementedError("Cannot return the model-matrix if X.T@X was formed iteratively.")
         else:
             terms = self.formula.get_terms()
             has_intercept = self.formula.has_intercept()
             ltx = self.formula.get_linear_term_idx()
-            irstx = []
+            irstx = self.formula.get_ir_smooth_term_idx()
             stx = self.formula.get_smooth_term_idx()
             rtx = self.formula.get_random_term_idx()
             var_types = self.formula.get_var_types()
@@ -109,13 +111,20 @@ class GAMM:
             else:
                 cov_flat = self.formula.cov_flat
 
-            cov = None
+            if len(irstx) > 0:
+                cov_flat = self.formula.cov_flat # Need to drop NA rows **after** building!
+                cov = self.formula.cov
+            else:
+                cov = None
 
             # Build the model matrix with all information from the formula
             model_mat = build_sparse_matrix_from_formula(terms,has_intercept,
                                                         ltx,irstx,stx,rtx,var_types,var_map,
                                                         var_mins,var_maxs,factor_levels,
                                                         cov_flat,cov,use_only=use_terms)
+            
+            if len(irstx) > 0 and drop_NA:
+                model_mat = model_mat[self.formula.NOT_NA_flat,:]
             
             return model_mat
     
@@ -279,7 +288,7 @@ class GAMM:
             terms = self.formula.get_terms()
             has_intercept = self.formula.has_intercept()
             ltx = self.formula.get_linear_term_idx()
-            irstx = []
+            irstx = self.formula.get_ir_smooth_term_idx()
             stx = self.formula.get_smooth_term_idx()
             rtx = self.formula.get_random_term_idx()
             var_types = self.formula.get_var_types()
@@ -288,8 +297,14 @@ class GAMM:
             var_maxs = self.formula.get_var_maxs()
             factor_levels = self.formula.get_factor_levels()
 
-            cov = None
             cov_flat = self.formula.cov_flat[self.formula.NOT_NA_flat]
+            
+            if len(irstx) > 0:
+                cov_flat = self.formula.cov_flat # Need to drop NA rows **after** building!
+                cov = self.formula.cov
+            else:
+                cov = None
+
             y_flat = self.formula.y_flat[self.formula.NOT_NA_flat]
 
             if not self.formula.get_lhs().f is None:
@@ -326,6 +341,8 @@ class GAMM:
                     
                     model_mat = scp.sparse.vstack(Xs,format='csc')
 
+            if len(irstx) > 0:
+                model_mat = model_mat[self.formula.NOT_NA_flat,:]
 
             # Get initial estimate of mu based on family:
             init_mu_flat = self.family.init_mu(y_flat)
@@ -502,14 +519,14 @@ class GAMM:
                     raise IndexError(f"Variable {k} is missing in new data.")
         
         # Encode test data
-        _,pred_cov_flat,_,_,_,_,_ = self.formula.encode_data(n_dat,prediction=True)
+        _,pred_cov_flat,_,_,pred_cov,_,_ = self.formula.encode_data(n_dat,prediction=True)
 
         # Then, we need to build the model matrix - but only for the terms which should
         # be included in the prediction!
         terms = self.formula.get_terms()
         has_intercept = self.formula.has_intercept()
         ltx = self.formula.get_linear_term_idx()
-        irstx = []
+        irstx = self.formula.get_ir_smooth_term_idx()
         stx = self.formula.get_smooth_term_idx()
         rtx = self.formula.get_random_term_idx()
         var_types = self.formula.get_var_types()
@@ -517,11 +534,14 @@ class GAMM:
         var_maxs = self.formula.get_var_maxs()
         factor_levels = self.formula.get_factor_levels()
 
+        if len(irstx) == 0:
+            pred_cov = None
+
         # So we pass the desired terms to the use_only argument
         predi_mat = build_sparse_matrix_from_formula(terms,has_intercept,
                                                      ltx,irstx,stx,rtx,var_types,var_map,
                                                      var_mins,var_maxs,factor_levels,
-                                                     pred_cov_flat,None,
+                                                     pred_cov_flat,pred_cov,
                                                      use_only=use_terms)
         
         # Now we calculate the prediction

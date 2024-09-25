@@ -263,6 +263,75 @@ class fs(f):
          self.name +=  ": " + self.by_subgroup[1]
         
 class irf(GammTerm):
+    """A simple impulse response term, designed to correct for events with overlapping responses in multi-level time-series modeling.
+
+       The idea (see Ehinger & Dimigen; 2019 for a detailed introduction to this kind of deconvolution analysis) is that some kind of event happens during each recorded time-series
+       (e.g., stimulus onset, distractor display, mask onset, etc.) which is assumed to affect the recorded signal in the next X ms in some way. The moment of event onset can
+       differ between recorded time-series. In other words, the event is believed to act like an impulse which triggers a delayed response on the signal. This term class can be
+       used to estimate the shape of this impulse response. Multiple ``irf`` terms can be included in a ``Formula`` if multiple events happen, potentially with overlapping responses.
+
+       Example::
+
+         # Simulate time-series based on two events that elicit responses which vary in their overlap.
+         # The summed responses + a random intercept + noise is then the signal.
+         overlap_dat,onsets1,onsets2 = sim7(100,1,2,seed=20)
+
+         # Model below tries to recover the shape of the two responses in the 200 ms after event onset (max_c=200) + the random intercepts:
+         overlap_formula = Formula(lhs("y"),[irf(["time"],onsets1,nk=15,basis_kwargs=[{"max_c":200,"min_c":0,"convolve":True}]),
+                                             irf(["time"],onsets2,nk=15,basis_kwargs=[{"max_c":200,"min_c":0,"convolve":True}]),
+                                             ri("factor")],
+                                             data=overlap_dat,
+                                             series_id="series") # For models with irf terms, the column in the data identifying unique series need to be specified.
+
+         model = GAMM(overlap_formula,Gaussian())
+         model.fit()
+
+       Note, that care needs to be taken when predicting for models including ``irf`` terms, because the onset of events can differ between time-series. Hence, model
+       predictions + standard errors should first be obtained for the entire data-set used also to train the model and then extract series-specific predictions from the
+       model-matrix as follows::
+
+         # Get model matrix for entire data-set but only based on the estimated shape for first irf term:
+         _,pred_mat,ci_b = model.predict([0],overlap_dat,ci=True)
+
+         # Now extract the prediction + approximate ci boundaries for a single series:
+         s = 8
+         s_pred = pred_mat[overlap_dat["series"] == s,:]@model.coef
+         s_ci = ci_b[overlap_dat["series"] == s]
+
+         # Now the estimated response following the onset of the first event can be visualized + an approximate CI:
+         from matplotlib import pyplot as plt
+         plt.plot(overlap_dat["time"][overlap_dat["series"] == s],s_pred,color='blue')
+         plt.plot(overlap_dat["time"][overlap_dat["series"] == s],s_pred+s_ci,color='blue',linestyle='dashed')
+         plt.plot(overlap_dat["time"][overlap_dat["series"] == s],s_pred-s_ci,color='blue',linestyle='dashed')
+
+       References:
+
+       - Ehinger, B. V., & Dimingen, O. (2019). Unfold: an integrated toolbox for overlap correction, non-linear modeling, and regression-based EEG analysis. https://doi.org/10.7717/peerj.7838
+
+       :param variables: A list of the variables (strings) of which the term is a function. Need to exist in ``data`` passed to ``Formula``. Need to be continuous.
+       :type variables: list[str]
+       :param event_onset: A ``np.array`` containing, for each individual time-series, the index corresponding to the sample/time-point at which the event eliciting the response to be estimate by this term happened.
+       :type event_onset: [int]
+       :param basis_kwargs: A list containing one or multiple dictionaries specifying how the basis should be computed. For ``irf`` terms, the ``convolve`` argument has to be set to True! Also,
+       ``min_c`` and ``max_c`` must be specified. ``min_c`` corresponds to the assumed min. delay of the response after event onset and can usually be set to 0. ``max_c`` corresponds to the assumed max. delay of the response (in ms) after which the response is believed to have returned to a zero base-line.
+       :type basis_kwargs: dict
+       :param by: A string corresponding to a factor in ``data`` passed to ``Formula``. Separate irf(``variables``) (and smoothness penalties) will be estimated per level of ``by``.
+       :type by: str, optional
+       :param id: Only useful in combination with specifying a ``by`` variable. If ``id`` is set to any integer the penalties placed on the separate irff(``variables``) will share a single smoothness penalty.
+       :type id: int, optional
+       :param nk: Number of basis functions to use. I.e., if ``nk``=10 (the default), the term will use 10 basis functions (Note that these terms are not made identifiable by absorbing any kind of constraint). 
+       :type nk: int, optional
+       :param basis: The basis functions to use to construct the spline matrix. By default a B-spline basis (Eilers & Marx, 2010) implemented in ``src.smooths.B_spline_basis``.
+       :type basis: Callable, optional
+       :param is_penalized: Should the term be left unpenalized or not. There are rarely good reasons to set this to False.
+       :type is_penalized: bool, optional
+       :param penalty: A list of penalty types to be placed on the term.
+       :type penalty: list[penalties.PenType], optional
+       :param pen_kwargs: A list containing one or multiple dictionaries specifying how the penalty should be created. For the default difference penalty (Eilers & Marx, 2010) the only keyword argument (with default value) available is: ``m``=2. This reflects the order of the difference penalty. Note, that while a higher ``m`` permits penalizing towards
+       smoother functions it also leads to an increased dimensionality of the penalty Kernel (the set of f[``variables``] which will not be penalized). In other words, increasingly more complex functions will be left un-penalized for higher ``m`` (except if ``penalize_null`` is set to True). ``m``=2 is usually a good choice and thus the default but see Eilers & Marx (2010) for details.
+       :type pen_kwargs: list[dict], optional      
+       """
+    
     def __init__(self,variables:[str],
                 event_onset:[int],
                 basis_kwargs:list[dict],

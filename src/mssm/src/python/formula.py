@@ -1052,6 +1052,9 @@ class Formula():
         if self.__n_irf > 0:
            self.__has_irf = True
         
+        if self.__has_irf and (len(self.file_paths) != 0 or self.__data is None):
+           raise NotImplementedError("Building X.T@X iteratively does not support Impulse Response Terms (i.e., ``irf``) in the formula.")
+
         # Compute number of coef and coef names
         self.__get_coef_info()
         
