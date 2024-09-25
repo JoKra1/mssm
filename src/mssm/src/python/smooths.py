@@ -1,38 +1,20 @@
 import numpy as np
 import scipy as scp
 
-##################################### Conventional Pupil basis  #####################################
+##################################### Spline Convolution Code  #####################################
 
-def convolve_event(f,pulse_locations,i):
+def convolve_event(f,pulse_location):
   # Convolution of function f with dirac delta spike centered around
   # sample pulse_locations[i].
   # Based on code by Wierda et al. 2012
   
   # Create spike
-  spike = np.array([0 for _ in range(max(pulse_locations)+1)])
-  spike[pulse_locations[i]] = 1
+  spike = np.array([0 for _ in range(pulse_location+1)])
+  spike[pulse_location] = 1
   
   # Convolve "spike" with function template f
   o = scp.signal.fftconvolve(f,spike,mode="full")
   return o
-
-
-def h_basis(i,time,pulse_locations,n=10.1,t_max=930,f=1e-24):
-  # Response function from Hoeks and Levelt
-  # + scale parameter introduced by Wierda et al. 2012
-  # Based on code by Wierda et al. 2012
-  # n+1 = number of laters
-  # t_max = response maximum
-  # f = scaling factor
-  h = f*(time**n)*np.exp(-n*time/t_max)
-  
-  # Convolve "spike" defined by peaks with h
-  o = convolve_event(h,pulse_locations,i)
-  
-  # Keep only the realization of the response function
-  # within the un-expanded time window
-  o_restr = o[0:len(time)]
-  return o_restr
 
 ##################################### B-spline functions #####################################
 
@@ -49,7 +31,7 @@ def bbase(x, knots, dx, deg):
    B = np.power(-1, deg + 1) * P @ D
    return B
 
-def B_spline_basis(i, cov, state_est, nk, drop_outer_k=False, convolve=False, min_c=None, max_c=None, deg=3):
+def B_spline_basis(cov, event_onset, nk, drop_outer_k=False, convolve=False, min_c=None, max_c=None, deg=3):
   # Setup basis with even knot locations.
   # Code based on Eilers, P., & Marx, B. (2010). Splines, knots, and penalties. https://doi.org/10.1002/WICS.125
   # See also: Eilers, P. H. C., & Marx, B. D. (1996). Flexible smoothing with B-splines and penalties. https://doi.org/10.1214/ss/1038425655
@@ -84,7 +66,7 @@ def B_spline_basis(i, cov, state_est, nk, drop_outer_k=False, convolve=False, mi
     o_restr = np.zeros(B.shape)
 
     for nki in range(nk):
-      o = convolve_event(B[:,nki],state_est,i)
+      o = convolve_event(B[:,nki],event_onset)
       o_restr[:,nki] = o[0:len(cov)]
 
     B = o_restr

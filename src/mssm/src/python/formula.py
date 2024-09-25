@@ -426,79 +426,6 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
    else:
       raise NotImplementedError(f"Requested option {option} for reparameterization is not implemented.")
    
-class PTerm():
-   # Storage for sojourn time distribution
-   def __init__(self,distribution:callable,
-                init_kwargs:dict or None=None,
-                fit_kwargs:dict or None=None,
-                split_by:str or None=None) -> None:
-      self.distribution = distribution
-      self.kwargs = init_kwargs # Any parameters required to use distribution.
-      if self.kwargs is None:
-         self.kwargs = {}
-      self.split_by = split_by
-      self.fit_kwargs = fit_kwargs
-      if self.fit_kwargs is None:
-         self.fit_kwargs = {}
-      self.n_by = None
-      self.params = None
-
-   def log_prob(self,d,by_i=None):
-      # Get log-probability of durations d under current
-      # sojourn distribution
-      if self.params is None:
-         return self.distribution.logpdf(d,**self.kwargs)
-
-      if self.split_by is None:
-         return self.distribution.logpdf(d,*self.params)
-      
-      # Optionally use distribution associated with a particular variable
-      return self.distribution.logpdf(d,*self.params[by_i,:])
-
-   def sample(self,N,by_i=None):
-      # Sample N values from current sojourn time distribution
-      if self.split_by is None:
-
-         if not self.params is None:
-            return self.distribution.rvs(*self.params,size=N)
-
-      if not self.params is None:
-         # Optionally again pick distribution parameters associated with
-         # specific by variable
-         return self.distribution.rvs(*self.params[by_i,:],size=N)
-      
-      # Initial sampling might be based on distributions default parameters
-      # as provided by scipy and any necessary parameter specified in kwargs.
-      return self.distribution.rvs(**self.kwargs,size=N)
-   
-   def fit(self,d,by_i=None):
-      # Update parameters of distribution(s)
-      if self.split_by is None:
-         self.params = self.distribution.fit(d,**self.fit_kwargs)
-      else:
-         fit = self.distribution.fit(d,**self.fit_kwargs)
-         if self.params is None:
-            self.params = np.zeros((self.n_by,len(fit)))
-         self.params[by_i,:] = fit
-   
-   def max_ppf(self,q):
-      # Return the criticial value for quantile q.
-      # In case split_by is true, return the max critical
-      # value taken over all splits
-      if self.params is None:
-         return self.distribution.ppf(q,**self.kwargs)
-      
-      if not self.split_by is None:
-         return max([self.distribution.ppf(q,*self.params[by_i,:]) for by_i in range(self.n_by)])
-      
-      return self.distribution.ppf(q,*self.params)
-      
-class PFormula():
-   def __init__(self,terms:list[PTerm]) -> None:
-      self.__terms = terms
-   
-   def get_terms(self):
-      return copy.deepcopy(self.__terms)
 
 class lhs():
     """
@@ -584,7 +511,7 @@ def get_coef_info_linear(has_intercept,lterm,var_types,coding_factors,factor_lev
         coef_per_term.append(len(inter_coef_names))
     return total_coef,unpenalized_coef,coef_names,coef_per_term
 
-def get_coef_info_smooth(has_scale_split,n_j,sterm,factor_levels):
+def get_coef_info_smooth(sterm,factor_levels):
     coef_names = []
     total_coef = 0
     coef_per_term = []
@@ -618,27 +545,17 @@ def get_coef_info_smooth(has_scale_split,n_j,sterm,factor_levels):
         by_levels = factor_levels[sterm.by]
         n_coef *= len(by_levels)
 
-        if sterm.by_latent is not False and has_scale_split is False:
-            n_coef *= n_j
-            for by_state in range(n_j):
-                for by_level in by_levels:
-                    coef_names.extend([f"f_{var_label}_{ink}_{by_level}_{by_state}" for ink in range(term_n_coef)])
-        else:
-            for by_level in by_levels:
-                coef_names.extend([f"f_{var_label}_{ink}_{by_level}" for ink in range(term_n_coef)])
+        for by_level in by_levels:
+            coef_names.extend([f"f_{var_label}_{ink}_{by_level}" for ink in range(term_n_coef)])
          
     else:
-        if sterm.by_latent is not False and has_scale_split is False:
-            for by_state in range(n_j):
-                coef_names.extend([f"f_{var_label}_{ink}_{by_state}" for ink in range(term_n_coef)])
-        else:
-            coef_names.extend([f"f_{var_label}_{ink}" for ink in range(term_n_coef)])
+         coef_names.extend([f"f_{var_label}_{ink}" for ink in range(term_n_coef)])
          
     total_coef += n_coef
     coef_per_term.append(n_coef)
     return total_coef,coef_names,coef_per_term
 
-def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
+def build_smooth_penalties(penalties,cur_pen_idx,
                            pen,penid,sti,sterm,
                            vars,by_levels,n_coef,col_S):
     # We again have to deal with potential identifiable constraints!
@@ -759,9 +676,6 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
 
             pen_iter = len(by_levels) - 1
 
-            if sterm.by_latent is not False and has_scale_split is False:
-                pen_iter = (len(by_levels)*n_j)-1
-
             #for _ in range(pen_iter):
             #    lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,id_k,cur_pen_idx)
             #    lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,id_k,cur_pen_idx)
@@ -794,9 +708,6 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
 
             pen_iter = len(by_levels) - 1
 
-            if sterm.by_latent is not False and has_scale_split is False:
-                pen_iter = (len(by_levels) * n_j)-1
-
             for _ in range(pen_iter):
 
                 # Create lambda term
@@ -812,24 +723,7 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
                 penalties.append(lTerm)
 
     else:
-        if sterm.by_latent is not False and has_scale_split is False:
-            # Handle by latent split - all latent levels get unique id
-            penalties.append(lTerm)
-
-            for _ in range(n_j-1):
-                # Create lambda term
-                lTerm = LambdaTerm(start_index=cur_pen_idx,
-                                   type = pen,
-                                   term=sti)
-
-                # Embed penalties
-                lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,id_k,cur_pen_idx)
-                lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,id_k,cur_pen_idx)
-                lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,id_k)
-                lTerm.rank = rank
-                penalties.append(lTerm)
-        else:
-            penalties.append(lTerm)
+        penalties.append(lTerm)
 
     return penalties,cur_pen_idx
 
@@ -941,7 +835,7 @@ def compute_constraint_single_MP(sterm,vars,lhs_var,file,var_mins,var_maxs,file_
 
       var_cov_flat = read_cor_cov_single(lhs_var,vars[vi],file,file_loading_kwargs)
 
-      matrix_term_v = sterm.basis(None,var_cov_flat,
+      matrix_term_v = sterm.basis(var_cov_flat,
                                     None,id_nk,min_c=var_mins[vars[vi]],
                                     max_c=var_maxs[vars[vi]], **sterm.basis_kwargs)
 
@@ -972,16 +866,9 @@ class Formula():
     :param data: A pandas dataframe (with header!) of the data which should be used to estimate the model. The variable specified for ``lhs`` as
     well as all variables included for a ``term`` in ``terms`` need to be present in the data, otherwise the call to Formula will throw an error.
     :type data: pd.DataFrame or None
-    :param p_formula: Experimental.
-    :type p_formula: PFormula or None=None
     :param series_id: A tring identifying the individual experimental units. Usually a unique trial identifier. Can only be ignored if a
    ``mssm.models.GAMM`` is to be estimated.
     :type series_id: str, optional
-    :param split_scale: Experimental. Whether or not a separate Gamm (including sseparate scale parameters) should be estimated per latent state. Only relevant
-    if a ``mssm.models.sMsGAMM`` is to be estimated.
-    :type split_scale: bool, optional
-    :param n_j: Experimental. Number of latent states to estimate. Only relevant if a ``mssm.models.sMsGAMM`` is to be estimated.
-    :type n_j: int, optional
     :param codebook: Codebook - keys should correspond to factor variable names specified in terms. Values should again be a ``dict``, with keys for each of K levels of the factor and value corresponding to an integer in {0,K}.
     :type codebook: dict or None
     :param print_warn: Whether warnings should be printed. Useful when fitting models from terminal. Defaults to True.
@@ -999,10 +886,7 @@ class Formula():
                  lhs:lhs,
                  terms:list[GammTerm],
                  data:pd.DataFrame,
-                 p_formula:PFormula or None=None,
                  series_id:str or None=None,
-                 split_scale:bool=False,
-                 n_j:int=3,
                  codebook:dict or None=None,
                  print_warn=True,
                  keep_cov = False,
@@ -1013,13 +897,8 @@ class Formula():
         self.__lhs = lhs
         self.__terms = terms
         self.__data = data
-        self.p_formula = p_formula
         self.series_id = series_id
-        self.__split_scale = split_scale # Separate scale parameters per state, if true then formula counts for individual state.
-        self.__n_j = n_j # Number of latent states to estimate - not for irf terms but for f terms!
         self.print_warn = print_warn
-        if self.__split_scale and self.print_warn:
-           warnings.warn("split_scale==True! All terms will be estimted per latent stage, independent of terms' by_latent status.")
         self.keep_cov = keep_cov # For iterative X.T@X building, whether the encoded data should be kept or read in from file again during every iteration.
         self.file_paths = file_paths # If this will not be empty, we accumulate t(X)@X directly without forming X. Only useful if model is normal.
         self.file_loading_nc = file_loading_nc
@@ -1039,7 +918,6 @@ class Formula():
         self.__random_terms = []
         self.__has_intercept = False
         self.__has_irf = False
-        self.__has_by_latent = False
         self.__n_irf = 0
         self.unpenalized_coef = None
         self.coef_names = None
@@ -1090,10 +968,6 @@ class Formula():
             
             if isinstance(term, ri) or isinstance(term,rs):
                self.__random_terms.append(ti)
-
-            if not isinstance(term,irf):
-               if term.by_latent:
-                  self.__has_by_latent = True
             
             if isinstance(term,fs):
                if not term.approx_deriv is None:
@@ -1174,29 +1048,9 @@ class Formula():
                     
                     if isinstance(term, f) and not term.binary is None:
                         term.binary_level = self.__factor_codings[t_by][term.binary[1]]
-
-        # Also encode P-formula term variables.
-        if self.p_formula is not None:
-           for pti,pTerm in enumerate(self.p_formula.get_terms()):
-              pt_by = pTerm.split_by
-              if not pt_by is  None:
-
-               if not pt_by in self.__data.columns:
-                  raise KeyError(f"By-variable '{pt_by}' attributed to P-term {pti} does not exist in dataframe.")
-               
-               if data[pt_by].dtype in ['float64','int64']:
-                  raise KeyError(f"Data-type of By-variable '{pt_by}' attributed to P-term {pti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'.")
-               
-               cvi = self.__encode_var(pt_by,'O',cvi,codebook)
-            
+    
         if self.__n_irf > 0:
            self.__has_irf = True
-
-        if self.__has_irf and self.__split_scale:
-           raise ValueError("Formula includes an impulse response term. split_scale must be set to False!")
-        
-        if self.__has_irf and self.__has_by_latent:
-           raise NotImplementedError("Formula includes an impulse response term. Having regular smooth terms differ by latent stages is currently not supported.")
         
         # Compute number of coef and coef names
         self.__get_coef_info()
@@ -1356,10 +1210,10 @@ class Formula():
             n_coef *= len(by_levels)
 
             for by_level in by_levels:
-               self.coef_names.extend([f"irf_{irsterm.event}_{var_label}_{ink}_{by_level}" for ink in range(n_coef)])
+               self.coef_names.extend([f"irf_{irsti}_{var_label}_{ink}_{by_level}" for ink in range(n_coef)])
          
          else:
-            self.coef_names.extend([f"irf_{irsterm.event}_{var_label}_{ink}" for ink in range(n_coef)])
+            self.coef_names.extend([f"irf_{irsti}_{var_label}_{ink}" for ink in range(n_coef)])
          
          self.n_coef += n_coef
          self.ordered_coef_per_term.append(n_coef)
@@ -1369,8 +1223,7 @@ class Formula():
          sterm = terms[sti]
          s_total_coef,\
          s_coef_names,\
-         s_coef_per_term = get_coef_info_smooth(self.has_scale_split(),
-                                                self.__n_j,sterm,
+         s_coef_per_term = get_coef_info_smooth(sterm,
                                                 factor_levels)
          self.coef_names.extend(s_coef_names)
          self.ordered_coef_per_term.extend(s_coef_per_term)
@@ -1741,7 +1594,7 @@ class Formula():
                   
                   var_cov_flat = read_cov(self.__lhs.variable,vars[vi],self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
 
-                  matrix_term_v = sterm.basis(None,var_cov_flat,
+                  matrix_term_v = sterm.basis(var_cov_flat,
                                               None,id_nk,min_c=self.__var_mins[vars[vi]],
                                               max_c=self.__var_maxs[vars[vi]], **sterm.basis_kwargs)
 
@@ -1798,7 +1651,7 @@ class Formula():
                   
                   var_cov_flat = self.cov_flat[self.NOT_NA_flat,var_map[vars[vi]]]
 
-                  matrix_term_v = sterm.basis(None,var_cov_flat,
+                  matrix_term_v = sterm.basis(var_cov_flat,
                                               None,id_nk,min_c=self.__var_mins[vars[vi]],
                                               max_c=self.__var_maxs[vars[vi]], **sterm.basis_kwargs)
 
@@ -1823,7 +1676,7 @@ class Formula():
 
             var_cov_flat = self.cov_flat[self.NOT_NA_flat,var_map[vars[vi]]]
 
-            matrix_term_v = sterm.basis(None,var_cov_flat,
+            matrix_term_v = sterm.basis(var_cov_flat,
                                       None,id_nk,min_c=self.__var_mins[vars[vi]],
                                       max_c=self.__var_maxs[vars[vi]], **sterm.basis_kwargs)
 
@@ -1964,9 +1817,6 @@ class Formula():
                if sterm.by is not None:
                   added_not_penalized *= len(by_levels)
 
-               if sterm.by_latent is not False and self.has_scale_split() is False:
-                  added_not_penalized *= self.__n_j
-
                start_idx += added_not_penalized
                self.unpenalized_coef += added_not_penalized
 
@@ -1988,8 +1838,7 @@ class Formula():
                   cur_pen_idx = prev_pen_idx
                
                prev_n_pen = len(penalties)
-               penalties,cur_pen_idx = build_smooth_penalties(self.has_scale_split(),self.__n_j,
-                                                              penalties,cur_pen_idx,
+               penalties,cur_pen_idx = build_smooth_penalties(penalties,cur_pen_idx,
                                                               pen,penid,sti,sterm,vars,
                                                               by_levels,n_coef,col_S)
 
@@ -2274,14 +2123,6 @@ class Formula():
        """Get a copy of the list of indices that identify random terms in ``self.__terms``."""
        return(copy.deepcopy(self.__random_terms))
     
-    def get_nj(self) -> int:
-       """Get the number of latent states assumed by this formula."""
-       if self.__has_irf:
-          # Every event has an irf and there are always
-          # n_event + 1 states.
-          return self.__n_irf + 1
-       return self.__n_j
-    
     def get_n_coef(self) -> int:
        """Get the number of coefficients that are implied by the formula."""
        return self.n_coef
@@ -2305,10 +2146,6 @@ class Formula():
     def has_ir_terms(self) -> bool:
        """Does this formula include impulse response terms or not."""
        return self.__has_irf
-    
-    def has_scale_split(self) -> bool:
-       """Does this formula include a scale split or not."""
-       return self.__split_scale
     
     def get_term_names(self) -> list:
        """Returns a copy of the list with the names of the terms specified for this formula."""
@@ -2473,7 +2310,7 @@ def build_linear_term_matrix(ci,n_y,has_intercept,lti,lterm,var_types,var_map,fa
    
    return new_elements,new_rows,new_cols,new_ci
 
-def build_ir_smooth_series(irsterm,s_cov,s_state,vars,var_map,var_mins,var_maxs,by_levels):
+def build_ir_smooth_series(irsterm,s_cov,s_event,vars,var_map,var_mins,var_maxs,by_levels):
    for vi in range(len(vars)):
 
       if len(vars) > 1:
@@ -2481,16 +2318,16 @@ def build_ir_smooth_series(irsterm,s_cov,s_state,vars,var_map,var_mins,var_maxs,
       else:
          id_nk = irsterm.nk
 
-      # Create matrix for state corresponding to term.
+      # Create matrix for event corresponding to term.
       # ToDo: For Multivariate case, the matrix term needs to be build iteratively for
       # every level of the multivariate factor to make sure that the convolution operation
       # works as intended. The splitting can happen later via by.
       basis_kwargs_v = irsterm.basis_kwargs[vi]
 
       if "max_c" in basis_kwargs_v and "min_c" in basis_kwargs_v:
-         matrix_term_v = irsterm.basis(irsterm.event,s_cov[:,var_map[vars[vi]]],s_state, id_nk, **basis_kwargs_v)
+         matrix_term_v = irsterm.basis(s_cov[:,var_map[vars[vi]]],s_event, id_nk, **basis_kwargs_v)
       else:
-         matrix_term_v = irsterm.basis(irsterm.event,s_cov[:,var_map[vars[vi]]],s_state, id_nk,min_c=var_mins[vars[vi]],max_c=var_maxs[vars[vi]], **basis_kwargs_v)
+         matrix_term_v = irsterm.basis(s_cov[:,var_map[vars[vi]]],s_event, id_nk,min_c=var_mins[vars[vi]],max_c=var_maxs[vars[vi]], **basis_kwargs_v)
 
       if vi == 0:
          matrix_term = matrix_term_v
@@ -2524,7 +2361,7 @@ def build_ir_smooth_series(irsterm,s_cov,s_state,vars,var_map,var_mins,var_maxs,
    
    return final_term
 
-def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,var_mins,var_maxs,factor_levels,ridx,cov,state_est,use_only,pool,tol):
+def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,var_mins,var_maxs,factor_levels,ridx,cov,use_only,pool,tol):
    """Parameterize model matrix for an impulse response term."""
    vars = irsterm.variables
    term_elements = []
@@ -2547,9 +2384,9 @@ def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,var_mins,var_maxs,facto
       n_coef *= len(by_levels)
 
    if pool is None:
-      for s_cov,s_state in zip(cov,state_est):
+      for s_cov,s_event in zip(cov,irsterm.event_onset):
          
-         final_term = build_ir_smooth_series(irsterm,s_cov,s_state,vars,var_map,var_mins,var_maxs,by_levels)
+         final_term = build_ir_smooth_series(irsterm,s_cov,s_event,vars,var_map,var_mins,var_maxs,by_levels)
 
          m_rows,m_cols = final_term.shape
 
@@ -2580,7 +2417,7 @@ def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,var_mins,var_maxs,facto
 
    else:
       
-      args = zip(repeat(irsterm),cov,state_est,repeat(vars),repeat(var_map),repeat(var_mins),repeat(var_maxs),repeat(by_levels))
+      args = zip(repeat(irsterm),cov,irsterm.event_onset,repeat(vars),repeat(var_map),repeat(var_mins),repeat(var_maxs),repeat(by_levels))
         
       final_terms = pool.starmap(build_ir_smooth_series,args)
       final_term = np.vstack(final_terms)
@@ -2599,7 +2436,7 @@ def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,var_mins,var_maxs,facto
    
    return new_elements,new_rows,new_cols,new_ci
 
-def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,var_maxs,factor_levels,ridx,cov_flat,state_est_flat,use_only,tol):
+def build_smooth_term_matrix(ci,sti,sterm,var_map,var_mins,var_maxs,factor_levels,ridx,cov_flat,use_only,tol):
    """Parameterize model matrix for a smooth term."""
    vars = sterm.variables
    term_ridx = []
@@ -2621,9 +2458,6 @@ def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,v
    if sterm.by is not None:
       by_levels = factor_levels[sterm.by]
       n_coef *= len(by_levels)
-
-      if sterm.by_latent is not False and has_scale_split is False:
-         n_coef *= n_j
       
    # Calculate smooth term for corresponding covariate
 
@@ -2640,7 +2474,7 @@ def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,v
          id_nk += 1
 
       #print(var_mins[vars[0]],var_maxs[vars[0]])
-      matrix_term_v = sterm.basis(None,cov_flat[:,var_map[vars[vi]]],
+      matrix_term_v = sterm.basis(cov_flat[:,var_map[vars[vi]]],
                                   None, id_nk, min_c=var_mins[vars[vi]],
                                   max_c=var_maxs[vars[vi]], **sterm.basis_kwargs)
 
@@ -2702,19 +2536,6 @@ def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,v
    # No by or binary just use rows/cols as they are
    else:
       term_ridx = [ridx[:] for _ in range(m_cols)]
-
-   # Handle split by latent variable if a shared scale term across latent stages is assumed.
-   if sterm.by_latent is not False and has_scale_split is False:
-      new_term_ridx = []
-
-      # Split by state and update rows with elements in columns
-      for by_state in range(n_j):
-         for m_coli in range(len(term_ridx)):
-            # Adjust state estimate for potential by split earlier.
-            col_cor_state_est = state_est_flat[term_ridx[m_coli]]
-            new_term_ridx.append(term_ridx[m_coli][col_cor_state_est == by_state,])
-
-      term_ridx = new_term_ridx
 
    f_cols = len(term_ridx)
 
@@ -2812,14 +2633,12 @@ def build_rs_term_matrix(ci,n_y,rti,rterm,var_types,var_map,factor_levels,ridx,c
    return new_elements,new_rows,new_cols,new_ci
 
 def build_sparse_matrix_from_formula(terms,has_intercept,
-                                     has_scale_split,
                                      ltx,irstx,stx,rtx,
                                      var_types,var_map,
                                      var_mins,var_maxs,
                                      factor_levels,cov_flat,
-                                     cov,n_j,state_est_flat,
-                                     state_est,pool=None,
-                                     use_only=None,tol=1e-10):
+                                     cov,pool=None,use_only=None,
+                                     tol=1e-10):
    
    """Builds the entire model-matrix specified by a formula."""
    n_y = cov_flat.shape[0]
@@ -2863,7 +2682,7 @@ def build_sparse_matrix_from_formula(terms,has_intercept,
       new_ci = build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,
                                            var_mins,var_maxs,
                                            factor_levels,ridx,cov,
-                                           state_est,use_only,pool,tol)
+                                           use_only,pool,tol)
       elements.extend(new_elements)
       rows.extend(new_rows)
       cols.extend(new_cols)
@@ -2876,10 +2695,10 @@ def build_sparse_matrix_from_formula(terms,has_intercept,
       new_elements,\
       new_rows,\
       new_cols,\
-      new_ci = build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,
-                                        var_map,var_mins,var_maxs,
+      new_ci = build_smooth_term_matrix(ci,sti,sterm,var_map,
+                                        var_mins,var_maxs,
                                         factor_levels,ridx,cov_flat,
-                                        state_est_flat,use_only,tol)
+                                        use_only,tol)
       elements.extend(new_elements)
       rows.extend(new_rows)
       cols.extend(new_cols)

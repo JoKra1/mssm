@@ -2,68 +2,16 @@ import numpy as np
 import scipy as scp
 import copy
 from collections.abc import Callable
-from .src.python.formula import Formula,PFormula,PTerm,build_sparse_matrix_from_formula,VarType,lhs,ConstType,Constraint,pd,embed_shared_penalties
+from .src.python.formula import Formula,build_sparse_matrix_from_formula,VarType,lhs,ConstType,Constraint,pd,embed_shared_penalties
 from .src.python.exp_fam import Link,Logit,Identity,LOG,Family,Binomial,Gaussian,GAMLSSFamily,GAUMLSS,Gamma,MULNOMLSS,GAMMALS,GENSMOOTHFamily
 from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2,solve_gammlss_sparse,solve_generalSmooth_sparse
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 from .src.python.penalties import PenType
 from .src.python.utils import sample_MVN,REML
 
-##################################### Base Class #####################################
-
-class MSSM:
-
-    def __init__(self,
-                 formula:Formula,
-                 family:Family,
-                 pre_llk_fun:Callable = None,
-                 estimate_pi:bool=False,
-                 estimate_TR:bool=False,
-                 cpus:int=1):
-        
-        # Formulas associated with model
-        self.formula = formula # For coefficients
-        self.p_formula = self.formula.p_formula # For sojourn time distributions
-
-        # Family of model
-        self.family = family
-        
-        ## "prior" Log-likelihood functions
-        self.pre_llk_fun = pre_llk_fun
-
-        ## Should transition matrices and initial distribution be estimated?
-        self.estimate_pi = estimate_pi
-        self.estimate_TR = estimate_TR
-
-        self.cpus=cpus
-
-        # Current estimates
-        self.coef = None
-        self.scale = None
-        self.__TR = None
-        self.__pi = None
-    
-    ##################################### Getters #####################################
-    
-    def get_pars(self):
-        pass
-    
-    def get_llk(self):
-        pass
-    
-    ##################################### Fitting #####################################
-
-    def fit(self):
-        pass
-
-    ##################################### Prediction #####################################
-
-    def predict(self,terms,n_dat):
-        pass
-
 ##################################### GAMM class #####################################
 
-class GAMM(MSSM):
+class GAMM:
     """Class to fit Generalized Additive Mixed Models.
 
     References:
@@ -94,8 +42,15 @@ class GAMM(MSSM):
     def __init__(self,
                  formula: Formula,
                  family: Family):
-        super().__init__(formula,family)
 
+        # Formula associated with model
+        self.formula = formula
+
+        # Family of model
+        self.family = family
+
+        self.coef = None
+        self.scale = None
         self.pred = None
         self.res = None
         self.edf = None
@@ -140,7 +95,6 @@ class GAMM(MSSM):
         else:
             terms = self.formula.get_terms()
             has_intercept = self.formula.has_intercept()
-            has_scale_split = False
             ltx = self.formula.get_linear_term_idx()
             irstx = []
             stx = self.formula.get_smooth_term_idx()
@@ -156,15 +110,12 @@ class GAMM(MSSM):
                 cov_flat = self.formula.cov_flat
 
             cov = None
-            n_j = None
-            state_est_flat = None
-            state_est = None
 
             # Build the model matrix with all information from the formula
-            model_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
+            model_mat = build_sparse_matrix_from_formula(terms,has_intercept,
                                                         ltx,irstx,stx,rtx,var_types,var_map,
                                                         var_mins,var_maxs,factor_levels,
-                                                        cov_flat,cov,n_j,state_est_flat,state_est,use_only=use_terms)
+                                                        cov_flat,cov,use_only=use_terms)
             
             return model_mat
     
@@ -327,7 +278,6 @@ class GAMM(MSSM):
             # We need to build the model matrix once
             terms = self.formula.get_terms()
             has_intercept = self.formula.has_intercept()
-            has_scale_split = False
             ltx = self.formula.get_linear_term_idx()
             irstx = []
             stx = self.formula.get_smooth_term_idx()
@@ -339,9 +289,6 @@ class GAMM(MSSM):
             factor_levels = self.formula.get_factor_levels()
 
             cov = None
-            n_j = None
-            state_est_flat = None
-            state_est = None
             cov_flat = self.formula.cov_flat[self.formula.NOT_NA_flat]
             y_flat = self.formula.y_flat[self.formula.NOT_NA_flat]
 
@@ -354,10 +301,10 @@ class GAMM(MSSM):
 
             # Build the model matrix with all information from the formula
             if self.formula.file_loading_nc == 1:
-                model_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
+                model_mat = build_sparse_matrix_from_formula(terms,has_intercept,
                                                             ltx,irstx,stx,rtx,var_types,var_map,
                                                             var_mins,var_maxs,factor_levels,
-                                                            cov_flat,cov,n_j,state_est_flat,state_est)
+                                                            cov_flat,cov)
             
             else:
                 # Build row sets of model matrix in parallel:
@@ -371,12 +318,11 @@ class GAMM(MSSM):
                 cov_split = np.array_split(cov_flat,self.formula.file_loading_nc,axis=0)
                 with mp.Pool(processes=self.formula.file_loading_nc) as pool:
                     # Build the model matrix with all information from the formula - but only for sub-set of rows
-                    Xs = pool.starmap(build_sparse_matrix_from_formula,zip(repeat(terms),repeat(has_intercept),repeat(has_scale_split),
+                    Xs = pool.starmap(build_sparse_matrix_from_formula,zip(repeat(terms),repeat(has_intercept),
                                                                            repeat(ltx),repeat(irstx),repeat(stx),repeat(rtx),
                                                                            repeat(var_types),repeat(var_map),repeat(var_mins),
                                                                            repeat(var_maxs),repeat(factor_levels),cov_split,
-                                                                           repeat(cov),repeat(n_j),repeat(state_est_flat),
-                                                                           repeat(state_est)))
+                                                                           repeat(cov)))
                     
                     model_mat = scp.sparse.vstack(Xs,format='csc')
 
@@ -562,7 +508,6 @@ class GAMM(MSSM):
         # be included in the prediction!
         terms = self.formula.get_terms()
         has_intercept = self.formula.has_intercept()
-        has_scale_split = False
         ltx = self.formula.get_linear_term_idx()
         irstx = []
         stx = self.formula.get_smooth_term_idx()
@@ -571,16 +516,13 @@ class GAMM(MSSM):
         var_mins = self.formula.get_var_mins()
         var_maxs = self.formula.get_var_maxs()
         factor_levels = self.formula.get_factor_levels()
-        n_j = None
-        state_est_flat = None
-        state_est = None
 
         # So we pass the desired terms to the use_only argument
-        predi_mat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
+        predi_mat = build_sparse_matrix_from_formula(terms,has_intercept,
                                                      ltx,irstx,stx,rtx,var_types,var_map,
                                                      var_mins,var_maxs,factor_levels,
-                                                     pred_cov_flat,None,n_j,state_est_flat,
-                                                     state_est,use_only=use_terms)
+                                                     pred_cov_flat,None,
+                                                     use_only=use_terms)
         
         # Now we calculate the prediction
         pred = predi_mat @ self.coef

@@ -1051,10 +1051,9 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
 
 ################################################ Iterative GAMM building code ################################################
 
-def read_mmat(should_cache,cache_dir,file,fi,terms,has_intercept,has_scale_split,
+def read_mmat(should_cache,cache_dir,file,fi,terms,has_intercept,
               ltx,irstx,stx,rtx,var_types,var_map,var_mins,
-              var_maxs,factor_levels,cov_flat_file,cov,n_j,
-              state_est_flat,state_est):
+              var_maxs,factor_levels,cov_flat_file,cov):
    """
    Creates model matrix for that dataset. The model-matrix is either cached or not. If the former is the case,
    the matrix is read in on subsequent calls to this function
@@ -1063,16 +1062,14 @@ def read_mmat(should_cache,cache_dir,file,fi,terms,has_intercept,has_scale_split
    target = file.split("/")[-1].split(".csv")[0] + f"_{fi}.npz"
    
    if should_cache == False:
-         mmat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
+         mmat = build_sparse_matrix_from_formula(terms,has_intercept,
                                        ltx,irstx,stx,rtx,var_types,var_map,var_mins,
-                                       var_maxs,factor_levels,cov_flat_file,cov,n_j,
-                                       state_est_flat,state_est)
+                                       var_maxs,factor_levels,cov_flat_file,cov)
          
    elif should_cache == True and target not in os.listdir(cache_dir):
-         mmat = build_sparse_matrix_from_formula(terms,has_intercept,has_scale_split,
+         mmat = build_sparse_matrix_from_formula(terms,has_intercept,
                                        ltx,irstx,stx,rtx,var_types,var_map,var_mins,
-                                       var_maxs,factor_levels,cov_flat_file,cov,n_j,
-                                       state_est_flat,state_est)
+                                       var_maxs,factor_levels,cov_flat_file,cov)
          
          scp.sparse.save_npz(f"{cache_dir}/" + target,mmat)
    else:
@@ -1080,15 +1077,13 @@ def read_mmat(should_cache,cache_dir,file,fi,terms,has_intercept,has_scale_split
 
    return mmat
 
-def form_cross_prod_mp(should_cache,cache_dir,file,fi,y_flat,terms,has_intercept,has_scale_split,
+def form_cross_prod_mp(should_cache,cache_dir,file,fi,y_flat,terms,has_intercept,
                        ltx,irstx,stx,rtx,var_types,var_map,var_mins,
-                       var_maxs,factor_levels,cov_flat_file,cov,n_j,
-                       state_est_flat,state_est):
+                       var_maxs,factor_levels,cov_flat_file,cov):
    
-   model_mat = read_mmat(should_cache,cache_dir,file,fi,terms,has_intercept,has_scale_split,
+   model_mat = read_mmat(should_cache,cache_dir,file,fi,terms,has_intercept,
                          ltx,irstx,stx,rtx,var_types,var_map,var_mins,
-                         var_maxs,factor_levels,cov_flat_file,cov,n_j,
-                         state_est_flat,state_est)
+                         var_maxs,factor_levels,cov_flat_file,cov)
    
    Xy = model_mat.T @ y_flat
    XX = (model_mat.T @ model_mat).tocsc()
@@ -1102,7 +1097,6 @@ def read_XTX(file,formula,nc):
 
    terms = formula.get_terms()
    has_intercept = formula.has_intercept()
-   has_scale_split = False
    ltx = formula.get_linear_term_idx()
    irstx = []
    stx = formula.get_smooth_term_idx()
@@ -1121,9 +1115,6 @@ def read_XTX(file,formula,nc):
             terms[sti].RP[rpi].cov = None
 
    cov = None
-   n_j = None
-   state_est_flat = None
-   state_est = None
 
    # Read file
    file_dat = pd.read_csv(file)
@@ -1142,12 +1133,11 @@ def read_XTX(file,formula,nc):
    with mp.Pool(processes=nc) as pool:
       # Build the model matrix with all information from the formula - but only for sub-set of rows in this file
       XX,Xy = zip(*pool.starmap(form_cross_prod_mp,zip(repeat(SHOULD_CACHE),repeat(CACHE_DIR),repeat(file),
-                                                       subsets,y_flat_files,repeat(terms),repeat(has_intercept),repeat(has_scale_split),
+                                                       subsets,y_flat_files,repeat(terms),repeat(has_intercept),
                                                        repeat(ltx),repeat(irstx),repeat(stx),repeat(rtx),
                                                        repeat(var_types),repeat(var_map),
                                                        repeat(var_mins),repeat(var_maxs),repeat(factor_levels),
-                                                       cov_flat_files,repeat(cov),repeat(n_j),
-                                                       repeat(state_est_flat),repeat(state_est))))
+                                                       cov_flat_files,repeat(cov))))
    
    XX = reduce(lambda xx1,xx2: xx1+xx2,XX)
    Xy = reduce(lambda xy1,xy2: xy1+xy2,Xy)
@@ -1160,7 +1150,6 @@ def keep_XTX(cov_flat,y_flat,formula,nc,progress_bar):
 
    terms = formula.get_terms()
    has_intercept = formula.has_intercept()
-   has_scale_split = False
    ltx = formula.get_linear_term_idx()
    irstx = []
    stx = formula.get_smooth_term_idx()
@@ -1179,9 +1168,6 @@ def keep_XTX(cov_flat,y_flat,formula,nc,progress_bar):
             terms[sti].RP[rpi].cov = None
 
    cov = None
-   n_j = None
-   state_est_flat = None
-   state_est = None
 
    
    cov_split = np.array_split(cov_flat,len(formula.file_paths),axis=0)
@@ -1201,12 +1187,11 @@ def keep_XTX(cov_flat,y_flat,formula,nc,progress_bar):
       with mp.Pool(processes=min(rows,nc)) as pool:
          # Build the model matrix with all information from the formula - but only for sub-set of rows at a time
          XX0,Xy0 = zip(*pool.starmap(form_cross_prod_mp,zip(repeat(SHOULD_CACHE),repeat(CACHE_DIR),repeat(f"/outer_split_{fi}.csv"),
-                                                         subsets,y_flat_files,repeat(terms),repeat(has_intercept),repeat(has_scale_split),
+                                                         subsets,y_flat_files,repeat(terms),repeat(has_intercept),
                                                          repeat(ltx),repeat(irstx),repeat(stx),repeat(rtx),
                                                          repeat(var_types),repeat(var_map),
                                                          repeat(var_mins),repeat(var_maxs),repeat(factor_levels),
-                                                         cov_flat_files,repeat(cov),repeat(n_j),
-                                                         repeat(state_est_flat),repeat(state_est))))
+                                                         cov_flat_files,repeat(cov))))
       
       XX0 = reduce(lambda xx1,xx2: xx1+xx2,XX0)
       Xy0 = reduce(lambda xy1,xy2: xy1+xy2,Xy0)
@@ -1221,15 +1206,13 @@ def keep_XTX(cov_flat,y_flat,formula,nc,progress_bar):
 
    return XX,Xy
 
-def form_eta_mp(should_cache,cache_dir,file,fi,coef,terms,has_intercept,has_scale_split,
+def form_eta_mp(should_cache,cache_dir,file,fi,coef,terms,has_intercept,
                 ltx,irstx,stx,rtx,var_types,var_map,var_mins,
-                var_maxs,factor_levels,cov_flat_file,cov,n_j,
-                state_est_flat,state_est):
+                var_maxs,factor_levels,cov_flat_file,cov):
    
-   model_mat = read_mmat(should_cache,cache_dir,file,fi,terms,has_intercept,has_scale_split,
+   model_mat = read_mmat(should_cache,cache_dir,file,fi,terms,has_intercept,
                          ltx,irstx,stx,rtx,var_types,var_map,var_mins,
-                         var_maxs,factor_levels,cov_flat_file,cov,n_j,
-                         state_est_flat,state_est)
+                         var_maxs,factor_levels,cov_flat_file,cov)
    
    eta_file = (model_mat @ coef).reshape(-1,1)
    return eta_file
@@ -1241,7 +1224,6 @@ def read_eta(file,formula,coef,nc):
 
    terms = formula.get_terms()
    has_intercept = formula.has_intercept()
-   has_scale_split = False
    ltx = formula.get_linear_term_idx()
    irstx = []
    stx = formula.get_smooth_term_idx()
@@ -1260,9 +1242,6 @@ def read_eta(file,formula,coef,nc):
             terms[sti].RP[rpi].cov = None
 
    cov = None
-   n_j = None
-   state_est_flat = None
-   state_est = None
 
    # Read file
    file_dat = pd.read_csv(file)
@@ -1280,11 +1259,10 @@ def read_eta(file,formula,coef,nc):
       # Build eta with all information from the formula - but only for sub-set of rows in this file
       etas = pool.starmap(form_eta_mp,zip(repeat(SHOULD_CACHE),repeat(CACHE_DIR),repeat(file),subsets,
                                           repeat(coef),repeat(terms),repeat(has_intercept),
-                                          repeat(has_scale_split),repeat(ltx),repeat(irstx),repeat(stx),
+                                          repeat(ltx),repeat(irstx),repeat(stx),
                                           repeat(rtx),repeat(var_types),repeat(var_map),
                                           repeat(var_mins),repeat(var_maxs),repeat(factor_levels),
-                                          cov_flat_files,repeat(cov),repeat(n_j),
-                                          repeat(state_est_flat),repeat(state_est)))
+                                          cov_flat_files,repeat(cov)))
 
    eta = []
    for eta_file in etas:
@@ -1299,7 +1277,6 @@ def keep_eta(formula,coef,nc):
 
    terms = formula.get_terms()
    has_intercept = formula.has_intercept()
-   has_scale_split = False
    ltx = formula.get_linear_term_idx()
    irstx = []
    stx = formula.get_smooth_term_idx()
@@ -1318,9 +1295,6 @@ def keep_eta(formula,coef,nc):
             terms[sti].RP[rpi].cov = None
 
    cov = None
-   n_j = None
-   state_est_flat = None
-   state_est = None
 
    cov_split = np.array_split(formula.cov_flat[formula.NOT_NA_flat],len(formula.file_paths),axis=0)
    eta = []
@@ -1333,11 +1307,10 @@ def keep_eta(formula,coef,nc):
          # Build eta with all information from the formula - but only for sub-set of rows
          etas = pool.starmap(form_eta_mp,zip(repeat(SHOULD_CACHE),repeat(CACHE_DIR),repeat(f"/outer_split_{fi}.csv"),subsets,
                                              repeat(coef),repeat(terms),repeat(has_intercept),
-                                             repeat(has_scale_split),repeat(ltx),repeat(irstx),repeat(stx),
+                                             repeat(ltx),repeat(irstx),repeat(stx),
                                              repeat(rtx),repeat(var_types),repeat(var_map),
                                              repeat(var_mins),repeat(var_maxs),repeat(factor_levels),
-                                             cov_flat_files,repeat(cov),repeat(n_j),
-                                             repeat(state_est_flat),repeat(state_est)))
+                                             cov_flat_files,repeat(cov)))
 
 
       for eta_split in etas:

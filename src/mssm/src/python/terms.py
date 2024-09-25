@@ -31,14 +31,10 @@ class i(GammTerm):
     """
     An intercept/offset term. In a model \mu = a + f(x) it reflects a.
 
-    :param by_latent: Should an overall intercept be added or one "by_latent" stage
-    :type by_latent: bool, optional
     """
 
-    def __init__(self,
-                 by_latent:bool=False) -> None:
+    def __init__(self) -> None:
         super().__init__(["1"], TermType.LINEAR, False, [], [])
-        self.by_latent = by_latent
         self.name = "Intercept"
 
 class f(GammTerm):
@@ -101,8 +97,6 @@ class f(GammTerm):
     :param basis_kwargs: A list containing one or multiple dictionaries specifying how the basis should be computed. For the B-spline basis the following arguments (with default values) are available: ``convolve``=``False``,
     ``min_c``=``None``, ``max_c``=``None``, ``deg``=``3``. See ``src.smooths.B_spline_basis`` for details, but the default should work for most cases.
     :type basis_kwargs: dict, optional
-    :param by_latent: Experimental. Should an overall f(``variables``) be added or one "by_latent" stage
-    :type by_latent: bool, optional
     :param is_penalized: Should the term be left unpenalized or not. There are rarely good reasons to set this to False.
     :type is_penalized: bool, optional
     :param penalize_null: Should a separate Null-space penalty (Marra & Wood, 2011) be placed on the term. By default, the term here will leave a linear f(`variables`) un-penalized! Thus, there is no option for the penalty to achieve
@@ -125,8 +119,7 @@ class f(GammTerm):
                 constraint:penalties.ConstType=penalties.ConstType.QR,
                 identifiable:bool=True,
                 basis:Callable=smooths.B_spline_basis,
-                basis_kwargs:dict={"convolve":False},
-                by_latent:bool=False,
+                basis_kwargs:dict={},
                 is_penalized:bool = True,
                 penalize_null:bool = False,
                 penalty:list[penalties.PenType] or None = None,
@@ -187,8 +180,6 @@ class f(GammTerm):
          self.nk = [nk for _ in range(len(variables))]
 
         self.te = te
-              
-        self.by_latent = by_latent
 
         # Term name
         self.name = f"f({variables}"
@@ -241,8 +232,6 @@ class fs(f):
     :param basis_kwargs: A list containing one or multiple dictionaries specifying how the basis should be computed. For the B-spline basis the following arguments (with default values) are available: ``convolve``=``False``,
     ``min_c``=``None``, ``max_c``=``None``, ``deg``=``3``. See ``src.smooths.B_spline_basis`` for details.
     :type basis_kwargs: dict, optional
-    :param by_latent: Should an overall f(``variables``) be added or one "by_latent" stage
-    :type by_latent: bool, optional
     :param by_subgroup: List including a factor variable and specific level of said variable. Allows for separate penalties as described above.
     :type by_subgroup: [str,str], optional
     :param approx_deriv: Dict holding important info for the clustering algorithm. Structure: ``{"no_disc":[str],"excl":[str],"split_by":[str],"restarts":int}``
@@ -258,13 +247,12 @@ class fs(f):
                 by_subgroup:[str,str]or None = None,
                 approx_deriv:dict or None = None,
                 basis: Callable = smooths.B_spline_basis,
-                basis_kwargs: dict = {},
-                by_latent: bool = False):
+                basis_kwargs: dict = {}):
 
       penalty = [penalties.PenType.DIFFERENCE]
       pen_kwargs = [{"m":m}]
       super().__init__(variables, rf, None, 99, nk+1, False, rp, penalties.ConstType.QR, False,
-                       basis, basis_kwargs, by_latent,
+                       basis, basis_kwargs,
                        True, True, penalty, pen_kwargs)
       
       self.approx_deriv=approx_deriv
@@ -276,7 +264,7 @@ class fs(f):
         
 class irf(GammTerm):
     def __init__(self,variables:[str],
-                event:int,
+                event_onset:[int],
                 basis_kwargs:list[dict],
                 by:str=None,
                 id:int=None,
@@ -308,7 +296,7 @@ class irf(GammTerm):
         super().__init__(variables, TermType.LSMOOTH, is_penalized, copy.deepcopy(penalty), copy.deepcopy(pen_kwargs))
         self.basis = basis
         self.basis_kwargs = basis_kwargs
-        self.event = event
+        self.event_onset = event_onset
         self.by = by
         self.id = id
 
@@ -356,21 +344,17 @@ class l(GammTerm):
 
     :param variables: A list of the variables (strings) for which linear predictors should be included
     :type variables: list[str]
-    :param by_latent: Experimental. Should linear terms be added separately "by_latent" stage or not
-    :type by_latent: bool, optional
     """
     def __init__(self,
-                 variables:list,
-                 by_latent:bool=False) -> None:
+                 variables:list) -> None:
         
         # Initialization
         super().__init__(variables, TermType.LINEAR, False, [], [])
-        self.by_latent = by_latent
 
         # Term name
         self.name = f"l({variables})"
 
-def li(variables:list[str],by_latent:bool=False):
+def li(variables:list[str]):
    """
     Behaves like the l() class but li() automatically includes all lower-order interactions and main effects.
 
@@ -396,8 +380,6 @@ def li(variables:list[str],by_latent:bool=False):
 
     :param variables: A list of the variables (strings) for which linear predictors should be included
     :type variables: list[str]
-    :param by_latent: Experimental. Should linear terms be added separately "by_latent" stage or not
-    :type by_latent: bool, optional
     """
    
    # Create len(variables)-way interaction, all lower
@@ -406,7 +388,7 @@ def li(variables:list[str],by_latent:bool=False):
    for order in range(1,len(variables)+1):
       full_order.extend(combinations(variables,order))
    
-   order_terms = [l(list(term),by_latent) for term in full_order]
+   order_terms = [l(list(term)) for term in full_order]
 
    return order_terms
 
@@ -422,16 +404,12 @@ class ri(GammTerm):
     :param variable: A factor variable. For every level of this factor a random intercept will be estimated. The random
     intercepts are assumed to follow a normal distribution centered around zero.
     :type variable: str
-    :param by_latent: Experimental. Should random intercepts be added separately "by_latent" stage or not
-    :type by_latent: bool, optional
     """
     def __init__(self,
-                 variable:str,
-                 by_latent:bool=False) -> None:
+                 variable:str) -> None:
         
         # Initialization
         super().__init__([variable], TermType.RANDINT, True, [penalties.PenType.IDENTITY], [{}])
-        self.by_latent = by_latent
 
         # Term name
         self.name = f"ri({variable})"
@@ -525,19 +503,15 @@ class rs(GammTerm):
     :type variables: list[str]
     :param rf: A factor variable. Identifies the random factor in the data.
     :type rf: str
-    :param by_latent: Experimental. Should random slopes be added separately "by_latent" stage or not
-    :type by_latent: bool, optional
     """
     def __init__(self,
                  variables:list[str],
-                 rf:str,
-                 by_latent:bool=False) -> None:
+                 rf:str) -> None:
         
         # Initialization
         super().__init__(variables, TermType.RANDSLOPE, True, [penalties.PenType.IDENTITY], [{}])
         self.var_coef = None
         self.by = rf
-        self.by_latent = by_latent
 
         # Term name
         self.name = f"rs({variables},{rf})"
