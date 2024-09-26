@@ -101,3 +101,57 @@ class Test_GAMMALS:
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
         assert round(llk,ndigits=3) == -892.042 
+
+class Test_pred_whole_func_cor:
+    # Simulate some data
+    sim_fit_dat = sim6(n=500,seed=37)
+
+    # Now fit nested models
+
+    # Create Gaussian GAMMLSS family with identity link for mean
+    # and log link for sigma
+    family = GAUMLSS([Identity(),LOG()])
+
+    # We need to model the mean: \mu_i = \alpha + f(x0)
+    sim1_formula_m = Formula(lhs("y"),
+                        [i(),f(["x0"],nk=15)],
+                        data=sim_fit_dat)
+
+    # and the standard deviation as well: log(\sigma_i) = \alpha + f(x0)
+    sim1_formula_sd = Formula(lhs("y"),
+                        [i(),f(["x0"],nk=15)],
+                        data=sim_fit_dat)
+
+    # Collect both formulas
+    sim1_formulas = [sim1_formula_m,sim1_formula_sd]
+
+    sim_fit_model = GAMMLSS(sim1_formulas,family)
+    sim_fit_model.fit()
+
+    # Test prediction code + whole-function correction
+    pred_dat = pd.DataFrame({"x0":np.linspace(0,1,50)})
+    pred,pred_mat,ci = sim_fit_model.predict(0,[0,1],pred_dat,ci=True,whole_interval=True,seed=20)
+
+    def test_pred(self):
+        assert np.allclose(self.pred,np.array([-0.00766164,  0.05264753,  0.44488919,  1.15005394,  2.1489656 ,
+                                            3.39499364,  4.75169151,  6.06427486,  7.17905639,  8.00844308,
+                                            8.56744442,  8.87991424,  8.96917929,  8.85062296,  8.53348482,
+                                            8.02684467,  7.34762305,  6.56016317,  5.7465462 ,  4.98885321,
+                                            4.34855489,  3.83084749,  3.43141092,  3.145817  ,  2.96529597,
+                                            2.87535612,  2.86111495,  2.90717605,  2.99202069,  3.09010881,
+                                            3.17583   ,  3.22419774,  3.21334918,  3.12239713,  2.93052651,
+                                            2.63407559,  2.26865388,  1.87534304,  1.4946562 ,  1.15089556,
+                                            0.85019165,  0.59771271,  0.39780757,  0.24697709,  0.13735639,
+                                            0.06103356,  0.01094003, -0.01648681, -0.02389859, -0.01377095]))
+    
+    def test_ci(self):
+        assert np.allclose(self.ci,np.array([0.27384879, 0.11903284, 0.14551358, 0.1994852 , 0.25914081,
+                                            0.26911891, 0.31556815, 0.39822631, 0.43291323, 0.44007542,
+                                            0.50971105, 0.59158676, 0.59413523, 0.58059439, 0.6464563 ,
+                                            0.71691553, 0.69990712, 0.6930809 , 0.76811388, 0.82810323,
+                                            0.82220835, 0.8701253 , 0.97803617, 1.01439956, 0.95999927,
+                                            0.93853541, 0.96163954, 0.91544704, 0.81592707, 0.77746659,
+                                            0.7808667 , 0.71622337, 0.64568265, 0.65924267, 0.67749825,
+                                            0.6135337 , 0.55950477, 0.57450552, 0.56600939, 0.50099435,
+                                            0.47875031, 0.50366898, 0.46206757, 0.3579219 , 0.29646708,
+                                            0.28369231, 0.21873725, 0.15284067, 0.10779222, 0.20600248]))

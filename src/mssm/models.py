@@ -1105,7 +1105,10 @@ class GSMM(GAMMLSS):
         """
         
         # Get y
-        y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
+        if drop_NA:
+            y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
+        else:
+            y = self.formulas[0].y_flat
 
         if not self.formulas[0].get_lhs().f is None:
             # Optionally apply function to dep. var. before fitting. Not sure why that would be desirable for this model class...

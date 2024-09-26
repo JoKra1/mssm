@@ -4,9 +4,9 @@ import math
 import warnings
 from itertools import permutations,product,repeat
 import copy
-from ..python.gamm_solvers import cpp_backsolve_tr,compute_S_emb_pinv_det,cpp_chol,cpp_solve_coef,update_scale_edf,compute_Linv,apply_eigen_perm,tqdm,managers,shared_memory,cpp_solve_coefXX,update_PIRLS,correct_coef_step
+from ..python.gamm_solvers import cpp_backsolve_tr,compute_S_emb_pinv_det,cpp_chol,cpp_solve_coef,update_scale_edf,compute_Linv,apply_eigen_perm,tqdm,managers,shared_memory,cpp_solve_coefXX,update_PIRLS,correct_coef_step,update_coef_gen_smooth,cpp_cholP,update_coef_gammlss,compute_lgdetD_bsb,calculate_edf
 from ..python.formula import reparam,map_csc_to_eigen,mp
-from ..python.exp_fam import Family,Gaussian, Identity
+from ..python.exp_fam import Family,Gaussian, Identity,GAMLSSFamily,GENSMOOTHFamily
 
 def sample_MVN(n,mu,scale,P,L,LI=None,use=None,seed=None):
     """
@@ -15,7 +15,7 @@ def sample_MVN(n,mu,scale,P,L,LI=None,use=None,seed=None):
     Notably, L (and LI) have actually be computed for P@[X.T@X+S_\lambda]@P.T (see Wood \& Fasiolo, 2017), hence for sampling we need to correct
     for permutation matrix ``P``. if ``LI`` is provided, then ``P`` can be omitted and is assumed to have been applied to ``LI already``
 
-    Used to sample the uncorrected posterior \beta|y,\lambda ~ N(\boldsymbol{\beta},(X.T@X+S_\lambda)^{-1}\phi) for a GAMM (see Wood, 2017).
+    Used to sample the uncorrected posterior :math:`\beta|y,\lambda ~ N(\boldsymbol{\beta},(X.T@X+S_\lambda)^{-1}\phi)` for a GAMM (see Wood, 2017).
 
     Based on section 7.4 in Gentle (2009), assuming Sigma is p*p and covariance matrix of uncorrected posterior:
 
@@ -99,14 +99,14 @@ def sample_MVN(n,mu,scale,P,L,LI=None,use=None,seed=None):
         return mus + Cs@z
 
 
-def compute_reml_candidate_GAMM(family,y,X,penalties):
+def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10):
    """
    Allows to evaluate REML criterion (e.g., Wood, 2011; Wood, 2016) efficiently for
    a set of \lambda values.
 
-   Used for computing the correction applied to the edf for the GLRT - based on Wood (2017) and Wood et al., (2016).
+   Internal function used for computing the correction applied to the edf for the GLRT - based on Wood (2017) and Wood et al., (2016).
 
-   See REML function below for more details.
+   See :func:``REML`` function below for more details.
    """
 
    S_emb,_,_ = compute_S_emb_pinv_det(X.shape[1],penalties,"svd")
@@ -187,7 +187,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties):
        nH = (X.T@W@X).tocsc() 
 
    # Get edf and optionally estimate scale
-   _,_,edf,_,_,scale = update_scale_edf(y,z,eta,Wr,X.shape[0],X.shape[1],LP,None,Pr,None,family,penalties,10)
+   _,_,edf,_,_,scale = update_scale_edf(y,z,eta,Wr,X.shape[0],X.shape[1],LP,None,Pr,None,family,penalties,n_c)
 
    if family.twopar:
         llk = family.llk(y,mu,scale)
@@ -198,17 +198,129 @@ def compute_reml_candidate_GAMM(family,y,X,penalties):
    reml = REML(llk,nH,coef,scale,penalties)
 
    return reml,LP,Pr,coef,scale,edf,llk
-   
 
-def REML(llk,H,coef,scale,penalties):
+def compute_REML_candidate_GSMM(family,coef,n_coef,coef_split_idx,y,Xs,penalties,method="Newton",conv_tol=1e-7,n_c=10):
+    """
+    Allows to evaluate REML criterion (e.g., Wood, 2011; Wood, 2016) efficiently for
+    a set of \lambda values for a GSMM or GAMMLSS.
+
+    Internal function used for computing the correction applied to the edf for the GLRT - based on Wood (2017) and Wood et al., (2016).
+
+    See :func:``REML`` function below for more details.
+   """
+
+    # Build current penalties
+    S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(n_coef,penalties,"svd")
+
+    if isinstance(family,GENSMOOTHFamily): # GSMM
+        
+        # Compute likelihood for current estimate
+        c_llk = family.llk(coef,coef_split_idx,y,Xs)
+
+        if method != "Newton":
+            # Define negative penalized likelihood function to be minimized via BFGS
+            def __neg_pen_llk(coef,coef_split_idx,y,Xs,family,S_emb):
+                neg_llk = -1 * family.llk(coef,coef_split_idx,y,Xs)
+                return neg_llk + coef.T@S_emb@coef
+        
+        # Estimate coefficients:
+        if method == "Newton":
+            coef,H,LV,c_llk,_ = update_coef_gen_smooth(family,y,Xs,coef,
+                                                               coef_split_idx,S_emb,
+                                                               c_llk,0,100,
+                                                               100,conv_tol)
+            
+            V = LV.T @ LV # inverse of hessian of penalized likelihood
+            nH = -1*H # negative hessian of likelihood
+        else:
+            opt = scp.optimize.minimize(__neg_pen_llk,
+                                        np.ndarray.flatten(coef),
+                                        args=(coef_split_idx,y,Xs,family,S_emb),
+                                        method="BFGS",
+                                        options={"maxiter":100,
+                                                 "gtol":conv_tol})
+            
+            # Get coefficient estimate
+            coef = opt["x"].reshape(-1,1)
+
+            # Compute penalized likelihood for current estimate
+            c_llk = family.llk(coef,coef_split_idx,y,Xs)
+
+            # Get inverse of Hessian of penalized likelihood
+            V = scp.sparse.csc_array(opt["hess_inv"])
+            V.eliminate_zeros()
+
+            # Get Cholesky factor needed for (accelerated) EFS
+            LVPT, P, code = cpp_cholP(V)
+            LVT = apply_eigen_perm(P,LVPT)
+            LV = LVT.T
+
+            # Get an apparoximation of the Hessian of the likelihood
+            LHPT = compute_Linv(LVPT)
+            LHT = apply_eigen_perm(P,LHPT)
+            nH = LHT.T@LHT # approximately: negative Hessian of llk + S_emb
+            nH -= S_emb # approximately: negative Hessian of llk 
+
+    else: # GAMMLSS
+        split_coef = np.split(coef,coef_split_idx)
+
+        # Initialize etas and mus
+        etas = [Xs[i]@split_coef[i] for i in range(family.n_par)]
+        mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
+
+        c_llk = family.llk(y,*mus)
+
+        # Estimate coefficients
+        coef,split_coef,mus,etas,H,LV,c_llk,_ = update_coef_gammlss(family,mus,y,Xs,coef,
+                                                                   coef_split_idx,S_emb,
+                                                                   c_llk,0,100,
+                                                                   100,conv_tol)
+        
+        V = LV.T@LV
+        nH = -1*H
+
+    # Remaining computations are shared for GAMMLSS and GSMM
+    
+    # Compute reml
+    reml = REML(c_llk,nH,coef,1,penalties)[0,0]
+
+    # Compute edf
+    lgdetDs = []
+    for lti,lTerm in enumerate(penalties):
+
+        lt_rank = None
+        if FS_use_rank[lti]:
+            lt_rank = lTerm.rank
+
+        lgdetD,_ = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
+        lgdetDs.append(lgdetD)
+
+    total_edf,_, _ = calculate_edf(None,None,LV,penalties,lgdetDs,n_coef,n_c)
+
+    return reml,V,coef,total_edf,c_llk
+
+
+def REML(llk,nH,coef,scale,penalties):
    """
    Based on Wood (2011). Exact REML for Gaussian GAM, Laplace approximate (Wood, 2016) for everything else.
    Evaluated after applying stabilizing reparameterization discussed by Wood (2011).
 
    References:
-
     - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
     - Wood, S. N., Pya, N., Saefken, B., (2016). Smoothing Parameter and Model Selection for General Smooth Models
+
+   :param llk: log-likelihood of model
+   :type llk: float
+   :param nH: negative hessian of log-likelihood of model
+   :type nH: scipy.sparse.csc_array
+   :param coef: Estimated vector of coefficients of shape (-1,1)
+   :type coef: numpy.array
+   :param scale: (Estimated) scale parameter - can be set to 1 for GAMLSS or GSMMs.
+   :type scale: float
+   :param penalties: List of penalties that were part of the model.
+   :type penalties: [LambdaTerm]
+   :return: (Approximate) REML score
+   :rtype: float
    """ 
 
    # Compute S_\lambda before any re-parameterization
@@ -261,11 +373,11 @@ def REML(llk,H,coef,scale,penalties):
         
         lgdetS += ldetSI
         
-   # Now log(|H+S_\lambda|)... Wood (2011) shows stable computation based on QR decomposition, but
+   # Now log(|nH+S_\lambda|)... Wood (2011) shows stable computation based on QR decomposition, but
    # we will generally not be able to compute a QR decomposition of X so that X.T@X=H efficiently.
    # Hence, we simply rely on the cholesky (again pre-conditioned) used for fitting (based on S_\lambda before
    # re-parameterization).
-   H_pen = H/scale + S_emb/scale
+   H_pen = nH/scale + S_emb/scale
 
    Sdiag = np.power(np.abs(H_pen.diagonal()),0.5)
    PI = scp.sparse.diags(1/Sdiag,format='csc')
@@ -363,44 +475,76 @@ def _compute_VB_corr_terms_MP(family,address_y,address_dat,address_ptr,address_i
    # Now collect what we need for the remaining terms
    return Linv,coef,reml,scale,edf,llk
 
-def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t1=False,verbose=False):
-    """
+def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_t1=False,verbose=False,drop_NA=True,method="Newton",seed=None):
+    """Estimate :math:`V`, the covariance matrix of the unconditional posterior :math:`\boldsymbol{\beta} | y ~ N(\hat{\boldsymbol{\beta}},V)` to account for smoothness uncertainty.
+    
     Wood et al. (2016) and Wood (2017) show that when basing conditional versions of model selection criteria or hypothesis
-    tests on Vb, which is the co-variance matrix for the conditional posterior of \boldsymbol{\beta} so that
-    \boldsymbol{\beta} | y, \lambda ~ N(\hat{\boldsymbol{\beta}},Vb), the tests are severely biased. To correct for this they
-    show that uncertainty in \lambda needs to be accounted for. Hence they suggest to base these tests on V, the covariance matrix
-    of the unconditional posterior \boldsymbol{\beta} | y ~ N(\hat{\boldsymbol{\beta}},V). They show how to obtain an estimate of V,
-    but this requires V_p - an estimate of the covariance matrix of log(\lambda). V_p requires derivatives that are not available
+    tests on :math:`Vb`, which is the co-variance matrix for the conditional posterior of :math:`\boldsymbol{\beta}` so that
+    :math:`\boldsymbol{\beta} | y, \lambda ~ N(\hat{\boldsymbol{\beta}},Vb)`, the tests are severely biased. To correct for this they
+    show that uncertainty in \lambda needs to be accounted for. Hence they suggest to base these tests on :math:`V`, the covariance matrix
+    of the unconditional posterior :math:`\boldsymbol{\beta} | y ~ N(\hat{\boldsymbol{\beta}},V)`. They show how to obtain an estimate of :math:`V`,
+    but this requires :math:`V_p` - an estimate of the covariance matrix of :math:`log(\lambda)`. :math:`V_p` requires derivatives that are not available
     when using the efs update.
 
-    Greven & Scheipl in their comment to the paper by Wood et al. (2016) show another option to estimate V that does not require V_p,
+    Greven & Scheipl in their comment to the paper by Wood et al. (2016) show another option to estimate :math:`V` that does not require :math:`V_p`,
     based either on forming a mixture approximation or on the total variance property. The latter is implemented below, based on the
-    equations for the expectations outlined in their response. A problem of this estimate is that a grid of \lambda values needs to be
-    provided covering the prior on \lambda (see Wood 2011 for the relation between smoothness penalties and this prior). For ``mssm`` the
+    equations for the expectations outlined in their response. A problem of this estimate is that a grid of :math:`\lambda` values needs to be
+    provided covering the prior on :math:`\lambda` (see Wood 2011 for the relation between smoothness penalties and this prior). For ``mssm`` the
     limits on this are 1e-7 and 1e7. However, as the authors already conclude, covering the entire prior range is not that efficient.
-    Hence we provide an alternative way to set-up the grid, based on first forming marginal grids for each \lambda that contain nR equally-spaced
-    samples from \lambda/lr to \lambda*lr, while all other lambda values are set to random samples between the prior limits. This neglects quite a bit
-    of the prior space. So we use these initial samples to estimate V_p, so that log(\lambda)|y ~ N(log(\hat{\lambda}),V_p,) - see Wood et al. (2016).
-    We then repeatedly sample new \lambda vectors from this normal, followed by updating out estimate of the normal (i.e., V_p) given these samples (
-    using the REML weights to approximate the expectation for estimating V_p, based on Greven & Scheipl; 2016). Note that until the last sampling step we
-    add small values to the diagonal of V_p to promote exploration. The idea is that this should help us to better explore and with less samples, locally
-    around \hat{\lambda}, the uncertainty than if we would just sample from a grid. We then also later re-compute the REML weights from this normal and
-    then follow the steps outlined by (Greven & Scheipl; 2016) to compute V, rather than computing the approximation suggested by Wood et al. (2016).
+    Hence we provide an alternative way to set-up the grid, based on first forming marginal grids for each :math:`\lambda` that contain nR equally-spaced
+    samples from :math:`\lambda/lr to \lambda*lr`, while all other lambda values are set to random samples between the prior limits. This neglects quite a bit
+    of the prior space. So we use these initial samples to estimate :math:`V_p`, so that :math:`log(\lambda)|y ~ N(log(\hat{\lambda}),V_p,)` - see Wood et al. (2016).
+    We then repeatedly sample new :math:`\lambda` vectors from this normal, followed by updating out estimate of the normal (i.e., :math:`V_p`) given these samples (
+    using the REML weights to approximate the expectation for estimating :math:`V_p`,` based on Greven & Scheipl; 2016). Note that until the last sampling step we
+    add small values to the diagonal of :math:`V_p` to promote exploration. The idea is that this should help us to better explore and with less samples, locally
+    around :math:`\hat{\lambda}`, the uncertainty than if we would just sample from a grid. We then also later re-compute the REML weights from this normal and
+    then follow the steps outlined by (Greven & Scheipl; 2016) to compute :math:`V`, rather than computing the approximation suggested by Wood et al. (2016).
     
     This is done when argument grid_type = 'JJJ'. Otherwise, the G&S strategy is employed - forming a grid over the full space (from 1e-7 to 1e7,
     again evaluated for nR equally-spaced values and then permuted for the number of \lambda parameters). Note that
     the latter can get very expensive quite quickly.
 
     References:
-
      - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
      - Wood, S. N., Pya, N., Saefken, B., (2016). Smoothing Parameter and Model Selection for General Smooth Models
      - Greven, S., & Scheipl, F. (2016). Comment on: Smoothing Parameter and Model Selection for General Smooth Models
      - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-    """
 
-    nPen = len(model.formula.penalties)
-    rPen = copy.deepcopy(model.formula.penalties)
+    :param model: GAMM,GAMLSS, or GSMM model (which has been fitted) for which to estimate :math:`V`
+    :type model: GAMM or GAMLSS or GSMM
+    :param nR: (Initial, in case grid_type=="JJJ") :math:`\lambda`  Grid is based on `nR` equally-spaced samples from :math:`\lambda/lr to \lambda*lr`. In case grid_type=="JJJ", `nR*len(model.formula.penalties)` updates to :math:`V_p` are performed during each of which additional `nR` :math`\lambda` samples/reml scores are generated/computed, defaults to 20
+    :type nR: int, optional
+    :param lR: (Initial, in case grid_type=="JJJ") :math:`\lambda`  Grid is based on `nR` equally-spaced samples from :math:`\lambda/`lr` to \lambda*`lr``, defaults to 100
+    :type lR: int, optional
+    :param grid_type: How to define the grid of :math:`\lambda` values on which to base the correction - see above for details, defaults to 'JJJ'
+    :type grid_type: str, optional
+    :param n_c: Number of cores to use to compute the correction, defaults to 10
+    :type n_c: int, optional
+    :param form_t: Whether or not the smoothness uncertainty corrected edf should be computed, defaults to True
+    :type form_t: bool, optional
+    :param form_t1: Whether or not the smoothness uncertainty + smoothness bias corrected edf should be computed, defaults to False
+    :type form_t1: bool, optional
+    :param verbose: Whether to print progress information or not, defaults to False
+    :type verbose: bool, optional
+    :param drop_NA: Whether to drop rows in the **model matrices** corresponding to NAs in the dependent variable vector. Defaults to True.
+    :type drop_NA: bool,optional
+    :param method: Which method to use to estimate the coefficients for GSMM models - supports "Newton" and "BFGS". In case of the former, ``model.family`` needs to implement :func:``gradient`` and :func:``hessian``. Defaults to "Newton"
+    :type method: str,optional
+    :param seed: Seed to use for random parts of the correction. Defaults to None
+    :type seed: int,optional
+    :return: A tuple containing: V - an estimate of the unconditional covariance matrix, LV - the Cholesky of the former, total_edf - smoothness uncertainty corrected edf, total_edf2 - smoothness uncertainty + smoothness bias corrected edf, expected_aic - an "expected version of the aic" based on a weighted sum (using the reml weights) over all computed aics
+    :rtype: (scipy.sparse.csc_array,scipy.sparse.csc_array,float,float,float) 
+    """
+    np_gen = np.random.default_rng(seed)
+
+    family = model.family
+
+    if isinstance(family,Family):
+        nPen = len(model.formula.penalties)
+        rPen = copy.deepcopy(model.formula.penalties)
+    else: # GAMMLSS and GSMM case
+        nPen = len(model.overall_penalties)
+        rPen = copy.deepcopy(model.overall_penalties)
 
     if grid_type == 'GS':
         # Build Full prior grid as discussed by Greven & Scheipl in their comment on Wood et al. (2016)
@@ -421,20 +565,29 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
                 if abs(val - pen.lam) <= 1e-7:
                     continue
                 
-                rGrid.append(np.array([val if pii == pi else np.random.choice(np.exp(np.linspace(np.log(max([1e-7,pen2.lam/lR])),np.log(min([1e7,pen2.lam*lR])),nR)),size=1)[0] for pii,pen2 in enumerate(rPen)]))
+                rGrid.append(np.array([val if pii == pi else np_gen.choice(np.exp(np.linspace(np.log(max([1e-7,pen2.lam/lR])),np.log(min([1e7,pen2.lam*lR])),nR)),size=None) for pii,pen2 in enumerate(rPen)]))
         
         # Make sure actual estimate is included once.
         rGrid.append(np.array([pen2.lam for pen2 in rPen]))
         rGrid = np.array(rGrid)
-            
-    y = model.formula.y_flat[model.formula.NOT_NA_flat]
-    X = model.get_mmat()
-    family = model.family
+    
+    if isinstance(family,Family):
+        y = model.formula.y_flat[model.formula.NOT_NA_flat]
+        X = model.get_mmat()
 
-    orig_scale = family.scale
-    if family.twopar:
-        _,orig_scale = model.get_pars()
+        orig_scale = family.scale
+        if family.twopar:
+            _,orig_scale = model.get_pars()
 
+    else:
+        if drop_NA:
+            y = model.formulas[0].y_flat[model.formula.NOT_NA_flat]
+        else:
+            y = model.formulas[0].y_flat
+        Xs = model.get_mmat(drop_NA=drop_NA)
+        orig_scale = 1
+        init_coef = copy.deepcopy(model.overall_coef)
+    
     remls = []
     Vs = []
     coefs = []
@@ -442,7 +595,7 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
     llks = []
     aics = []
 
-    if X.shape[1] < 2000 and isinstance(family,Gaussian) and isinstance(family.link,Identity) and n_c > 1: # Parallelize grid search
+    if isinstance(family,Gaussian) and X.shape[1] < 2000 and isinstance(family.link,Identity) and n_c > 1: # Parallelize grid search
         with managers.SharedMemoryManager() as manager, mp.Pool(processes=n_c) as pool:
             # Create shared memory copies of data, indptr, and indices for X, XX, and y
 
@@ -515,16 +668,23 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
                 rPen[ridx].lam = rc
             
             # Now compute REML - and all other terms needed for correction proposed by Greven & Scheipl (2017)
-            reml,LP,Pr,coef,scale,edf,llk = compute_reml_candidate_GAMM(family,y,X,rPen)
-            coef = coef.reshape(-1,1)
+            if isinstance(family,Family):
+                reml,LP,Pr,coef,scale,edf,llk = compute_reml_candidate_GAMM(family,y,X,rPen,n_c)
+                coef = coef.reshape(-1,1)
 
-            # Form VB, first solve LP{^-1}
-            LPinv = compute_Linv(LP,n_c)
-            Linv = apply_eigen_perm(Pr,LPinv)
+                # Form VB, first solve LP{^-1}
+                LPinv = compute_Linv(LP,n_c)
+                Linv = apply_eigen_perm(Pr,LPinv)
 
-            # Can already compute first term from correction
-            Vb = Linv.T@Linv*scale
-            Vb += coef@coef.T
+                # Can already compute first term from correction
+                Vb = Linv.T@Linv*scale
+                Vb += coef@coef.T
+            else:
+                reml,V,coef,edf,llk = compute_REML_candidate_GSMM(family,init_coef,len(init_coef),model.coef_split_idx,y,Xs,rPen,n_c=n_c,method=method)
+                coef = coef.reshape(-1,1)
+
+                # Can already compute first term from correction
+                Vb = V + coef@coef.T
 
             # and aic under current penalty
             aic = -2*llk + 2*edf
@@ -540,7 +700,10 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
     if grid_type == "JJJ":
         # Iteratively estimate Vp - covariance matrix of log(\lambda) to guide further REML grid sampling
         id_weight = 0.1
-        ep = np.log(np.array([pen.lam for pen in model.formula.penalties]).reshape(-1,1))
+        if isinstance(family,Family):
+            ep = np.log(np.array([pen.lam for pen in model.formula.penalties]).reshape(-1,1))
+        else:
+            ep = np.log(np.array([pen.lam for pen in model.overall_penalties]).reshape(-1,1))
 
         # Get first estimate for Vp based on samples collected so far
         Vp = estVp(ep,remls,rGrid) + id_weight*np.identity(len(ep))
@@ -548,7 +711,7 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
         # Now continuously update Vp and generate more REML samples in the process
         n_est = nR
         
-        if X.shape[1] < 2000 and isinstance(family,Gaussian) and isinstance(family.link,Identity) and n_c > 1: # Parallelize grid search
+        if isinstance(family,Gaussian) and X.shape[1] < 2000 and isinstance(family.link,Identity) and n_c > 1: # Parallelize grid search
             with managers.SharedMemoryManager() as manager, mp.Pool(processes=n_c) as pool:
                 # Create shared memory copies of data, indptr, and indices for X, XX, and y
 
@@ -597,12 +760,26 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
                     enumerator = tqdm(enumerator)
                 for sp in enumerator:
                     # Generate next \lambda values for which to compute REML, and Vb
-                    p_sample = scp.stats.multivariate_normal.rvs(mean=np.ndarray.flatten(ep),cov=Vp,size=n_est)
-                    p_sample = np.exp(p_sample)
-                    p_sample = p_sample[[np.any(np.all(rGrid==lam,axis=1))==False for lam in p_sample]]
+                    p_sample = []
+                    while len(p_sample) == 0:
+                        p_sample = scp.stats.multivariate_normal.rvs(mean=np.ndarray.flatten(ep),cov=Vp,size=n_est,random_state=seed)
+                        p_sample = np.exp(p_sample)
 
-                    if n_est == 1:
-                        p_sample = [p_sample]
+                        if len(np.ndarray.flatten(ep)) == 1: # Single lambda parameter in model
+                        
+                            if n_est == 1: # and single sample (n_est==1) - so p_sample needs to be shape (1,1)
+                                p_sample = np.array([p_sample])
+
+                            p_sample = p_sample.reshape(n_est,1) # p_sample needs to be shape (n_est,1)
+                            
+                        elif n_est == 1: # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
+                            p_sample = np.array([p_sample]).reshape(1,-1)
+
+                        p_sample = p_sample[[np.any(np.all(rGrid==lam,axis=1))==False for lam in p_sample]]
+
+                        if not seed is None:
+                            seed += 1
+
                     
                     # Now compute reml for new candidates in parallel
                     args = zip(repeat(family),repeat(y_mem.name),repeat(dat_mem.name),
@@ -640,27 +817,47 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
             for sp in enumerator:
 
                 # Generate next \lambda values for which to compute REML, and Vb
-                p_sample = scp.stats.multivariate_normal.rvs(mean=np.ndarray.flatten(ep),cov=Vp,size=n_est)
-                p_sample = np.exp(p_sample)
-                p_sample = p_sample[[np.any(np.all(rGrid==lam,axis=1))==False for lam in p_sample]]
+                p_sample = []
+                while len(p_sample) == 0:
+                    p_sample = scp.stats.multivariate_normal.rvs(mean=np.ndarray.flatten(ep),cov=Vp,size=n_est,random_state=seed)
+                    p_sample = np.exp(p_sample)
 
-                if n_est == 1:
-                    p_sample = [p_sample]
+                    if len(np.ndarray.flatten(ep)) == 1: # Single lambda parameter in model
+                        
+                        if n_est == 1: # and single sample (n_est==1) - so p_sample needs to be shape (1,1)
+                            p_sample = np.array([p_sample])
+
+                        p_sample = p_sample.reshape(n_est,1) # p_sample needs to be shape (n_est,1)
+                        
+                    elif n_est == 1: # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
+                        p_sample = np.array([p_sample]).reshape(1,-1)
+                    
+                    p_sample = p_sample[[np.any(np.all(rGrid==lam,axis=1))==False for lam in p_sample]]
+
+                    if not seed is None:
+                        seed += 1
 
                 for ps in p_sample:
                     for ridx,rc in enumerate(ps):
                         rPen[ridx].lam = rc
                     
-                    reml,LP,Pr,coef,scale,edf,llk = compute_reml_candidate_GAMM(family,y,X,rPen)
-                    coef = coef.reshape(-1,1)
+                    if isinstance(family,Family):
+                        reml,LP,Pr,coef,scale,edf,llk = compute_reml_candidate_GAMM(family,y,X,rPen,n_c)
+                        coef = coef.reshape(-1,1)
 
-                    # Form VB, first solve LP{^-1}
-                    LPinv = compute_Linv(LP,n_c)
-                    Linv = apply_eigen_perm(Pr,LPinv)
+                        # Form VB, first solve LP{^-1}
+                        LPinv = compute_Linv(LP,n_c)
+                        Linv = apply_eigen_perm(Pr,LPinv)
 
-                    # Can already compute first term from correction
-                    Vb = Linv.T@Linv*scale
-                    Vb += coef@coef.T
+                        # Can already compute first term from correction
+                        Vb = Linv.T@Linv*scale
+                        Vb += coef@coef.T
+                    else:
+                        reml,V,coef,edf,llk = compute_REML_candidate_GSMM(family,init_coef,len(init_coef),model.coef_split_idx,y,Xs,rPen,n_c=n_c,method=method)
+                        coef = coef.reshape(-1,1)
+
+                        # Can already compute first term from correction
+                        Vb = V + coef@coef.T
 
                     # and aic under current penalty
                     aic = -2*llk + 2*edf
@@ -694,7 +891,7 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
     expected_aic = np.sum(ws*aics)
 
     # Now compute \hat{cov(\boldsymbol{\beta}|y)}
-    if X.shape[1] < 2000 and isinstance(family,Gaussian) and isinstance(family.link,Identity) and n_c > 1:
+    if isinstance(family,Gaussian) and X.shape[1] < 2000 and isinstance(family.link,Identity) and n_c > 1:
         # E_{p|y}[V_\boldsymbol{\beta}(\lambda)] + E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] in Greven & Scheipl (2017)
         Vr1 = ws[0]* ((Linvs[0].T@Linvs[0]*scales[0]) + (coefs[0]@coefs[0].T))
 
@@ -726,7 +923,15 @@ def correct_VB(model,nR = 11,lR = 20,grid_type = 'JJJ',n_c=10,form_t=True,form_t
     # Compute corrected edf (e.g., for AIC; Wood, Pya, & Saefken, 2016)
     total_edf = None
     if form_t or form_t1:
-        F = V@((X.T@X)/orig_scale)
+        if isinstance(family,Family):
+            if isinstance(family,Gaussian) and isinstance(family.link,Identity): # Strictly additive case
+                F = V@((X.T@X)/orig_scale)
+            else: # Generalized case
+                W = model.Wr@model.Wr
+                F = V@((X.T@W@X)/orig_scale)
+        else: # GSMM/GAMLSS case
+            F = V@(-1*model.hessian)
+
         total_edf = F.trace()
 
     # Compute corrected smoothness bias corrected edf (t1 in section 6.1.2 of Wood, 2017)

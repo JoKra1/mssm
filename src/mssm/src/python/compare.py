@@ -1,21 +1,24 @@
 import numpy as np
 import scipy as scp
 import math
-from ...models import GAMM
+from ...models import GAMM,GAMMLSS,GSMM,Family,GAMLSSFamily,GENSMOOTHFamily,Gaussian,Identity
 from .utils import correct_VB
 import warnings
 
-def compare_CDL(model1:GAMM,
-                model2:GAMM,
+def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
+                model2:GAMM or GAMMLSS or GSMM,
                 correct_V:bool=True,
                 correct_t1:bool=True,
                 perform_GLRT:bool=True,
-                lR=20,
-                nR=5,
+                lR=100,
+                nR=20,
                 n_c=10,
                 alpha=0.05,
                 grid='JJJ',
-                verbose=False):
+                verbose=False,
+                drop_NA=True,
+                method="Newton",
+                seed=None):
     
     """(Optionally) performs an approximate GLRT on twice the difference in unpenalized likelihood between ``model1`` and ``model2`` (see Wood, 2017).
     
@@ -25,7 +28,7 @@ def compare_CDL(model1:GAMM,
     The difference between the models in EDF serves as DoF for computing the Chi-Square statistic. Similarly, for each model 2*edf is added to twice the negative (conditional) likelihood to
     compute the aic (see Wood et al., 2016).
     
-    By default (``correct_V=True``), ``mssm`` will attempt to correct the edf for uncertainty in the estimated \lambda parameters. This requires computing a costly
+    By default (``correct_V=True``), ``mssm`` will attempt to correct the edf for uncertainty in the estimated :math:`\lambda` parameters. This requires computing a costly
     correction (see Greven & Scheipl, 2016 and the ``correct_VB`` function in the utils module) which will take quite some time for reasonably large models with more than 3-4 smoothing parameters.
     In that case relying on CIs and penalty-based comparisons might be preferable (see Marra & Wood, 2011 for details on the latter).
 
@@ -37,7 +40,6 @@ def compare_CDL(model1:GAMM,
     (see Wood, 2017: 6.12.4).
 
     References:
-    
      - Marra, G., & Wood, S. N. (2011) Practical variable selection for generalized additive models.
      - Wood, S. N., Pya, N., Saefken, B., (2016). Smoothing Parameter and Model Selection for General Smooth Models
      - Greven, S., & Scheipl, F. (2016). Comment on: Smoothing Parameter and Model Selection for General Smooth Models
@@ -45,12 +47,34 @@ def compare_CDL(model1:GAMM,
      - ``compareML`` function from ``itsadug`` R-package: https://rdrr.io/cran/itsadug/man/compareML.html
      - ``anova.gam`` function from ``mgcv``, see: https://www.rdocumentation.org/packages/mgcv/versions/1.9-1/topics/anova.gam
 
-    :param model1: GAMM model 1.
-    :type model1: GAMM
-    :param model2: GAMM model 2.
-    :type model2: GAMM
-    :param alpha: alpha level of the GLRT.
-    :type model1: GAMM
+    :param model1: GAMM, GAMLSS, or GSMM 1.
+    :type model1: GAMM or GAMMLSS or GSMM
+    :param model2: GAMM, GAMLSS, or GSMM 2.
+    :type model2: GAMM or GAMMLSS or GSMM
+    :param correct_V: Whether or not to correct for smoothness uncertainty. Defaults to True
+    :type correct_V: bool, optional
+    :param correct_t1: Whether or not to also correct the smoothness bias corrected edf for smoothness uncertainty. Defaults to True.
+    :type correct_t1: bool, optional
+    :param perform_GLRT: Whether to perform both a GLRT and to compute the AIC or to only compute the AIC. Defaults to True.
+    :type perform_GLRT: bool, optional
+    :param lR: For smoothness uncertainty correction. (Initial, in case grid_type=="JJJ") :math:`\lambda`  Grid is based on `nR` equally-spaced samples from :math:`\lambda/`lr` to \lambda*`lr``, defaults to 100
+    :type lR: int, optional
+    :param nR: For smoothness uncertainty correction. (Initial, in case grid_type=="JJJ") :math:`\lambda`  Grid is based on `nR` equally-spaced samples from :math:`\lambda/lr to \lambda*lr`. In case grid_type=="JJJ", `nR*len(model.formula.penalties)` updates to :math:`V_p` are performed during each of which additional `nR` :math`\lambda` samples/reml scores are generated/computed, defaults to 20
+    :type nR: int, optional
+    :param n_c: Number of cores to use to compute the smoothness uncertaincy correction, defaults to 10
+    :type n_c: int, optional
+    :param alpha: alpha level of the GLRT. Defaults to 0.05
+    :type alpha: float, optional
+    :param grid: How to define the grid of :math:`\lambda` values on which to base the correction - see :func:`correct_VB` for details, defaults to 'JJJ'
+    :type grid: str, optional
+    :param verbose: Whether to print progress information or not, defaults to False
+    :type verbose: bool, optional
+    :param drop_NA: Whether to drop rows in the **model matrices** corresponding to NAs in the dependent variable vector. Defaults to True.
+    :type drop_NA: bool,optional
+    :param method: Which method to use to estimate the coefficients for GSMM models - supports "Newton" and "BFGS". In case of the former, ``model.family`` needs to implement :func:``gradient`` and :func:``hessian``. Defaults to "Newton"
+    :type method: str,optional
+    :param seed: Seed to use for random parts of the correction. Defaults to None
+    :type seed: int,optional
     :raises ValueError: If both models are from different families.
     :raises ValueError: If ``perform_GLRT=True`` and ``model1`` has fewer coef than ``model2`` - i.e., ``model1`` has to be the notationally more complex one.
     :return: A dictionary with outcomes of all tests. Key ``H1`` will be a bool indicating whether Null hypothesis was rejected or not, ``p`` will be the p-value, ``chi^2`` will be the test statistic used,
@@ -61,15 +85,18 @@ def compare_CDL(model1:GAMM,
     if type(model1.family) != type(model2.family):
         raise ValueError("Both models should be estimated using the same family.")
     
-    if perform_GLRT and model1.formula.n_coef < model2.formula.n_coef:
+    if perform_GLRT and isinstance(model1.family,Family) and model1.formula.n_coef < model2.formula.n_coef:
+        raise ValueError("For the GLRT, model1 needs to be set to the more complex model (i.e., needs to have more coefficients than model2).")
+    
+    if perform_GLRT and (isinstance(model1.family,Family) == False) and len(model1.overall_coef) < len(model2.overall_coef):
         raise ValueError("For the GLRT, model1 needs to be set to the more complex model (i.e., needs to have more coefficients than model2).")
     
     # Collect total DOF for uncertainty in \lambda using correction proposed by Greven & Scheipl (2016)
     if correct_V:
         if verbose:
             print("Correcting for uncertainty in lambda estimates...\n")
-        _,_,DOF1,DOF12,expected_aic1 = correct_VB(model1,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,verbose=verbose)
-        _,_,DOF2,DOF22,expected_aic2 = correct_VB(model2,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,verbose=verbose)
+        _,_,DOF1,DOF12,expected_aic1 = correct_VB(model1,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,verbose=verbose,drop_NA=drop_NA,method=method,seed=seed)
+        _,_,DOF2,DOF22,expected_aic2 = correct_VB(model2,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,verbose=verbose,drop_NA=drop_NA,method=method,seed=seed)
         
         if correct_t1:
             # Section 6.12.4 suggests replacing t (edf) with t1 (2*t - (F@F).trace()) with F=(X.T@X+S_\llambda)^{-1}@X.T@X for GLRT - with the latter also being corrected for
@@ -84,13 +111,26 @@ def compare_CDL(model1:GAMM,
         DOF2 = model2.edf
         
         if correct_t1:
-            # Compute uncertainty uncorrected but smoothness bias corrected edf (t1 in section 6.1.2 of Wood, 2017)
-            X1 = model1.get_mmat()
-            X2 = model2.get_mmat()
-            V1 = model1.lvi.T @ model1.lvi
-            V2 = model2.lvi.T @ model2.lvi
-            F1 = V1@(X1.T@X1)
-            F2 = V2@(X2.T@X2)
+            # Compute uncertainty un-corrected but smoothness bias corrected edf (t1 in section 6.1.2 of Wood, 2017)
+            if isinstance(model1.family,Family):
+                X1 = model1.get_mmat()
+                X2 = model2.get_mmat()
+                V1 = model1.lvi.T @ model1.lvi
+                V2 = model2.lvi.T @ model2.lvi
+                if isinstance(model1.family,Gaussian) and isinstance(model1.family.link,Identity): # Strictly additive case
+                    F1 = V1@(X1.T@X1)
+                    F2 = V2@(X2.T@X2)
+                else: # Generalized case
+                    W1 = model1.Wr@model1.Wr
+                    W2 = model2.Wr@model2.Wr
+                    F1 = V1@(X1.T@W1@X1)
+                    F2 = V2@(X2.T@W2@X2)
+            else: # GAMLSS or GSMM case
+                V1 = model1.overall_lvi.T @ model1.overall_lvi
+                V2 = model2.overall_lvi.T @ model2.overall_lvi
+                F1 = V1@(-1*model1.hessian)
+                F2 = V2@(-1*model2.hessian)
+
             DOF12 = 2*DOF1 - (F1@F1).trace()
             DOF22 = 2*DOF2 - (F2@F2).trace()
 
@@ -101,15 +141,19 @@ def compare_CDL(model1:GAMM,
 
 
     # Compute un-penalized likelihood based on scale estimate of more complex (in terms of edf - so actually more complex) model if a scale was estimated (see section 3.1.4, Wood, 2017).
-    ext_scale = None
-    if model1.family.twopar:
-        if DOF1 > DOF2:
-            _,ext_scale = model1.get_pars()
-        else:
-            _,ext_scale = model2.get_pars()
+    if isinstance(model1.family,Family):
+        ext_scale = None
+        if model1.family.twopar:
+            if DOF1 > DOF2:
+                _,ext_scale = model1.get_pars()
+            else:
+                _,ext_scale = model2.get_pars()
 
-    llk1 = model1.get_llk(penalized=False,ext_scale=ext_scale)
-    llk2 = model2.get_llk(penalized=False,ext_scale=ext_scale)
+        llk1 = model1.get_llk(penalized=False,ext_scale=ext_scale)
+        llk2 = model2.get_llk(penalized=False,ext_scale=ext_scale)
+    else:
+        llk1 = model1.get_llk(penalized=False)
+        llk2 = model2.get_llk(penalized=False)
 
     # Compute Chi-square statistic...
     stat = 2 * (llk1 - llk2)
