@@ -375,7 +375,7 @@ class Test_ri_li:
         llk = self.model.get_llk(False)
         assert round(llk,ndigits=3) == -1311.209 
 
-class Test_rs_ri:
+class Test_rs_ri_hard:
 
     # Random slope + intercept model
     sim_dat,_ = sim1(100,random_seed=100)
@@ -452,7 +452,7 @@ class Test_rs_ri:
         llk = self.model.get_llk(False)
         assert round(llk,ndigits=3) == -31874.389 
 
-class Test_no_pen:
+class Test_no_pen_hard:
     # No penalties
     sim_dat,_ = sim1(100,random_seed=100)
 
@@ -484,7 +484,7 @@ class Test_no_pen:
         llk = self.model.get_llk(False)
         assert round(llk,ndigits=3) == -33724.491
 
-class Test_te_rs_fact:
+class Test_te_rs_fact_hard:
     # te + random slope with factor
     sim_dat,_ = sim1(100,random_seed=100)
 
@@ -547,7 +547,7 @@ class Test_te_rs_fact:
         llk = self.model.get_llk(False)
         assert round(llk,ndigits=3) == -31959.948
 
-class Test_ti_rs_fact:
+class Test_ti_rs_fact_hard:
     # ti + random slope with factor
     sim_dat,_ = sim1(100,random_seed=100)
 
@@ -614,7 +614,7 @@ class Test_ti_rs_fact:
         llk = self.model.get_llk(False)
         assert round(llk,ndigits=3) == -31850.663 
 
-class Test_3way_li:
+class Test_3way_li_hard:
     # *li() with three variables: three-way interaction
     sim_dat,_ = sim1(100,random_seed=100)
 
@@ -644,7 +644,7 @@ class Test_3way_li:
         lam = np.array([p.lam for p in self.model.formula.penalties])
         assert np.allclose(lam,np.array([])) 
 
-class Test_diff:
+class Test_diff_hard:
     # pred_diff test
     sim_dat,_ = sim1(100,random_seed=100)
 
