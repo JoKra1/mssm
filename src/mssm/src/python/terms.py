@@ -29,7 +29,12 @@ class GammTerm():
 
 class i(GammTerm):
     """
-    An intercept/offset term. In a model \mu = a + f(x) it reflects a.
+    An intercept/offset term. In a model
+    
+    .. math::
+       \mu_i = a + f(x_i)
+       
+    it reflects :math:`a`.
 
     """
 
@@ -40,16 +45,68 @@ class i(GammTerm):
 class f(GammTerm):
     """
     A univariate or tensor interaction smooth term. If ``variables`` only contains a
-    single variable 'x', this term will represent a univariate f(x) in a model \mu = a + f(x). If
-    ``variables`` contains two variables 'x' and 'y', then this term will either represent
-    the tensor interaction f(x,y) in a model a + f(x) + f(y) + f(x,y) or in a model a + f(x,y).
-    The first behavior is achieved by setting ``te=False``. In that case it is necessary
-    to add 'main effect' ``f()`` terms for 'x' and 'y'. In other words, the behavior then mimicks
-    the ``ti()`` term available in mgcv (Wood, 2017). If ``te=True``, the term instead behaves like
-    a ``te()`` term in mgcv, so no separate smooth effects for the main effects need to be included.
+    single variable :math:`x`, this term will represent a univariate :math:`f(x)` in a model:
+    
+    .. math::
 
-    By default a B-spline basis is used with ``nk``=9 basis functions (after removing identifiability
-    constrains). This is equivalent to mgcv's default behavior of using 10 basis functions
+      \mu_i = a + f(x_i)
+   
+    For example, the model below in ``mgcv``:
+
+    ::
+
+      bam(y ~ s(x,k=10) + s(z,k=20))
+
+    would be expressed as follows in ``mssm``:
+
+    ::
+
+      GAMM(Formula(lhs("y"),[i(),f(["x"],nk=9),f(["z"],nk=19)]),Gaussian())
+      
+    If ``variables`` contains two variables :math:`x` and :math:`z`, then this term will either represent
+    the tensor interaction :math:`f(x,z)` in model:
+     
+    .. math::
+
+      \mu_i = a + f(x_i) + f(z_i) + f(x_i,z_i)
+    
+    or in model:
+    
+    .. math::
+
+      \mu_i = a + f(x_i,z_i)
+
+    The first behavior is achieved by setting ``te=False``. In that case it is necessary
+    to add 'main effect' ``f`` terms for :math:`x` and :math:`y`. In other words, the behavior then mimicks
+    the ``ti()`` term available in ``mgcv`` (Wood, 2017). If ``te=True``, the term instead behaves like
+    a ``te()`` term in ``mgcv``, so no separate smooth effects for the main effects need to be included.
+
+    For example, the model below in ``mgcv``:
+
+    ::
+
+      bam(y ~ te(x,z,k=10))
+
+    would be expressed as follows in ``mssm``:
+
+    ::
+
+      GAMM(Formula(lhs("y"),[i(),f(["x","z"],nk=9,te=True)]),Gaussian())
+
+    In addition, the model below in ``mgcv``:
+
+    ::
+
+      bam(y ~ s(x,k=10) + s(z,k=20) + ti(x,z,k=10))
+
+    would be expressed as follows in ``mssm``:
+
+    ::
+
+      GAMM(Formula(lhs("y"),[i(),f(["x"],nk=9),f(["z"],nk=19),f(["x","z"],nk=9,te=False)]),Gaussian())
+
+    By default a B-spline basis is used with ``nk=9`` basis functions (after removing identifiability
+    constrains). This is equivalent to ``mgcv``'s default behavior of using 10 basis functions
     (before removing identifiability constrains). In case ``variables`` contains more then one variable
     ``nk`` can either bet set to a single value or to a list containing the number of basis functions
     that should be used to setup the spline matrix for every variable. The former implies that the same
@@ -75,37 +132,30 @@ class f(GammTerm):
     :param by: A string corresponding to a factor in ``data`` passed to ``Formula``. Separate f(``variables``) (and smoothness penalties) will be estimated per level of ``by``.
     :type by: str, optional
     :param binary: A list containing two strings. The first string corresponds to a factor in ``data`` passed to ``Formula``. A separate f(``variables``) will be estimated for the level of this factor corresponding to the second string.
-    :type binary:list[str,str], optional
+    :type binary: [str,str], optional
     :param id: Only useful in combination with specifying a ``by`` variable. If ``id`` is set to any integer the penalties placed on the separate f(``variables``) will share a single smoothness penalty.
     :type id: int, optional
-    :param nk: Number of basis functions to use. Even if ``identifiable`` is true, this number will reflect the final number of basis functions for this term (i.e., mssm acts like you would have asked for 10 basis functions if ``nk``=9 and identifiable=True; the default).
+    :param nk: Number of basis functions to use. Even if ``identifiable`` is true, this number will reflect the final number of basis functions for this term (i.e., mssm acts like you would have asked for 10 basis functions if ``nk=9`` and identifiable=True; the default).
     :type nk: int or list[int], optional
-    :param te: For tensor interaction terms only. If set to false, the term mimics the behavior of ti() in mgcv (Wood, 2017).
-    Otherwise, the term behaves like a te() term in mgcv - i.e., the marginal basis functions are not removed from the interaction.
+    :param te: For tensor interaction terms only. If set to false, the term mimics the behavior of ``ti()`` in mgcv (Wood, 2017). Otherwise, the term behaves like a ``te()`` term in mgcv - i.e., the marginal basis functions are not removed from the interaction.
     :type te: bool, optional
-    :param rp: Experimental - will currently break for tensor smooths or in case ``by`` is provided. Whether or not to re-parameterize the term - see src.python.formula.reparam for details. Defaults to no re-parameterization.
+    :param rp: Experimental - will currently break for tensor smooths or in case ``by`` is provided. Whether or not to re-parameterize the term - see :func:`mssm.src.python.formula.reparam` for details. Defaults to no re-parameterization.
     :type rp: int, optional
-    :param constraint: What kind of identifiability constraints should be absorbed by the terms (if they are to be identifiable). Either QR-based
-    constraints (default, well-behaved), by means of column-dropping (no infill, not so well-behaved), or by means of difference re-coding (little infill, not so well behaved either).
+    :param constraint: What kind of identifiability constraints should be absorbed by the terms (if they are to be identifiable). Either QR-based constraints (default, well-behaved), by means of column-dropping (no infill, not so well-behaved), or by means of difference re-coding (little infill, not so well behaved either).
     :type constraint: mssm.src.constraints.ConstType, optional
-    :param identifiable: Whether or not the constant should be removed from the space of functions this term can fit. Achieved by enforcing that 1.T @ X = 0 (X here is the spline matrix computed for the observed data;
-    see Wood, 2017 for details). Necessary in most cases to keep the model identifiable.
+    :param identifiable: Whether or not the constant should be removed from the space of functions this term can fit. Achieved by enforcing that :math:`\mathbf{1}^T \mathbf{X} = 0` (:math:`\mathbf{X}` here is the spline matrix computed for the observed data; see Wood, 2017 for details). Necessary in most cases to keep the model identifiable.
     :type identifiable: bool, optional
-    :param basis: The basis functions to use to construct the spline matrix. By default a B-spline basis
-    (Eilers & Marx, 2010) implemented in ``src.smooths.B_spline_basis``.
+    :param basis: The basis functions to use to construct the spline matrix. By default a B-spline basis (Eilers & Marx, 2010) implemented in :func:`mssm.src.smooths.B_spline_basis`.
     :type basis: Callable, optional
-    :param basis_kwargs: A list containing one or multiple dictionaries specifying how the basis should be computed. For the B-spline basis the following arguments (with default values) are available: ``convolve``=``False``,
-    ``min_c``=``None``, ``max_c``=``None``, ``deg``=``3``. See ``src.smooths.B_spline_basis`` for details, but the default should work for most cases.
+    :param basis_kwargs: A list containing one or multiple dictionaries specifying how the basis should be computed. For the B-spline basis the following arguments (with default values) are available: ``convolve``=``False``, ``min_c``=``None``, ``max_c``=``None``, ``deg``=``3``. See :func:`mss.src.smooths.B_spline_basis` for details, but the default should work for most cases.
     :type basis_kwargs: dict, optional
     :param is_penalized: Should the term be left unpenalized or not. There are rarely good reasons to set this to False.
     :type is_penalized: bool, optional
-    :param penalize_null: Should a separate Null-space penalty (Marra & Wood, 2011) be placed on the term. By default, the term here will leave a linear f(`variables`) un-penalized! Thus, there is no option for the penalty to achieve
-    f(`variables`) = 0 even if that would be supported by the data. Adding a Null-space penalty provides the penalty with that power. This can be used for model selection instead of Hypothesis testing and is the preferred way in mssm (see Marra & Wood, 2011 for details).
+    :param penalize_null: Should a separate Null-space penalty (Marra & Wood, 2011) be placed on the term. By default, the term here will leave a linear f(`variables`) un-penalized! Thus, there is no option for the penalty to achieve f(`variables`) = 0 even if that would be supported by the data. Adding a Null-space penalty provides the penalty with that power. This can be used for model selection instead of Hypothesis testing and is the preferred way in ``mssm`` (see Marra & Wood, 2011 for details).
     :type penalize_null: bool, optional
     :param penalty: A list of penalty types to be placed on the term.
     :type penalty: list[penalties.PenType], optional
-    :param pen_kwargs: A list containing one or multiple dictionaries specifying how the penalty should be created. For the default difference penalty (Eilers & Marx, 2010) the only keyword argument (with default value) available is: ``m``=2. This reflects the order of the difference penalty. Note, that while a higher ``m`` permits penalizing towards
-    smoother functions it also leads to an increased dimensionality of the penalty Kernel (the set of f[``variables``] which will not be penalized). In other words, increasingly more complex functions will be left un-penalized for higher ``m`` (except if ``penalize_null`` is set to True). ``m``=2 is usually a good choice and thus the default but see Eilers & Marx (2010) for details.
+    :param pen_kwargs: A list containing one or multiple dictionaries specifying how the penalty should be created. For the default difference penalty (Eilers & Marx, 2010) the only keyword argument (with default value) available is: ``m=2``. This reflects the order of the difference penalty. Note, that while a higher ``m`` permits penalizing towards smoother functions it also leads to an increased dimensionality of the penalty Kernel (the set of bases functions which will not be penalized). In other words, increasingly more complex functions will be left un-penalized for higher ``m`` (except if ``penalize_null`` is set to True). ``m=2`` is usually a good choice and thus the default but see Eilers & Marx (2010) for details.
     :type pen_kwargs: list[dict], optional
     """
 
@@ -190,24 +240,49 @@ class f(GammTerm):
 
 class fs(f):
    """
-    Essentially a ``f()`` term with ``by``=``rf``, ``id`` != None, ``penalize_null`` = True, and ``pen_kwargs`` = ``[{"m":1}]`` and ``rp=1``.
-    This term approximates the "factor-smooth interaction" basis "fs" with ``m``= 1 available in mgcv (Wood, 2017). It is however
-    not equivalent (mgcv by default uses a different basis for which the ``m`` key-word has a different functionality).
+    Essentially a :class:`f` term with ``by=rf``, ``id != None``, ``penalize_null= True``, ``pen_kwargs = [{"m":1}]``, and ``rp=1``.
     
-    Specifically, here ``m``= 1 implies that the only function left unpenalized by the default (difference) penalty is the constant (Eilers & Marx, 2010). Thus,
-    a linear ``f(``variables``)`` is penalized by the same default penalty that also penalizes smoothness (and not by a separate penalty as
-    is the case in mgcv when ``m=1`` for the default basis)! Any constant ``f(``variables``)`` is penalized by the null-space penalty (in both mgcv and mssm;
+    This term approximates the "factor-smooth interaction" basis "fs" with ``m= 1`` available in ``mgcv`` (Wood, 2017). For example,
+    the term below from ``mgcv``:
+
+    ::
+
+      s(x,sub,bs="fs"))
+   
+    would approximately correspond to the following term in ``mssm``:
+
+    ::
+
+      fs(["x"],rf="sub")
+
+    They are however not equivalent (mgcv by default uses a different basis for which the ``m`` key-word has a different functionality).
+    
+    Specifically, here ``m= 1`` implies that the only function left unpenalized by the default (difference) penalty is the constant (Eilers & Marx, 2010). Thus,
+    a linear basis is penalized by the same default penalty that also penalizes smoothness (and not by a separate penalty as
+    is the case in ``mgcv`` when ``m=1`` for the default basis)! Any constant basis is penalized by the null-space penalty (in both ``mgcv`` and ``mssm``;
     see Marra & Wood, 2011) - the term thus shrinks towards zero (Wood, 2017).
 
     The factor smooth basis in mgcv allows to let the penalty be different for different levels of an additional factor (by additionally specifying
-    the ``by`` argument for a smooth with basis "fs"). I.e., s(Time,Subject,by='condition',bs='fs') would estimate a non-linear random smooth of time
-    per level of the subject & condition interaction - with the same penalty being placed on all random smooth terms within the same condition level.
-    This can be achieved here by adding multiple ``fs`` terms to the formula and utilising the ``by_subgroup`` argument. This needs to be set to a list
-    where the first element identifies the additional factor variable (e.g., "condition") and the second element corresponds to a level of said factor variable.
-    E.g., *[fs(["Time],rf="subject_cond",by_subgroup=["cond",cl]) for cl in np.unique(dat["cond"])]. Importantly, "subject_cond" is the interaction of "subject"
-    and "condition" - not just the "subject variable in the data.
+    the ``by`` argument for a smooth with basis "fs"). I.e.,
+   
+    ::
 
-    Model estimation can become quite expensive for fs terms, when the factor variable for ``rf`` has many levels. (> 10000) In that case, approximate derivative
+      s(Time,Subject,by='condition',bs='fs')
+   
+    in ``mgcv`` would estimate a non-linear random smooth of "time" per level of the "subject" & "condition" interaction - with the same penalty being placed on all
+    random smooth terms within the same "condition" level.
+    
+    This can be achieved in ``mssm`` by adding multiple :class:`fs` terms to the :class:`Formula` and utilising the ``by_subgroup`` argument. This needs to be set to a list
+    where the first element identifies the additional factor variable (e.g., "condition") and the second element corresponds to a level of said factor variable. E.g., to approximate
+    the aforementioned ``mgcv`` term we have to add:
+     
+    ::
+    
+      *[fs(["Time"],rf="subject_cond",by_subgroup=["cond",cl]) for cl in np.unique(dat["cond"])]
+      
+    to the :class:`Formula` ``terms`` list. Importantly, "subject_cond" is the interaction of "subject" and "condition" - not just the "subject variable in the data.
+
+    Model estimation can become quite expensive for :class:`fs` terms, when the factor variable for ``rf`` has many levels. (> 10000) In that case, approximate derivative
     evaluation can speed things up considerably. To enforce this, the ``approx_deriv`` argument needs to be specified with a dict, having the following structure:
     ``{"no_disc":[str],"excl":[str],"split_by":[str],"restarts":int}``. "no_disc" should usually be set to an empty list, and should in general only contain names of
     continuous variables included in the formula. Any variable mentioned here will not be discretized before clustering - this will make the approximation a bit more
@@ -224,13 +299,11 @@ class fs(f):
     :type variables: list[str]
     :param rf: A string corresponding to a (random) factor in ``data`` passed to ``Formula``. Separate f(``variables``) (but a shared smoothness penalty!) will be estimated per level of ``rf``.
     :type rf: str, optional
-    :param nk: Number of basis functions -1 to use. I.e., if ``nk``=9 (the default), the term will use 10 basis functions. By default ``f()`` has identifiability constraints applied and we act as if ``nk``+ 1 coefficients were requested. The ``fs()`` term needs no identifiability constrains so if the same number of coefficients used for
-    a ``f()`` term is requested (the desired approach), one coefficient is added to compensate for the lack of identifiability constraints. This is the opposite to how this is handled in mgcv: specifying nk=10 for "fixed" univariate smooths results in 9 basis functions being available. However, for a smooth in mgcv with basis='fs', 10 basis functions will remain available.
+    :param nk: Number of basis functions -1 to use. I.e., if ``nk=9`` (the default), the term will use 10 basis functions. By default ``f()`` has identifiability constraints applied and we act as if ``nk``+ 1 coefficients were requested. The ``fs()`` term needs no identifiability constrains so if the same number of coefficients used for a ``f()`` term is requested (the desired approach), one coefficient is added to compensate for the lack of identifiability constraints. This is the opposite to how this is handled in mgcv: specifying ``nk=10`` for "fixed" univariate smooths results in 9 basis functions being available. However, for a smooth in mgcv with basis='fs', 10 basis functions will remain available.
     :type nk: int or list[int], optional
-    :param basis: The basis functions to use to construct the spline matrix. By default a B-spline basis (Eilers & Marx, 2010) implemented in ``src.smooths.B_spline_basis``.
+    :param basis: The basis functions to use to construct the spline matrix. By default a B-spline basis (Eilers & Marx, 2010) implemented in :func:`mssm.src.smooths.B_spline_basis`.
     :type basis: Callable, optional
-    :param basis_kwargs: A list containing one or multiple dictionaries specifying how the basis should be computed. For the B-spline basis the following arguments (with default values) are available: ``convolve``=``False``,
-    ``min_c``=``None``, ``max_c``=``None``, ``deg``=``3``. See ``src.smooths.B_spline_basis`` for details.
+    :param basis_kwargs: A list containing one or multiple dictionaries specifying how the basis should be computed. For the B-spline basis the following arguments (with default values) are available: ``convolve``=``False``, ``min_c``=``None``, ``max_c``=``None``, ``deg``=``3``. See :func:`mssm.src.smooths.B_spline_basis` for details.
     :type basis_kwargs: dict, optional
     :param by_subgroup: List including a factor variable and specific level of said variable. Allows for separate penalties as described above.
     :type by_subgroup: [str,str], optional
@@ -312,14 +385,13 @@ class irf(GammTerm):
        :type variables: list[str]
        :param event_onset: A ``np.array`` containing, for each individual time-series, the index corresponding to the sample/time-point at which the event eliciting the response to be estimate by this term happened.
        :type event_onset: [int]
-       :param basis_kwargs: A list containing one or multiple dictionaries specifying how the basis should be computed. For ``irf`` terms, the ``convolve`` argument has to be set to True! Also,
-       ``min_c`` and ``max_c`` must be specified. ``min_c`` corresponds to the assumed min. delay of the response after event onset and can usually be set to 0. ``max_c`` corresponds to the assumed max. delay of the response (in ms) after which the response is believed to have returned to a zero base-line.
+       :param basis_kwargs: A list containing one or multiple dictionaries specifying how the basis should be computed. For ``irf`` terms, the ``convolve`` argument has to be set to True! Also, ``min_c`` and ``max_c`` must be specified. ``min_c`` corresponds to the assumed min. delay of the response after event onset and can usually be set to 0. ``max_c`` corresponds to the assumed max. delay of the response (in ms) after which the response is believed to have returned to a zero base-line.
        :type basis_kwargs: dict
        :param by: A string corresponding to a factor in ``data`` passed to ``Formula``. Separate irf(``variables``) (and smoothness penalties) will be estimated per level of ``by``.
        :type by: str, optional
        :param id: Only useful in combination with specifying a ``by`` variable. If ``id`` is set to any integer the penalties placed on the separate irff(``variables``) will share a single smoothness penalty.
        :type id: int, optional
-       :param nk: Number of basis functions to use. I.e., if ``nk``=10 (the default), the term will use 10 basis functions (Note that these terms are not made identifiable by absorbing any kind of constraint). 
+       :param nk: Number of basis functions to use. I.e., if ``nk=10`` (the default), the term will use 10 basis functions (Note that these terms are not made identifiable by absorbing any kind of constraint). 
        :type nk: int, optional
        :param basis: The basis functions to use to construct the spline matrix. By default a B-spline basis (Eilers & Marx, 2010) implemented in ``src.smooths.B_spline_basis``.
        :type basis: Callable, optional
@@ -327,8 +399,7 @@ class irf(GammTerm):
        :type is_penalized: bool, optional
        :param penalty: A list of penalty types to be placed on the term.
        :type penalty: list[penalties.PenType], optional
-       :param pen_kwargs: A list containing one or multiple dictionaries specifying how the penalty should be created. For the default difference penalty (Eilers & Marx, 2010) the only keyword argument (with default value) available is: ``m``=2. This reflects the order of the difference penalty. Note, that while a higher ``m`` permits penalizing towards
-       smoother functions it also leads to an increased dimensionality of the penalty Kernel (the set of f[``variables``] which will not be penalized). In other words, increasingly more complex functions will be left un-penalized for higher ``m`` (except if ``penalize_null`` is set to True). ``m``=2 is usually a good choice and thus the default but see Eilers & Marx (2010) for details.
+       :param pen_kwargs: A list containing one or multiple dictionaries specifying how the penalty should be created. For the default difference penalty (Eilers & Marx, 2010) the only keyword argument (with default value) available is: ``m=2``. This reflects the order of the difference penalty. Note, that while a higher ``m`` permits penalizing towards smoother functions it also leads to an increased dimensionality of the penalty Kernel (the set of f[``variables``] which will not be penalized). In other words, increasingly more complex functions will be left un-penalized for higher ``m`` (except if ``penalize_null`` is set to True). ``m=2`` is usually a good choice and thus the default but see Eilers & Marx (2010) for details.
        :type pen_kwargs: list[dict], optional      
        """
     
@@ -382,37 +453,42 @@ class irf(GammTerm):
 
 class l(GammTerm):
     """
-    Adds a parametric (linear) term to the model formula. The model y = a + b*x can for example be achieved
-    by adding [i(), l(['x'])] to the ``term`` argument of a ``Formula``. The coefficient "b" estimated for
-    the term will then correspond to the slope of "x". This class can also be used to add predictors for
-    categorical variables. If the formula includes an intercept, binary coding will be utilized for to
-    add reference-level adjustment coefficients for the remaining k-1 levels of the factor variable.
+    Adds a parametric (linear) term to the model formula. The model :math:`\mu_i = a + b*x_i` can for example be achieved
+    by adding ``[i(), l(['x'])]`` to the ``term`` argument of a ``Formula``. The coefficient :math:`b` estimated for
+    the term will then correspond to the slope of :math:`x`. This class can also be used to add predictors for
+    categorical variables. If the formula includes an intercept, binary coding will be utilized to
+    add reference-level adjustment coefficients for the remaining k-1 levels of any additional factor variable.
 
-    If more than variable is included in ``variables`` the model will only add the the len(``variables``)-interaction
-    to the model! Lower order interactions and main effects will not be included by default (see li() function instead, which
+    If more than one variable is included in ``variables`` the model will only add the the len(``variables``)-interaction
+    to the model! Lower order interactions and main effects will not be included by default (see :func:`li` function instead, which
     automatically includes all lower-order interactions and main effects).
 
     Example: The interaction effect of factor variable "cond", with two levels "1" and "2", and acontinuous variable "x"
     on the dependent variable "y" are of interest. To estimate such a model, the following formula can be used::
 
-         formula = Formula(lhs("y"),terms=[i(),l(["cond"]),l(["x"]),l(["cond","x"])])
+      formula = Formula(lhs("y"),terms=[i(),l(["cond"]),l(["x"]),l(["cond","x"])])
    
     This formula will estimate the following model:
 
-         \mu = a + b1*c + b2*x + b3*c*x
-         with: c = binary predictor variable created so that it is 1 if "cond"=2 else 0
-         b3 is the coefficient that is added because l(["cond","x"]) is included in the terms.
+    .. math::
+
+      \mu_i = a + b_1*c_i + b_2*x_i + b_3*c_i*x_i
+
+    Here, :math:`c` is a binary predictor variable created so that it is 1 if "cond"=2 else 0 and :math:`b_3` is the coefficient that is added
+    because ``l(["cond","x"])`` is included in the terms (i.e., the interaction effect).
 
     To get a model with only main effects for "cond" and "x", the following formula could be used::
 
-         formula = Formula(lhs("y"),terms=[i(),l(["cond"]),l(["x"])])
+      formula = Formula(lhs("y"),terms=[i(),l(["cond"]),l(["x"])])
 
     This formula will estimate:
 
-         \mu = a + b1*c + b2*x
+    .. math::
+    
+      \mu_i = a + b_1*c_i + b_2*x_i
 
     :param variables: A list of the variables (strings) for which linear predictors should be included
-    :type variables: list[str]
+    :type variables: [str]
     """
     def __init__(self,
                  variables:list) -> None:
@@ -425,27 +501,32 @@ class l(GammTerm):
 
 def li(variables:list[str]):
    """
-    Behaves like the l() class but li() automatically includes all lower-order interactions and main effects.
+    Behaves like the :class:`l` class but automatically includes all lower-order interactions and main effects.
 
     Example: The interaction effect of factor variable "cond", with two levels "1" and "2", and acontinuous variable "x"
     on the dependent variable "y" are of interest. To estimate such a model, the following formula can be used::
 
-         formula = Formula(lhs("y"),terms=[i(),*li(["cond","x"])])
+      formula = Formula(lhs("y"),terms=[i(),*li(["cond","x"])])
 
-    Note, the use of the "*" operator to unpack the individual terms returned from li!
+    Note, the use of the ``*`` operator to unpack the individual terms returned from li!
    
-    This formula will still estimate the following model:
+    This formula will still (see :class:`l`) estimate the following model:
+    
+    .. math::
 
-         \mu = a + b1*c + b2*x + b3*c*x
-         with: c = binary predictor variable created so that it is 1 if "cond"=2 else 0
+      \mu = a + b_1*c_i + b_2*x_i + b_3*c_i*x_i
 
-    To get a model with only main effects for "cond" and "x" ``li()`` cannot be used and ``l()`` needs to be used instead::
+    with: :math:`c` corresponding to a binary predictor variable created so that it is 1 if "cond"=2 else 0.
 
-         formula = Formula(lhs("y"),terms=[i(),l(["cond"]),l(["x"])])
+    To get a model with only main effects for "cond" and "x" :class:`li` **cannot be used** and :class:`l` needs to be used instead::
+
+      formula = Formula(lhs("y"),terms=[i(),l(["cond"]),l(["x"])])
 
     This formula will estimate:
 
-         \mu = a + b1*c + b2*x
+    .. math::
+    
+      \mu_i = a + b_1*c_i + b_2*x_i
 
     :param variables: A list of the variables (strings) for which linear predictors should be included
     :type variables: list[str]
@@ -463,15 +544,17 @@ def li(variables:list[str]):
 
 class ri(GammTerm):
     """
-    Adds a random intercept for the factor ``variable`` to the model. The random intercepts "b" are assumed
-    to be "b ~ N(0,sigma_b)" i.e., normally distributed around zero - the simplest random effect supported by ``mssm``.
+    Adds a random intercept for the factor ``variable`` to the model. The random intercepts :math:`b_i` are assumed
+    to be i.i.d :math:`b_i \sim N(0,\sigma_b)` i.e., normally distributed around zero - the simplest random effect supported by ``mssm``.
 
-    The ``variable`` needs to identify a factor-variable in the data (dat[''variable''].dtype == 'O'). If you want to
-    add more complex random effects to the model (e.g., random slopes for continuous variable "x" per level of factor
-    ``variable``) use the ``rs()`` class.
+    Thus, this term achieves exactly what is achieved in ``mgcv`` by adding the term::
 
-    :param variable: A factor variable. For every level of this factor a random intercept will be estimated. The random
-    intercepts are assumed to follow a normal distribution centered around zero.
+      s(variable,bs="re")
+    
+    The ``variable`` needs to identify a factor-variable in the data (i.e., the .dtype of the variable has to be equal to 'O'). If you want to
+    add more complex random effects to the model (e.g., random slopes for continuous variable "x" per level of factor ``variable``) use the :class:`rs` class.
+
+    :param variable: The name (string) of a factor variable. For every level of this factor a random intercept will be estimated. The random intercepts are assumed to follow a normal distribution centered around zero.
     :type variable: str
     """
     def __init__(self,
@@ -485,59 +568,68 @@ class ri(GammTerm):
 
 class rs(GammTerm):
     """
-    Adds random slopes for the effects of the term encoded by the ``variables`` for each level of the
-    random factor ``rf``. The type of random slope created depends on the ``variables``.
+    Adds random slopes for the effects of ``variables`` for each level of the
+    random factor ``rf``. The type of random slope created depends on the content of ``variables``.
     
-    If len(``variables``)==1, and the str in ``variables`` identifies a categorical variable in the data, then
+    If ``len(variables)==1``, and the string in ``variables`` identifies a categorical variable in the data, then
     a random offset adjustment (for every level of the categorical variable, so without binary coding!) will be
     estimated for every level of the random factor ``rf``.
 
     Example: The factor variable "cond", with two levels "1" and "2" is assumed to have a general effect on the DV "y".
-    However, data was collected from multiple subjects (random factor ``rf``="subject") and it is reasonable to assume
+    However, data was collected from multiple subjects (random factor ``rf`` = "subject") and it is reasonable to assume
     that the effect of "cond" is slightly different for every subject (it is also assumed that all subjects took part
     in both conditions identified by "cond"). A model that accounts for this is estimated via::
 
       formula = Formula(lhs("y"),terms=[i(),l(["cond"]),rs(["cond"],rf="subject")])
    
     This formula will estimate the following model:
-         \mu = a + b1*c_i + a_{j(i),cc(i)}
-         with: c = binary predictor variable created so that it is 1 if "cond"=2 for observation i else 0
-         and:  cc(i) corresponding to the level of "cond" at observation i
-         and:  j(i) corresponding to the level of "subject" at observation i
-         and:  a_{j,cc(i)} identifying the random offset estimated for subject j and the level of "cond"
-               indicated by cc(i). The a_{j,cc(i)} are assumed to be from a **single** normal distribution N(0,sigma_a)
-   
-    Note that the fixed effect sturcture uses binary coding but the random effect structure does not.
 
-    If all the str in ``variables`` identify continuous variables in the data, then a random slope for the
+    .. math::
+
+      \mu = a + b_1*c_i + a_{j(i),cc(i)}
+
+    Here, :math:`c` is again a binary predictor variable created so that it is 1 if "cond"=2 for observation i else 0, :math:`cc(i)` indexes the level of "cond" at observation :math:`i`,
+    :math:`j(i)` indexes the level of "subject" at observation :math:`i`, and :math:`a_{j,cc(i)}` identifies the random offset estimated for subject :math:`j` at the level of "cond"
+    indicated by :math:`cc(i)`. The :math:`a_{j,cc(i)}` are assumed to be i.i.d :math:`\sim N(0,\sigma_a)`. Note that the fixed effect sturcture uses binary coding but the random effect structure does not!
+    
+    Hence, ``rs(["cond"],rf="subject")`` in ``mssm`` corresponds to adding the term below to a ``mgcv`` model::
+
+      s(cond,subject,bs="re")
+   
+    If all the strings in ``variables`` identify continuous variables in the data, then a random slope for the
     len(``variables``)-way interaction (will simplify to a slope for a single continuous variable if len(``variables``) == 1)
     will be estimated for every level of the random factor ``rf``.
 
     Example: The continuous variable "x" is assumed to have a general effect on the DV "y".
-    However, data was collected from multiple subjects (random factor ``rf``="subject") and it is reasonable to assume
+    However, data was collected from multiple subjects (random factor ``rf`` ="subject") and it is reasonable to assume
     that the effect of "x" is slightly different for every subject. A model that accounts for this is estimated via::
 
       formula = Formula(lhs("y"),terms=[i(),l(["x"]),rs(["x"],rf="subject")])
    
     This formula will estimate the following model:
-         \mu = a + b*x_i + b_j(i) * x_i
-         with: j(i) corresponding to the level of "subject" at observation i
-         and:  b_j(i) identifying the random slope (the subject-specific slope adjustment for "b") for variable "x" estimated
-         for subject j. The b_j(i) are assumed to be from a **single** normal distribution N(0,sigma_b)
+
+    .. math::
+      
+      \mu = a + b*x_i + b_{j(i)} * x_i
+    
+    Where, :math:`j(i)` again indexes the level of "subject" at observation :math:`i`, :math:`b_j(i)` identifies the random slope (the subject-specific slope adjustment for :math:`b`)
+    for variable "x" estimated for subject :math:`j` and the :math:`b_{j(i)}` are again assumed to be i.i.d from a **single** :math:`\sim N(0,\sigma_b)`
    
-    Note, lower-order interaction slopes (as well as main effects) are not pulled in by default! Consider the following formula::
+    Note, lower-order interaction slopes (as well as main effects) are **not pulled in by default**! Consider the following formula::
 
       formula = Formula(lhs("y"),terms=[i(),*li(["x","z"]),rs(["x","z"],rf="subject")])
    
     with another continuous variable "z". This corresponds to the model:
 
-      \mu = a + b1*x_i + b2*z_i + b3*x_i*z_i + b_j(i)*x_i*z_i
-      with: j(i) corresponding to the level of "subject" at observation i
-      and:  b_j(i) identifying the random slope (the subject-specific slope adjustment for "b3") for the interaction of
-      variables "x" and "z" estimated for subject j. The b_j(i) are assumed to be from a **single** normal distribution N(0,sigma_b)
+    .. math::
+      
+      \mu = a + b_1*x_i + b_2*z_i + b_3*x_i*z_i + b_{j(i)}*x_i*z_i
+
+    With :math:`j(i)` again indexing the level of "subject" at observation i, :math:`b_{j(i)}` identifying the random slope (the subject-specific slope adjustment for :math:`b_3`) for the interaction of
+    variables :math:`x` and :math:`z` estimated for subject :math:`j`. The :math:`b_{j(i)}` are again assumed to be i.i.d from a **single** :math:`\sim N(0,\sigma_b)`.
     
-    To add random slopes for the main effects of either "x" or "z" as well as an additional random intercept, additional ``rs``
-    and a ``ri`` would have to be added to the formula::
+    To add random slopes for the main effects of either :math:`x` or :math:`z` as well as an additional random intercept, additional :class:`rs`
+    and a :class:`ri` terms would have to be added to the formula::
 
       formula = Formula(lhs("y"),terms=[i(),*li(["x","z"]),
                                        ri("subject"),
@@ -545,31 +637,35 @@ class rs(GammTerm):
                                        rs(["z"],rf="subject"),
                                        rs(["x","z"],rf="subject")])
 
-    If len(``variables``) > 1 and at least one str in ``variables`` identifies a categorical variable in the data then random slopes for the
-    len(``variables``)-way interaction will be estimated for every level of the random factor ``rf``. Separate distribution parameters (the sigma of
+    If ``len(variables) > 1`` and at least one string in ``variables`` identifies a categorical variable in the data then random slopes for the
+    len(``variables``)-way interaction will be estimated for every level of the random factor ``rf``. Separate distribution parameters (the :math:`\sigma` of
     the Normal) will be estimated for every level of the resulting interaction.
 
     Example: The continuous variable "x" and the factor variable "cond", with two levels "1" and "2" are assumed to have a general interaction effect
-    on the DV "y". However, data was collected from multiple subjects (random factor ``rf``="subject") and it is reasonable to assume
-    that the interaction effect is slightly different for every subject. A model that accounts for this is estimated via::
+    on the DV "y". However, data was collected from multiple subjects (random factor ``rf`` ="subject") and it is reasonable to assume
+    that their interaction effect is slightly different for every subject. A model that accounts for this is estimated via::
 
       formula = Formula(lhs("y"),terms=[i(),*li(["x","cond"]),rs(["x","cond"],rf="subject")])
 
     This formula will estimate the following model:
 
-         \mu = a + b1*c_i + b2*x_i + b3*x_i*c_i + b_{j(i),cc(i)}*x_i
-         with: c = binary predictor variable created so that it is 1 if "cond"=2 for observation i else 0
-         and:  cc(i) corresponding to the level of "cond" at observation i
-         and:  j(i) corresponding to the level of "subject" at observation i
-         and:  b_{j(i),cc(i)} identifying the random slope for variable "x" and "cond"=cc(i) estimated for subject j.
-         The b_{j,cc(i)} where cc(i)=1 are assumed to be from a normal distribution N(0,sigma_b1) and the b_{j,cc(i)} where cc(i)=2
-         are assumed to be from a separate normal distribution N(0,sigma_b2).
-
+    .. math::
+      
+      \mu = a + b_1*c_i + b_2*x_i + b_3*x_i*c_i + b_{j(i),cc(i)}*x_i
     
-    Correlations between random effects cannot be taken into account by means of parameters (this is possible for example in lme4).
+    With, :math:`c` corresponding to a binary predictor variable created so that it is 1 if "cond"=2 for observation :math:`i` else 0, :math:`cc(i)` corresponds to the level of "cond" at observation :math:`i`,
+    :math:`j(i)` corresponds to the level of "subject" at observation :math:`i`, and :math:`b_{j(i),cc(i)}` identifies the random slope for variable :math:`x` at "cond" = :math:`cc(i)` estimated for subject :math:`j`.
+    That is: the :math:`b_{j,cc(i)}` where :math:`cc(i)=1` are assumed to be i.i.d realizations from normal distribution :math:`N(0,\sigma_{b_1})` and the :math:`b_{j,cc(i)}` where :math:`cc(i)=2` are assumed to be
+    i.i.d realizations from a **separate normal distribution** :math:`N(0,\sigma_{b_2})`.
+
+    Hence, adding ``rs(["x","cond"],rf="subject")`` to a ``mssm`` model, is equivalent to adding the term below to a ``mgcv`` model::
+
+      s(x,subject,by=cond,bs="re")
+
+    Correlations between random effects cannot be taken into account by means of parameters (this is possible for example in ``lme4``).
 
     :param variables: A list of variables. Can point to continuous and categorical variables.
-    :type variables: list[str]
+    :type variables: [str]
     :param rf: A factor variable. Identifies the random factor in the data.
     :type rf: str
     """

@@ -7,18 +7,11 @@ class Link:
    """
    Link function base class. To be implemented by any link functiion used for GAMMs and GAMMLSS models.
    Only links used by GAMLSS models require implementing the dy2 function.
-
-   Methods:
-
-   :method f: Link function
-   :method fi: Inverse of the link function
-   :method dy1: First derivative of link with respect to mean \mu
-   :method dy2: Second derivative of link with respect to mean \mu
    """
    
    def f(self,mu):
       """
-      Link function f() mapping mean \mu of an exponential family to the model prediction \eta, so that f(\mu) = \eta.
+      Link function :math:`f()` mapping mean :math:`\\boldsymbol{\mu}` of an exponential family to the model prediction :math:`\\boldsymbol{\eta}`, so that :math:`f(\\boldsymbol{\mu}) = \\boldsymbol{\eta}`.
       see Wood (2017, 3.1.2) and Faraway (2016)
 
       References:
@@ -32,7 +25,7 @@ class Link:
 
    def fi(self,eta):
       """
-      Inverse of the link function mapping \eta = f(\mu) to the mean fi(\eta) = fi(f(\mu)) = \mu.
+      Inverse of the link function mapping :math:`\\boldsymbol{\eta} = f(\\boldsymbol{\mu})` to the mean :math:`fi(\\boldsymbol{\eta}) = fi(f(\\boldsymbol{\mu})) = \\boldsymbol{\mu}`.
       see Faraway (2016) and the ``Link.f`` function.
 
       References:
@@ -46,7 +39,7 @@ class Link:
 
    def dy1(self,mu):
       """
-      First derivative of f(mu) with respect to mu. Needed for Fisher scoring/PIRLS (Wood, 2017).
+      First derivative of :math:`f(\\boldsymbol{\mu})` with respect to :math:`\\boldsymbol{\mu}` Needed for Fisher scoring/PIRLS (Wood, 2017).
 
       References:
 
@@ -59,18 +52,12 @@ class Link:
 
 class Logit(Link):
    """
-   Logit Link function, which is canonical for the binomial model. \eta=log-odds of success.
-
-   Methods:
-
-   :method f: Link function
-   :method fi: Inverse of the link function
-   :method dy1: First derivative of link with respect to mean \mu
+   Logit Link function, which is canonical for the binomial model. :math:`\\boldsymbol{\eta}` = log-odds of success.
    """
 
    def f(self, mu):
       """
-      Canonical link for binomial distribution with \mu = p the probability of success, so that the model prediction \eta
+      Canonical link for binomial distribution with :math:`\\boldsymbol{\mu}` holding the probabilities of success, so that the model prediction :math:`\\boldsymbol{\eta}`
       is equal to the log-odds.
 
       References:
@@ -84,7 +71,7 @@ class Logit(Link):
 
    def fi(self,eta):
       """
-      For the logit link and the binomial model, \eta = log-odds, so the inverse to go from \eta to \mu is \mu = exp(\eta) / (1 + exp(\eta)).
+      For the logit link and the binomial model, :math:`\\boldsymbol{\eta}` = log-odds, so the inverse to go from :math:`\\boldsymbol{\eta}` to :math:`\\boldsymbol{\mu}` is :math:`\\boldsymbol{\mu} = exp(\\boldsymbol{\eta}) / (1 + exp(\\boldsymbol{\eta}))`.
       see Faraway (2016)
 
       References:
@@ -98,13 +85,18 @@ class Logit(Link):
    
    def dy1(self,mu):
       """
-      First derivative of f(mu) with respect to mu. Needed for Fisher scoring/PIRLS (Wood, 2017).
-      f(mu) = log(mu / (1 - mu))
-             = log(mu) - log(1 - mu)
-      dln(x)/dx = 1/x and sum rule: 
-      df(mu)/dmu = 1/mu - 1/(1 - mu)
+      First derivative of :math:`f(\\boldsymbol{\mu})` with respect to :math:`\\boldsymbol{\mu}`. Needed for Fisher scoring/PIRLS (Wood, 2017):
+
+      .. math::
+
+
+         f(\mu) = log(\mu / (1 - \mu))
+
+         f(\mu) = log(\mu) - log(1 - \mu)
+
+         \partial f(\mu)/ \partial \mu = 1/\mu - 1/(1 - \mu)
       
-      Faraway (2016) simplifies to: df(mu)/dmu = 1 / (mu - mu**2) = 1/ ((1-mu)mu)
+      Faraway (2016) simplifies this to: :math:`\partial f(\mu)/ \partial \mu = 1 / (\mu - \mu^2) = 1/ ((1-\mu)\mu)`
 
       References:
 
@@ -117,19 +109,12 @@ class Logit(Link):
 
 class Identity(Link):
    """
-   Identity Link function. \mu=\eta and so this link is trivial.
-
-   Methods:
-
-   :method f: Link function
-   :method fi: Inverse of the link function
-   :method dy1: First derivative of link with respect to mean \mu
-   :method dy2: Second derivative of link with respect to mean \mu
+   Identity Link function. :math:`\\boldsymbol{\mu}=\\boldsymbol{\eta}` and so this link is trivial.
    """
 
    def f(self, mu):
       """
-      Canonical link for normal distribution with \mu = \eta.
+      Canonical link for normal distribution with :math:`\\boldsymbol{\eta} = \\boldsymbol{\mu}`.
 
       References:
 
@@ -142,7 +127,7 @@ class Identity(Link):
 
    def fi(self,eta):
       """
-      For the identity link, \eta = \mu, so the inverse is also just the identity.
+      For the identity link, :math:`\\boldsymbol{\eta} = \\boldsymbol{\mu}`, so the inverse is also just the identity.
       see Faraway (2016)
 
       References:
@@ -156,7 +141,7 @@ class Identity(Link):
    
    def dy1(self,mu):
       """
-      First derivative of f(mu) with respect to mu. Needed for Fisher scoring/PIRLS (Wood, 2017).
+      First derivative of :math:`f(\\boldsymbol{\mu})` with respect to :math:`\\boldsymbol{\mu}`. Needed for Fisher scoring/PIRLS (Wood, 2017).
 
       References:
 
@@ -169,7 +154,7 @@ class Identity(Link):
    
    def dy2(self,mu):
       """
-      Second derivative of f(mu) with respect to mu. Needed for GAMMLSS models (Wood, 2017).
+      Second derivative of :math:`f(\\boldsymbol{\mu})` with respect to :math:`\\boldsymbol{\mu}`. Needed for GAMMLSS models (Wood, 2017).
 
       References:
 
@@ -183,19 +168,12 @@ class Identity(Link):
    
 class LOG(Link):
    """
-   Log Link function. log(\mu)=\eta.
-
-   Methods:
-
-   :method f: Link function
-   :method fi: Inverse of the link function
-   :method dy1: First derivative of link with respect to mean \mu
-   :method dy2: Second derivative of link with respect to mean \mu
+   Log Link function. :math:`log(\\boldsymbol{\mu}) = \\boldsymbol{\eta}`.
    """
    
    def f(self,mu):
       """
-      Non-canonical link for Gamma distribution with log(\mu) = \eta.
+      Non-canonical link for Gamma distribution with :math:`log(\\boldsymbol{\mu}) = \\boldsymbol{\eta}`.
 
       References:
 
@@ -208,7 +186,7 @@ class LOG(Link):
    
    def fi(self,eta):
       """
-      For the log link, \eta = log(\mu), so exp(\eta)=\mu.
+      For the log link, :math:`\\boldsymbol{\eta} = log(\\boldsymbol{\mu})`, so :math:`exp(\\boldsymbol{\eta})=\\boldsymbol{\mu}`.
       see Faraway (2016)
 
       References:
@@ -221,7 +199,7 @@ class LOG(Link):
    
    def dy1(self,mu):
       """
-      First derivative of f(mu) with respect to mu. Needed for Fisher scoring/PIRLS (Wood, 2017).
+      First derivative of :math:`f(\\boldsymbol{\mu})` with respect to :math:`\\boldsymbol{\mu}`. Needed for Fisher scoring/PIRLS (Wood, 2017).
 
       References:
        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
@@ -233,7 +211,7 @@ class LOG(Link):
    
    def dy2(self,mu):
       """
-      Second derivative of f(mu) with respect to mu. Needed for GAMMLSS models (Wood, 2017).
+      Second derivative of :math:`f(\\boldsymbol{\mu})` with respect to :math:`\\boldsymbol{\mu}`. Needed for GAMMLSS models (Wood, 2017).
 
       References:
 
@@ -284,7 +262,7 @@ class Family:
 
    def init_mu(self,y):
       """
-      Convenience function to compute an initial mu estimate passed to the GAMM/PIRLS estimation routine.
+      Convenience function to compute an initial :math:`\\boldsymbol{\mu}` estimate passed to the GAMM/PIRLS estimation routine.
 
       :param y: The vector containing each observation.
       :type y: [float]
@@ -307,7 +285,7 @@ class Family:
    
    def llk(self,y,mu,**kwargs):
       """
-      log-probability of y under this family with mean=\mu. Essentially sum over all elements in the vector returned by the ``lp`` method.
+      log-probability of :math:`\mathbf{y}` under this family with mean = :math:`\\boldsymbol{\mu}`. Essentially sum over all elements in the vector returned by the :func:`lp` method.
 
       References:
 
@@ -322,7 +300,7 @@ class Family:
    
    def lp(self,y,mu,**kwargs):
       """
-      Log-probability of observing every value in y under this family with mean=\mu.
+      Log-probability of observing every value in :math:`\mathbf{y}` under this family with mean = :math:`\\boldsymbol{\mu}`.
 
       References:
 
@@ -370,9 +348,9 @@ class Family:
 class Binomial(Family):
    """
    Binomial family. For this implementation we assume that we have collected proportions of success, i.e., the dependent variables specified in the model `Formula` needs to hold observed proportions and not counts!
-   If we assume that each observation $y_i$ reflects a single independent draw from a binomial, (with $n=1$, and $p_i$ being the probability that the result is 1) then the dependent variable should either hold 1 or 0.
-   If we have multiple independent draws from the binomial per observation (i.e., row in our data-frame), then $n$ will usually differ between observations/rows in our data-frame (i.e., we observe $k_i$ counts of success
-   out of $n_i$ draws - so that $y_i=k_i/n_i$). In that case, the `Binomial()` family accepts a vector for argument `n` (which is simply set to 1 by default, assuming binary data), containing $n_i$ for every observation $y_i$.
+   If we assume that each observation :math:`y_i` reflects a single independent draw from a binomial, (with :math:`n=1`, and :math:`p_i` being the probability that the result is 1) then the dependent variable should either hold 1 or 0.
+   If we have multiple independent draws from the binomial per observation (i.e., row in our data-frame), then :math:`n` will usually differ between observations/rows in our data-frame (i.e., we observe :math:`k_i` counts of success
+   out of :math:`n_i` draws - so that :math:`y_i=k_i/n_i`). In that case, the `Binomial()` family accepts a vector for argument :math:`\mathbf{n}` (which is simply set to 1 by default, assuming binary data), containing :math:`n_i` for every observation :math:`y_i`.
 
    By default the scale parameter is kept fixed/known at 1, but setting ``scale=None`` allows to estimate it.
 
@@ -395,10 +373,10 @@ class Binomial(Family):
    
    def init_mu(self,y):
       """
-      Function providing initial \mu vector for GAMM.
+      Function providing initial :math:`\\boldsymbol{\mu}` vector for GAMM.
 
       Estimation assumes proportions as dep. variable. According to: https://stackoverflow.com/questions/60526586/
-      the glm() function in R always initializes mu = 0.75 for observed proportions (y) of 1 and mu = 0.25 for proportions of zero.
+      the glm() function in R always initializes :math:`\mu` = 0.75 for observed proportions (i.e., elements in :math:`\mathbf{y}`) of 1 and :math:`\mu` = 0.25 for proportions of zero.
       This can be achieved by adding 0.5 to the observed proportion of success (and adding one observation).
 
       :param y: The vector containing each observation.
@@ -410,7 +388,7 @@ class Binomial(Family):
    
    def V(self,mu):
       """
-      The variance function (of the mean; see Wood, 2017, 3.1.2) for the Binomial model. Variance is minimal for \mu=1 and \mu=0, maximal for \mu=0.5.
+      The variance function (of the mean; see Wood, 2017, 3.1.2) for the Binomial model. Variance is minimal for :math:`\mu=1` and :math:`\mu=0`, maximal for :math:`\mu=0.5`.
 
       References:
 
@@ -424,7 +402,7 @@ class Binomial(Family):
    
    def lp(self,y,mu):
       """
-      Log-probability of observing every proportion in y under their respective binomial with mean=\mu.
+      Log-probability of observing every proportion in :math:`\mathbf{y}` under their respective binomial with mean = :math:`\\boldsymbol{\mu}`.
 
       References:
 
@@ -442,7 +420,7 @@ class Binomial(Family):
    
    def llk(self,y,mu):
       """
-      log-probability of data under given model. Essentially sum over all elements in the vector returned by the ``lp`` method.
+      log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
 
       References:
 
@@ -495,10 +473,10 @@ class Binomial(Family):
 class Gaussian(Family):
    """Normal/Gaussian Family. 
 
-   We assume: Y_i \sim N(\mu_i,\sigma) - i.e., each of the N observations is generated from a normally distributed RV with observation-specific
-   mean and shared scale parameter \sigma. Equivalent to the assumption that the observed residual vector - the difference between the model
-   prediction and the observed data - should look like what could be expected from drawing N independent samples from a Normal with mean zero and
-   standard deviation equal to sigma.
+   We assume: :math:`Y_i \sim N(\mu_i,\sigma)` - i.e., each of the :math:`N` observations is generated from a normally distributed RV with observation-specific
+   mean and shared scale parameter :math:`\sigma`. Equivalent to the assumption that the observed residual vector - the difference between the model
+   prediction and the observed data - should look like what could be expected from drawing :math:`N` independent samples from a Normal with mean zero and
+   standard deviation equal to :math:`\sigma`.
 
    References:
 
@@ -530,7 +508,7 @@ class Gaussian(Family):
       return np.ones(len(mu))
    
    def lp(self,y,mu,sigma=1):
-      """Log-probability of observing every proportion in y under their respective Normal with mean=\mu.
+      """Log-probability of observing every proportion in :math:`\mathbf{y}` under their respective Normal with mean = :math:`\\boldsymbol{\mu}`.
 
       References:
 
@@ -548,7 +526,7 @@ class Gaussian(Family):
       return scp.stats.norm.logpdf(y,loc=mu,scale=math.sqrt(sigma))
    
    def llk(self,y,mu,sigma = 1):
-      """log-probability of data under given model. Essentially sum over all elements in the vector returned by the ``lp`` method.
+      """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
 
       References:
 
@@ -604,9 +582,9 @@ class Gaussian(Family):
 class Gamma(Family):
    """Gamma Family. 
 
-   We assume: Y_i \sim \Gamma(\mu_i,\phi). The Gamma distribution is usually not expressed in terms of the mean and scale (\phi) parameter
-   but rather in terms of a shape and rate parameter - called \alpha and \beta respectively. Wood (2017) provides \alpha = 1/\phi.
-   With this we can obtain \beta = 1/\phi/\mu (see the source-code for :func:`lp` method for details).
+   We assume: :math:`Y_i \sim \Gamma(\mu_i,\phi)`. The Gamma distribution is usually not expressed in terms of the mean and scale (:math:`\phi`) parameter
+   but rather in terms of a shape and rate parameter - called :math:`\\alpha` and :math:`\\beta` respectively. Wood (2017) provides :math:`\\alpha = 1/\phi`.
+   With this we can obtain :math:`\\beta = 1/\phi/\mu` (see the source-code for :func:`lp` method for details).
 
    References:
 
@@ -624,7 +602,7 @@ class Gamma(Family):
    def V(self,mu):
       """Variance function for the Gamma family.
 
-      The variance of random variable Y is proportional to it's mean raised to the second power.
+      The variance of random variable :math:`Y` is proportional to it's mean raised to the second power.
 
       References:
 
@@ -639,7 +617,7 @@ class Gamma(Family):
       return np.power(mu,2)
    
    def lp(self,y,mu,scale=1):
-      """Log-probability of observing every proportion in y under their respective Gamma with mean=\mu.
+      """Log-probability of observing every proportion in :math:`\mathbf{y}` under their respective Gamma with mean = :math:`\\boldsymbol{\mu}`.
 
       References:
 
@@ -669,7 +647,7 @@ class Gamma(Family):
       return scp.stats.gamma.logpdf(y,a=alpha,scale=(1/beta))
    
    def llk(self,y,mu,scale = 1):
-      """log-probability of data under given model. Essentially sum over all elements in the vector returned by the ``lp`` method.
+      """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
 
       References:
 
@@ -724,18 +702,16 @@ class Gamma(Family):
       return dev
 
 class GAMLSSFamily:
-   """Base-class for families of Generalized Additive Mixed Models of Location, Scale, and Shape (GAMMLSS; Rigby & Stasinopoulos, 2005).
-
+   """Base-class to be implemented by families of Generalized Additive Mixed Models of Location, Scale, and Shape (GAMMLSS; Rigby & Stasinopoulos, 2005).
 
    References:
 
     - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
 
-   :param pars: Number of parameters of the distribution belonging to the random variables assumed to have generated the observations.
-   e.g., 2 for the Normal: mean and standard deviation.
+   :param pars: Number of parameters of the distribution belonging to the random variables assumed to have generated the observations, e.g., 2 for the Normal: mean and standard deviation.
    :type pars: int
-   :param links:Link functions for each of the parameters of the distribution.
+   :param links: Link functions for each of the parameters of the distribution.
    :type links: [Link]
    """
    def __init__(self,pars:int,links:[Link]) -> None:
@@ -747,7 +723,7 @@ class GAMLSSFamily:
       self.mean_init_fam:Family or None = None # Family to fit for the mean model to initialize coef.
 
    def llk(self,y,*mus):
-      """log-probability of data under given model. Essentially sum over all elements in the vector returned by the ``lp`` method.
+      """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
 
       References:
 
@@ -755,8 +731,7 @@ class GAMLSSFamily:
 
       :param y: The vector containing each observation.
       :type y: [float]
-      :param mus: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains
-      the expected value for a particular parmeter for each of the N observations.
+      :param mus: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains the expected value for a particular parmeter for each of the N observations.
       :type mus: [[float]]
       :return: The log-probability of observing all data under the current model.
       :rtype: float
@@ -764,7 +739,7 @@ class GAMLSSFamily:
       pass
    
    def lp(self,y,*mus):
-      """Log-probability of observing every proportion in y under their respective Gamma with mean=\mu.
+      """Log-probability of observing every proportion in :math:`\mathbf{y}` under their respective Gamma with mean = :math:`\\boldsymbol{\mu}`.
 
       References:
 
@@ -772,8 +747,7 @@ class GAMLSSFamily:
 
       :param y: The vector containing each observed value.
       :type y: [float]
-      :param mus: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains
-      the expected value for a particular parmeter for each of the N observations.
+      :param mus: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains the expected value for a particular parmeter for each of the N observations.
       :type mus: [[float]]
       :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
       :rtype: [float]
@@ -791,8 +765,7 @@ class GAMLSSFamily:
 
       :param y: The vector containing each observed value.
       :type y: [float]
-      :param mus: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains
-      the expected value for a particular parmeter for each of the N observations.
+      :param mus: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains the expected value for a particular parmeter for each of the N observations.
       :type mus: [[float]]
       :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
       :rtype: [float]
@@ -803,19 +776,19 @@ class GAMLSSFamily:
 class GAUMLSS(GAMLSSFamily):
    """Family for a Normal GAMMLSS model (Rigby & Stasinopoulos, 2005).
 
-   This Family follows the :class:`Gaussian` family, in that we assume: Y_i \sim N(\mu_i,\sigma_i). i.e., each of the N observations
+   This Family follows the :class:`Gaussian` family, in that we assume: :math:`Y_i \sim N(\mu_i,\sigma_i)`. i.e., each of the :math:`N` observations
    is still believed to have been generated from an independent normally distributed RV with observation-specific mean.
    
-   The important difference is that the scale parameter, \sigma, is now also observation-specific and modeled as an additive combination
+   The important difference is that the scale parameter, :math:`\sigma`, is now also observation-specific and modeled as an additive combination
    of smooth functions and other parametric terms, just like the mean is in a Normal GAM. Note, that this explicitly models heteroscedasticity -
-   the residuals are no longer assumed to be i.i.d samples from N(0,\sigma), since \sigma can now differ between residual realizations.
+   the residuals are no longer assumed to be i.i.d samples from :math:`\sim N(0,\sigma)`, since :math:`\sigma` can now differ between residual realizations.
 
    References:
 
     - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
 
-   :param links: Link functions for the mean and standard deviation. Standard would be `links=[Identity(),LOG()]`.
+   :param links: Link functions for the mean and standard deviation. Standard would be ``links=[Identity(),LOG()]``.
    :type links: [Link]
    """
    def __init__(self, links: [Link]) -> None:
@@ -847,7 +820,7 @@ class GAUMLSS(GAMLSSFamily):
       return scp.stats.norm.logpdf(y,loc=mu,scale=sigma)
    
    def llk(self,y,mu,sigma):
-      """log-probability of data under given model. Essentially sum over all elements in the vector returned by the ``lp`` method.
+      """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
 
       References:
 
@@ -869,7 +842,7 @@ class GAUMLSS(GAMLSSFamily):
       
       Essentially, each residual should reflect a realization of a normal with mean zero and observation-specific standard deviation.
       After scaling each residual by their observation-specific standard deviation we should end up with standardized
-      residuals that can be expected to be i.i.d N(0,1) - assuming that our model is correct.
+      residuals that can be expected to be i.i.d :math:`\sim N(0,1)` - assuming that our model is correct.
 
       :param y: The vector containing each observation.
       :type y: [float]
@@ -887,14 +860,14 @@ class GAUMLSS(GAMLSSFamily):
 class MULNOMLSS(GAMLSSFamily):
    """Family for a Multinomial GAMMLSS model (Rigby & Stasinopoulos, 2005).
 
-   This Family assumes that each observation y_i corresponds to one of K classes (labeled as 0,...,K) and reflects a
-   realization of an independent RV Y_i with observation-specific probability mass function defined over the K classes. These K
-   probabilities - that Y_i takes on class 1,...K - are modeled as additive combinations of smooth functions of covariates and
+   This Family assumes that each observation :math:`y_i` corresponds to one of :math:`K` classes (labeled as 0, ..., :math:`K`) and reflects a
+   realization of an independent RV :math:`Y_i` with observation-specific probability mass function defined over the :math:`K` classes. These :math:`K`
+   probabilities - that :math:`Y_i` takes on class 1, ..., :math:`K` - are modeled as additive combinations of smooth functions of covariates and
    other parametric terms.
 
-   As an example, consider a visual search experiment where K-1 distractors are presented on a computer screen together with
+   As an example, consider a visual search experiment where :math:`K-1` distractors are presented on a computer screen together with
    a single target and subjects are instructed to find the target and fixate it. With a Multinomial model we can estimate how
-   the probability of looking at each of the K stimuli on the screen changes (smoothly) over time and as a function of other
+   the probability of looking at each of the :math:`K` stimuli on the screen changes (smoothly) over time and as a function of other
    predictor variables of interest (e.g., contrast of stimuli, dependening on whether parfticipants are instructed to be fast or accurate).
 
    References:
@@ -936,11 +909,11 @@ class MULNOMLSS(GAMLSSFamily):
 
       Specifically, the probability of the outcome being class k is simply:
 
-      p(Y_i == k) = mu_k / (1 + \sum_j^{K-1} mu_j) where mu_k is the aforementioned non-normalized probability of observing class k - which is simply set to 1 for class K (this follows from the sum-to-zero constraint; see Wikipedia).
+      :math:`p(Y_i == k) = \mu_k / (1 + \sum_j^{K-1} \mu_j)` where :math:`\mu_k` is the aforementioned non-normalized probability of observing class :math:`k` - which is simply set to 1 for class :math:`K` (this follows from the sum-to-zero constraint; see Wikipedia).
 
       So, the log-prob of the outcome being class k is:
 
-      log(p(Y_i == k)) = log(mu_k) - log(1 + \sum_j^{K-1} mu_j)
+      :math:`log(p(Y_i == k)) = log(\mu_k) - log(1 + \sum_j^{K-1} \mu_j)`
 
       References:
 
@@ -950,8 +923,7 @@ class MULNOMLSS(GAMLSSFamily):
 
       :param y: The vector containing each observed class, every element must be larger than or equal to 0 and smaller than `self.n_par + 1`.
       :type y: [float]
-      :param mus: A list containing K-1 (`self.n_par`) lists, each containing the non-normalized probabilities of observing class k for
-      every observation.
+      :param mus: A list containing K-1 (`self.n_par`) lists, each containing the non-normalized probabilities of observing class k for every observation.
       :type mus: [[float]]
       :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
       :rtype: [float]
@@ -966,7 +938,7 @@ class MULNOMLSS(GAMLSSFamily):
       return lp
 
    def llk(self, y, *mus):
-      """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:``lp`` method.
+      """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
 
       References:
 
@@ -974,8 +946,7 @@ class MULNOMLSS(GAMLSSFamily):
 
       :param y: The vector containing each observed class, every element must be larger than or equal to 0 and smaller than `self.n_par + 1`.
       :type y: [float]
-      :param mus: A list containing K-1 (`self.n_par`) lists, each containing the non-normalized probabilities of observing class k for
-      every observation.
+      :param mus: A list containing K-1 (`self.n_par`) lists, each containing the non-normalized probabilities of observing class k for every observation.
       :type mus: [[float]]
       :return: The log-probability of observing all data under the current model.
       :rtype: float
@@ -988,10 +959,10 @@ class MULNOMLSS(GAMLSSFamily):
 class GAMMALS(GAMLSSFamily):
    """Family for a GAMMA GAMMLSS model (Rigby & Stasinopoulos, 2005).
 
-   This Family follows the :class:`Gamma` family, in that we assume: Y_i \sim \Gamma(\mu_i,\phi_i). The difference to the :class:`Gamma` family
-   is that we now also model \phi as an additive combination of smooth variables and other parametric terms. The Gamma distribution is usually
-   not expressed in terms of the mean and scale (\phi) parameter but rather in terms of a shape and rate parameter - called \alpha and \beta
-   respectively. Wood (2017) provides \alpha = 1/\phi. With this we can obtain \beta = 1/\phi/\mu (see the source-code for :func:`lp` method
+   This Family follows the :class:`Gamma` family, in that we assume: :math:`Y_i \sim \Gamma(\mu_i,\phi_i)`. The difference to the :class:`Gamma` family
+   is that we now also model :math:`\phi` as an additive combination of smooth variables and other parametric terms. The Gamma distribution is usually
+   not expressed in terms of the mean and scale (:math:`\phi`) parameter but rather in terms of a shape and rate parameter - called :math:`\\alpha` and :math:`\\beta`
+   respectively. Wood (2017) provides :math:`\\alpha = 1/\phi`. With this we can obtain :math:`\\beta = 1/\phi/\mu` (see the source-code for :func:`lp` method
    of the :class:`Gamma` family for details).
 
    References:
@@ -999,7 +970,7 @@ class GAMMALS(GAMLSSFamily):
     - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
 
-   :param links: Link functions for the mean and standard deviation. Standard would be `links=[LOG(),LOG()]`.
+   :param links: Link functions for the mean and standard deviation. Standard would be ``links=[LOG(),LOG()]``.
    :type links: [Link]
    """
 
@@ -1013,7 +984,7 @@ class GAMMALS(GAMLSSFamily):
       self.mean_init_fam = Gamma()
    
    def lp(self,y,mu,scale):
-      """Log-probability of observing every proportion in y under their respective Gamma with mean=\mu and scale=\phi.
+      """Log-probability of observing every proportion in :math:`\mathbf{y}` under their respective Gamma with mean = :math:`\\boldsymbol{\mu}` and scale = :math:`\\boldsymbol{\phi}`.
 
       References:
 
@@ -1043,7 +1014,7 @@ class GAMMALS(GAMLSSFamily):
       return scp.stats.gamma.logpdf(y,a=alpha,scale=(1/beta))
    
    def llk(self,y,mu,scale):
-      """log-probability of data under given model. Essentially sum over all elements in the vector returned by the ``lp`` method.
+      """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
 
       References:
 
@@ -1065,8 +1036,8 @@ class GAMMALS(GAMLSSFamily):
       
       Essentially, to get a standaridzed residual vector we first have to account for the mean-variance relationship of our RVs
       (which we also have to do for the :class:`Gamma` family) - for this we can simply compute deviance residuals again (see Wood, 2017).
-      These should be ~ N(0,\scale) - so if we divide each of those by the observation-specific scale we can expect the resulting
-      standardized residuals to be ~ N(0,1) if the model is correct.
+      These should be :math:`\sim N(0,\phi_i)` (where :math:`\phi_i` is the element in ``scale`` for a specific observation) - so if we divide each of those by the observation-specific scale we can expect the resulting
+      standardized residuals to be :math:` \sim N(0,1)` if the model is correct.
 
       References:
 
@@ -1087,7 +1058,10 @@ class GAMMALS(GAMLSSFamily):
    
 
 class GENSMOOTHFamily:
-   """Base-class for General Smooth "families" as discussed by Wood, Pya, & Säfken (2016).
+   """Base-class for General Smooth "families" as discussed by Wood, Pya, & Säfken (2016). For estimation of :class:``mssm.models.GSMM`` models via
+   ``BFGS`` it is sufficient to implement :func:`llk`. :func:`gradient` and :func:`hessian` can then simply return ``None``. For exact estimation via
+   Newton's method, the latter two functions need to be implemented and have to return the gradient and hessian at the current coefficient estimate
+   respectively.
 
    Additional parameters needed for likelihood, gradient, or hessian evaluation can be passed along via the ``llkargs``.
 
@@ -1095,6 +1069,7 @@ class GENSMOOTHFamily:
    References:
 
     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+    - Nocedal & Wright (2006). Numerical Optimization. Springer New York.
 
    :param pars: Number of parameters of the likelihood.
    :type pars: int
@@ -1116,7 +1091,7 @@ class GENSMOOTHFamily:
 
       :param coef: The current coefficient estimate (as np.array of shape (-1,) - so it has to be flattened!).
       :type coef: [float]
-      :param coef_split_idx: A list used to split (via :func:``np.split``) the ``coef`` into the sub-sets associated with each paramter of the llk.
+      :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
       :type coef_split_idx: [int]
       :param y: The vector containing each observation.
       :type y: [float]
@@ -1130,7 +1105,7 @@ class GENSMOOTHFamily:
 
       :param coef: The current coefficient estimate (as np.array of shape (-1,) - so it has to be flattened!).
       :type coef: [float]
-      :param coef_split_idx: A list used to split (via :func:``np.split``) the ``coef`` into the sub-sets associated with each paramter of the llk.
+      :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
       :type coef_split_idx: [int]
       :param y: The vector containing each observation.
       :type y: [float]
@@ -1144,7 +1119,7 @@ class GENSMOOTHFamily:
 
       :param coef: The current coefficient estimate (as np.array of shape (-1,) - so it has to be flattened!).
       :type coef: [float]
-      :param coef_split_idx: A list used to split (via :func:``np.split``) the ``coef`` into the sub-sets associated with each paramter of the llk.
+      :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
       :type coef_split_idx: [int]
       :param y: The vector containing each observation.
       :type y: [float]

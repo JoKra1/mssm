@@ -10,45 +10,78 @@ from ..python.exp_fam import Family,Gaussian, Identity,GAMLSSFamily,GENSMOOTHFam
 
 def sample_MVN(n,mu,scale,P,L,LI=None,use=None,seed=None):
     """
-    Draw n samples x from multivariate normal with mean ``mu`` and covariance matrix Sigma so that Sigma/scale = LI.T@LI, LI = L^{-1}, and
-    finally L@L.T = {Sigma/scale}^{-1}. In other words, L*(1/scale)^{0.5} is the cholesky for the precision matrix corresponding to Sigma.
-    Notably, L (and LI) have actually be computed for P@[X.T@X+S_\lambda]@P.T (see Wood \& Fasiolo, 2017), hence for sampling we need to correct
-    for permutation matrix ``P``. if ``LI`` is provided, then ``P`` can be omitted and is assumed to have been applied to ``LI already``
-
-    Used to sample the uncorrected posterior :math:`\beta|y,\lambda ~ N(\boldsymbol{\beta},(X.T@X+S_\lambda)^{-1}\phi)` for a GAMM (see Wood, 2017).
-
-    Based on section 7.4 in Gentle (2009), assuming Sigma is p*p and covariance matrix of uncorrected posterior:
-
-        x = mu + P.T@LI.T*scale^{0.5}@z where z_i ~ N(0,1) for all i = 1,...,p
-
-    Notably, we can rely on the fact of equivalence that:
-
-        L.T*(1/scale)^{0.5} @ P@x = z
+    Draw ``n`` samples from multivariate normal with mean :math:`\\boldsymbol{\mu}` (``mu``) and covariance matrix :math:`\\boldsymbol{\Sigma}`.
     
-    ...and then first solve for y in:
+    :math:`\\boldsymbol{\Sigma}` does not need to be provided. Rather the function expects either ``L`` (:math:`\mathbf{L}` in what follows) or ``LI`` (:math:`\mathbf{L}^{-1}` in what follows) and ``scale`` (:math:`\phi` in what follows).
+    These relate to :math:`\\boldsymbol{\Sigma}` so that :math:`\\boldsymbol{\Sigma}/\phi = \mathbf{L}^{-T}\mathbf{L}^{-1}` or :math:`\mathbf{L}\mathbf{L}^T = [\\boldsymbol{\Sigma}/\phi]^{-1}`
+    so that :math:`\mathbf{L}*(1/\phi)^{0.5}` is the Cholesky of the precision matrix of :math:`\\boldsymbol{\Sigma}`.
 
-        L.T*(1/scale)^{0.5} @ y = z
+    Notably, for models available in ``mssm`` ``L`` (and ``LI``) have usually be computed for a permuted matrix, e.g., :math:`\mathbf{P}[\mathbf{X}^T\mathbf{X} + \mathbf{S}_{\lambda}]\mathbf{P}^T` (see Wood \& Fasiolo, 2017).
+    Hence for sampling we often need to correct for permutation matrix :math:`\mathbf{P}` (``P``). if ``LI`` is provided, then ``P`` can be omitted and is assumed to have been used to un-pivot ``LI`` already.
+
+    Used for example sample the uncorrected posterior :math:`\\boldsymbol{\\beta} | \mathbf{y}, \\boldsymbol{\lambda} \sim N(\\boldsymbol{\\mu} = \hat{\\boldsymbol{\\beta}},[\mathbf{X}^T\mathbf{X} + \mathbf{S}_{\lambda}]^{-1}\phi)` for a GAMM (see Wood, 2017).
+    Based on section 7.4 in Gentle (2009), assuming :math:`\\boldsymbol{\Sigma}` is :math:`p*p` and covariance matrix of uncorrected posterior, samples :math:`\\boldsymbol{\\beta}` are then obtained by computing:
+
+    .. math::
+
+        \\boldsymbol{\\beta} = \hat{\\boldsymbol{\\beta}} + [\mathbf{P}^T \mathbf{L}^{-T}*\phi^{0.5}]\mathbf{z}\ \\text{where}\ z_i \sim N(0,1)\ \\forall i = 1,...,p
+
+    Alternatively, relying on the fact of equivalence that:
+
+    .. math::
+
+        [\mathbf{L}^T*(1/\phi)^{0.5}]\mathbf{P}[\\boldsymbol{\\beta} - \hat{\\boldsymbol{\\beta}}] = \mathbf{z}
     
-    ...followed by computing:
+    we can first solve for :math:`\mathbf{y}` in:
 
-        y = P@x
-        x = P.T@y
+    .. math::
+
+        [\mathbf{L}^T*(1/\phi)^{0.5}] \mathbf{y} = \mathbf{z}
+    
+    followed by computing:
+
+    .. math::
+
+        \mathbf{y} = \mathbf{P}[\\boldsymbol{\\beta} - \hat{\\boldsymbol{\\beta}}]
+
+        \\boldsymbol{\\beta} = \hat{\\boldsymbol{\\beta}} + \mathbf{P}^T\mathbf{y}
     
         
-    The latter allows to avoid forming L^{-1} (which unlike L might not benefit from the sparsity preserving permutation P). Hence, if ``LI is None``,
-    ``L`` will be used for sampling.
+    The latter avoids forming :math:`\mathbf{L}^{-1}` (which unlike :math:`\mathbf{L}` might not benefit from the sparsity preserving permutation \mathbf{P}). If ``LI is None``,
+    ``L`` will thus be used for sampling as outlined in these alternative steps.
 
-    Often we care only about a handfull of elements in mu (usually the first ones corresponding to "fixed effects'" in a GAMM). In that case we
-    can generate x only for this sub-set of interest by only using a row-block of L/LI (all columns remain). Argument ``use`` can be a Numpy array
-    containg the indices of elements in mu that should be sampled. Because this only works efficiently when ``LI`` is available an error is raised
-    when ``not use is None and LI is None``.
+    Often we care only about a handfull of elements in ``mu`` (e.g., the first ones corresponding to "fixed effects'" in a GAMM). In that case we
+    can generate samles only for this sub-set of interest by only using a sub-block of rows of :math:`\mathbf{L}` or :math:`\mathbf{L}^{-1}` (all columns remain). Argument ``use`` can be a ``np.array``
+    containg the indices of elements in ``mu`` that should be sampled. Because this only works efficiently when ``LI`` is available an error is raised when ``not use is None and LI is None``.
 
-    If ``mu`` is set to any integer (i.e., not a Numpy array/list) it is treated as 0. 
+    If ``mu`` is set to any integer (i.e., not a Numpy array/list) it is automatically treated as 0. For :class:`mssm.models.GAMMLSS` or :class:`mssm.models.GSMM` models, ``scale`` can be set to 1.
     
     References:
 
      - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
      - Gentle, J. (2009). Computational Statistics.
+
+    :param n: Number of samples to generate
+    :type n: int
+    :param mu: mean of normal distribution as described above
+    :type mu: np.array
+    :param scale: scaling parameter of covariance matrix as described above
+    :type scale: float
+    :param P: Permutation matrix, optional.
+    :type P: scp.sparse.csc_array
+    :param L: Cholesky of precision of scaled covariance matrix as described above.
+    :type L: scp.sparse.csc_array
+    :param LI: Inverse of cholesky factor of precision of scaled covariance matrix as described above.
+    :type LI: scp.sparse.csc_array, optional
+    :param use: Indices of parameters in ``mu`` for which to generate samples, defaults to None in which case all parameters will be sampled
+    :type use: [int], optional
+    :param seed: Seed to use for random sample generation, defaults to None
+    :type seed: int, optional
+    :raises ValueError: In case neither ``LI`` nor ``L`` are provided.
+    :raises ValueError: In case ``L`` is provided but ``P`` is not.
+    :raises ValueError: In case ``use`` is provided but ``LI`` is not. 
+    :return: Samples from multi-variate normal distribution. In case ``use`` is not provided, the returned array will be of shape ``(p,n)`` where ``p==LI.shape[1]``. Otherwise, the returned array will be of shape ``(len(use),n)``.
+    :rtype: np.array
     """
     if L is None and LI is None:
         raise ValueError("Either ``L`` or ``LI`` have to be provided.")
@@ -106,7 +139,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10):
 
    Internal function used for computing the correction applied to the edf for the GLRT - based on Wood (2017) and Wood et al., (2016).
 
-   See :func:``REML`` function below for more details.
+   See :func:`REML` function for more details.
    """
 
    S_emb,_,_ = compute_S_emb_pinv_det(X.shape[1],penalties,"svd")
@@ -206,7 +239,7 @@ def compute_REML_candidate_GSMM(family,coef,n_coef,coef_split_idx,y,Xs,penalties
 
     Internal function used for computing the correction applied to the edf for the GLRT - based on Wood (2017) and Wood et al., (2016).
 
-    See :func:``REML`` function below for more details.
+    See :func:`REML` function for more details.
    """
 
     # Build current penalties
@@ -393,7 +426,7 @@ def REML(llk,nH,coef,scale,penalties):
    return reml + lgdetS/2 - lgdetXXS/2 + (Mp*np.log(2*np.pi))/2
 
 def estVp(ep,remls,rGrid):
-    """Estimate covariance matrix of log(\lambda). REML scores are used to
+    """Estimate covariance matrix of posterior for :math:`\mathbf{p} = log(\\boldsymbol{\lambda})`. REML scores are used to
     approximate expectation, similar to what was suggested by Greven & Scheipl (2016).
 
     References:
@@ -476,29 +509,31 @@ def _compute_VB_corr_terms_MP(family,address_y,address_dat,address_ptr,address_i
    return Linv,coef,reml,scale,edf,llk
 
 def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_t1=False,verbose=False,drop_NA=True,method="Newton",seed=None):
-    """Estimate :math:`V`, the covariance matrix of the unconditional posterior :math:`\boldsymbol{\beta} | y ~ N(\hat{\boldsymbol{\beta}},V)` to account for smoothness uncertainty.
+    """Estimate :math:`\mathbf{V}`, the covariance matrix of the unconditional posterior :math:`\\boldsymbol{\\beta} | y \sim N(\hat{\\boldsymbol{\\beta}},\\mathbf{V})` to account for smoothness uncertainty.
     
     Wood et al. (2016) and Wood (2017) show that when basing conditional versions of model selection criteria or hypothesis
-    tests on :math:`Vb`, which is the co-variance matrix for the conditional posterior of :math:`\boldsymbol{\beta}` so that
-    :math:`\boldsymbol{\beta} | y, \lambda ~ N(\hat{\boldsymbol{\beta}},Vb)`, the tests are severely biased. To correct for this they
-    show that uncertainty in \lambda needs to be accounted for. Hence they suggest to base these tests on :math:`V`, the covariance matrix
-    of the unconditional posterior :math:`\boldsymbol{\beta} | y ~ N(\hat{\boldsymbol{\beta}},V)`. They show how to obtain an estimate of :math:`V`,
-    but this requires :math:`V_p` - an estimate of the covariance matrix of :math:`log(\lambda)`. :math:`V_p` requires derivatives that are not available
+    tests on :math:`\mathbf{V}_{\\boldsymbol{\\beta}}`, which is the co-variance matrix for the conditional posterior of :math:`\\boldsymbol{\\beta}` so that
+    :math:`\\boldsymbol{\\beta} | y, \\boldsymbol{\lambda} \sim N(\hat{\\boldsymbol{\\beta}},\mathbf{V}_{\\boldsymbol{\\beta}})`, the tests are severely biased. To correct for this they
+    show that uncertainty in :math:`\\boldsymbol{\lambda}` needs to be accounted for. Hence they suggest to base these tests on :math:`\mathbf{V}`, the covariance matrix
+    of the **unconditional posterior** :math:`\\boldsymbol{\\beta} | y \sim N(\hat{\\boldsymbol{\\beta}},\\mathbf{V})`. They show how to obtain an estimate of :math:`\mathbf{V}`,
+    but this requires :math:`\mathbf{V}_{\\boldsymbol{p}}` - an estimate of the covariance matrix of :math:`\\boldsymbol{p}=log(\\boldsymbol{\lambda})`. :math:`\mathbf{V}_{\\boldsymbol{p}}` requires derivatives that are not available
     when using the efs update.
 
-    Greven & Scheipl in their comment to the paper by Wood et al. (2016) show another option to estimate :math:`V` that does not require :math:`V_p`,
+    Greven & Scheipl in their comment to the paper by Wood et al. (2016) show another option to estimate :math:`\mathbf{V}` that does not require :math:`\mathbf{V}_{\\boldsymbol{p}}`,
     based either on forming a mixture approximation or on the total variance property. The latter is implemented below, based on the
-    equations for the expectations outlined in their response. A problem of this estimate is that a grid of :math:`\lambda` values needs to be
-    provided covering the prior on :math:`\lambda` (see Wood 2011 for the relation between smoothness penalties and this prior). For ``mssm`` the
-    limits on this are 1e-7 and 1e7. However, as the authors already conclude, covering the entire prior range is not that efficient.
-    Hence we provide an alternative way to set-up the grid, based on first forming marginal grids for each :math:`\lambda` that contain nR equally-spaced
-    samples from :math:`\lambda/lr to \lambda*lr`, while all other lambda values are set to random samples between the prior limits. This neglects quite a bit
-    of the prior space. So we use these initial samples to estimate :math:`V_p`, so that :math:`log(\lambda)|y ~ N(log(\hat{\lambda}),V_p,)` - see Wood et al. (2016).
-    We then repeatedly sample new :math:`\lambda` vectors from this normal, followed by updating out estimate of the normal (i.e., :math:`V_p`) given these samples (
-    using the REML weights to approximate the expectation for estimating :math:`V_p`,` based on Greven & Scheipl; 2016). Note that until the last sampling step we
-    add small values to the diagonal of :math:`V_p` to promote exploration. The idea is that this should help us to better explore and with less samples, locally
-    around :math:`\hat{\lambda}`, the uncertainty than if we would just sample from a grid. We then also later re-compute the REML weights from this normal and
-    then follow the steps outlined by (Greven & Scheipl; 2016) to compute :math:`V`, rather than computing the approximation suggested by Wood et al. (2016).
+    equations for the expectations outlined in their response. A problem of this estimate is that a grid of :math:`\\boldsymbol{\lambda}` values needs to be
+    provided covering the prior on :math:`\\boldsymbol{\lambda}` (see Wood 2011 for the relation between smoothness penalties and this prior). For ``mssm`` the
+    default limits on this are 1e-7 and 1e7.
+    
+    However, as the authors already conclude, covering the entire prior range is not that efficient in case more than one :math:`\lambda` is to be estimated.
+    Hence we provide an alternative way to set-up the grid, based on first forming marginal grids for each :math:`\lambda` in :math:`\\boldsymbol{\lambda}` that contain nR equally-spaced
+    samples from :math:`\lambda/lr` to :math:`\lambda*lr`, while all other :math:`\lambda` values are set to random samples between the prior limits. This neglects quite a bit
+    of the prior space. So we use these initial samples to estimate :math:`\mathbf{V}_{\\boldsymbol{p}}` (using the REML weights to approximate the expectation based on Greven & Scheipl; 2016), so that :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})` - see Wood et al. (2016).
+    
+    We then repeatedly sample new :math:`\\boldsymbol{p}` vectors from this normal, followed by updating out estimate of the normal (i.e., :math:`\mathbf{V}_{\\boldsymbol{p}}`) given these samples. Note that until the last sampling step we
+    add small values to the diagonal of :math:`\mathbf{V}_{\\boldsymbol{p}}` to promote exploration. The idea is that this should help us to better explore and with less samples, locally
+    around :math:`\hat{\\boldsymbol{p}}`, the uncertainty than if we would just sample from a grid. We then also later re-compute the REML weights from this normal and
+    then follow the steps outlined by (Greven & Scheipl; 2016) to compute :math:`\mathbf{V}`, rather than computing the approximation suggested by Wood et al. (2016).
     
     This is done when argument grid_type = 'JJJ'. Otherwise, the G&S strategy is employed - forming a grid over the full space (from 1e-7 to 1e7,
     again evaluated for nR equally-spaced values and then permuted for the number of \lambda parameters). Note that
@@ -510,11 +545,11 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
      - Greven, S., & Scheipl, F. (2016). Comment on: Smoothing Parameter and Model Selection for General Smooth Models
      - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
-    :param model: GAMM,GAMLSS, or GSMM model (which has been fitted) for which to estimate :math:`V`
+    :param model: GAMM,GAMLSS, or GSMM model (which has been fitted) for which to estimate :math:`\mathbf{V}`
     :type model: GAMM or GAMLSS or GSMM
-    :param nR: (Initial, in case grid_type=="JJJ") :math:`\lambda`  Grid is based on `nR` equally-spaced samples from :math:`\lambda/lr to \lambda*lr`. In case grid_type=="JJJ", `nR*len(model.formula.penalties)` updates to :math:`V_p` are performed during each of which additional `nR` :math`\lambda` samples/reml scores are generated/computed, defaults to 20
+    :param nR: (Initial, in case grid_type=="JJJ") :math:`\lambda`  Grid is based on `nR` equally-spaced samples from :math:`\lambda/lr` to :math:`\lambda*lr`. In case grid_type=="JJJ", `nR*len(model.formula.penalties)` updates to :math:`\mathbf{V}_{\\boldsymbol{p}}` are performed during each of which additional `nR` :math`\lambda` samples/reml scores are generated/computed, defaults to 20
     :type nR: int, optional
-    :param lR: (Initial, in case grid_type=="JJJ") :math:`\lambda`  Grid is based on `nR` equally-spaced samples from :math:`\lambda/`lr` to \lambda*`lr``, defaults to 100
+    :param lR: (Initial, in case grid_type=="JJJ") :math:`\lambda`  Grid is based on `nR` equally-spaced samples from :math:`\lambda/lr` to :math:`\lambda*lr`, defaults to 100
     :type lR: int, optional
     :param grid_type: How to define the grid of :math:`\lambda` values on which to base the correction - see above for details, defaults to 'JJJ'
     :type grid_type: str, optional
@@ -528,7 +563,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
     :type verbose: bool, optional
     :param drop_NA: Whether to drop rows in the **model matrices** corresponding to NAs in the dependent variable vector. Defaults to True.
     :type drop_NA: bool,optional
-    :param method: Which method to use to estimate the coefficients for GSMM models - supports "Newton" and "BFGS". In case of the former, ``model.family`` needs to implement :func:``gradient`` and :func:``hessian``. Defaults to "Newton"
+    :param method: Which method to use to estimate the coefficients for GSMM models - supports "Newton" and "BFGS". In case of the former, ``model.family`` needs to implement :func:`gradient` and :func:`hessian`. Defaults to "Newton"
     :type method: str,optional
     :param seed: Seed to use for random parts of the correction. Defaults to None
     :type seed: int,optional

@@ -46,57 +46,61 @@ def map_csc_to_eigen(X):
 
 def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
    """
-    Options 1 - 3 are natural reparameterization discussed in Wood (2017; 5.4.2)
-    with different strategies for the QR computation of X.
+   Options 1 - 3 are natural reparameterization discussed in Wood (2017; 5.4.2)
+   with different strategies for the QR computation of :math:`\mathbf{X}`. Option 4 helps with stabilizing the REML computation
+   and is from Wood (2011) and section 6.2.7 in Wood (2017):
 
-       1. Form complete matrix X based on entire covariate.
-       2. Form matrix X only based on unique covariate values.
-       3. Form matrix X on a sample of values making up covariate. Covariate
-       is split up into ``n_bins`` equally wide bins. The number of covariate values
-       per bin is then calculated. Subsequently, the ratio relative to minimum bin size is
-       computed and each ratio is rounded to the nearest integer. Then ``ratio`` samples
-       are obtained from each bin. That way, imbalance in the covariate is approximately preserved when
-       forming the QR.
-       4. Transform term-specific S_\lambda based on section Wood (2011) and section 6.2.7 in Wood (2017)
-       so that they are full-rank and their log-determinant can be computed safely. In that case, only S needs
-       to be provided and has to be a list holding the penalties to be transformed
-    
-    If ``QR==True`` then X is decomposed into Q @ R directly via QR decomposition. Alternatively, we first
-    form X.T @ X and then compute the cholesky L of this product - note that L.T = R. Overall the latter
-    strategy is much faster (in particular if ``option==1``), but the increased loss of precision in L/R
-    might not be ok for some.
+      1. Form complete matrix :math:`\mathbf{X}` based on entire covariate.
+      2. Form matrix :math:`\mathbf{X}` only based on unique covariate values.
+      3. Form matrix :math:`\mathbf{X}` on a sample of values making up covariate. Covariate
+         is split up into ``n_bins`` equally wide bins. The number of covariate values
+         per bin is then calculated. Subsequently, the ratio relative to minimum bin size is
+         computed and each ratio is rounded to the nearest integer. Then ``ratio`` samples
+         are obtained from each bin. That way, imbalance in the covariate is approximately preserved when
+         forming the QR.
+      4. Transform term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` based on section Wood (2011) and section 6.2.7 in Wood (2017)
+         so that they are full-rank and their log-determinant can be computed safely. In that case, only ``S`` needs
+         to be provided and has to be a list holding the penalties to be transformed
+   
+   For Options 1-3:
 
-    After transformation S only contains elements on it's diagonal and X the transformed functions. As discussed
-    in Wood (2017), the transformed functions are decreasingly flexible - so the elements on S diagonal become smaller
-    and eventually zero, for elements that are in the kernel of the original S (un-penalized == not flexible).
+      If ``QR==True`` then :math:`\mathbf{X}` is decomposed into :math:`\mathbf{Q}\mathbf{R}` directly via QR decomposition. Alternatively, we first
+      form :math:`\mathbf{X}^T\mathbf{X}` and then compute the cholesky :math:`\mathbf{L}` of this product - note that :math:`\mathbf{L}^T = \mathbf{R}`. Overall the latter
+      strategy is much faster (in particular if ``option==1``), but the increased loss of precision in :math:`\mathbf{L}^T = \mathbf{R}` might not be ok for some.
 
-    For a similar transformation (based solely on S), Wood et al. (2013) show how to further reduce the diagonally
-    transformed S to an even simpler identity penalty. As discussed also in Wood (2017) the same behavior of decreasing
-    flexibility if all entries on the diagonal of S are 1 can only be maintained if the transformed functions are
-    multiplied by a weight related to their wiggliness. Specifically, more flexible functions need to become smaller in
-    amplitude - so that for the same level of penalization they are removed earlier than less flexible ones. To achieve this
-    Wood further post-multiply the transformed matrix 'X with a matrix that contains on it's diagonal the reciprocal of the
-    square root of the transformed penalty matrix (and 1s in the last cells corresponding to the kernel). This is done here
-    if ``identity=True``.
+      After transformation S only contains elements on it's diagonal and :math:`\mathbf{X}` the transformed functions. As discussed
+      in Wood (2017), the transformed functions are decreasingly flexible - so the elements on :math:`\mathbf{S}` diagonal become smaller
+      and eventually zero, for elements that are in the kernel of the original :math:`\mathbf{S}` (un-penalized == not flexible).
 
-    In ``mgcv`` the transformed model matrix and penalty can optionally be scaled by the root mean square value of the transformed
-    model matrix (see the nat.param function in mgcv). This is done here if ``scale=True``.
+      For a similar transformation (based solely on :math:`\mathbf{S}`), Wood et al. (2013) show how to further reduce the diagonally
+      transformed :math:`\mathbf{S}` to an even simpler identity penalty. As discussed also in Wood (2017) the same behavior of decreasing
+      flexibility if all entries on the diagonal of :math:`\mathbf{S}` are 1 can only be maintained if the transformed functions are
+      multiplied by a weight related to their wiggliness. Specifically, more flexible functions need to become smaller in
+      amplitude - so that for the same level of penalization they are removed earlier than less flexible ones. To achieve this
+      Wood further post-multiply the transformed matrix :math:`\mathbf{X}'` with a matrix that contains on it's diagonal the reciprocal of the
+      square root of the transformed penalty matrix (and 1s in the last cells corresponding to the kernel). This is done here
+      if ``identity=True``.
 
-    Option 4 enforces re-parameterization of term-specific S_\lambda based on section Wood (2011) and section 6.2.7 in Wood (2017).
-    In ``mssm`` multiple penalties can be placed on individual terms (i.e., tensor terms, random smooths, Kernel penalty) but
-    it is not always the case that the term-specific S_\lambda - i.e., the sum over all those individual penalties multiplied with
-    their \lambda parameters, is of full rank. If we need to form the inverse of the term-specific S_\lambda this is problematic.
-    It is also probelmatic, as discussed by Wood (2011), if the different \lambda are all of different magnitude in which case forming
-    the term-specific log(|S_\lambda|+) becomes numerically difficult.
+      In ``mgcv`` the transformed model matrix and penalty can optionally be scaled by the root mean square value of the transformed
+      model matrix (see the nat.param function in mgcv). This is done here if ``scale=True``.
 
-    The re-parameterization implemented by option 4, based on Appendix B in Wood (2011), solves these issues. After this re-parameterization a
-    term-specific S_\lambda has been formed that is full rank. And log(|S_\lambda|) - no longer just a generalized determinant - can be
-    computed without running into numerical problems.
+   For Option 4:
 
-    The strategy by Wood (2011) is more general and could be applied to form an overall - not just term-specific - S_\lambda with these properties.
-    However, in ``mssm`` penalties currently cannot overlap, so this is not necessary at the moment.
+      Option 4 enforces re-parameterization of term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` based on section Wood (2011) and section 6.2.7 in Wood (2017).
+      In ``mssm`` multiple penalties can be placed on individual terms (i.e., tensor terms, random smooths, Kernel penalty) but
+      it is not always the case that the term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` - i.e., the sum over all those individual penalties multiplied with
+      their :math:`\lambda` parameters, is of full rank. If we need to form the inverse of the term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` this is problematic.
+      It is also problematic, as discussed by Wood (2011), if the different :math:`\lambda` are all of different magnitude in which case forming
+      the term-specific :math:`log(|\mathbf{S}_{\\boldsymbol{\lambda}}|+)` becomes numerically difficult.
 
-    References:
+      The re-parameterization implemented by option 4, based on Appendix B in Wood (2011), solves these issues. After this re-parameterization a
+      term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` has been formed that is full rank. And :math:`log(|\mathbf{S}_{\\boldsymbol{\lambda}}|)` - no longer just a generalized determinant - can be
+      computed without running into numerical problems.
+
+      The strategy by Wood (2011) is more general and could be applied to form an overall - not just term-specific - :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` with these properties.
+      However, in ``mssm`` penalties currently cannot overlap, so this is not necessary at the moment.
+
+   References:
       - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
       - Wood, S. N., Scheipl, F., & Faraway, J. J. (2013). Straightforward intermediate rank tensor product smoothing in mixed models.
       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
@@ -435,8 +439,7 @@ class lhs():
 
     :param variable: The dependent variable. Can point to continuous and categorical variables.
     :type variable: str
-    :param f: A function that will be applied to the ``variable`` before fitting. For example: np.log().
-    By default no function is applied to the ``variable``.
+    :param f: A function that will be applied to the ``variable`` before fitting. For example: np.log(). By default no function is applied to the ``variable``.
     :type f: Callable, optional
     """
     def __init__(self,variable:str,f:Callable=None) -> None:
@@ -862,29 +865,27 @@ class Formula():
     :param lhs: The lhs object defining the dependent variable.
     :type variable: lhs
     :param terms: A list of the terms which should be added to the model. See ``mssm.src.python.terms`` for info on which terms can be added.
-    :type terms: list[GammTerm]
-    :param data: A pandas dataframe (with header!) of the data which should be used to estimate the model. The variable specified for ``lhs`` as
-    well as all variables included for a ``term`` in ``terms`` need to be present in the data, otherwise the call to Formula will throw an error.
+    :type terms: [GammTerm]
+    :param data: A pandas dataframe (with header!) of the data which should be used to estimate the model. The variable specified for ``lhs`` as well as all variables included for a ``term`` in ``terms`` need to be present in the data, otherwise the call to Formula will throw an error.
     :type data: pd.DataFrame or None
-    :param series_id: A tring identifying the individual experimental units. Usually a unique trial identifier. Can only be ignored if a
-   ``mssm.models.GAMM`` is to be estimated.
+    :param series_id: A string identifying the individual experimental units. Usually a unique trial identifier. Only necessary if approximate derivative computations are to be utilized for random smooth terms.
     :type series_id: str, optional
     :param codebook: Codebook - keys should correspond to factor variable names specified in terms. Values should again be a ``dict``, with keys for each of K levels of the factor and value corresponding to an integer in {0,K}.
     :type codebook: dict or None
     :param print_warn: Whether warnings should be printed. Useful when fitting models from terminal. Defaults to True.
     :type print_warn: bool,optional
-    :param keep_cov: Whether or not the internal encoding structure of all predictor variables should be created when forming X.T@X iteratively instead of forming X directly. Can speed up estimation but increases memory footprint. Defaults to True.
+    :param keep_cov: Whether or not the internal encoding structure of all predictor variables should be created when forming :math:`\mathbf{X}^T\mathbf{X}` iteratively instead of forming :math:`\mathbf{X}` directly. Can speed up estimation but increases memory footprint. Defaults to True.
     :type keep_cov: bool,optional
-    :param file_paths: A list of paths to .csv files from which X.T@X and X.T@y should be created iteratively. Setting this to a non-empty list will prevent fitting X as a whole. ``data`` should then be set to ``None``. Defaults to an empty list.
+    :param file_paths: A list of paths to .csv files from which :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` should be created iteratively. Setting this to a non-empty list will prevent fitting X as a whole. ``data`` should then be set to ``None``. Defaults to an empty list.
     :type file_paths: [str],optional
-    :param file_loading_nc: How many cores to use to a) accumulate X in parallel (if ``data`` is not ``None`` and ``file_paths`` is an empty list) or b) to accumulate X.T@X and X.T@y (and \eta during estimation) (if ``data`` is ``None`` and ``file_paths`` is a non-empty list). For case b, this should really be set to the maimum number of cores available. For a this only really speeds up accumulating X if X has many many columns and/or rows. Defaults to 1.
+    :param file_loading_nc: How many cores to use to a) accumulate :math:`\mathbf{X}` in parallel (if ``data`` is not ``None`` and ``file_paths`` is an empty list) or b) to accumulate :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` (and :math:`\mathbf{\eta}` during estimation) (if ``data`` is ``None`` and ``file_paths`` is a non-empty list). For case b, this should really be set to the maimum number of cores available. For a this only really speeds up accumulating :math:`\mathbf{X}` if :math:`\mathbf{X}` has many many columns and/or rows. Defaults to 1.
     :type file_loading_nc: int,optional
-    :param file_loading_kwargs: Any key-word arguments to pass to pandas.read_csv when X.T@X and X.T@y should be created iteratively (if ``data`` is ``None`` and ``file_paths`` is a non-empty list). Defaults to ``{"header":0,"index_col":False}``.
+    :param file_loading_kwargs: Any key-word arguments to pass to pandas.read_csv when :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` should be created iteratively (if ``data`` is ``None`` and ``file_paths`` is a non-empty list). Defaults to ``{"header":0,"index_col":False}``.
     :type file_loading_kwargs: dict,optional
     """
     def __init__(self,
                  lhs:lhs,
-                 terms:list[GammTerm],
+                 terms:[GammTerm],
                  data:pd.DataFrame,
                  series_id:str or None=None,
                  codebook:dict or None=None,
@@ -1278,9 +1279,8 @@ class Formula():
       :type data: pd.DataFrame
       :param prediction: Whether or not a NA index and a column for the dependent variable should be generated.
       :type prediction: bool, optional
-      :return: A tuple with 7 entries: a ``np.array`` of the dependent variable described by ``self.__lhs`` or ``None``, a ``np.array`` with as many columns as there are predictor variables specified in ``self.__terms``, holding the encoded predictor variables (number of rows matches the number of rows of the first entry returned), either a ``np.array`` indicating for each row whether the dependent variable described by ``self.__lhs`` is NA or ``None``,
-      either like the first entry but split into a list of lists by ``self.series_id`` or ``None``, either like the second entry but split into a list of lists by ``self.series_id`` or ``None``, either like the third entry but split into a list of lists by ``self.series_id`` or ``None``, either a ``np.array`` indicating the start and end point for the splits used to split the previous three elements (identifying the start and end point of every level of ``self.series_id``) or ``None``.
-      :rtype: tuple
+      :return: A tuple with 7 (optional) entries: the dependent variable described by ``self.__lhs``, the encoded predictor variables as a (N,k) array (number of rows matches the number of rows of the first entry returned, the number of columns matches the number of k variables present in the formula), an indication for each row whether the dependent variable described by ``self.__lhs`` is NA, like the first entry but split into a list of lists by ``self.series_id``, like the second entry but split into a list of lists by ``self.series_id``, ike the third entry but split into a list of lists by ``self.series_id``, start and end points for the splits used to split the previous three elements (identifying the start and end point of every level of ``self.series_id``).
+      :rtype: (numpy.array or None, numpy.array or None, numpy.array or None, [numpy.array] or None, [numpy.array] or None, [numpy.array] or None, numpy.array or None)
       """
       # Build NA index
       if prediction:
@@ -2099,11 +2099,11 @@ class Formula():
        return copy.deepcopy(self.__var_types)
     
     def get_var_mins(self) -> dict:
-       """Get a copy of the var mins dictionary. Keys are variables in the data, values are either the minimum value the variable takes on in ``self.__data`` for continuous variables or ``None` for categorical variables."""
+       """Get a copy of the var mins dictionary. Keys are variables in the data, values are either the minimum value the variable takes on in ``self.__data`` for continuous variables or ``None`` for categorical variables."""
        return copy.deepcopy(self.__var_mins)
     
     def get_var_maxs(self) -> dict:
-       """Get a copy of the var maxs dictionary. Keys are variables in the data, values are either the maximum value the variable takes on in ``self.__data`` for continuous variables or ``None` for categorical variables."""
+       """Get a copy of the var maxs dictionary. Keys are variables in the data, values are either the maximum value the variable takes on in ``self.__data`` for continuous variables or ``None`` for categorical variables."""
        return copy.deepcopy(self.__var_maxs)
     
     def get_var_mins_maxs(self) -> (dict,dict):
