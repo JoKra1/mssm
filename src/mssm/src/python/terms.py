@@ -13,6 +13,19 @@ class TermType(Enum):
     RANDSLOPE = 5
 
 class GammTerm():
+   """Base-class implemented by the terms passed to :class:`mssm.src.python.formula.Formula`.
+
+   :param variables: List of variables as strings.
+   :type variables: [str]
+   :param type: Type of term as enum
+   :type type: TermType
+   :param is_penalized: Whether the term is penalized/can be penalized or not
+   :type is_penalized: bool
+   :param penalty: The default penalties associated with a term.
+   :type penalty: [penalties.PenType]
+   :param pen_kwargs: A list of dictionaries, each with key-word arguments passed to the construction of the corresponding  :class:`penalties.PenType` in ``penalty``.
+   :type pen_kwargs: [dict]
+   """
    
    def __init__(self,variables:list[str],
                 type:TermType,

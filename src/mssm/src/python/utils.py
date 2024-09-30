@@ -47,14 +47,14 @@ def sample_MVN(n,mu,scale,P,L,LI=None,use=None,seed=None):
         \\boldsymbol{\\beta} = \hat{\\boldsymbol{\\beta}} + \mathbf{P}^T\mathbf{y}
     
         
-    The latter avoids forming :math:`\mathbf{L}^{-1}` (which unlike :math:`\mathbf{L}` might not benefit from the sparsity preserving permutation \mathbf{P}). If ``LI is None``,
+    The latter avoids forming :math:`\mathbf{L}^{-1}` (which unlike :math:`\mathbf{L}` might not benefit from the sparsity preserving permutation :math:`\mathbf{P}`). If ``LI is None``,
     ``L`` will thus be used for sampling as outlined in these alternative steps.
 
     Often we care only about a handfull of elements in ``mu`` (e.g., the first ones corresponding to "fixed effects'" in a GAMM). In that case we
     can generate samles only for this sub-set of interest by only using a sub-block of rows of :math:`\mathbf{L}` or :math:`\mathbf{L}^{-1}` (all columns remain). Argument ``use`` can be a ``np.array``
     containg the indices of elements in ``mu`` that should be sampled. Because this only works efficiently when ``LI`` is available an error is raised when ``not use is None and LI is None``.
 
-    If ``mu`` is set to any integer (i.e., not a Numpy array/list) it is automatically treated as 0. For :class:`mssm.models.GAMMLSS` or :class:`mssm.models.GSMM` models, ``scale`` can be set to 1.
+    If ``mu`` is set to **any integer** (i.e., not a Numpy array/list) it is automatically treated as 0. For :class:`mssm.models.GAMMLSS` or :class:`mssm.models.GSMM` models, ``scale`` can be set to 1.
     
     References:
 

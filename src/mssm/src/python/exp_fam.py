@@ -249,7 +249,7 @@ class Family:
 
    :param link: The link function to be used by the model of the mean of this family.
    :type link: Link
-   :param twopar: Whether the family has two parameters (mean,scale) to be estimated, or only a single one (mean).
+   :param twopar: Whether the family has two parameters (mean,scale) to be estimated (i.e., whether the likelihood is a function of two parameters), or only a single one (usually the mean).
    :type twopar: bool
    :param scale: Known/fixed scale parameter for this family.
    :type scale: float or None, optional
@@ -287,6 +287,14 @@ class Family:
       """
       log-probability of :math:`\mathbf{y}` under this family with mean = :math:`\\boldsymbol{\mu}`. Essentially sum over all elements in the vector returned by the :func:`lp` method.
 
+      Families with more than one parameter that needs to be estimated in order to evaluate the model's log-likelihood (i.e., ``two_par=True``) must pass as key-word argument a ``scale``
+      parameter with a default value, e.g.,::
+
+         def llk(self, mu, scale=1):
+            ...
+      
+      You can check the implementation of the :class:`Gaussian` Family for an example.
+
       References:
 
        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
@@ -301,6 +309,14 @@ class Family:
    def lp(self,y,mu,**kwargs):
       """
       Log-probability of observing every value in :math:`\mathbf{y}` under this family with mean = :math:`\\boldsymbol{\mu}`.
+
+      Families with more than one parameter that needs to be estimated in order to evaluate the model's log-likelihood (i.e., ``two_par=True``) must pass as key-word argument a ``scale``
+      parameter with a default value, e.g.,::
+
+         def lp(self, mu, scale=1):
+            ...
+      
+      You can check the implementation of the :class:`Gaussian` Family for an example.
 
       References:
 
@@ -352,7 +368,7 @@ class Binomial(Family):
    If we have multiple independent draws from the binomial per observation (i.e., row in our data-frame), then :math:`n` will usually differ between observations/rows in our data-frame (i.e., we observe :math:`k_i` counts of success
    out of :math:`n_i` draws - so that :math:`y_i=k_i/n_i`). In that case, the `Binomial()` family accepts a vector for argument :math:`\mathbf{n}` (which is simply set to 1 by default, assuming binary data), containing :math:`n_i` for every observation :math:`y_i`.
 
-   By default the scale parameter is kept fixed/known at 1, but setting ``scale=None`` allows to estimate it.
+   In this implementation, the scale parameter is kept fixed/known at 1.
 
    References:
 
@@ -704,6 +720,11 @@ class Gamma(Family):
 class GAMLSSFamily:
    """Base-class to be implemented by families of Generalized Additive Mixed Models of Location, Scale, and Shape (GAMMLSS; Rigby & Stasinopoulos, 2005).
 
+   Apart from the required methods, three mandatory attributes need to be defined by the :func:`__init__` constructor of implementations of this class. These are required
+   to evaluate the first and second (pure & mixed) derivative of the log-likelihood with respect to any of the log-likelihood's parameters. See the variables below.
+
+   Optionally, a ``mean_init_fam`` attribute can be defined - specfiying a :class:`Family` member that is fitted to the data to get an initial estimate of the mean parameter of the assumed distribution.
+
    References:
 
     - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
@@ -713,6 +734,10 @@ class GAMLSSFamily:
    :type pars: int
    :param links: Link functions for each of the parameters of the distribution.
    :type links: [Link]
+   :ivar [Callable] d1: A list holding ``n_par`` functions to evaluate the first partial derivatives of llk with respect to each parameter of the llk. Needs to be initialized when calling :func:`__init__`.
+   :ivar [Callable] d2: A list holding ``n_par`` functions to evaluate the second (pure) partial derivatives of llk with respect to each parameter of the llk. Needs to be initialized when calling :func:`__init__`.
+   :ivar [Callable] d2m: A list holding ``n_par*(n_par-1)/2`` functions to evaluate the second mixed partial derivatives of llk with respect to each parameter of the llk in **order**: ``d2m[0]`` = :math:`\partial l/\partial \mu_1 \partial \mu_2`, ``d2m[1]`` = :math:`\partial l/\partial \mu_1 \partial \mu_3`, ..., ``d2m[n_par-1]`` = :math:`\partial l/\partial \mu_1 \partial \mu_{n_{par}}`, ``d2m[n_par]`` = :math:`\partial l/\partial \mu_2 \partial \mu_3`, ``d2m[n_par+1]`` = :math:`\partial l/\partial \mu_2 \partial \mu_4`, ... . Needs to be initialized when calling :func:`__init__`.
+   :ivar Family or None mean_init_fam: a :class:`Family` member that is fitted to the data to get an initial estimate of the mean parameter of the assumed distribution. Set to ``None`` if not initialized in the :func:`__init__` constructor of implementations. 
    """
    def __init__(self,pars:int,links:[Link]) -> None:
       self.n_par = pars
