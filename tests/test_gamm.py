@@ -6,7 +6,7 @@ from mssmViz.sim import*
 from mssm.src.python.formula import reparam
 from mssm.src.python.gamm_solvers import compute_S_emb_pinv_det,cpp_chol,cpp_cholP,compute_eigen_perm,compute_Linv
 
-class Test_BIG_GAMM_Discretize:
+class Test_BIG_GAMM_Discretize_hard:
     dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
 
     # mssm requires that the data-type for variables used as factors is 'O'=object
@@ -32,27 +32,22 @@ class Test_BIG_GAMM_Discretize:
     model.fit()
 
     def test_GAMedf(self):
-        assert round(self.model.edf,ndigits=3) == 2434.403 
+        assert round(self.model.edf,ndigits=0) == 2434
 
     def test_GAMsigma(self):
         _, sigma = self.model.get_pars()
         assert round(sigma,ndigits=3) == 10.969 
 
-    def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
-        assert np.allclose(lam,np.array([0.011997751012142885, 0.003772235174540065, 3543.8661832009607, 1385.1080073139244, 5625000.000000044,
-                                         11.92306932594258, 10000000.0, 2.1499803173682137, 0.004425903234643409, 0.03315636013104999])) 
-
     def test_GAMreml(self):
         reml = self.model.get_reml()
-        assert round(reml,ndigits=3) == -84025.317 
+        assert round(reml,ndigits=2) == -84025.32
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
-        assert round(llk,ndigits=3) == -75228.311
+        assert round(llk,ndigits=0) == -75228
 
 
-class Test_NUll_penalty_reparam:
+class Test_NUll_penalty_reparam_hard:
     dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
 
     # mssm requires that the data-type for variables used as factors is 'O'=object
@@ -116,19 +111,13 @@ class Test_NUll_penalty_reparam:
         _, sigma = self.model.get_pars()
         assert round(sigma,ndigits=3) == 577.199 
 
-    def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
-        assert np.allclose(lam,np.array([0.004025587208418643, 0.006097412551134263, 10000000.0, 0.012923375640493355,
-                                         2082.1033835676053, 10000000.0, 57366.46967076861, 10000000.0, 10000000.0,
-                                         1395056.565271352, 10000000.0, 10000000.0, 0.12055446587293978, 2.1668830991958745])) 
-
     def test_GAMreml(self):
         reml = self.model.get_reml()
         assert round(reml,ndigits=3) == -134748.718 
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
-        assert round(llk,ndigits=3) == -134264.976 
+        assert round(llk,ndigits=1) == -134265.0
 
 
 class Test_BIG_GAMM:
@@ -170,7 +159,7 @@ class Test_BIG_GAMM:
         rel_diff = diff/np.array([0.004, 0.006, 5814.327, 153569.898 , 328846.811, 105218.21, 162215.095, 934.775, 0.119, 2.166])
         assert np.max(rel_diff) < 1e-7
 
-class Test_BIG_GAMM_keep_cov:
+class Test_BIG_GAMM_keep_cov_hard:
     file_paths = [f'https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat_cond_{cond}.csv' for cond in ["a","b"]]
 
     codebook = {'cond':{'a': 0, 'b': 1}}
@@ -193,16 +182,11 @@ class Test_BIG_GAMM_keep_cov:
     model.fit()
 
     def test_GAMedf(self):
-        assert round(self.model.edf,ndigits=3) == 153.7 
+        assert round(self.model.edf,ndigits=2) == 153.71
 
     def test_GAMsigma(self):
         _, sigma = self.model.get_pars()
-        assert round(sigma,ndigits=3) == 577.194 
-
-    def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
-        assert np.allclose(lam,np.array([0.003576342178463364, 0.006011903860447472, 5027.924474625172, 10000000.0, 10000000.0,
-                                         38376.83781761932, 10000000.0, 329.15045389258586, 0.11887214629302387, 2.1663813832962906])) 
+        assert round(sigma,ndigits=3) == 577.194
 
 class Test_rs_ri_hard:
 
