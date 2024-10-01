@@ -71,7 +71,7 @@ class Test_GAUMLSSGEN:
     model = GSMM(formulas=formulas,family=gsmm_fam)
 
     # First fit with bfgs and, to speed things up, only then with Newton
-    model.fit(init_coef=None,method="BFGS",extend_lambda=False,max_outer=100,seed=10,conv_tol=1e-3)
+    model.fit(init_coef=None,method="BFGS",extend_lambda=True,max_outer=100,seed=10,conv_tol=1e-3)
 
     # Use BFGS estimate as initial estimate for Newton model
     coef = model.overall_coef
@@ -92,7 +92,7 @@ class Test_GAUMLSSGEN:
 
     def test_GAMlam(self):
         lam = np.array([p.lam for p in self.model.overall_penalties])
-        assert np.allclose(lam,np.array([0.009095523712854558, 1.0115210819988278])) 
+        assert np.allclose(lam,np.array([0.00909552371282305, 1.0115210823791556])) 
 
     def test_GAMreml(self):
         reml = self.model.get_reml()

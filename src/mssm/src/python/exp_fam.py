@@ -764,7 +764,7 @@ class GAMLSSFamily:
       pass
    
    def lp(self,y,*mus):
-      """Log-probability of observing every proportion in :math:`\mathbf{y}` under their respective Gamma with mean = :math:`\\boldsymbol{\mu}`.
+      """Log-probability of observing every element in :math:`\mathbf{y}` under their respective distribution parameterized by ``mus``.
 
       References:
 
@@ -781,6 +781,8 @@ class GAMLSSFamily:
 
    def get_resid(self,y,*mus):
       """Get standardized residuals for a GAMMLSS model (Rigby & Stasinopoulos, 2005).
+
+      Any implementation of this function should return a vector that looks like what could be expected from taking ``len(y)`` independent draws from :math:`N(0,1)`.
 
       References:
 

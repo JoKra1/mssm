@@ -3,159 +3,132 @@ from mssm.src.python.compare import compare_CDL
 import numpy as np
 import os
 from mssmViz.sim import*
+from mssm.src.python.formula import reparam
+from mssm.src.python.gamm_solvers import compute_S_emb_pinv_det,cpp_chol,cpp_cholP,compute_eigen_perm,compute_Linv
 
-class Test_GAM:
-
+class Test_BIG_GAMM_Discretize:
     dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
-    
+
     # mssm requires that the data-type for variables used as factors is 'O'=object
     dat = dat.astype({'series': 'O',
                     'cond':'O',
                     'sub':'O',
                     'series':'O'})
-    
+
+    discretize = {"no_disc":[],"excl":[],"split_by":["cond"],"restarts":40,"seed":20}
+
     formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
-                        terms=[i(), # The intercept, a
-                               f(["time"])], # The f(time) term, by default parameterized with 9 basis functions (after absorbing one for identifiability)
-                        data=dat,
-                        print_warn=False)
+                            terms=[i(), # The intercept, a
+                                l(["cond"]), # For cond='b'
+                                f(["time"],by="cond",nk=20), # to-way interaction between time and cond; one smooth over time per cond level
+                                f(["x"],by="cond"), # to-way interaction between x and cond; one smooth over x per cond level
+                                f(["time","x"],by="cond"), # three-way interaction
+                                fs(["time"],rf="series",nk=20,approx_deriv=discretize)], # Random non-linear effect of time - one smooth per level of factor series
+                            data=dat,
+                            series_id="series") # When approximating the computations for a random smooth, the series identifier column needs to be specified!
         
     model = GAMM(formula,Gaussian())
 
-    model.fit(extension_method_lam = "mult",exclude_lambda=True)
+    model.fit()
 
     def test_GAMedf(self):
-        assert round(self.model.edf,ndigits=3) == 9.723
+        assert round(self.model.edf,ndigits=3) == 2434.403 
 
-    def test_GAMTermEdf(self):
-        assert round(self.model.term_edf[0],ndigits=3) == 8.723
-    
     def test_GAMsigma(self):
         _, sigma = self.model.get_pars()
-        assert round(sigma,ndigits=3) == 1084.879
-    
+        assert round(sigma,ndigits=3) == 10.969 
+
     def test_GAMlam(self):
-        assert round(self.model.formula.penalties[0].lam,ndigits=5) == 0.0089
+        lam = np.array([p.lam for p in self.model.formula.penalties])
+        assert np.allclose(lam,np.array([0.011997751012142885, 0.003772235174540065, 3543.8661832009607, 1385.1080073139244, 5625000.000000044,
+                                         11.92306932594258, 10000000.0, 2.1499803173682137, 0.004425903234643409, 0.03315636013104999])) 
 
-class Test_GAM_TE:
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        assert round(reml,ndigits=3) == -84025.317 
 
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        assert round(llk,ndigits=3) == -75228.311
+
+
+class Test_NUll_penalty_reparam:
     dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
-    
+
     # mssm requires that the data-type for variables used as factors is 'O'=object
     dat = dat.astype({'series': 'O',
                     'cond':'O',
                     'sub':'O',
                     'series':'O'})
-    
+
+    # Add Null-penalties to univariate by-term and tensor by-term
     formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
                         terms=[i(), # The intercept, a
-                               l(["cond"]), # Offset for cond='b'
-                               f(["time","x"],by="cond",te=True)], # one smooth surface over time and x - f(time,x) - per level of cond: three-way interaction!
+                                l(["cond"]), # For cond='b'
+                                f(["time"],by="cond",constraint=ConstType.QR,penalize_null=True), # to-way interaction between time and cond; one smooth over time per cond level
+                                f(["x"],by="cond",constraint=ConstType.QR,penalize_null=False), # to-way interaction between x and cond; one smooth over x per cond level
+                                f(["time","x"],by="cond",constraint=ConstType.QR,penalize_null=True), # three-way interaction
+                                fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
                         data=dat,
                         print_warn=False)
         
     model = GAMM(formula,Gaussian())
 
-    model.fit(extension_method_lam = "mult",exclude_lambda=True)
+    model.fit()
 
-    def test_GAMedf(self):
-        assert round(self.model.edf,ndigits=2) == 33.83
+    #Compute re-parameterization strategy from Wood (2011)
+    S_emb,S_pinv,_ = compute_S_emb_pinv_det(len(model.coef),formula.penalties,"svd")
+    Sj_reps,S_reps,SJ_term_idx,S_idx,S_coefs,Q_reps,_,Mp = reparam(None,formula.penalties,None,option=4)
 
-    def test_GAMTermEdf(self):
-        # Third lambda terms -> inf, making this test hard to pass 
-        diff = np.abs(np.round(self.model.term_edf,decimals=2) - np.array([12.69, 19.14]))
-        rel_diff = diff/np.array([12.69, 19.14])
-        assert np.max(rel_diff) < 1e-2
+    # For Computing derivative of log(|S_{\lambda}|) with respect to \lambda_j of univariate smooth term (Wood, 2011)
+    S_rep = S_reps[0]
+
+    L,code = cpp_chol(S_rep)
+    Linv = compute_Linv(L)
+    S_inv = Linv.T@Linv
+
+    # And the same for tensor term
+    S_rep2 = S_reps[4]
+
+    L2,code2 = cpp_chol(S_rep2)
+    Linv2 = compute_Linv(L2)
+    S_inv2 = Linv2.T@Linv2
+
+    def test_reparam_1(self):
+        # Transformation strategy from Wood (2011) &  Wood, Li, Shaddick, & Augustin (2017)
+        assert np.allclose((self.S_inv@self.Sj_reps[0].S_J).trace(),
+                            self.Sj_reps[0].rank/self.Sj_reps[0].lam)
     
+    def test_reparam2(self):
+        # General strategy, e.g. from Wood & Fasiolo, 2017
+        assert np.allclose((self.S_inv@self.Sj_reps[0].S_J).trace(),
+                           (self.S_pinv@self.formula.penalties[0].S_J_emb).trace())
+        
+    def test_reparam3(self):
+        # General strategy (here for tensor), e.g. from Wood & Fasiolo, 2017
+        assert np.allclose((self.S_inv2@self.Sj_reps[6].S_J).trace(),
+                           (self.S_pinv@self.formula.penalties[6].S_J_emb).trace())
+    
+    def test_GAMedf(self):
+        assert round(self.model.edf,ndigits=3) == 151.46 
+
     def test_GAMsigma(self):
         _, sigma = self.model.get_pars()
-        assert round(sigma,ndigits=3) == 967.71
-    
+        assert round(sigma,ndigits=3) == 577.199 
+
     def test_GAMlam(self):
-        # Same here, so the lambda term in question is excluded and tolerance is lowered
-        diff = np.abs(np.round([p.lam for p in self.model.formula.penalties],decimals=3) - np.array([     0.001,      0.001, 573912.862,     48.871]))
-        rel_diff = diff[[0,1,3]]/np.array([     0.001,      0.001,  48.871])
-        assert np.max(rel_diff) < 1e-3
+        lam = np.array([p.lam for p in self.model.formula.penalties])
+        assert np.allclose(lam,np.array([0.004025587208418643, 0.006097412551134263, 10000000.0, 0.012923375640493355,
+                                         2082.1033835676053, 10000000.0, 57366.46967076861, 10000000.0, 10000000.0,
+                                         1395056.565271352, 10000000.0, 10000000.0, 0.12055446587293978, 2.1668830991958745])) 
 
-class Test_GAM_TE_BINARY:
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        assert round(reml,ndigits=3) == -134748.718 
 
-    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
-    
-    # mssm requires that the data-type for variables used as factors is 'O'=object
-    dat = dat.astype({'series': 'O',
-                    'cond':'O',
-                    'sub':'O',
-                    'series':'O'})
-    
-    formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
-                        terms=[i(), # The intercept, a
-                               f(["time","x"],te=True), # one smooth surface over time and x - f(time,x) - for the reference level = cond == b
-                               f(["time","x"],te=True,binary=["cond","a"])], # another smooth surface over time and x - f(time,x) - representing the difference from the other surface when cond==a
-                        data=dat,
-                        print_warn=False)
-        
-    model = GAMM(formula,Gaussian())
-
-    model.fit(extension_method_lam = "mult",exclude_lambda=True)
-
-    def test_GAMedf(self):
-        assert round(self.model.edf,ndigits=3) == 29.884
-
-    def test_GAMTermEdf(self):
-        diff = np.abs(np.round(self.model.term_edf,decimals=3) - np.array([16.668, 12.216]))
-        rel_diff = diff/np.array([16.668, 12.216])
-        assert np.max(rel_diff) < 1e-7
-    
-    def test_GAMsigma(self):
-        _, sigma = self.model.get_pars()
-        assert round(sigma,ndigits=3) == 967.893
-    
-    def test_GAMlam(self):
-        # Fourth lambda term varies a lot, so is exlcuded here.
-        diff = np.abs(np.round([p.lam for p in self.model.formula.penalties],decimals=3) - np.array([    0.001,   621.874,     0.011, 25335.589]))
-        rel_diff = diff[[0,1,2]]/np.array([    0.001,   621.874,     0.011])
-        assert np.max(rel_diff) < 1e-7
-
-class Test_GAMM:
-
-    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
-
-    # mssm requires that the data-type for variables used as factors is 'O'=object
-    dat = dat.astype({'series': 'O',
-                    'cond':'O',
-                    'sub':'O',
-                    'series':'O'})
-    
-    formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
-                      terms=[i(), # The intercept, a
-                               l(["cond"]), # For cond='b'
-                               f(["time"],by="cond",constraint=ConstType.QR), # to-way interaction between time and cond; one smooth over time per cond level
-                               f(["x"],by="cond",constraint=ConstType.QR), # to-way interaction between x and cond; one smooth over x per cond level
-                               f(["time","x"],by="cond",constraint=ConstType.QR), # three-way interaction
-                               fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
-                        data=dat,
-                        print_warn=False)
-        
-    model = GAMM(formula,Gaussian())
-
-    model.fit(extension_method_lam = "mult",exclude_lambda=True)
-
-    def test_GAMMedf(self):
-        assert round(self.model.edf,ndigits=3) == 153.619
-
-    def test_GAMMTermEdf(self):
-        diff = np.abs(np.round(self.model.term_edf,decimals=3) - np.array([6.892, 8.635, 1.182, 1.01, 1.001, 1.039, 131.861]))
-        rel_diff = diff/np.array([6.892, 8.635, 1.182, 1.01, 1.001, 1.039, 131.861])
-        assert np.max(rel_diff) < 1e-7
-    
-    def test_GAMMsigma(self):
-        _, sigma = self.model.get_pars()
-        assert round(sigma,ndigits=3) == 577.196
-    
-    def test_GAMMlam(self):
-        diff = np.abs(np.round([p.lam for p in self.model.formula.penalties],decimals=3) - np.array([0.004, 0.006, 5814.327, 153569.898 , 328846.811, 105218.21, 162215.095, 934.775, 0.119, 2.166]))
-        rel_diff = diff/np.array([0.004, 0.006, 5814.327, 153569.898 , 328846.811, 105218.21, 162215.095, 934.775, 0.119, 2.166])
-        assert np.max(rel_diff) < 1e-7
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        assert round(llk,ndigits=3) == -134264.976 
 
 
 class Test_BIG_GAMM:
@@ -197,183 +170,39 @@ class Test_BIG_GAMM:
         rel_diff = diff/np.array([0.004, 0.006, 5814.327, 153569.898 , 328846.811, 105218.21, 162215.095, 934.775, 0.119, 2.166])
         assert np.max(rel_diff) < 1e-7
 
+class Test_BIG_GAMM_keep_cov:
+    file_paths = [f'https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat_cond_{cond}.csv' for cond in ["a","b"]]
 
-class Test_Binom_GAMM:
+    codebook = {'cond':{'a': 0, 'b': 1}}
 
-    Binomdat = sim3(10000,2,family=Binomial(),seed=20)
-
-    formula = Formula(lhs("y"),[i(),f(["x0"]),f(["x1"]),f(["x2"]),f(["x3"])],data=Binomdat)
-
-    # By default, the Binomial family assumes binary data and uses the logit link.
-    model = GAMM(formula,Binomial())
-    model.fit()
-
-    def test_GAMedf(self):
-        assert round(self.model.edf,ndigits=3) == 13.468 
-
-    def test_GAMsigma(self):
-        _, sigma = self.model.get_pars()
-        assert round(sigma,ndigits=3) == 1 
-
-    def test_GAMcoef(self):
-        coef, _ = self.model.get_pars()
-        assert np.allclose(coef,np.array([0.7422333451777551, -0.17195247706792302, 0.057394164386376505, 0.18704155831577263, 0.22846608870924795,
-                        0.23511563352132572, 0.23707380980366774, 0.1858274828099582, 0.012619280027852899, -0.17315651504766674,
-                        -0.17250023796593375, -0.094200972083248, -0.04409410888775292, 0.01921436719459457, 0.1053763860762365,
-                        0.20885336302996846, 0.3163156513235213, 0.3922828489471839, 0.4674708452078455, -0.4517546540990654,
-                        0.9374862846060616, 1.2394748022759206, 0.4085019434244128, 0.6450776959620124, 0.6155671421354455,
-                        0.12222718933779214, -0.05160555872945563, 0.08904926741803995, 0.04897607940790038, 0.0017796804146379072,
-                        -0.023979562522928297, -0.04130161353880989, -0.05541306071248854, -0.06449403279102219, -0.06700848322507941,
-                        -0.05044390273197432, -0.03325208528628772])) 
-
-    def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
-        assert np.allclose(lam,np.array([122.52719452460906, 655.3557029613052, 1.3826427117149267, 2841.8313047699667])) 
-
-    def test_GAMreml(self):
-        reml = self.model.get_reml()
-        assert round(reml,ndigits=3) == -6214.394 
-
-    def test_GAMllk(self):
-        llk = self.model.get_llk(False)
-        assert round(llk,ndigits=3) == -6188.98 
-
-
-class Test_Gamma_GAMM:
-
-    Gammadat = sim3(500,2,family=Gamma(),seed=0)
-
-    formula = Formula(lhs("y"),[i(),f(["x0"]),f(["x1"]),f(["x2"]),f(["x3"])],data=Gammadat)
-
-    # By default, the Gamma family assumes that the model predictions match log(\mu_i), i.e., a log-link is used.
-    model = GAMM(formula,Gamma())
-    model.fit()
-
-    def test_GAMedf(self):
-        assert round(self.model.edf,ndigits=3) == 17.814 
-
-    def test_GAMsigma(self):
-        _, sigma = self.model.get_pars()
-        assert round(sigma,ndigits=3) == 2.198 
-
-    def test_GAMcoef(self):
-        coef, _ = self.model.get_pars()
-        assert np.allclose(coef,np.array([7.654619426165573, -0.8985835974502748, 0.007379410246291677, 0.8957101794062817, 1.5029853796818358,
-                        1.493483354632211, 0.8784842536845233, 0.26098272816203444, -0.4103286413630141, -1.114920815874382,
-                        -1.5927964521179392, -1.148958310775413, -0.7600643014139132, -0.12496105839506648, 0.7216919175807573,
-                        1.8576582674297482, 3.0961174683334454, 4.115793366721786, 5.270272872019139, -6.587061280350998,
-                        5.549362912627165, 7.502334022655151, -0.002066373028916379, 0.8329530056316238, 1.2364758339185502,
-                        -2.3108759390294447, -3.0463729185932946, 1.7885877838213213, -0.08631242743776814, 0.07052295759155355,
-                        0.16597169875196663, 0.18903677135585883, 0.1574395995140705, 0.09725688737590793, 0.04256696866874943,
-                        -0.033305436991563596, -0.12103077388832384])) 
-
-    def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
-        assert np.allclose(lam,np.array([6.77298234619713, 14.900785396068327, 0.026452730145895265, 227.83911564014247])) 
-
-    def test_GAMreml(self):
-        reml = self.model.get_reml()
-        assert round(reml,ndigits=3) == -4249.165 
-
-    def test_GAMllk(self):
-        llk = self.model.get_llk(False)
-        assert round(llk,ndigits=3) == -4215.695
-
-class Test_Overlap_GAMM:
-    
-    # Simulate time-series based on two events that elicit responses which vary in their overlap.
-    # The summed responses + a random intercept + noise is then the signal.
-    overlap_dat,onsets1,onsets2 = sim7(100,1,2,seed=20)
-
-    # Model below tries to recover the shape of the two responses + the random intercepts:
-    overlap_formula = Formula(lhs("y"),[irf(["time"],onsets1,nk=15,basis_kwargs=[{"max_c":200,"min_c":0,"convolve":True}]),
-                                        irf(["time"],onsets2,nk=15,basis_kwargs=[{"max_c":200,"min_c":0,"convolve":True}]),
-                                        ri("factor")],
-                                        data=overlap_dat,
-                                        series_id="series")
-
-    model = GAMM(overlap_formula,Gaussian())
-    model.fit()
-
-    def test_GAMedf(self):
-        assert round(self.model.edf,ndigits=3) == 54.547 
-
-    def test_GAMsigma(self):
-        _, sigma = self.model.get_pars()
-        assert round(sigma,ndigits=3) == 3.91 
-
-    def test_GAMcoef(self):
-        coef, _ = self.model.get_pars()
-        assert np.allclose(coef,np.array([0.5414381914556667, 0.9027253840593255, 1.2394888139729652, 1.5408974325924492, 1.793282236604561,
-                                        1.9605024352161622, 2.0342513059209852, 2.018245078562129, 1.9481936897353123, 1.8291845270086586,
-                                        1.6414046863148892, 1.3759062972662246, 1.0473698479784739, 0.6781931660932433, 0.2896778273936524,
-                                        5.018807622568596, 8.155536921854802, 9.057658829442943, 8.118583945017296, 6.009795403374646,
-                                        3.4570230629826937, 2.4450369885874026, 2.417918115195418, 3.251836238689801, 3.4258032416231323,
-                                        2.6532468387795594, 2.0300261093566743, 0.731209208180373, -0.5804637873111934, -0.18465710319341722,
-                                        1.0285145982624768, 0.4524899052941147, 0.4005568257213123, -0.823004121469387, -0.6499737442921556,
-                                        -0.8960486421242312, -1.0453212699599603, 0.17551387787392425, -0.17550250699168513, 1.71876796701693,
-                                        1.0220803116075616, 0.7907656543437932, 0.18640800710629646, 0.10229679462403848, -3.032559645373398,
-                                        1.243208243377598, 1.0817416861889755, -0.48123485830242374, 0.031615091580908194, 0.23411521023216836,
-                                        1.4525117994309633, 0.24783178423729385, -1.2968663600345203, -2.358827075195528, -0.7007707103060459,
-                                        -0.943074112905826, 0.7718437972508059, 2.2734085553443526, -0.6620713954858437, -1.3234198671472517,
-                                        0.7227119874087831, -0.9365821180001762, 0.16427911329019607, -1.5908026012661671, -0.9487180564832598,
-                                        1.0573347505186208, 0.999116483922564, -1.09744680946051, 0.7031765530477949, 0.799916646746684])) 
-
-    def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
-        assert np.allclose(lam,np.array([227.8068139397452, 1.8954868106567002, 3.04743103446127])) 
-
-    def test_GAMreml(self):
-        reml = self.model.get_reml()
-        assert round(reml,ndigits=3) == -7346.922 
-
-    def test_GAMllk(self):
-        llk = self.model.get_llk(False)
-        assert round(llk,ndigits=3) == -7232.595
-
-class Test_ri_li:
-    # Random intercept model + *li()
-    sim_dat = sim4(n=500,scale=2,seed=20)
-
-    # Specify formula 
-    formula = Formula(lhs("y"),[i(),*li(["x0","x1"]),ri("x4")],data=sim_dat)
-
-    # ... and model
+    formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
+                        terms=[i(), # The intercept, a
+                                l(["cond"]), # For cond='b'
+                                f(["time"],by="cond",constraint=ConstType.QR), # to-way interaction between time and cond; one smooth over time per cond level
+                                f(["x"],by="cond",constraint=ConstType.QR), # to-way interaction between x and cond; one smooth over x per cond level
+                                f(["time","x"],by="cond",constraint=ConstType.QR), # three-way interaction
+                                fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
+                        data=None, # No data frame!
+                        file_paths=file_paths, # Just a list with paths to files.
+                        print_warn=False,
+                        keep_cov=True, # Keep encoded data structure in memory
+                        codebook=codebook)
+        
     model = GAMM(formula,Gaussian())
 
-    # then fit
     model.fit()
 
     def test_GAMedf(self):
-        assert round(self.model.edf,ndigits=3) == 27.458 
+        assert round(self.model.edf,ndigits=3) == 153.7 
 
     def test_GAMsigma(self):
         _, sigma = self.model.get_pars()
-        assert round(sigma,ndigits=3) == 11.727 
-
-    def test_GAMcoef(self):
-        coef, _ = self.model.get_pars()
-        assert np.allclose(coef,np.array([4.4496869070736516, 1.5961324271808035, 6.4361364571346265, -3.0591651115769993, 0.07948249536871332,
-                                          -0.11501386584710335, 0.6505400484007926, 0.7096563086326143, -0.7142393186240358, 0.5593738772412031,
-                                          -0.7133681425701058, 0.00984614953239883, 0.516050065109191, 1.038654222613382, 0.920317555859632,
-                                          1.6827256736523348, -0.5615052428662065, -0.36418148548156637, -2.0302380548653485, 0.8057098517098714,
-                                          1.3121331440612154, -0.7699578556178519, 0.09798781448952851, -0.8558991725303929, 1.1069346027406766,
-                                          -0.3556611557220524, -2.35255431320692, -0.9234657845204244, -0.2705203747460906, -0.6018802984689225,
-                                          0.41568172492693195, 1.8200370847180312, -1.070922758355525, -0.8231396771947899, 0.6529342195558038,
-                                          -0.32948639417321524, 1.3361213113054577, -0.7414321131404542, -0.7531221916054935, 0.0800941666704564,
-                                          1.3002335376265413, -0.7276918391919509, 0.2894890343822381, -0.3097228498687097])) 
+        assert round(sigma,ndigits=3) == 577.194 
 
     def test_GAMlam(self):
         lam = np.array([p.lam for p in self.model.formula.penalties])
-        assert np.allclose(lam,np.array([7.880949768403679])) 
-
-    def test_GAMreml(self):
-        reml = self.model.get_reml()
-        assert round(reml,ndigits=3) == -1340.036 
-
-    def test_GAMllk(self):
-        llk = self.model.get_llk(False)
-        assert round(llk,ndigits=3) == -1311.209 
+        assert np.allclose(lam,np.array([0.003576342178463364, 0.006011903860447472, 5027.924474625172, 10000000.0, 10000000.0,
+                                         38376.83781761932, 10000000.0, 329.15045389258586, 0.11887214629302387, 2.1663813832962906])) 
 
 class Test_rs_ri_hard:
 

@@ -369,7 +369,7 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
             #print(Sk.shape,(Ur.T@Sjk@Un).shape,(Un.T@Sjk@Ur).shape,(Un.T@Sjk@Un).shape)
 
             C = np.concatenate((np.concatenate((Sk,Un.T@Sjk@Ur),axis=0),
-                                          np.concatenate((Ur.T@Sjk@Un,Un.T@Sjk@Un),axis=0)),axis=1)
+                                np.concatenate((Ur.T@Sjk@Un,Un.T@Sjk@Un),axis=0)),axis=1)
             
             #print(C.shape)
 
@@ -382,20 +382,20 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
                   if not X is None:
                      Q_rep = U.toarray()
             else:
-                  A = S_rep[:K,:K]
-                  B = S_rep[:K,:Q]
+                  A = S_rep[:K,:K] # From partitioning step 6 in Wood, 2011
+                  B = S_rep[:K,K:] # From partitioning step 6 in Wood, 2011
                   BU = B @ U
                   S_rep = np.concatenate((np.concatenate((A,BU.T),axis=0),
                                           np.concatenate((BU,C),axis=0)),axis=1)
                   
                   Ta = np.concatenate((np.concatenate((np.identity(K),np.zeros((K,r+n))),axis=1),
-                                       np.concatenate((np.zeros((Ur.shape[0],K)),Ur.toarray(),np.zeros(Ur.shape[0],n)),axis=1)),axis=0)
+                                       np.concatenate((np.zeros((Ur.shape[0],K)),Ur.toarray(),np.zeros((Ur.shape[0],n))),axis=1)),axis=0)
                   
-                  Tb = np.concatenate((np.concatenate((np.identity(K),np.zeros((K,r+n))),axis=1),
+                  Tg = np.concatenate((np.concatenate((np.identity(K),np.zeros((K,r+n))),axis=1),
                                        np.concatenate((np.zeros((U.shape[0],K)),U.toarray()),axis=1)),axis=0)
                   
                   if not X is None:
-                     Q_rep = Tb @ Q_rep
+                     Q_rep = Tg @ Q_rep
 
             #print(Ta.shape,Tg.shape)
             # Transform remaining terms that made up Sjk
@@ -1472,6 +1472,8 @@ class Formula():
       best_error = None
 
       iterator = range(self.discretize[sti]["restarts"])
+      seed = self.discretize[sti]["seed"]
+
       if self.print_warn:
          iterator = tqdm(iterator,desc="Clustering",leave=True)
 
@@ -1530,7 +1532,10 @@ class Formula():
 
             # Use heuristic to determine the number of clusters also used to discretize individual covariates
             # Then cluster - for estimation this only has to do once before starting the actual fitting routine
-            clust_centroids,clust_lab = scp.cluster.vq.kmeans2(clust,int((dig_cov_flat_unq.shape[1]*dig_cov_flat_unq.shape[0])**0.5),minit='++')
+            clust_centroids,clust_lab = scp.cluster.vq.kmeans2(clust,int((dig_cov_flat_unq.shape[1]*dig_cov_flat_unq.shape[0])**0.5),minit='++',seed=seed)
+
+            if seed is not None:
+               seed += 1
 
             # Compute clustering loss, according to scipy docs: https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.vq.kmeans2.html
             # Simply pick the cluster set out of all repetitions that minimizes the loss

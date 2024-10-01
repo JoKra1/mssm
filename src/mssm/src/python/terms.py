@@ -297,10 +297,11 @@ class fs(f):
 
     Model estimation can become quite expensive for :class:`fs` terms, when the factor variable for ``rf`` has many levels. (> 10000) In that case, approximate derivative
     evaluation can speed things up considerably. To enforce this, the ``approx_deriv`` argument needs to be specified with a dict, having the following structure:
-    ``{"no_disc":[str],"excl":[str],"split_by":[str],"restarts":int}``. "no_disc" should usually be set to an empty list, and should in general only contain names of
+    ``{"no_disc":[str],"excl":[str],"split_by":[str],"restarts":int,"seed":None or int}``. "no_disc" should usually be set to an empty list, and should in general only contain names of
     continuous variables included in the formula. Any variable mentioned here will not be discretized before clustering - this will make the approximation a bit more
     accurate but also require more time. Similarly, "excl" specifies any continuous variables that should be excluded for clustering. "split_by" should generally be set
-    to a list containing all categorical variables present in the formula. "restarts" indicates the number of times to re-produce the clustering (40 seems to be a good number).
+    to a list containing all categorical variables present in the formula. "restarts" indicates the number of times to re-produce the clustering (40 seems to be a good number). "seed" can either be
+    set to None or to an integer - in the latter case, the random cluster initialization will use that seed, ensuring that the clustering outcome (and hence model fit) is replicable.
 
     References:
 
