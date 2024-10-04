@@ -451,7 +451,7 @@ def get_coef_info_linear(has_intercept,lterm,var_types,coding_factors,factor_lev
     unpenalized_coef = 0
     coef_names = []
     total_coef = 0
-    coef_per_term = []
+
     # Main effects
     if len(lterm.variables) == 1:
         var = lterm.variables[0]
@@ -467,13 +467,10 @@ def get_coef_info_linear(has_intercept,lterm,var_types,coding_factors,factor_lev
                 unpenalized_coef += 1
                 total_coef += 1
 
-            coef_per_term.append(len(factor_levels[var]) - fl_start)
-
         else: # Continuous predictor
             coef_names.append(f"{var}")
             unpenalized_coef += 1
             total_coef += 1
-            coef_per_term.append(1)
 
     else: # Interactions
         inter_coef_names = []
@@ -511,13 +508,10 @@ def get_coef_info_linear(has_intercept,lterm,var_types,coding_factors,factor_lev
             unpenalized_coef += 1
             total_coef += 1
 
-        coef_per_term.append(len(inter_coef_names))
-    return total_coef,unpenalized_coef,coef_names,coef_per_term
+    return total_coef,unpenalized_coef,coef_names
 
 def get_coef_info_smooth(sterm,factor_levels):
     coef_names = []
-    total_coef = 0
-    coef_per_term = []
 
     vars = sterm.variables
     # Calculate Coef names
@@ -554,9 +548,7 @@ def get_coef_info_smooth(sterm,factor_levels):
     else:
          coef_names.extend([f"f_{var_label}_{ink}" for ink in range(term_n_coef)])
          
-    total_coef += n_coef
-    coef_per_term.append(n_coef)
-    return total_coef,coef_names,coef_per_term
+    return n_coef,coef_names
 
 def build_smooth_penalties(penalties,cur_pen_idx,
                            pen,penid,sti,sterm,
@@ -882,6 +874,7 @@ class Formula():
     :type file_loading_nc: int,optional
     :param file_loading_kwargs: Any key-word arguments to pass to pandas.read_csv when :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` should be created iteratively (if ``data`` is ``None`` and ``file_paths`` is a non-empty list). Defaults to ``{"header":0,"index_col":False}``.
     :type file_loading_kwargs: dict,optional
+    :ivar [int] coef_per_term: A list containing the number of coefficients corresponding to each term included in ``terms``. Initialized at construction.
     """
     def __init__(self,
                  lhs:lhs,
@@ -923,7 +916,7 @@ class Formula():
         self.unpenalized_coef = None
         self.coef_names = None
         self.n_coef = None # Number of total coefficients in formula.
-        self.ordered_coef_per_term = None # Number of coefficients associated with each term - order: linear terms, irf terms, f terms, random terms
+        self.coef_per_term = None # Number of coefficients associated with each term
         cvi = 0 # Number of variables included in some way as predictors
 
         # Encoding from data frame to series-level dependent values + predictor values (in cov)
@@ -1170,7 +1163,7 @@ class Formula():
       self.unpenalized_coef = 0
       self.n_coef = 0
       self.coef_names = []
-      self.ordered_coef_per_term = []
+      self.coef_per_term = np.zeros(len(terms),dtype=int)
 
       for lti in self.get_linear_term_idx():
          lterm = terms[lti]
@@ -1179,19 +1172,18 @@ class Formula():
             self.coef_names.append("Intercept")
             self.unpenalized_coef += 1
             self.n_coef += 1
-            self.ordered_coef_per_term.append(1)
+            self.coef_per_term[lti] = 1
          
          else:
             # Linear effects
             t_total_coef,\
             t_unpenalized_coef,\
-            t_coef_names,\
-            t_coef_per_term = get_coef_info_linear(self.has_intercept(),
+            t_coef_names = get_coef_info_linear(self.has_intercept(),
                                                    lterm,var_types,
                                                    coding_factors,
                                                    factor_levels)
             self.coef_names.extend(t_coef_names)
-            self.ordered_coef_per_term.extend(t_coef_per_term)
+            self.coef_per_term[lti] = t_total_coef
             self.n_coef += t_total_coef
             self.unpenalized_coef += t_unpenalized_coef
       
@@ -1220,17 +1212,16 @@ class Formula():
             self.coef_names.extend([f"irf_{irsti}_{var_label}_{ink}" for ink in range(n_coef)])
          
          self.n_coef += n_coef
-         self.ordered_coef_per_term.append(n_coef)
+         self.coef_per_term[irsti] = n_coef
 
       for sti in self.get_smooth_term_idx():
 
          sterm = terms[sti]
          s_total_coef,\
-         s_coef_names,\
-         s_coef_per_term = get_coef_info_smooth(sterm,
-                                                factor_levels)
+         s_coef_names = get_coef_info_smooth(sterm,
+                                             factor_levels)
          self.coef_names.extend(s_coef_names)
-         self.ordered_coef_per_term.extend(s_coef_per_term)
+         self.coef_per_term[sti] = s_total_coef
          self.n_coef += s_total_coef
 
       for rti in self.get_random_term_idx():
@@ -1244,13 +1235,12 @@ class Formula():
                self.coef_names.append(f"ri_{vars[0]}_{by_code_factors[fl]}")
                self.n_coef += 1
 
-            self.ordered_coef_per_term.append(len(factor_levels[vars[0]]))
+            self.coef_per_term[rti]= len(factor_levels[vars[0]])
 
          elif isinstance(rterm,rs):
             t_total_coef,\
             _,\
-            t_coef_names,\
-            _ = get_coef_info_linear(False,
+            t_coef_names = get_coef_info_linear(False,
                                      rterm,var_types,
                                      coding_factors,
                                      factor_levels)
@@ -1265,7 +1255,7 @@ class Formula():
             
             t_ncoef = len(rf_coef_names)
             self.coef_names.extend(rf_coef_names)
-            self.ordered_coef_per_term.append(t_ncoef)
+            self.coef_per_term[rti] = t_ncoef
             self.n_coef += t_ncoef
             
                

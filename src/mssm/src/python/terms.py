@@ -250,6 +250,8 @@ class f(GammTerm):
            self.name += f",by={by})"
         elif binary is not None:
            self.name += f",by={binary[1]})"
+        else:
+           self.name += ")"
 
 class fs(f):
    """

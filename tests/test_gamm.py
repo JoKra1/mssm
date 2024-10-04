@@ -5,6 +5,8 @@ import os
 from mssmViz.sim import*
 from mssm.src.python.formula import reparam
 from mssm.src.python.gamm_solvers import compute_S_emb_pinv_det,cpp_chol,cpp_cholP,compute_eigen_perm,compute_Linv
+import io
+from contextlib import redirect_stdout
 
 class Test_BIG_GAMM_Discretize_hard:
     dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
@@ -359,6 +361,15 @@ class Test_te_rs_fact_hard:
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
         assert round(llk,ndigits=3) == -31959.948
+    
+    def test_print_smooth(self):
+        capture = io.StringIO()
+        with redirect_stdout(capture):
+            self.model.print_smooth_terms()
+        capture = capture.getvalue()
+
+        comp = "f(['time', 'x']); edf: 16.262\nrs(['fact'],sub); edf: 38.08\nrs(['x', 'fact'],sub):0; edf: 12.841\nrs(['x', 'fact'],sub):1; edf: 14.283\nrs(['x', 'fact'],sub):2; edf: 10.333\n"
+        assert comp == capture
 
 class Test_ti_rs_fact_hard:
     # ti + random slope with factor

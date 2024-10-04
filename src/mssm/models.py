@@ -201,9 +201,19 @@ class GAMM:
                 
                 name_idx += 1
             
-            for _ in self.formula.get_random_term_idx():
-                print(smooth_names[name_idx] + f"; edf: {self.term_edf[edf_idx]}")
-                edf_idx += 1
+            for rti in self.formula.get_random_term_idx():
+                rterm = terms[rti]
+                if isinstance(rterm,rs):
+                    if rterm.var_coef > 1 and len(rterm.variables) > 1:
+                        for li in range(rterm.var_coef):
+                            print(smooth_names[name_idx] + f":{li}; edf: {round(self.term_edf[edf_idx],ndigits=3)}")
+                            edf_idx += 1
+                    else:
+                        print(smooth_names[name_idx] + f"; edf: {round(self.term_edf[edf_idx],ndigits=3)}")
+                        edf_idx += 1
+                else:
+                    print(smooth_names[name_idx] + f"; edf: {round(self.term_edf[edf_idx],ndigits=3)}")
+                    edf_idx += 1
                 name_idx += 1
             
             if pen_out == 1:

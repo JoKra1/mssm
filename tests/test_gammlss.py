@@ -2,6 +2,8 @@ from mssm.models import *
 import numpy as np
 import os
 from mssmViz.sim import*
+import io
+from contextlib import redirect_stdout
 
 
 class Test_GAUMLS:
@@ -51,6 +53,15 @@ class Test_GAUMLS:
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
         assert round(llk,ndigits=3) == -719.601 
+    
+    def test_print_smooth(self):
+        capture = io.StringIO()
+        with redirect_stdout(capture):
+            self.model.print_smooth_terms()
+        capture = capture.getvalue()
+
+        comp = "f(['x0']); edf: 9.799\nf(['x0']); edf: 6.559\n"
+        assert comp == capture
 
 
 class Test_GAMMALS:
