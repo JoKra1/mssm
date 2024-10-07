@@ -60,9 +60,17 @@ class Test_GAUMLS:
             self.model.print_smooth_terms()
         capture = capture.getvalue()
 
-        comp = "f(['x0']); edf: 9.799\nf(['x0']); edf: 6.559\n"
+        comp = "\nDistribution parameter: 1\n\nf(['x0']); edf: 9.799\n\nDistribution parameter: 2\n\nf(['x0']); edf: 6.559\n"
         assert comp == capture
 
+    def test_print_parametric(self):
+        capture = io.StringIO()
+        with redirect_stdout(capture):
+            self.model.print_parametric_terms()
+        capture = capture.getvalue()
+
+        comp = "\nDistribution parameter: 1\n\nIntercept: 3.584, z: 58.435, P(|Z| > |z|): 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: .\n\nDistribution parameter: 2\n\nIntercept: 0.02, z: 0.64, P(|Z| > |z|): 0.52194\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: .\n"
+        assert comp == capture
 
 class Test_GAMMALS:
 

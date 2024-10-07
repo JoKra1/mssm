@@ -1475,7 +1475,7 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
 
    clear_cache(CACHE_DIR,SHOULD_CACHE)
 
-   return coef,eta,wres,scale,InvCholXXS,total_edf,term_edfs,penalty,fit_info
+   return coef,eta,wres,XX,scale,InvCholXXS,total_edf,term_edfs,penalty,fit_info
 
 
 ################################################ GAMMLSS code ################################################

@@ -410,7 +410,7 @@ def REML(llk,nH,coef,scale,penalties):
    # we will generally not be able to compute a QR decomposition of X so that X.T@X=H efficiently.
    # Hence, we simply rely on the cholesky (again pre-conditioned) used for fitting (based on S_\lambda before
    # re-parameterization).
-   H_pen = nH/scale + S_emb/scale
+   H_pen = nH + S_emb/scale
 
    Sdiag = np.power(np.abs(H_pen.diagonal()),0.5)
    PI = scp.sparse.diags(1/Sdiag,format='csc')

@@ -875,6 +875,12 @@ class Formula():
     :param file_loading_kwargs: Any key-word arguments to pass to pandas.read_csv when :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` should be created iteratively (if ``data`` is ``None`` and ``file_paths`` is a non-empty list). Defaults to ``{"header":0,"index_col":False}``.
     :type file_loading_kwargs: dict,optional
     :ivar [int] coef_per_term: A list containing the number of coefficients corresponding to each term included in ``terms``. Initialized at construction.
+    :ivar [str] coef_names: A list containing a named identifier (e.g., "Intercept") for each coefficient estimated by the model. Initialized at construction.
+    :ivar int n_coef: The number of coefficients estimated by the model in total. Initialized at construction.
+    :ivar int unpenalized_coef: The number of un-penalized coefficients estimated by the model. Initialized at construction.
+    :ivar [float] or None y_flat: An array, containing all values on the dependent variable (i.e., specified by ``lhs.variable``) in order of the data-frame passed to ``data``. This variable will be initialized at construction but only if ``file_paths=None``, i.e., in case :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` are **not** created iteratively.
+    :ivar [float] or None cov_flat: An array, containing all (encoded, in case of categorical predictors) values on each predictor (each columns of ``cov_flat`` corresponds to a different predictor) variable included in any of the ``terms`` in order of the data-frame passed to ``data``. This variable will be initialized at construction but only if ``file_paths=None``, i.e., in case :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` are **not** created iteratively.
+    :ivar [bool] or None NOT_NA_flat: An array, containing an indication for each value on the dependent variable (i.e., specified by ``lhs.variable``) whether the corresponding value is not a number ("NA") or not. In order of the data-frame passed to ``data``. This variable will be initialized at construction but only if ``file_paths=None``, i.e., in case :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` are **not** created iteratively.
     """
     def __init__(self,
                  lhs:lhs,

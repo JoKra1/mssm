@@ -371,6 +371,27 @@ class Test_te_rs_fact_hard:
         comp = "f(['time', 'x']); edf: 16.262\nrs(['fact'],sub); edf: 38.08\nrs(['x', 'fact'],sub):0; edf: 12.841\nrs(['x', 'fact'],sub):1; edf: 14.283\nrs(['x', 'fact'],sub):2; edf: 10.333\n"
         assert comp == capture
 
+class Test_print_parametric_hard:
+    # te + random slope with factor
+    sim_dat,_ = sim1(100,random_seed=100)
+
+    # Specify formula 
+    formula = Formula(lhs("y"),[i(),l(["fact"]),f(["time","x"],te=True,nk=5),rs(["fact"],rf="sub"),rs(["x","fact"],rf="sub")],data=sim_dat)
+
+    # ... and model
+    model = GAMM(formula,Gaussian())
+
+    model.fit(maxiter=100)
+    
+    def test_print_parametric(self):
+        capture = io.StringIO()
+        with redirect_stdout(capture):
+            self.model.print_parametric_terms()
+        capture = capture.getvalue()
+
+        comp = "Intercept: 4.918, t: 2.549, DoF.: 9409, P(|T| > |t|): 0.01082 *\nfact_fact_2: -14.004, t: -5.246, DoF.: 9409, P(|T| > |t|): 1.584e-07 ***\nfact_fact_3: -6.16, t: -2.335, DoF.: 9409, P(|T| > |t|): 0.01957 *\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: .\n"
+        assert comp == capture
+
 class Test_ti_rs_fact_hard:
     # ti + random slope with factor
     sim_dat,_ = sim1(100,random_seed=100)

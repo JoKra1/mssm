@@ -31,6 +31,7 @@ class GAMM:
     :ivar [float] term_edf: The estimated degrees of freedom per smooth term. Initialized with ``None``.
     :ivar scipy.sparse.csc_array lvi: The inverse of the Cholesky factor of the conditional model coefficient covariance matrix. Initialized with ``None``.
     :ivar float penalty: The total penalty applied to the model deviance after fitting as a float. Initialized with ``None``.
+    :ivar scipy.sparse.csc_array hessian: Estimated hessian of the log-likelihood. Initialized with ``None``.
     """
 
     def __init__(self,
@@ -52,6 +53,7 @@ class GAMM:
         self.Wr = None
         self.lvi = None
         self.penalty = 0
+        self.hessian = None
 
     ##################################### Getters #####################################
 
@@ -76,9 +78,13 @@ class GAMM:
         :type penalized: bool, optional
         :param ext_scale: Optionally provide an external scale parameter at which to evaluate the log-likelihood, defaults to None
         :type ext_scale: float, optional
+        :raises NotImplementedError: Will throw an error when called for a model for which the model matrix was never former completely.
         :return: llk score
         :rtype: float or None
         """
+
+        if len(self.formula.file_paths) != 0:
+            raise NotImplementedError("Cannot return the log-likelihood if X.T@X was formed iteratively.")
 
         pen = 0
         if penalized:
@@ -221,6 +227,85 @@ class GAMM:
             elif pen_out > 1:
                 print(f"\n{pen_out} terms have been effectively penalized to zero and are marked with a '*'")
                         
+    def print_parametric_terms(self):
+        """Prints summary output for linear/parametric terms in the model, not unlike the one returned in R when using the ``summary`` function
+        for ``mgcv`` models.
+        
+        For each coefficient, the named identifier and estimated value are returned. In addition, for each coefficient a p-value is returned, testing
+        the null-hypothesis that the corresponding coefficient :math:`\\beta=0`. Under the assumption that this is true, the Null distribution follows
+        a t-distribution for models in which an additional scale parameter was estimated (e.g., Gaussian, Gamma) and a standardized normal distribution for
+        models in which the scale parameter is known or was fixed (e.g., Binomial). For the former case, the t-statistic, Degrees of freedom of the Null
+        distribution (DoF.), and the p-value are printed as well. For the latter case, only the z-statistic and the p-value are printed.
+        See Wood (2017) section 6.12 and 1.3.3 for more details.
+
+        Note that, un-penalized coefficients that are part of a smooth function are not covered by this function.
+
+        :raises NotImplementedError: Will throw an error when called for a model for which the model matrix was never former completely.
+        """
+        # Wood (2017) section 6.12 defines that b_j.T@[V_{b_j}]^{-1}@b_j is the test-statistic following either
+        # an F distribution or a Chi-square distribution (the latter if we have a known scale parameter).
+        # Here we want to report single parameter tests for all un-penalized coefficients, so V_b_j is actually the
+        # diagonal elements of the initial n_j_coef*n_j_coef sub-block of V_b. Where n_j_coef is the number of un-penalized
+        # coefficients present in the model. We can form this block efficiently from L, where L.T@L = V, by taking only the
+        # first n_j_coef columns of L. 1 over the diagonal of the resulting sub-block then gives the desired inverse to compute
+        # the test-statistic for a single test. Note that for a single test we need to take the root of the F/Chi-square statistic
+        # to go to a t/N statistic. As a consequence, sqrt(b_j.T@[V_{b_j}]^{-1}@b_j) is actually abs(b_j/sqrt(V_{b_j})) as shown in
+        # section 1.3.3 of Wood (2017). So we can just compute that directly.
+
+        if len(self.formula.file_paths) != 0:
+            raise NotImplementedError("Cannot return p-value for parametric terms if X.T@X was formed iteratively.")
+
+        # Number of linear terms
+        n_j_coef = sum(self.formula.coef_per_term[self.formula.get_linear_term_idx()])
+
+        # Corresponding coef
+        coef_j = self.coef[:n_j_coef]
+
+        # and names...
+        coef_j_names = self.formula.coef_names[:n_j_coef]
+
+        # Form initial n_j_coef*n_j_coef sub-block of V_b
+        V_b_j = (self.lvi[:,:n_j_coef].T@self.lvi[:,:n_j_coef])*self.scale
+
+        # Now get the inverse of the diagonal for the test-statistic (ts)
+        V_b_inv_j = V_b_j.diagonal()
+
+        # Actual ts (all positive, later we should return * sign(coef_j)):
+        ts = np.abs(coef_j/np.sqrt(V_b_inv_j))
+
+        # Compute p(abs(T/N) > abs(t/n))
+        if isinstance(self.family,Family) and self.family.twopar:
+            ps = 1 - scp.stats.t.cdf(ts,df = len(self.formula.y_flat[self.formula.NOT_NA_flat]) - self.formula.n_coef)
+        else:
+            ps = 1 - scp.stats.norm.cdf(ts)
+
+        ps *= 2 # Correct for abs
+
+        for coef_name,coef,t,p in zip(coef_j_names,coef_j,ts,ps):
+            t_str = coef_name + f": {round(coef,ndigits=3)}, "
+
+            if isinstance(self.family,Family) and self.family.twopar:
+                t_str += f"t: {round(np.sign(coef)*t,ndigits=3)}, DoF.: {int(len(self.formula.y_flat[self.formula.NOT_NA_flat]) - self.formula.n_coef)}, P(|T| > |t|): "
+            else:
+                t_str += f"z: {round(np.sign(coef)*t,ndigits=3)}, P(|Z| > |z|): "
+
+            if p < 0.001:
+                t_str += "{:.3e}".format(p,ndigits=3)
+            else:
+                t_str += f"{round(p,ndigits=5)}"
+
+            if p < 0.001:
+                t_str += " ***"
+            elif p < 0.01:
+                t_str += " **"
+            elif p < 0.05:
+                t_str += " *"
+            elif p < 0.1:
+                t_str += " ."
+            print(t_str)
+
+        print("\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: .")
+
     def get_reml(self):
         """
         Get's the (Laplace approximate) REML (Restricted Maximum Likelihood) score (as a float) for the estimated lambda values (see Wood, 2011).
@@ -230,6 +315,7 @@ class GAMM:
          - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models.
         
         :raises ValueError: Will throw an error when called before the model was fitted/before model penalties were formed.
+        :raises NotImplementedError: Will throw an error when called for a model for which the model matrix was never former completely.
         :raises TypeError: Will throw an error when called before the model was fitted/before model penalties were formed.
         :return: REML score
         :rtype: float
@@ -244,17 +330,11 @@ class GAMM:
         if self.family.twopar:
             scale = self.scale # Estimated scale
         
-        X = self.get_mmat()
         llk = self.get_llk(False)
 
         # Compute negative Hessian of llk (Wood, 2011)
-        if not isinstance(self.family,Gaussian) or isinstance(self.family.link,Identity) == False:
-            W = self.Wr@self.Wr
-            nH = (X.T@W@X).tocsc() 
-        else:
-            nH = (X.T@X).tocsc() 
+        nH = -1 * self.hessian
             
-
         reml = REML(llk,nH,self.coef,scale,self.formula.penalties)
         
         return reml
@@ -401,6 +481,12 @@ class GAMM:
                                                                                       progress_bar,n_cores)
             
             self.Wr = Wr
+
+            # Compute Hessian of llk (Wood, 2011)
+            if not isinstance(self.family,Gaussian) or isinstance(self.family.link,Identity) == False:
+                self.hessian = -1 * ((model_mat.T@(Wr@Wr)@model_mat).tocsc()/scale)
+            else:
+                self.hessian = -1 * ((model_mat.T@model_mat).tocsc()/scale)
         
         else:
             # Iteratively build model matrix.
@@ -411,12 +497,14 @@ class GAMM:
             if isinstance(self.family,Gaussian) == False or isinstance(self.family.link,Identity) == False:
                 raise ValueError("Iteratively building the model matrix is currently only supported for Normal models.")
             
-            coef,eta,wres,scale,LVI,edf,term_edf,penalty,fit_info = solve_gamm_sparse2(self.formula,penalties,self.formula.n_coef,
-                                                                                       self.family,maxiter,"svd",
-                                                                                       conv_tol,extend_lambda,control_lambda,
-                                                                                       exclude_lambda,extension_method_lam,
-                                                                                       len(self.formula.discretize) == 0,
-                                                                                       progress_bar,n_cores)
+            coef,eta,wres,XX,scale,LVI,edf,term_edf,penalty,fit_info = solve_gamm_sparse2(self.formula,penalties,self.formula.n_coef,
+                                                                                          self.family,maxiter,"svd",
+                                                                                          conv_tol,extend_lambda,control_lambda,
+                                                                                          exclude_lambda,extension_method_lam,
+                                                                                          len(self.formula.discretize) == 0,
+                                                                                          progress_bar,n_cores)
+            
+            self.hessian = -1*(XX/scale)
         
         self.coef = coef
         self.scale = scale # ToDo: scale name is used in another context for more general mssm..
@@ -782,6 +870,36 @@ class GAMMLSS(GAMM):
             Xs.append(mod.get_mmat(use_terms=use_terms,drop_NA=drop_NA))
         return Xs
     
+    def print_parametric_terms(self):
+        """Prints summary output for linear/parametric terms in the model, separately for each parameter of the family's distribution.
+        
+        For each coefficient, the named identifier and estimated value are returned. In addition, for each coefficient a p-value is returned, testing
+        the null-hypothesis that the corresponding coefficient :math:`\\beta=0`. Under the assumption that this is true, the Null distribution follows
+        approximately a standardized normal distribution. The corresponding z-statistic and the p-value are printed.
+        See Wood (2017) section 6.12 and 1.3.3 for more details.
+
+        Note that, un-penalized coefficients that are part of a smooth function are not covered by this function.
+
+        :raises NotImplementedError: Will throw an error when called for a model for which the model matrix was never former completely.
+        """
+        # Prepare so that we can just call gamm.print_parametric_terms()
+        for formi,form in enumerate(self.formulas):
+            print(f"\nDistribution parameter: {formi + 1}\n")
+            self.formula = form
+            split_coef = np.split(self.overall_coef,self.coef_split_idx)
+            self.coef = np.ndarray.flatten(split_coef[formi])
+            self.scale=1
+            start = 0
+            
+            end = self.coef_split_idx[0]
+            for pari in range(1,formi+1):
+                start = end
+                end += self.formulas[pari].n_coef
+
+            self.lvi = self.overall_lvi[:,start:end]
+
+            super().print_parametric_terms()
+    
     def print_smooth_terms(self, pen_cutoff=0.2):
         """Prints the name of the smooth terms included in the model. After fitting, the estimated degrees of freedom per term are printed as well.
         Smooth terms with edf. < ``pen_cutoff`` will be highlighted. This only makes sense when extra Kernel penalties are placed on smooth terms to enable
@@ -799,8 +917,9 @@ class GAMMLSS(GAMM):
         start_idx = -1
         pen_idx = 0
         n_coef = 0
-        for form in self.formulas:
+        for formi,form in enumerate(self.formulas):
             # Prepare formula, term_edf so that we can just call GAMM.print_smooth_terms()
+            print(f"\nDistribution parameter: {formi + 1}\n")
             n_coef += form.n_coef
             self.term_edf = []
             for peni in range(pen_idx,len(self.overall_penalties)):
