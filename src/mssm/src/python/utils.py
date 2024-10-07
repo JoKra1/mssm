@@ -219,7 +219,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10):
        W = Wr@Wr
        nH = (X.T@W@X).tocsc() 
 
-   # Get edf and optionally estimate scale
+   # Get edf and optionally estimate scale (scale will be kept at fixed (e.g., 1) for Generalized case)
    _,_,edf,_,_,scale = update_scale_edf(y,z,eta,Wr,X.shape[0],X.shape[1],LP,None,Pr,None,family,penalties,n_c)
 
    if family.twopar:
@@ -228,7 +228,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10):
         llk = family.llk(y,mu)
 
    # Now compute REML for candidate
-   reml = REML(llk,nH,coef,scale,penalties)
+   reml = REML(llk,nH/scale,coef,scale,penalties)
 
    return reml,LP,Pr,coef,scale,edf,llk
 
@@ -488,17 +488,13 @@ def _compute_VB_corr_terms_MP(family,address_y,address_dat,address_ptr,address_i
    
    eta = (X @ coef).reshape(-1,1)
    
-   # Optionally estimate scale
-   if family.twopar:
-        _,_,edf,_,_,scale = update_scale_edf(y,None,eta,None,X.shape[0],X.shape[1],LP,None,Pr,None,family,rPen,10)
+   # Compute scale
+   _,_,edf,_,_,scale = update_scale_edf(y,None,eta,None,X.shape[0],X.shape[1],LP,None,Pr,None,family,rPen,10)
 
-        llk = family.llk(y,eta,scale)
-   else:
-        scale = family.scale
-        llk = family.llk(y,eta)
+   llk = family.llk(y,eta,scale)
 
    # Now compute REML for candidate
-   reml = REML(llk,XX,coef,scale,rPen)
+   reml = REML(llk,XX/scale,coef,scale,rPen)
    coef = coef.reshape(-1,1)
 
    # Form VB, first solve LP{^-1}
