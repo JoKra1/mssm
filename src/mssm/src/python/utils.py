@@ -132,6 +132,78 @@ def sample_MVN(n,mu,scale,P,L,LI=None,use=None,seed=None):
         return mus + Cs@z
 
 
+def adjust_CI(model,n_ps,b,predi_mat,use_terms,alpha,seed):
+        """
+        Internal function to adjust point-wise CI to behave like whole-function interval (based on Wood, 2017; section 6.10.2 and Simpson, 2016):
+
+        ``model.coef +- b`` gives point-wise interval, and for the interval to cover the whole-function, ``1-alpha`` % of posterior samples should
+        be expected to fall completely within these boundaries.
+
+        From section 6.10 in Wood (2017) we have that :math:`\\boldsymbol{\\beta} | \mathbf{y}, \\boldsymbol{\lambda} \sim N(\hat{\\boldsymbol{\\beta}},\mathbf{V})`.
+        :math:`\mathbf{V}` is the covariance matrix of this conditional posterior, and can be obtained by evaluating ``model.lvi.T @ model.lvi * model.scale`` (``model.scale`` should be
+        set to 1 for :class:`msssm.models.GAMMLSS` and :class:`msssm.models.GSMM`).
+
+        The implication of this result is that we can also expect the deviations :math:`\\boldsymbol{\\beta} - \hat{\\boldsymbol{\\beta}}`  to follow
+        :math:`\\boldsymbol{\\beta} - \hat{\\boldsymbol{\\beta}} | \mathbf{y}, \\boldsymbol{\lambda} \sim N(0,\mathbf{V})`. In line with the whole-function interval definition above, ``1-alpha`` % of
+        ``predi_mat@[*coef - coef]`` (where ``[*coef - coef]`` representes the deviations :math:`\\boldsymbol{\\beta} - \hat{\\boldsymbol{\\beta}}`) should fall within ``[b,-b]``.
+        Wood (2017) suggests to find ``a`` so that ``[a*b,a*-b]`` achieves this.
+
+        To do this, we find ``a`` for every ``predi_mat@[*coef - coef]`` and then select the final one so that ``1-alpha`` % of samples had an equal or lower
+        one. The consequence: ``1-alpha`` % of samples drawn should fall completely within the modified boundaries.
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
+
+        :param model: GAMM,GAMLSS, or GSMM model (which has been fitted) for which to estimate :math:`\mathbf{V}`
+        :type model: GAMM or GAMLSS or GSMM
+        :param n_ps: Number of samples to obtain from posterior.
+        :type n_ps: int
+        :param b: Ci boundary of point-wise CI.
+        :type b: [float]
+        :param predi_mat: Model matrix for a particular smooth term or additive combination of parameters evaluated usually at a representative sample of predictor variables.
+        :type predi_mat: scipy.sparse.csc_array
+        :param use_terms: The indices corresponding to the terms that should be used to obtain the prediction or ``None`` in which case all terms will be used.
+        :type use_terms: list[int] or None
+        :param alpha: The alpha level to use for the whole-function interval adjustment calculation as outlined above.
+        :type alpha: float
+        :param seed: Can be used to provide a seed for the posterior sampling.
+        :type seed: int or None
+        """
+        use_post = None
+        if not use_terms is None:
+            # If we have many random factor levels, but want to make predictions only
+            # for fixed effects, it's wasteful to sample all coefficients from posterior.
+            # The code below performs a selection of the coefficients to be sampled.
+            use_post = predi_mat.sum(axis=0) != 0
+            use_post = np.arange(0,predi_mat.shape[1])[use_post]
+
+        # Sample deviations [*coef - coef] from posterior of model
+        post = model.sample_post(n_ps,use_post,deviations=True,seed=seed)
+
+        # To make computations easier take the abs of predi_mat@[*coef - coef], because [b,-b] is symmetric we can
+        # simply check whether abs(predi_mat@[*coef - coef]) < b by computing abs(predi_mat@[*coef - coef])/b. The max of
+        # this ratio, over rows of predi_mat, is a for this sample. If a<=1, no extension is necessary for this series.
+        if use_post is None:
+            fpost = np.abs(predi_mat@post)
+        else:
+            fpost = np.abs(predi_mat[:,use_post]@post)
+
+        # Compute ratio between abs(predi_mat@[*coef - coef])/b for every sample.
+        fpost = fpost / b[:,None]
+
+        # Then compute max of this ratio, over rows of predi_mat, for every sample. np.max(fpost,axis=0) now is a vector
+        # with n_ps elements, holding for each sample the multiplicative adjustment a, necessary to ensure that predi_mat@[*coef - coef]
+        # falls completely between [a*b,a*-b].
+        # The final multiplicative adjustment bmadq is selected from this vector to be high enough so that in 1-(alpha) simulations
+        # we have an equal or lower a.
+        bmadq = np.quantile(np.max(fpost,axis=0),1-alpha)
+
+        # Then adjust b
+        b *= bmadq
+
+        return b
+
 def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10):
    """
    Allows to evaluate REML criterion (e.g., Wood, 2011; Wood, 2016) efficiently for
@@ -612,7 +684,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
 
     else:
         if drop_NA:
-            y = model.formulas[0].y_flat[model.formula.NOT_NA_flat]
+            y = model.formulas[0].y_flat[model.formulas[0].NOT_NA_flat]
         else:
             y = model.formulas[0].y_flat
         Xs = model.get_mmat(drop_NA=drop_NA)

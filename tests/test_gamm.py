@@ -489,6 +489,66 @@ class Test_3way_li_hard:
         lam = np.array([p.lam for p in self.model.formula.penalties])
         assert np.allclose(lam,np.array([])) 
 
+class Test_print_smooth_by_factor_p_hard:
+    # by factor
+    sim_dat,_ = sim1(100,random_seed=100)
+
+    # Specify formula 
+    formula = Formula(lhs("y"),[i(),l(["fact"]),f(["time"],nk=10,by="fact")],data=sim_dat)
+
+    # ... and model
+    model = GAMM(formula,Gaussian())
+
+    model.fit(maxiter=100)
+    
+    def test_print_smooth_p(self):
+        capture = io.StringIO()
+        with redirect_stdout(capture):
+            self.model.print_smooth_terms(p_values=True)
+        capture = capture.getvalue()
+
+        comp = "f(['time'],by=fact): fact_1; edf: 9.391 f: 60.049 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.587 f: 18.299 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_3; edf: 4.689 f: 13.482 P(F > f) = 2.087e-12 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        assert comp == capture
+
+class Test_print_smooth_by_factor_fs_p_hard:
+    # by factor
+    sim_dat,_ = sim1(100,random_seed=100)
+
+    # Specify formula 
+    formula = Formula(lhs("y"),[i(),l(["fact"]),f(["time"],nk=10,by="fact"),fs(["time"],rf="sub")],data=sim_dat)
+
+    # ... and model
+    model = GAMM(formula,Gaussian())
+
+    model.fit(maxiter=100)
+    
+    def test_print_smooth_p(self):
+        capture = io.StringIO()
+        with redirect_stdout(capture):
+            self.model.print_smooth_terms(p_values=True)
+        capture = capture.getvalue()
+
+        comp = "f(['time'],by=fact): fact_1; edf: 9.45 f: 33.87 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.851 f: 9.624 P(F > f) = 2.139e-10 ***\nf(['time'],by=fact): fact_3; edf: 5.084 f: 2.667 P(F > f) = 0.0238 *\nf(['time'],by=sub); edf: 95.075\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        assert comp == capture
+
+class Test_print_smooth_binomial:
+    Binomdat = sim3(10000,2,family=Binomial(),seed=20)
+
+    formula = Formula(lhs("y"),[i(),f(["x0"]),f(["x1"]),f(["x2"]),f(["x3"])],data=Binomdat)
+
+    # By default, the Binomial family assumes binary data and uses the logit link.
+    model = GAMM(formula,Binomial())
+    model.fit()
+
+    def test_print_smooth_p(self):
+        capture = io.StringIO()
+        with redirect_stdout(capture):
+            self.model.print_smooth_terms(p_values=True)
+        capture = capture.getvalue()
+
+        comp = "f(['x0']); edf: 2.856 chi^2: 18.441 P(Chi^2 > chi^2) = 3.017e-04 ***\nf(['x1']); edf: 1.962 chi^2: 60.923 P(Chi^2 > chi^2) = 1.421e-13 ***\nf(['x2']); edf: 6.243 chi^2: 168.288 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x3']); edf: 1.407 chi^2: 2.62 P(Chi^2 > chi^2) = 0.26934\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        assert comp == capture
+
 class Test_diff_hard:
     # pred_diff test
     sim_dat,_ = sim1(100,random_seed=100)
