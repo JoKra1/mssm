@@ -497,8 +497,184 @@ def REML(llk,nH,coef,scale,penalties):
    # Done
    return reml + lgdetS/2 - lgdetXXS/2 + (Mp*np.log(2*np.pi))/2
 
-def estVp(ep,remls,rGrid):
+def estimateVp(model,nR = 20,lR = 100,n_c=10,verbose=False,drop_NA=True,method="Newton",seed=None,conv_tol=1e-7,id_weight=0.01):
     """Estimate covariance matrix of posterior for :math:`\mathbf{p} = log(\\boldsymbol{\lambda})`. REML scores are used to
+    approximate expectation, similar to what was suggested by Greven & Scheipl (2016).
+
+    References:
+     - https://en.wikipedia.org/wiki/Estimation_of_covariance_matrices
+     - Greven, S., & Scheipl, F. (2016). Comment on: Smoothing Parameter and Model Selection for General Smooth Models
+
+    :param model: GAMM,GAMLSS, or GSMM model (which has been fitted) for which to estimate :math:`\mathbf{V}`
+    :type model: GAMM or GAMLSS or GSMM
+    :param nR: (Initial, in case grid_type=="JJJ") :math:`\lambda`  Grid is based on `nR` equally-spaced samples from :math:`\lambda/lr` to :math:`\lambda*lr`. In addition, `nR*len(model.formula.penalties)` updates to :math:`\mathbf{V}_{\\boldsymbol{p}}` are performed during each of which additional `nR` :math`\lambda` samples/reml scores are generated/computed, defaults to 20
+    :type nR: int, optional
+    :param lR: (Initial, in case grid_type=="JJJ") :math:`\lambda`  Grid is based on `nR` equally-spaced samples from :math:`\lambda/lr` to :math:`\lambda*lr`, defaults to 100
+    :type lR: int, optional
+    :param n_c: Number of cores to use to compute the estimate, defaults to 10
+    :type n_c: int, optional
+    :param verbose: Whether to print progress information or not, defaults to False
+    :type verbose: bool, optional
+    :param drop_NA: Whether to drop rows in the **model matrices** corresponding to NAs in the dependent variable vector. Defaults to True.
+    :type drop_NA: bool,optional
+    :param method: Which method to use to estimate the coefficients for GSMM models - supports "Newton" and "BFGS". In case of the former, ``model.family`` needs to implement :func:`gradient` and :func:`hessian`. Defaults to "Newton"
+    :type method: str,optional
+    :param seed: Seed to use for random parts of the estimate. Defaults to None
+    :type seed: int,optional
+    :param conv_tol: Tolerance used to determine whether estimate has converged. The Frobenius norm of the **difference** in the estimate after the update (``||Vp_next - Vp||``) is compared to ``conv_tol*||Vp_next||``, defaults to 1e-7
+    :type conv_tol: float, optional
+    :param id_weight: Value to add to the diagonal of the current estimate of ``Vp`` when sampling the next set of candidates. Is decreased according to ``0.99*id_weight`` after every sampling step, defaults to 0.01
+    :type id_weight: float, optional
+    :return: An estimate of the covariance matrix of the posterior for :math:`\mathbf{p} = log(\\boldsymbol{\lambda})`
+    :rtype: numpy.array
+    """
+    np_gen = np.random.default_rng(seed)
+
+    family = model.family
+
+    if isinstance(family,Family):
+        nPen = len(model.formula.penalties)
+        rPen = copy.deepcopy(model.formula.penalties)
+    else: # GAMMLSS and GSMM case
+        nPen = len(model.overall_penalties)
+        rPen = copy.deepcopy(model.overall_penalties)
+    
+    # Set up grid of nR equidistant values based on marginal grids that cover range from \lambda/lr to \lambda*lr
+    # conditional on all estimated penalty values except the current one.
+    
+    rGrid = []
+    for pi,pen in enumerate(rPen):
+        
+        # Set up marginal grid from \lambda/lr to \lambda*lr
+        mGrid = np.exp(np.linspace(np.log(max([1e-7,pen.lam/lR])),np.log(min([1e7,pen.lam*lR])),nR))
+        
+        # Now create penalty candidates conditional on estimates for all other penalties except current one
+        for val in mGrid:
+            if abs(val - pen.lam) <= 1e-7:
+                continue
+            
+            rGrid.append(np.array([val if pii == pi else np_gen.choice(np.exp(np.linspace(np.log(max([1e-7,pen2.lam/lR])),np.log(min([1e7,pen2.lam*lR])),nR)),size=None) for pii,pen2 in enumerate(rPen)]))
+    
+    # Make sure actual estimate is included once.
+    rGrid.append(np.array([pen2.lam for pen2 in rPen]))
+    rGrid = np.array(rGrid)
+
+    if isinstance(family,Family):
+        y = model.formula.y_flat[model.formula.NOT_NA_flat]
+        X = model.get_mmat()
+
+        orig_scale = family.scale
+        if family.twopar:
+            _,orig_scale = model.get_pars()
+
+    else:
+        if drop_NA:
+            y = model.formulas[0].y_flat[model.formulas[0].NOT_NA_flat]
+        else:
+            y = model.formulas[0].y_flat
+        Xs = model.get_mmat(drop_NA=drop_NA)
+        orig_scale = 1
+        init_coef = copy.deepcopy(model.overall_coef)
+    
+    remls = []
+
+    enumerator = rGrid
+    if verbose:
+        enumerator = tqdm(rGrid)
+    for r in enumerator:
+
+        # Prepare penalties with current lambda candidate r
+        for ridx,rc in enumerate(r):
+            rPen[ridx].lam = rc
+        
+        # Now compute REML - and all other terms needed for correction proposed by Greven & Scheipl (2017)
+        if isinstance(family,Family):
+            reml,_,_,_,_,_,_ = compute_reml_candidate_GAMM(family,y,X,rPen,n_c)
+        else:
+            reml,_,_,_,_ = compute_REML_candidate_GSMM(family,init_coef,len(init_coef),model.coef_split_idx,y,Xs,rPen,n_c=n_c,method=method)
+
+        # Now collect what we need for updating Vp
+        remls.append(reml)
+    
+    # Iteratively estimate Vp - covariance matrix of log(\lambda) to guide further REML grid sampling
+    if isinstance(family,Family):
+        ep = np.log(np.array([pen.lam for pen in model.formula.penalties]).reshape(-1,1))
+    else:
+        ep = np.log(np.array([pen.lam for pen in model.overall_penalties]).reshape(-1,1))
+
+    # Get first estimate for Vp based on samples collected so far
+    Vp = updateVp(ep,remls,rGrid) + id_weight*np.identity(len(ep))
+
+    # Now continuously update Vp and generate more REML samples in the process
+    n_est = nR
+    enumerator = range(nR*len(ep))
+    if verbose:
+        enumerator = tqdm(enumerator,desc="Estimating Vp",leave=True)
+    for sp in enumerator:
+
+        # Generate next \lambda values for which to compute REML, and Vb
+        p_sample = []
+        while len(p_sample) == 0:
+            p_sample = scp.stats.multivariate_normal.rvs(mean=np.ndarray.flatten(ep),cov=Vp,size=n_est,random_state=seed)
+            p_sample = np.exp(p_sample)
+
+            if len(np.ndarray.flatten(ep)) == 1: # Single lambda parameter in model
+                
+                if n_est == 1: # and single sample (n_est==1) - so p_sample needs to be shape (1,1)
+                    p_sample = np.array([p_sample])
+
+                p_sample = p_sample.reshape(n_est,1) # p_sample needs to be shape (n_est,1)
+                
+            elif n_est == 1: # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
+                p_sample = np.array([p_sample]).reshape(1,-1)
+            
+            p_sample = p_sample[[np.any(np.all(rGrid==lam,axis=1))==False for lam in p_sample]]
+
+            if not seed is None:
+                seed += 1
+
+        for ps in p_sample:
+            for ridx,rc in enumerate(ps):
+                rPen[ridx].lam = rc
+            
+            if isinstance(family,Family):
+                reml,_,_,_,_,_,_ = compute_reml_candidate_GAMM(family,y,X,rPen,n_c)
+
+            else:
+                reml,_,_,_,_ = compute_REML_candidate_GSMM(family,init_coef,len(init_coef),model.coef_split_idx,y,Xs,rPen,n_c=n_c,method=method)
+
+            # Collect new remls and update grid of log(lambdas)
+            remls.append(reml)
+            rGrid = np.concatenate((rGrid,ps.reshape(1,-1)),axis=0)
+
+        # Update Vp - based on additional REML scores available now
+        id_weight *= 0.99
+
+        # Last step should not involve identity at all.
+        if sp == (nR-1):
+            id_weight = 0
+
+        Vp_next = updateVp(ep,remls,rGrid) + id_weight*np.identity(len(ep))
+        
+        # Check convergence
+        vp_diff_norm = scp.linalg.norm(Vp-Vp_next,ord='fro')
+        vp_norm = scp.linalg.norm(Vp_next,ord='fro')
+
+        Vp = Vp_next
+        
+        if verbose:
+            enumerator.set_description_str(desc="Estimating Vp - Conv.: " + "{:.2e}".format(vp_diff_norm - conv_tol*vp_norm), refresh=True)
+
+        if vp_diff_norm < conv_tol*vp_norm:
+            if verbose:
+                enumerator.set_description_str(desc="Converged!", refresh=True)
+                enumerator.close()
+            break
+    
+    return Vp
+
+def updateVp(ep,remls,rGrid):
+    """Update covariance matrix of posterior for :math:`\mathbf{p} = log(\\boldsymbol{\lambda})`. REML scores are used to
     approximate expectation, similar to what was suggested by Greven & Scheipl (2016).
 
     References:
@@ -809,7 +985,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
             ep = np.log(np.array([pen.lam for pen in model.overall_penalties]).reshape(-1,1))
 
         # Get first estimate for Vp based on samples collected so far
-        Vp = estVp(ep,remls,rGrid) + id_weight*np.identity(len(ep))
+        Vp = updateVp(ep,remls,rGrid) + id_weight*np.identity(len(ep))
 
         # Now continuously update Vp and generate more REML samples in the process
         n_est = nR
@@ -911,7 +1087,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
                     if sp == (nR-1):
                         id_weight = 0
 
-                    Vp = estVp(ep,remls,rGrid) + id_weight*np.identity(len(ep))
+                    Vp = updateVp(ep,remls,rGrid) + id_weight*np.identity(len(ep))
             
         else:
             enumerator = range(nR*len(ep))
@@ -981,7 +1157,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
                 if sp == (nR-1):
                     id_weight = 0
 
-                Vp = estVp(ep,remls,rGrid) + id_weight*np.identity(len(ep))
+                Vp = updateVp(ep,remls,rGrid) + id_weight*np.identity(len(ep))
 
     # Compute weights proposed by Greven & Scheipl (2017)
     ws = scp.special.softmax(remls)

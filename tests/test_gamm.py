@@ -5,6 +5,7 @@ import os
 from mssmViz.sim import*
 from mssm.src.python.formula import reparam
 from mssm.src.python.gamm_solvers import compute_S_emb_pinv_det,cpp_chol,cpp_cholP,compute_eigen_perm,compute_Linv
+from mssm.src.python.utils import estimateVp
 import io
 from contextlib import redirect_stdout
 
@@ -507,7 +508,7 @@ class Test_print_smooth_by_factor_p_hard:
             self.model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
-        comp = "f(['time'],by=fact): fact_1; edf: 9.391 f: 60.049 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.587 f: 18.299 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_3; edf: 4.689 f: 13.482 P(F > f) = 2.087e-12 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        comp = "f(['time'],by=fact): fact_1; edf: 9.391 f: 60.049 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.587 f: 18.299 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_3; edf: 4.689 f: 13.482 P(F > f) = 2.313e-12 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         assert comp == capture
 
 class Test_print_smooth_by_factor_fs_p_hard:
@@ -548,6 +549,23 @@ class Test_print_smooth_binomial:
 
         comp = "f(['x0']); edf: 2.856 chi^2: 18.441 P(Chi^2 > chi^2) = 3.017e-04 ***\nf(['x1']); edf: 1.962 chi^2: 60.923 P(Chi^2 > chi^2) = 1.421e-13 ***\nf(['x2']); edf: 6.243 chi^2: 168.288 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x3']); edf: 1.407 chi^2: 2.62 P(Chi^2 > chi^2) = 0.26934\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         assert comp == capture
+
+class Test_Vp_estimation:
+    Binomdat = sim3(10000,2,family=Binomial(),seed=20)
+
+    formula = Formula(lhs("y"),[i(),f(["x0"]),f(["x1"]),f(["x2"]),f(["x3"])],data=Binomdat)
+
+    # By default, the Binomial family assumes binary data and uses the logit link.
+    model = GAMM(formula,Binomial())
+    model.fit()
+
+    Vp = estimateVp(model,verbose=True,nR=20,lR=100,conv_tol=1e-2,id_weight=0,seed=20)
+
+    def test_Vp(self):
+        assert np.round(self.Vp,decimals=3) == np.array([[ 0.43, -0.18, -0.01,  0.01],
+                                                         [-0.18,  0.95,  0.  , -0.01],
+                                                         [-0.01,  0.  ,  0.18, -0.05],
+                                                         [ 0.01, -0.01, -0.05,  1.62]])
 
 class Test_diff_hard:
     # pred_diff test
