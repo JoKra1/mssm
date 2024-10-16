@@ -1968,7 +1968,7 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,max
 def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smooth_pen,
                               max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,
                               extend_lambda=True,control_lambda=True,progress_bar=True,
-                              n_c=10,method="Newton"):
+                              n_c=10,method="Newton",**bfgs_options):
     """
     Fits a general smooth model, following steps outlined by Wood, Pya, & Säfken (2016). Essentially,
     an even more general version of :func:``solve_gammlss_sparse`` that requires only a function to compute
@@ -2020,9 +2020,9 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
             opt = scp.optimize.minimize(__neg_pen_llk,
                                         np.ndarray.flatten(coef),
                                         args=(coef_split_idx,y,Xs,family,S_emb),
-                                        method="BFGS",
+                                        method=method,
                                         options={"maxiter":max_inner,
-                                                 "gtol":conv_tol})
+                                                 **bfgs_options})
             
             # Get coefficient estimate
             coef = opt["x"].reshape(-1,1)
@@ -2032,7 +2032,10 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
             c_pen_llk = c_llk - coef.T@S_emb@coef
 
             # Get inverse of Hessian of penalized likelihood
-            V = scp.sparse.csc_array(opt["hess_inv"])
+            if method == "BFGS":
+               V = scp.sparse.csc_array(opt["hess_inv"])
+            elif method == "L-BFGS-B":
+               V = scp.sparse.csc_array(opt.hess_inv.todense())
             V.eliminate_zeros()
 
             # Get Cholesky factor needed for (accelerated) EFS
@@ -2106,15 +2109,18 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                 opt = scp.optimize.minimize(__neg_pen_llk,
                                             np.ndarray.flatten(coef),
                                             args=(coef_split_idx,y,Xs,family,S_emb),
-                                            method="BFGS",
+                                            method=method,
                                             options={"maxiter":max_inner,
-                                                     "gtol":conv_tol})
+                                                     **bfgs_options})
 
                 # Get next coefficient estimate
                 next_coef = opt["x"].reshape(-1,1)
 
                 # Get inverse of Hessian of penalized likelihood
-                V = scp.sparse.csc_array(opt["hess_inv"])
+                if method == "BFGS":
+                  V = scp.sparse.csc_array(opt["hess_inv"])
+                elif method == "L-BFGS-B":
+                  V = scp.sparse.csc_array(opt.hess_inv.todense())
                 V.eliminate_zeros()
 
                 # Get Cholesky factor needed for (accelerated) EFS

@@ -304,7 +304,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10):
 
    return reml,LP,Pr,coef,scale,edf,llk
 
-def compute_REML_candidate_GSMM(family,coef,n_coef,coef_split_idx,y,Xs,penalties,method="Newton",conv_tol=1e-7,n_c=10):
+def compute_REML_candidate_GSMM(family,coef,n_coef,coef_split_idx,y,Xs,penalties,method="Newton",conv_tol=1e-7,n_c=10,**bfgs_options):
     """
     Allows to evaluate REML criterion (e.g., Wood, 2011; Wood, 2016) efficiently for
     a set of \lambda values for a GSMM or GAMMLSS.
@@ -341,9 +341,9 @@ def compute_REML_candidate_GSMM(family,coef,n_coef,coef_split_idx,y,Xs,penalties
             opt = scp.optimize.minimize(__neg_pen_llk,
                                         np.ndarray.flatten(coef),
                                         args=(coef_split_idx,y,Xs,family,S_emb),
-                                        method="BFGS",
+                                        method=method,
                                         options={"maxiter":100,
-                                                 "gtol":conv_tol})
+                                                 **bfgs_options})
             
             # Get coefficient estimate
             coef = opt["x"].reshape(-1,1)
@@ -352,7 +352,10 @@ def compute_REML_candidate_GSMM(family,coef,n_coef,coef_split_idx,y,Xs,penalties
             c_llk = family.llk(coef,coef_split_idx,y,Xs)
 
             # Get inverse of Hessian of penalized likelihood
-            V = scp.sparse.csc_array(opt["hess_inv"])
+            if method == "BFGS":
+               V = scp.sparse.csc_array(opt["hess_inv"])
+            elif method == "L-BFGS-B":
+               V = scp.sparse.csc_array(opt.hess_inv.todense())
             V.eliminate_zeros()
 
             # Get Cholesky factor needed for (accelerated) EFS
@@ -497,8 +500,8 @@ def REML(llk,nH,coef,scale,penalties):
    # Done
    return reml + lgdetS/2 - lgdetXXS/2 + (Mp*np.log(2*np.pi))/2
 
-def estimateVp(model,nR = 20,lR = 100,n_c=10,verbose=False,drop_NA=True,method="Newton",seed=None,conv_tol=1e-7,id_weight=0.01):
-    """Estimate covariance matrix of posterior for :math:`\mathbf{p} = log(\\boldsymbol{\lambda})`. REML scores are used to
+def estimateVp(model,nR = 20,lR = 100,n_c=10,verbose=False,drop_NA=True,method="Newton",seed=None,conv_tol=1e-7,id_weight=0.01,**bfgs_options):
+    """Estimate covariance matrix :math:`\mathbf{V}_{\\boldsymbol{p}}` of posterior for :math:`\mathbf{p} = log(\\boldsymbol{\lambda})`. REML scores are used to
     approximate expectation, similar to what was suggested by Greven & Scheipl (2016).
 
     References:
@@ -507,9 +510,9 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,verbose=False,drop_NA=True,method="
 
     :param model: GAMM,GAMLSS, or GSMM model (which has been fitted) for which to estimate :math:`\mathbf{V}`
     :type model: GAMM or GAMLSS or GSMM
-    :param nR: (Initial, in case grid_type=="JJJ") :math:`\lambda`  Grid is based on `nR` equally-spaced samples from :math:`\lambda/lr` to :math:`\lambda*lr`. In addition, `nR*len(model.formula.penalties)` updates to :math:`\mathbf{V}_{\\boldsymbol{p}}` are performed during each of which additional `nR` :math`\lambda` samples/reml scores are generated/computed, defaults to 20
+    :param nR: Initial :math:`\lambda`  Grid is based on `nR` equally-spaced samples from :math:`\lambda/lr` to :math:`\lambda*lr`. In addition, ``nR*len(model.formula.penalties)`` updates to :math:`\mathbf{V}_{\\boldsymbol{p}}` are performed during each of which additional `nR` :math:`\lambda` samples/reml scores are generated/computed, defaults to 20
     :type nR: int, optional
-    :param lR: (Initial, in case grid_type=="JJJ") :math:`\lambda`  Grid is based on `nR` equally-spaced samples from :math:`\lambda/lr` to :math:`\lambda*lr`, defaults to 100
+    :param lR: Initial :math:`\lambda`  Grid is based on `nR` equally-spaced samples from :math:`\lambda/lr` to :math:`\lambda*lr`, defaults to 100
     :type lR: int, optional
     :param n_c: Number of cores to use to compute the estimate, defaults to 10
     :type n_c: int, optional
@@ -517,7 +520,7 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,verbose=False,drop_NA=True,method="
     :type verbose: bool, optional
     :param drop_NA: Whether to drop rows in the **model matrices** corresponding to NAs in the dependent variable vector. Defaults to True.
     :type drop_NA: bool,optional
-    :param method: Which method to use to estimate the coefficients for GSMM models - supports "Newton" and "BFGS". In case of the former, ``model.family`` needs to implement :func:`gradient` and :func:`hessian`. Defaults to "Newton"
+    :param method: Which method to use to estimate the coefficients - supports "Newton", "BFGS", and "L-BFGS-B". In case of the former, ``self.family`` needs to implement :func:`gradient` and :func:`hessian`. Defaults to "Newton"
     :type method: str,optional
     :param seed: Seed to use for random parts of the estimate. Defaults to None
     :type seed: int,optional
@@ -525,12 +528,22 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,verbose=False,drop_NA=True,method="
     :type conv_tol: float, optional
     :param id_weight: Value to add to the diagonal of the current estimate of ``Vp`` when sampling the next set of candidates. Is decreased according to ``0.99*id_weight`` after every sampling step, defaults to 0.01
     :type id_weight: float, optional
+    :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100. Defaults to None.
+    :type bfgs_options: key=value,optional
+    :raises ValueError: Will throw an error when ``method`` is not one of 'Newton', 'BFGS', 'L-BFGS-B' and a :class:`mssm.models.GSMM` is to be estimated.
     :return: An estimate of the covariance matrix of the posterior for :math:`\mathbf{p} = log(\\boldsymbol{\lambda})`
     :rtype: numpy.array
     """
     np_gen = np.random.default_rng(seed)
 
     family = model.family
+
+    if isinstance(family,GENSMOOTHFamily):
+        if not bfgs_options:
+            bfgs_options = {"gtol":1e-3}
+
+        if not method in ["Newton", "BFGS", "L-BFGS-B"]:
+            raise ValueError("'method' needs to be set to one of 'Newton', 'BFGS', 'L-BFGS-B'.")
 
     if isinstance(family,Family):
         nPen = len(model.formula.penalties)
@@ -591,7 +604,7 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,verbose=False,drop_NA=True,method="
         if isinstance(family,Family):
             reml,_,_,_,_,_,_ = compute_reml_candidate_GAMM(family,y,X,rPen,n_c)
         else:
-            reml,_,_,_,_ = compute_REML_candidate_GSMM(family,init_coef,len(init_coef),model.coef_split_idx,y,Xs,rPen,n_c=n_c,method=method)
+            reml,_,_,_,_ = compute_REML_candidate_GSMM(family,init_coef,len(init_coef),model.coef_split_idx,y,Xs,rPen,n_c=n_c,method=method,**bfgs_options)
 
         # Now collect what we need for updating Vp
         remls.append(reml)
@@ -641,7 +654,7 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,verbose=False,drop_NA=True,method="
                 reml,_,_,_,_,_,_ = compute_reml_candidate_GAMM(family,y,X,rPen,n_c)
 
             else:
-                reml,_,_,_,_ = compute_REML_candidate_GSMM(family,init_coef,len(init_coef),model.coef_split_idx,y,Xs,rPen,n_c=n_c,method=method)
+                reml,_,_,_,_ = compute_REML_candidate_GSMM(family,init_coef,len(init_coef),model.coef_split_idx,y,Xs,rPen,n_c=n_c,method=method,**bfgs_options)
 
             # Collect new remls and update grid of log(lambdas)
             remls.append(reml)
@@ -752,7 +765,7 @@ def _compute_VB_corr_terms_MP(family,address_y,address_dat,address_ptr,address_i
    # Now collect what we need for the remaining terms
    return Linv,coef,reml,scale,edf,llk
 
-def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_t1=False,verbose=False,drop_NA=True,method="Newton",seed=None):
+def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_t1=False,verbose=False,drop_NA=True,method="Newton",seed=None,**bfgs_options):
     """Estimate :math:`\mathbf{V}`, the covariance matrix of the unconditional posterior :math:`\\boldsymbol{\\beta} | y \sim N(\hat{\\boldsymbol{\\beta}},\\mathbf{V})` to account for smoothness uncertainty.
     
     Wood et al. (2016) and Wood (2017) show that when basing conditional versions of model selection criteria or hypothesis
@@ -789,11 +802,11 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
      - Greven, S., & Scheipl, F. (2016). Comment on: Smoothing Parameter and Model Selection for General Smooth Models
      - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
-    :param model: GAMM,GAMLSS, or GSMM model (which has been fitted) for which to estimate :math:`\mathbf{V}`
-    :type model: GAMM or GAMLSS or GSMM
-    :param nR: (Initial, in case grid_type=="JJJ") :math:`\lambda`  Grid is based on `nR` equally-spaced samples from :math:`\lambda/lr` to :math:`\lambda*lr`. In case grid_type=="JJJ", `nR*len(model.formula.penalties)` updates to :math:`\mathbf{V}_{\\boldsymbol{p}}` are performed during each of which additional `nR` :math`\lambda` samples/reml scores are generated/computed, defaults to 20
+    :param model: GAMM, GAMMLSS, or GSMM model (which has been fitted) for which to estimate :math:`\mathbf{V}`
+    :type model: GAMM or GAMMLSS or GSMM
+    :param nR: :math:`\lambda`  Grid (at least the initial one, in case grid_type=="JJJ") is based on `nR` equally-spaced samples from :math:`\lambda/lr` to :math:`\lambda*lr`. In case grid_type=="JJJ", ``nR*len(model.formula.penalties)`` updates to :math:`\mathbf{V}_{\\boldsymbol{p}}` are performed during each of which additional `nR` :math:`\lambda` samples/reml scores are generated/computed, defaults to 20
     :type nR: int, optional
-    :param lR: (Initial, in case grid_type=="JJJ") :math:`\lambda`  Grid is based on `nR` equally-spaced samples from :math:`\lambda/lr` to :math:`\lambda*lr`, defaults to 100
+    :param lR: :math:`\lambda`  Grid (at least the initial one, in case grid_type=="JJJ") is based on `nR` equally-spaced samples from :math:`\lambda/lr` to :math:`\lambda*lr`, defaults to 100
     :type lR: int, optional
     :param grid_type: How to define the grid of :math:`\lambda` values on which to base the correction - see above for details, defaults to 'JJJ'
     :type grid_type: str, optional
@@ -807,16 +820,26 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
     :type verbose: bool, optional
     :param drop_NA: Whether to drop rows in the **model matrices** corresponding to NAs in the dependent variable vector. Defaults to True.
     :type drop_NA: bool,optional
-    :param method: Which method to use to estimate the coefficients for GSMM models - supports "Newton" and "BFGS". In case of the former, ``model.family`` needs to implement :func:`gradient` and :func:`hessian`. Defaults to "Newton"
+    :param method: Which method to use to estimate the coefficients - supports "Newton", "BFGS", and "L-BFGS-B". In case of the former, ``self.family`` needs to implement :func:`gradient` and :func:`hessian`. Defaults to "Newton"
     :type method: str,optional
     :param seed: Seed to use for random parts of the correction. Defaults to None
     :type seed: int,optional
+    :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100. Defaults to None.
+    :type bfgs_options: key=value,optional
+    :raises ValueError: Will throw an error when ``method`` is not one of 'Newton', 'BFGS', 'L-BFGS-B' and a :class:`mssm.models.GSMM` is to be estimated.
     :return: A tuple containing: V - an estimate of the unconditional covariance matrix, LV - the Cholesky of the former, total_edf - smoothness uncertainty corrected edf, total_edf2 - smoothness uncertainty + smoothness bias corrected edf, expected_aic - an "expected version of the aic" based on a weighted sum (using the reml weights) over all computed aics
     :rtype: (scipy.sparse.csc_array,scipy.sparse.csc_array,float,float,float) 
     """
     np_gen = np.random.default_rng(seed)
 
     family = model.family
+
+    if isinstance(family,GENSMOOTHFamily):
+        if not bfgs_options:
+            bfgs_options = {"gtol":1e-3}
+
+        if not method in ["Newton", "BFGS", "L-BFGS-B"]:
+            raise ValueError("'method' needs to be set to one of 'Newton', 'BFGS', 'L-BFGS-B'.")
 
     if isinstance(family,Family):
         nPen = len(model.formula.penalties)
@@ -959,7 +982,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
                 Vb = Linv.T@Linv*scale
                 Vb += coef@coef.T
             else:
-                reml,V,coef,edf,llk = compute_REML_candidate_GSMM(family,init_coef,len(init_coef),model.coef_split_idx,y,Xs,rPen,n_c=n_c,method=method)
+                reml,V,coef,edf,llk = compute_REML_candidate_GSMM(family,init_coef,len(init_coef),model.coef_split_idx,y,Xs,rPen,n_c=n_c,method=method,**bfgs_options)
                 coef = coef.reshape(-1,1)
 
                 # Can already compute first term from correction
@@ -1132,7 +1155,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
                         Vb = Linv.T@Linv*scale
                         Vb += coef@coef.T
                     else:
-                        reml,V,coef,edf,llk = compute_REML_candidate_GSMM(family,init_coef,len(init_coef),model.coef_split_idx,y,Xs,rPen,n_c=n_c,method=method)
+                        reml,V,coef,edf,llk = compute_REML_candidate_GSMM(family,init_coef,len(init_coef),model.coef_split_idx,y,Xs,rPen,n_c=n_c,method=method,**bfgs_options)
                         coef = coef.reshape(-1,1)
 
                         # Can already compute first term from correction

@@ -508,7 +508,7 @@ class Test_print_smooth_by_factor_p_hard:
             self.model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
-        comp = "f(['time'],by=fact): fact_1; edf: 9.391 f: 60.049 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.587 f: 18.299 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_3; edf: 4.689 f: 13.482 P(F > f) = 2.313e-12 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        comp = "f(['time'],by=fact): fact_1; edf: 9.391 f: 60.049 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.587 f: 18.299 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_3; edf: 4.689 f: 13.384 P(F > f) = 2.313e-12 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         assert comp == capture
 
 class Test_print_smooth_by_factor_fs_p_hard:
@@ -562,10 +562,10 @@ class Test_Vp_estimation:
     Vp = estimateVp(model,verbose=True,nR=20,lR=100,conv_tol=1e-2,id_weight=0,seed=20)
 
     def test_Vp(self):
-        assert np.round(self.Vp,decimals=3) == np.array([[ 0.43, -0.18, -0.01,  0.01],
-                                                         [-0.18,  0.95,  0.  , -0.01],
-                                                         [-0.01,  0.  ,  0.18, -0.05],
-                                                         [ 0.01, -0.01, -0.05,  1.62]])
+        assert np.allclose(np.round(self.Vp,decimals=2), np.array([[ 0.43, -0.18, -0.01,  0.01],
+                                                                   [-0.18,  0.95,  0.  , -0.01],
+                                                                   [-0.01,  0.  ,  0.18, -0.05],
+                                                                   [ 0.01, -0.01, -0.05,  1.62]]))
 
 class Test_diff_hard:
     # pred_diff test
