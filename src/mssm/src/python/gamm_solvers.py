@@ -708,7 +708,7 @@ def initialize_extension(method,penalties):
 
    extend_by = 1 # Extension factor for lambda update for the Fellner Schall method by Wood & Fasiolo (2016)
 
-   if method == "nesterov":
+   if method == "nesterov" or method == "nesterov2":
       extend_by = {"prev_lam":[lterm.lam for lterm in penalties],
                    "acc":[0 for _ in penalties]}
 
@@ -737,7 +737,7 @@ def extend_lambda_step(lti,lam,dLam,extend_by,was_extended, method):
       else:
          was_extended[lti] = False
 
-   elif method == "nesterov":
+   elif method == "nesterov" or method == "nesterov2":
       # The idea for the correction is based on the derivations in the supplementary materials
       # of Sutskever et al. (2013) - but adapted to use efs_step**2 / |lam_t - lam_{t-1}| for
       # the correction to lambda. So that the next efs update will be calculated from
@@ -749,6 +749,10 @@ def extend_lambda_step(lti,lam,dLam,extend_by,was_extended, method):
       # of the efs_step.
    
       diff_lam = lam - extend_by["prev_lam"][lti]
+
+      if method == "nesterov2" and dLam**2 > 1:
+         diff_lam *= 2
+
       extend_by["prev_lam"][lti] = lam
       acc = np.sign(dLam)*(dLam**2/max(sys.float_info.epsilon,abs(diff_lam)))
       extend_by["acc"][lti] = acc
@@ -785,7 +789,7 @@ def reduce_lambda_step(lti,lam,dLam,extend_by,was_extended, method):
          dLam/=2
          lam -= dLam
    
-   elif method == "nesterov":
+   elif method == "nesterov"  or method == "nesterov2":
       # We can simply reset lam by the extension factor computed earlier. If we repeatedly have to half we
       # can fall back to the strategy by Wood & Fasiolo (2016) to just half the step.
       if was_extended[lti] and extend_by["acc"][lti] != 0:
@@ -1752,7 +1756,8 @@ def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,ma
     
 def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
                          max_outer=50,max_inner=30,min_inner=1,conv_tol=1e-7,
-                         extend_lambda=True,control_lambda=True,progress_bar=True,n_c=10):
+                         extend_lambda=True,extension_method_lam = "nesterov2",
+                         control_lambda=True,progress_bar=True,n_c=10):
     """
     Fits a GAMLSS model, following steps outlined by Wood, Pya, & Säfken (2016).
 
@@ -1762,7 +1767,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
     # total number of coefficients
     n_coef = np.sum(form_n_coef)
 
-    extend_by = initialize_extension("nesterov",gamlss_pen)
+    extend_by = initialize_extension(extension_method_lam,gamlss_pen)
     was_extended = [False for _ in enumerate(gamlss_pen)]
 
     split_coef = np.split(coef,coef_split_idx)
@@ -1783,25 +1788,26 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
     for outer in iterator:
 
         # Update coefficients:
-        coef,split_coef,mus,etas,H,LV,c_llk,c_pen_llk = update_coef_gammlss(family,mus,y,Xs,coef,
-                                                                             coef_split_idx,S_emb,
-                                                                             c_llk,outer,max_inner,
-                                                                             min_inner,conv_tol)
-        
-        # Given new coefficients compute lgdetDs, ldetHS, and bsbs - needed for efs step
-        lgdetDs = []
-        bsbs = []
-        for lti,lTerm in enumerate(gamlss_pen):
+        if outer == 0 or extend_lambda == False or (control_lambda and refit):
+            coef,split_coef,mus,etas,H,LV,c_llk,c_pen_llk = update_coef_gammlss(family,mus,y,Xs,coef,
+                                                                                 coef_split_idx,S_emb,
+                                                                                 c_llk,outer,max_inner,
+                                                                                 min_inner,conv_tol)
+            
+            # Given new coefficients compute lgdetDs, ldetHS, and bsbs - needed for efs step
+            lgdetDs = []
+            bsbs = []
+            for lti,lTerm in enumerate(gamlss_pen):
 
-            lt_rank = None
-            if FS_use_rank[lti]:
-                lt_rank = lTerm.rank
+               lt_rank = None
+               if FS_use_rank[lti]:
+                  lt_rank = lTerm.rank
 
-            lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
-            lgdetDs.append(lgdetD)
-            bsbs.append(bsb)
+               lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
+               lgdetDs.append(lgdetD)
+               bsbs.append(bsb)
 
-        total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,gamlss_pen,lgdetDs,n_coef,n_c)
+            total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,gamlss_pen,lgdetDs,n_coef,n_c)
 
         # Check overall convergence
         if outer > 0:
@@ -1829,7 +1835,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
             #print(lgdetD-ldetHS)
             dLam = step_fellner_schall_sparse(lgdetD,ldetHS,bsb[0,0],lTerm.lam,1)
             if extend_lambda:
-                dLam,extend_by,was_extended = extend_lambda_step(lti,lTerm.lam,dLam,extend_by,was_extended,"nesterov")
+                dLam,extend_by,was_extended = extend_lambda_step(lti,lTerm.lam,dLam,extend_by,was_extended,extension_method_lam)
             lTerm.lam += dLam
 
             lam_delta.append(dLam)
@@ -1844,10 +1850,10 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
             # can do is at least undo the acceleration if we over-shoot the approximate derivative...
 
             # First re-compute coef
-            next_coef,_,_,_,_,LV,_,next_pen_llk = update_coef_gammlss(family,mus,y,Xs,coef,
-                                                            coef_split_idx,S_emb,
-                                                            c_llk,outer,max_inner,
-                                                            min_inner,conv_tol)
+            next_coef,split_coef,next_mus,next_etas,H,LV,next_llk,next_pen_llk  = update_coef_gammlss(family,mus,y,Xs,coef,
+                                                                                                      coef_split_idx,S_emb,
+                                                                                                      c_llk,outer,max_inner,
+                                                                                                      min_inner,conv_tol)
             
             # Now re-compute lgdetDs, ldetHS, and bsbs
             lgdetDs = []
@@ -1873,7 +1879,9 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
             # Now undo the acceleration if overall direction is **very** off - don't just check against 0 because
             # our criterion is approximate, so we can be more lenient (see Wood et al., 2017). 
             
+            refit = False
             if check[0] < 1e-3*-abs(prev_pen_llk):
+               refit = True
                for lti,lTerm in enumerate(gamlss_pen):
                   if was_extended[lti]:
 
@@ -1881,6 +1889,13 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
 
                # Rebuild penalties
                S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
+            else:
+               # Can re-use estimate for next iteration
+               coef=next_coef
+               mus=next_mus
+               etas=next_etas
+               c_llk=next_llk
+               c_pen_llk=next_pen_llk
 
         #print([lterm.lam for lterm in gamlss_pen])
     
@@ -1969,7 +1984,8 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,max
 
 def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smooth_pen,
                               max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,
-                              extend_lambda=True,control_lambda=True,progress_bar=True,
+                              extend_lambda=True,extension_method_lam = "nesterov2",
+                              control_lambda=True,progress_bar=True,
                               n_c=10,method="Newton",**bfgs_options):
     """
     Fits a general smooth model, following steps outlined by Wood, Pya, & Säfken (2016). Essentially,
@@ -1990,7 +2006,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
     # total number of coefficients
     n_coef = np.sum(form_n_coef)
 
-    extend_by = initialize_extension("nesterov",smooth_pen)
+    extend_by = initialize_extension(extension_method_lam,smooth_pen)
     was_extended = [False for _ in enumerate(smooth_pen)]
 
     # Build current penalties
@@ -2013,52 +2029,53 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
     for outer in iterator:
 
         # Update coefficients:
-        if method == "Newton":
-            coef,H,LV,c_llk,c_pen_llk = update_coef_gen_smooth(family,y,Xs,coef,
-                                                            coef_split_idx,S_emb,
-                                                            c_llk,outer,max_inner,
-                                                            min_inner,conv_tol)
-        else:
-            opt = scp.optimize.minimize(__neg_pen_llk,
-                                        np.ndarray.flatten(coef),
-                                        args=(coef_split_idx,y,Xs,family,S_emb),
-                                        method=method,
-                                        options={"maxiter":max_inner,
-                                                 **bfgs_options})
+        if outer == 0 or extend_lambda == False or (control_lambda and refit):
+            if method == "Newton":
+               coef,H,LV,c_llk,c_pen_llk = update_coef_gen_smooth(family,y,Xs,coef,
+                                                                  coef_split_idx,S_emb,
+                                                                  c_llk,outer,max_inner,
+                                                                  min_inner,conv_tol)
+            else:
+               opt = scp.optimize.minimize(__neg_pen_llk,
+                                          np.ndarray.flatten(coef),
+                                          args=(coef_split_idx,y,Xs,family,S_emb),
+                                          method=method,
+                                          options={"maxiter":max_inner,
+                                                   **bfgs_options})
+               
+               # Get coefficient estimate
+               coef = opt["x"].reshape(-1,1)
+
+               # Compute penalized likelihood for current estimate
+               c_llk = family.llk(coef,coef_split_idx,y,Xs)
+               c_pen_llk = c_llk - coef.T@S_emb@coef
+
+               # Get inverse of Hessian of penalized likelihood
+               if method == "BFGS":
+                  V = scp.sparse.csc_array(opt["hess_inv"])
+               elif method == "L-BFGS-B":
+                  V = scp.sparse.csc_array(opt.hess_inv.todense())
+               V.eliminate_zeros()
+
+               # Get Cholesky factor needed for (accelerated) EFS
+               LVPT, P, code = cpp_cholP(V)
+               LVT = apply_eigen_perm(P,LVPT)
+               LV = LVT.T
             
-            # Get coefficient estimate
-            coef = opt["x"].reshape(-1,1)
+            # Given new coefficients compute lgdetDs, ldetHS, and bsbs - needed for efs step
+            lgdetDs = []
+            bsbs = []
+            for lti,lTerm in enumerate(smooth_pen):
 
-            # Compute penalized likelihood for current estimate
-            c_llk = family.llk(coef,coef_split_idx,y,Xs)
-            c_pen_llk = c_llk - coef.T@S_emb@coef
+               lt_rank = None
+               if FS_use_rank[lti]:
+                  lt_rank = lTerm.rank
 
-            # Get inverse of Hessian of penalized likelihood
-            if method == "BFGS":
-               V = scp.sparse.csc_array(opt["hess_inv"])
-            elif method == "L-BFGS-B":
-               V = scp.sparse.csc_array(opt.hess_inv.todense())
-            V.eliminate_zeros()
+               lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
+               lgdetDs.append(lgdetD)
+               bsbs.append(bsb)
 
-            # Get Cholesky factor needed for (accelerated) EFS
-            LVPT, P, code = cpp_cholP(V)
-            LVT = apply_eigen_perm(P,LVPT)
-            LV = LVT.T
-        
-        # Given new coefficients compute lgdetDs, ldetHS, and bsbs - needed for efs step
-        lgdetDs = []
-        bsbs = []
-        for lti,lTerm in enumerate(smooth_pen):
-
-            lt_rank = None
-            if FS_use_rank[lti]:
-                lt_rank = lTerm.rank
-
-            lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
-            lgdetDs.append(lgdetD)
-            bsbs.append(bsb)
-
-        total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,smooth_pen,lgdetDs,n_coef,n_c)
+            total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,smooth_pen,lgdetDs,n_coef,n_c)
 
         # Check overall convergence
         if outer > 0:
@@ -2087,7 +2104,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
             #print(lgdetD-ldetHS,dLam)
 
             if extend_lambda:
-                dLam,extend_by,was_extended = extend_lambda_step(lti,lTerm.lam,dLam,extend_by,was_extended,"nesterov")
+                dLam,extend_by,was_extended = extend_lambda_step(lti,lTerm.lam,dLam,extend_by,was_extended,extension_method_lam)
             lTerm.lam += dLam
 
             lam_delta.append(dLam)
@@ -2103,7 +2120,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
 
             # First re-compute coef
             if method == "Newton":
-                next_coef,_,LV,_,_ = update_coef_gen_smooth(family,y,Xs,coef,
+                next_coef,H,LV,next_llk,next_pen_llk = update_coef_gen_smooth(family,y,Xs,coef,
                                                                 coef_split_idx,S_emb,
                                                                 c_llk,outer,max_inner,
                                                                 min_inner,conv_tol)
@@ -2117,6 +2134,10 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
 
                 # Get next coefficient estimate
                 next_coef = opt["x"].reshape(-1,1)
+
+                # Compute penalized likelihood for next estimate
+                next_llk = family.llk(next_coef,coef_split_idx,y,Xs)
+                next_pen_llk = next_llk - next_coef.T@S_emb@next_coef
 
                 # Get inverse of Hessian of penalized likelihood
                 if method == "BFGS":
@@ -2152,8 +2173,10 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
             check = lam_grad.T @ lam_delta
 
             # Now undo the acceleration if overall direction is **very** off - don't just check against 0 because
-            # our criterion is approximate, so we can be more lenient (see Wood et al., 2017). 
+            # our criterion is approximate, so we can be more lenient (see Wood et al., 2017).
+            refit = False 
             if check[0] < 1e-3*-abs(prev_pen_llk):
+                refit = True
                 for lti,lTerm in enumerate(smooth_pen):
                     if was_extended[lti]:
 
@@ -2161,6 +2184,10 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
 
                 # Rebuild penalties
                 S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
+            else: # Can re-use estimate for next iteration
+               coef = next_coef
+               c_llk = next_llk
+               c_pen_llk = next_pen_llk
 
         #print([lterm.lam for lterm in smooth_pen])
     

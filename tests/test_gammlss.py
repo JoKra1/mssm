@@ -29,7 +29,7 @@ class Test_GAUMLS:
 
     # Now define the model and fit!
     model = GAMMLSS(formulas,family)
-    model.fit()
+    model.fit(extension_method_lam="nesterov")
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 18.357 
@@ -105,7 +105,7 @@ class Test_GAMMALS:
 
     # Now define the model and fit!
     model = GAMMLSS(formulas,family)
-    model.fit()
+    model.fit(extension_method_lam="nesterov")
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 14.677 
@@ -154,7 +154,7 @@ class Test_pred_whole_func_cor:
     sim1_formulas = [sim1_formula_m,sim1_formula_sd]
 
     sim_fit_model = GAMMLSS(sim1_formulas,family)
-    sim_fit_model.fit()
+    sim_fit_model.fit(extension_method_lam="nesterov")
 
     # Test prediction code + whole-function correction
     pred_dat = pd.DataFrame({"x0":np.linspace(0,1,50)})
@@ -215,7 +215,7 @@ class Test_diff_whole_func_cor:
     sim1_formulas = [sim1_formula_m,sim1_formula_sd]
 
     sim_fit_model = GAMMLSS(sim1_formulas,family)
-    sim_fit_model.fit()
+    sim_fit_model.fit(extension_method_lam="nesterov")
 
     pred_dat1 = pd.DataFrame({"x0":np.linspace(0,1,50),
                           "cond":["a" for _ in range(50)]})

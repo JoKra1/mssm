@@ -1266,7 +1266,7 @@ class GAMMLSS(GAMM):
         return self.family.get_resid(self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat],*self.overall_mus)
         
 
-    def fit(self,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,progress_bar=True,n_cores=10,seed=0):
+    def fit(self,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,progress_bar=True,n_cores=10,seed=0):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -1332,7 +1332,8 @@ class GAMMLSS(GAMM):
 
         coef,etas,mus,wres,H,LV,total_edf,term_edfs,penalty = solve_gammlss_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,
                                                                                  gamlss_pen,max_outer,max_inner,min_inner,conv_tol,
-                                                                                 extend_lambda,control_lambda,progress_bar,n_cores)
+                                                                                 extend_lambda,extension_method_lam,control_lambda,
+                                                                                 progress_bar,n_cores)
         
         self.overall_coef = coef
         self.overall_preds = etas
@@ -1711,7 +1712,7 @@ class GSMM(GAMMLSS):
         """
         return None
     
-    def fit(self,init_coef=None,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,restart=False,progress_bar=True,n_cores=10,seed=0,method="Newton",drop_NA=True,**bfgs_options):
+    def fit(self,init_coef=None,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,restart=False,progress_bar=True,n_cores=10,seed=0,method="Newton",drop_NA=True,**bfgs_options):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -1794,7 +1795,7 @@ class GSMM(GAMMLSS):
         
         # Now fit model
         coef,H,LV,total_edf,term_edfs,penalty = solve_generalSmooth_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,smooth_pen,
-                                                                           max_outer,max_inner,min_inner,conv_tol,extend_lambda,
+                                                                           max_outer,max_inner,min_inner,conv_tol,extend_lambda,extension_method_lam,
                                                                            control_lambda,progress_bar,n_cores,method,**bfgs_options)
         
         self.overall_coef = coef
