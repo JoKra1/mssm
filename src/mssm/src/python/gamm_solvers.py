@@ -1587,28 +1587,30 @@ def deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs):
                 d2 = d2meta[mixed_idx]
                 mixed_idx += 1
 
-            #print(etai,etaj,mixed_idx)
-                
             for coefi in range(Xs[etai].shape[1]):
-                for coefj in range(Xs[etaj].shape[1]):
+                # More efficient computation now, no longer an additional nested loop over coefj..
+                d2beta = (d2*Xs[etai][:,[coefi]]).T @ Xs[etaj][:,coefi:Xs[etaj].shape[1]]
+                
+                if d2beta.nnz > 0:
+                  
+                  # Sort, to make symmetric deriv extraction easier
+                  if not d2beta.has_sorted_indices:
+                     d2beta.sort_indices()
+                  
+                  # Get non-zero column entries for current row
+                  cols = d2beta.indices[d2beta.indptr[0]:d2beta.indptr[1]] + coefi
+                  
+                  # Get non-zero values for current row in sorted order
+                  vals = d2beta.data[d2beta.indptr[0]:d2beta.indptr[1]]
+                  
+                  h_rows.extend(np.tile(coefi,d2beta.nnz) + hr_idx)
+                  h_cols.extend(cols + hc_idx)
+                  h_vals.extend(vals)
 
-                    if hc_idx+coefj < hr_idx+coefi:
-                        continue
-
-                    # Naive:
-                    # d2beta = np.sum([d2[i]*Xs[etai][i,coefi]*Xs[etaj][i,coefj] for i in range(Xs[etai].shape[0])])
-                    # But this is again just a dot product, preceded by element wise multiplication. In principle we
-                    # could even skip these loops but that might get a bit tricky with sparse matrix set up- for now
-                    # I just leave it like this...
-                    d2beta = ((d2*Xs[etai][:,[coefi]]).T @ Xs[etaj][:,[coefj]])[0,0]
-                    #print(hr_idx+coefi,hc_idx+coefj)
-                    h_rows.append(hr_idx+coefi)
-                    h_cols.append(hc_idx+coefj)
-                    h_vals.append(d2beta)
-                    if hr_idx+coefi != hc_idx+coefj: # Symmetric 2nd deriv..
-                        h_rows.append(hc_idx+coefj)
-                        h_cols.append(hr_idx+coefi)
-                        h_vals.append(d2beta)
+                  # Symmetric 2nd deriv..
+                  h_rows.extend(cols[1:] + hc_idx)
+                  h_cols.extend(np.tile(coefi,d2beta.nnz-1) + hr_idx)
+                  h_vals.extend(vals[1:])
 
             hc_idx += Xs[etaj].shape[1]
         hr_idx += Xs[etai].shape[1]
