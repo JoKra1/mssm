@@ -750,16 +750,24 @@ def extend_lambda_step(lti,lam,dLam,extend_by,was_extended, method):
    
       diff_lam = lam - extend_by["prev_lam"][lti]
 
-      if method == "nesterov2" and dLam**2 > 1:
+      if method == "nesterov2":
          diff_lam *= 2
 
+         acc = dLam * min(0.99,abs(dLam)/max(sys.float_info.epsilon,abs(diff_lam)))
+
+      else:
+         acc = np.sign(dLam)*(dLam**2/max(sys.float_info.epsilon,abs(diff_lam)))
+
       extend_by["prev_lam"][lti] = lam
-      acc = np.sign(dLam)*(dLam**2/max(sys.float_info.epsilon,abs(diff_lam)))
+
+      #if dLam>1 and diff_lam<1:
+      #   acc = 0
+      
       extend_by["acc"][lti] = acc
 
       extension = lam + dLam + acc
 
-      if extension < 1e7 and extension > 1e-7 and np.sign(diff_lam) == np.sign(dLam):
+      if extension < 1e7 and extension > 1e-7 and np.sign(diff_lam) == np.sign(dLam): # and abs(acc) > 0
          dLam += acc
          was_extended[lti] = True
       else:
@@ -1880,7 +1888,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
             # our criterion is approximate, so we can be more lenient (see Wood et al., 2017). 
             
             refit = False
-            if check[0] < 1e-3*-abs(prev_pen_llk):
+            if check[0] < 1e-3*-abs(prev_pen_llk): #1e-7*abs(next_pen_llk)
                refit = True
                for lti,lTerm in enumerate(gamlss_pen):
                   if was_extended[lti]:
@@ -2175,7 +2183,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
             # Now undo the acceleration if overall direction is **very** off - don't just check against 0 because
             # our criterion is approximate, so we can be more lenient (see Wood et al., 2017).
             refit = False 
-            if check[0] < 1e-3*-abs(prev_pen_llk):
+            if check[0] < 1e-3*-abs(prev_pen_llk): #1e-7*abs(next_pen_llk)
                 refit = True
                 for lti,lTerm in enumerate(smooth_pen):
                     if was_extended[lti]:
