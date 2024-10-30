@@ -3,7 +3,7 @@ import scipy as scp
 import copy
 from collections.abc import Callable
 from .src.python.formula import Formula,build_sparse_matrix_from_formula,VarType,lhs,ConstType,Constraint,pd,embed_shared_penalties,warnings
-from .src.python.exp_fam import Link,Logit,Identity,LOG,Family,Binomial,Gaussian,GAMLSSFamily,GAUMLSS,Gamma,MULNOMLSS,GAMMALS,GENSMOOTHFamily
+from .src.python.exp_fam import Link,Logit,Identity,LOG,LOGb,Family,Binomial,Gaussian,GAMLSSFamily,GAUMLSS,Gamma,MULNOMLSS,GAMMALS,GENSMOOTHFamily
 from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2,solve_gammlss_sparse,solve_generalSmooth_sparse
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 from .src.python.penalties import PenType,LambdaTerm

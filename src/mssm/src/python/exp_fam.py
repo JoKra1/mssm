@@ -50,6 +50,20 @@ class Link:
       """
       pass
 
+   def dy2(self,mu):
+      """
+      Second derivative of :math:`f(\\boldsymbol{\mu})` with respect to :math:`\\boldsymbol{\mu}`. Needed for GAMMLSS models (Wood, 2017).
+
+      References:
+
+       - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).      
+
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      """
+      pass
+
 class Logit(Link):
    """
    Logit Link function, which is canonical for the binomial model. :math:`\\boldsymbol{\eta}` = log-odds of success.
@@ -222,6 +236,69 @@ class LOG(Link):
       :type mu: [float]
       """
       return -1*(1/np.power(mu,2))
+
+class LOGb(Link):
+   """
+   Log + b Link function. :math:`log(\\boldsymbol{\mu} + b) = \\boldsymbol{\eta}`.
+
+   :param b: The constant to add to :math:`\mu` before taking the log.
+   :type b: float
+   """
+   
+   def __init__(self,b):
+      super().__init__()
+      self.b = b
+
+   def f(self,mu):
+      """
+      :math:`log(\\boldsymbol{\mu} + b) = \\boldsymbol{\eta}`.
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      """
+      return np.log(mu + self.b)
+   
+   def fi(self,eta):
+      """
+      For the logb link, :math:`\\boldsymbol{\eta} = log(\\boldsymbol{\mu} + b)`, so :math:`exp(\\boldsymbol{\eta})-b =\\boldsymbol{\mu}`
+
+      References:
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param eta: The vector containing the model prediction corresponding to each observation.
+      :type eta: [float]
+      """
+      return np.exp(eta) - self.b
+   
+   def dy1(self,mu):
+      """
+      First derivative of :math:`f(\\boldsymbol{\mu})` with respect to :math:`\\boldsymbol{\mu}`. Needed for Fisher scoring/PIRLS (Wood, 2017).
+
+      References:
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      """
+      return 1/(self.b+mu)
+   
+   def dy2(self,mu):
+      """
+      Second derivative of :math:`f(\\boldsymbol{\mu})` with respect to :math:`\\boldsymbol{\mu}`. Needed for GAMMLSS models (Wood, 2017).
+
+      References:
+
+       - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).      
+
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      """
+      return -1*(1/np.power(mu+self.b,2))
 
 def est_scale(res,rows_X,total_edf):
    """
