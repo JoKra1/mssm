@@ -1266,7 +1266,7 @@ class GAMMLSS(GAMM):
         return self.family.get_resid(self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat],*self.overall_mus)
         
 
-    def fit(self,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,progress_bar=True,n_cores=10,seed=0):
+    def fit(self,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,progress_bar=True,n_cores=10,seed=0):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -1332,7 +1332,8 @@ class GAMMLSS(GAMM):
 
         coef,etas,mus,wres,H,LV,total_edf,term_edfs,penalty = solve_gammlss_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,
                                                                                  gamlss_pen,max_outer,max_inner,min_inner,conv_tol,
-                                                                                 extend_lambda,control_lambda,progress_bar,n_cores)
+                                                                                 extend_lambda,extension_method_lam,control_lambda,
+                                                                                 progress_bar,n_cores)
         
         self.overall_coef = coef
         self.overall_preds = etas
@@ -1711,7 +1712,7 @@ class GSMM(GAMMLSS):
         """
         return None
     
-    def fit(self,init_coef=None,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,restart=False,progress_bar=True,n_cores=10,seed=0,method="Newton",drop_NA=True):
+    def fit(self,init_coef=None,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,restart=False,progress_bar=True,n_cores=10,seed=0,method="Newton",drop_NA=True,**bfgs_options):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -1735,11 +1736,20 @@ class GSMM(GAMMLSS):
         :type n_cores: int,optional
         :param seed: Seed to use for random parameter initialization. Defaults to 0
         :type seed: int,optional
-        :param method: Which method to use to estimate the coefficients - supports "Newton" and "BFGS". In case of the former, ``self.family`` needs to implement :func:``gradient`` and :func:``hessian``. Defaults to "Newton"
+        :param method: Which method to use to estimate the coefficients - supports "Newton", "BFGS", and "L-BFGS-B". In case of the former, ``self.family`` needs to implement :func:`gradient` and :func:`hessian`. Defaults to "Newton"
         :type method: str,optional
         :param drop_NA: Whether to drop rows in the **model matrices** corresponding to NAs in the dependent variable vector. Defaults to True.
         :type drop_NA: bool,optional
+        :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to ``conv_tol``. Note also, that in any case the ``maxiter`` argument is automatically set to ``max_inner``. Defaults to None.
+        :type bfgs_options: key=value,optional
+        :raises ValueError: Will throw an error when ``method`` is not one of 'Newton', 'BFGS', 'L-BFGS-B'.
         """
+
+        if not bfgs_options:
+            bfgs_options = {"gtol":conv_tol}
+
+        if not method in ["Newton", "BFGS", "L-BFGS-B"]:
+            raise ValueError("'method' needs to be set to one of 'Newton', 'BFGS', 'L-BFGS-B'.")
         
         # Get y
         if drop_NA:
@@ -1785,8 +1795,8 @@ class GSMM(GAMMLSS):
         
         # Now fit model
         coef,H,LV,total_edf,term_edfs,penalty = solve_generalSmooth_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,smooth_pen,
-                                                                           max_outer,max_inner,min_inner,conv_tol,extend_lambda,
-                                                                           control_lambda,progress_bar,n_cores,method)
+                                                                           max_outer,max_inner,min_inner,conv_tol,extend_lambda,extension_method_lam,
+                                                                           control_lambda,progress_bar,n_cores,method,**bfgs_options)
         
         self.overall_coef = coef
         self.edf = total_edf

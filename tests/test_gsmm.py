@@ -71,13 +71,13 @@ class Test_GAUMLSSGEN:
     model = GSMM(formulas=formulas,family=gsmm_fam)
 
     # First fit with bfgs and, to speed things up, only then with Newton
-    model.fit(init_coef=None,method="BFGS",extend_lambda=True,max_outer=100,seed=10,conv_tol=1e-3)
+    model.fit(init_coef=None,method="BFGS",extend_lambda=True,max_outer=100,seed=10,conv_tol=1e-3,extension_method_lam="nesterov")
 
     # Use BFGS estimate as initial estimate for Newton model
     coef = model.overall_coef
 
     # Now re-fit with full Newton
-    model.fit(init_coef=coef,method="Newton",extend_lambda=False,max_outer=100,seed=10,conv_tol=1e-7,restart=True)
+    model.fit(init_coef=coef,method="Newton",extend_lambda=False,max_outer=100,seed=10,conv_tol=1e-7,restart=True,extension_method_lam="nesterov")
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 18.221 

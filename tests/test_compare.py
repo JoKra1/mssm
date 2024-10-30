@@ -86,7 +86,7 @@ class Test_model_comparison2_hard:
     sim1_formulas = [sim1_formula_m,sim1_formula_sd]
 
     sim_fit_model = GAMMLSS(sim1_formulas,family)
-    sim_fit_model.fit()
+    sim_fit_model.fit(extension_method_lam="nesterov")
 
     # We need to model the mean: \mu_i = \alpha + f(x0)
     sim2_formula_m = Formula(lhs("y"),
@@ -102,7 +102,7 @@ class Test_model_comparison2_hard:
     sim2_formulas = [sim2_formula_m,sim2_formula_sd]
 
     sim_fit_model2 = GAMMLSS(sim2_formulas,family)
-    sim_fit_model2.fit()
+    sim_fit_model2.fit(extension_method_lam="nesterov")
 
     # And perform a couple of bias corrected / smoothness uncertainty corrected / or not / comparisons...
     uncor_result = compare_CDL(sim_fit_model,sim_fit_model2,correct_V=False,correct_t1=False,grid='JJJ',seed=22,verbose=True)

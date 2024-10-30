@@ -903,7 +903,7 @@ class GAUMLSS(GAMLSSFamily):
       self.d1 = [lambda y, mu, sigma: (1/np.power(sigma,2))*(y-mu),lambda y, mu, sigma: (np.power(y-mu,2)-np.power(sigma,2))/(np.power(sigma,3))]
       self.d2 = [lambda y, mu, sigma: -(1/np.power(sigma,2)), lambda y, mu, sigma: -(2/np.power(sigma,2))]
       self.d2m = [lambda y, mu, sigma: np.zeros_like(y)]
-      self.mean_init_fam = Gaussian()
+      self.mean_init_fam = Gaussian(link=links[0])
    
    def lp(self,y,mu,sigma):
       """Log-probability of observing every proportion in y under their respective Normal with observation-specific mean and standard deviation.
@@ -1085,7 +1085,7 @@ class GAMMALS(GAMLSSFamily):
       self.d1 = [lambda y, mu, scale: (y-mu)/(scale*np.power(mu,2)),lambda y, mu, scale: (2/(scale*np.sqrt(scale)))*((y/mu)-np.log(y)+np.log(mu)+np.log(scale)-1+scp.special.digamma(1/(scale)))]
       self.d2 = [lambda y, mu, scale:  -1/(scale*np.power(mu,2)), lambda y, mu, scale: (4/np.power(scale,2))-(4/np.power(scale,3))*scp.special.polygamma(1,1/scale)]
       self.d2m = [lambda y, mu, scale: np.zeros_like(y)]
-      self.mean_init_fam = Gamma()
+      self.mean_init_fam = Gamma(link=links[0])
    
    def lp(self,y,mu,scale):
       """Log-probability of observing every proportion in :math:`\mathbf{y}` under their respective Gamma with mean = :math:`\\boldsymbol{\mu}` and scale = :math:`\\boldsymbol{\phi}`.

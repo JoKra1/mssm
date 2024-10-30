@@ -18,11 +18,12 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
                 verbose=False,
                 drop_NA=True,
                 method="Newton",
-                seed=None):
+                seed=None,
+                **bfgs_options):
     
     """(Optionally) performs an approximate GLRT on twice the difference in unpenalized likelihood between ``model1`` and ``model2`` (see Wood, 2017).
     
-    Also computes the AIC difference (see Wood et al., 2016). For the GLRT to be appropriate model1 should be set to the model containing more effects and model2 should be a nested, simpler, variant of model1.
+    Also computes the AIC difference (see Wood et al., 2016). For the GLRT to be appropriate ``model1`` should be set to the model containing more effects and ``model2`` should be a nested, simpler, variant of ``model1``.
     
     For the degrees of freedom for the test, the expected degrees of freedom (EDF) of each model are used (i.e., this is the conditional test discussed in Wood (2017: 6.12.4)).
     The difference between the models in EDF serves as DoF for computing the Chi-Square statistic. Similarly, for each model 2*edf is added to twice the negative (conditional) likelihood to
@@ -47,9 +48,9 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
      - ``compareML`` function from ``itsadug`` R-package: https://rdrr.io/cran/itsadug/man/compareML.html
      - ``anova.gam`` function from ``mgcv``, see: https://www.rdocumentation.org/packages/mgcv/versions/1.9-1/topics/anova.gam
 
-    :param model1: GAMM, GAMLSS, or GSMM 1.
+    :param model1: GAMM, GAMMLSS, or GSMM 1.
     :type model1: GAMM or GAMMLSS or GSMM
-    :param model2: GAMM, GAMLSS, or GSMM 2.
+    :param model2: GAMM, GAMMLSS, or GSMM 2.
     :type model2: GAMM or GAMMLSS or GSMM
     :param correct_V: Whether or not to correct for smoothness uncertainty. Defaults to True
     :type correct_V: bool, optional
@@ -57,9 +58,9 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
     :type correct_t1: bool, optional
     :param perform_GLRT: Whether to perform both a GLRT and to compute the AIC or to only compute the AIC. Defaults to True.
     :type perform_GLRT: bool, optional
-    :param lR: For smoothness uncertainty correction. (Initial, in case grid_type=="JJJ") :math:`\lambda`  Grid is based on `nR` equally-spaced samples from :math:`\lambda/`lr` to \lambda*`lr``, defaults to 100
+    :param lR: For smoothness uncertainty correction. :math:`\lambda`  Grid (at least the initial one, in case grid_type=="JJJ") is based on `nR` equally-spaced samples from :math:`\lambda/lr` to :math:`\lambda*lr`, defaults to 100
     :type lR: int, optional
-    :param nR: For smoothness uncertainty correction. (Initial, in case grid_type=="JJJ") :math:`\lambda`  Grid is based on `nR` equally-spaced samples from :math:`\lambda/lr to \lambda*lr`. In case grid_type=="JJJ", `nR*len(model.formula.penalties)` updates to :math:`V_p` are performed during each of which additional `nR` :math`\lambda` samples/reml scores are generated/computed, defaults to 20
+    :param nR: For smoothness uncertainty correction. :math:`\lambda`  Grid (at least the initial one, in case grid_type=="JJJ") is based on `nR` equally-spaced samples from :math:`\lambda/lr` to :math:`\lambda*lr`. In case grid_type=="JJJ", ``nR*len(model.formula.penalties)`` updates to :math:`\mathbf{V}_{\\boldsymbol{p}}` are performed during each of which additional `nR` :math:`\lambda` samples/reml scores are generated/computed, defaults to 20
     :type nR: int, optional
     :param n_c: Number of cores to use to compute the smoothness uncertaincy correction, defaults to 10
     :type n_c: int, optional
@@ -71,10 +72,13 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
     :type verbose: bool, optional
     :param drop_NA: Whether to drop rows in the **model matrices** corresponding to NAs in the dependent variable vector. Defaults to True.
     :type drop_NA: bool,optional
-    :param method: Which method to use to estimate the coefficients for GSMM models - supports "Newton" and "BFGS". In case of the former, ``model.family`` needs to implement :func:``gradient`` and :func:``hessian``. Defaults to "Newton"
+    :param method: Which method to use to estimate the coefficients - supports "Newton", "BFGS", and "L-BFGS-B". In case of the former, ``self.family`` needs to implement :func:`gradient` and :func:`hessian`. Defaults to "Newton"
     :type method: str,optional
     :param seed: Seed to use for random parts of the correction. Defaults to None
     :type seed: int,optional
+    :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100. Defaults to None.
+    :type bfgs_options: key=value,optional
+    :raises ValueError: Will throw an error when ``method`` is not one of 'Newton', 'BFGS', 'L-BFGS-B' and a :class:`mssm.models.GSMM` is to be estimated.
     :raises ValueError: If both models are from different families.
     :raises ValueError: If ``perform_GLRT=True`` and ``model1`` has fewer coef than ``model2`` - i.e., ``model1`` has to be the notationally more complex one.
     :return: A dictionary with outcomes of all tests. Key ``H1`` will be a bool indicating whether Null hypothesis was rejected or not, ``p`` will be the p-value, ``chi^2`` will be the test statistic used, ``Res. DOF`` will be the degrees of freedom used by the test, ``aic1`` and ``aic2`` will be the aic scores for both models.
@@ -94,8 +98,8 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
     if correct_V:
         if verbose:
             print("Correcting for uncertainty in lambda estimates...\n")
-        _,_,DOF1,DOF12,expected_aic1 = correct_VB(model1,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,verbose=verbose,drop_NA=drop_NA,method=method,seed=seed)
-        _,_,DOF2,DOF22,expected_aic2 = correct_VB(model2,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,verbose=verbose,drop_NA=drop_NA,method=method,seed=seed)
+        _,_,DOF1,DOF12,expected_aic1 = correct_VB(model1,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,verbose=verbose,drop_NA=drop_NA,method=method,seed=seed,**bfgs_options)
+        _,_,DOF2,DOF22,expected_aic2 = correct_VB(model2,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,verbose=verbose,drop_NA=drop_NA,method=method,seed=seed,**bfgs_options)
         
         if correct_t1:
             # Section 6.12.4 suggests replacing t (edf) with t1 (2*t - (F@F).trace()) with F=(X.T@X+S_\llambda)^{-1}@X.T@X for GLRT - with the latter also being corrected for
