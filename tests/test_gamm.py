@@ -562,10 +562,10 @@ class Test_Vp_estimation:
     Vp = estimateVp(model,verbose=True,nR=20,lR=100,conv_tol=1e-2,id_weight=0,seed=20)
 
     def test_Vp(self):
-        assert np.allclose(np.round(self.Vp,decimals=2), np.array([[ 0.43, -0.18, -0.01,  0.01],
-                                                                   [-0.18,  0.95,  0.  , -0.01],
-                                                                   [-0.01,  0.  ,  0.18, -0.05],
-                                                                   [ 0.01, -0.01, -0.05,  1.62]]))
+        assert np.allclose(np.round(self.Vp,decimals=2), np.array([[ 0.42, -0.15,  0.  , -0.08],
+                                                                   [-0.15,  1.08,  0.04, -0.16],
+                                                                   [ 0.  ,  0.04,  0.14, -0.07],
+                                                                   [-0.08, -0.16, -0.07,  1.71]]))
 
 class Test_diff_hard:
     # pred_diff test

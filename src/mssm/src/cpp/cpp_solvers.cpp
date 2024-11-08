@@ -81,6 +81,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::SparseMatrix<double>,Eigen::Vector
                                                     (Eigen::SparseMatrix<double,0,long long int>::Scalar*) Adata.data());
     // Computed column-pivoted QR factorization of A.
     Eigen::SparseQR<Eigen::SparseMatrix<double>,Eigen::COLAMDOrdering<int>> solver;
+    //solver.setPivotThreshold(1e-8*A.norm());
     solver.compute(A);
 
     // Column permutation matrix

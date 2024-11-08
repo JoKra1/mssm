@@ -15,6 +15,7 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
                 n_c=10,
                 alpha=0.05,
                 grid='JJJ',
+                a=1e-7,b=1e7,df=40,
                 verbose=False,
                 drop_NA=True,
                 method="Newton",
@@ -22,22 +23,22 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
                 **bfgs_options):
     
     """(Optionally) performs an approximate GLRT on twice the difference in unpenalized likelihood between ``model1`` and ``model2`` (see Wood, 2017).
-    
-    Also computes the AIC difference (see Wood et al., 2016). For the GLRT to be appropriate ``model1`` should be set to the model containing more effects and ``model2`` should be a nested, simpler, variant of ``model1``.
+    For the GLRT to be appropriate ``model1`` should be set to the model containing more effects and ``model2`` should be a nested, simpler, variant of ``model1``.
     
     For the degrees of freedom for the test, the expected degrees of freedom (EDF) of each model are used (i.e., this is the conditional test discussed in Wood (2017: 6.12.4)).
-    The difference between the models in EDF serves as DoF for computing the Chi-Square statistic. Similarly, for each model 2*edf is added to twice the negative (conditional) likelihood to
-    compute the aic (see Wood et al., 2016).
+    The difference between the models in EDF serves as DoF for computing the Chi-Square statistic.
+    
+    Also computes the AIC difference (see Wood et al., 2016). For each model 2*edf is added to twice the negative (conditional) likelihood to compute the aic (see Wood et al., 2016).
     
     By default (``correct_V=True``), ``mssm`` will attempt to correct the edf for uncertainty in the estimated :math:`\lambda` parameters. This requires computing a costly
     correction (see Greven & Scheipl, 2016 and the ``correct_VB`` function in the utils module) which will take quite some time for reasonably large models with more than 3-4 smoothing parameters.
     In that case relying on CIs and penalty-based comparisons might be preferable (see Marra & Wood, 2011 for details on the latter).
 
-    In case ``correct_t1=True`` the EDF will be set to the (smoothness uncertainty corrected in case ``correct_V=True``) and smoothness bias corrected exprected degrees of freedom (t1 in section 6.1.2 of Wood, 2017),
-    for the GLRT (based on reccomendation given in section 6.12.4 in Wood, 2017). The AIC (Wood, 2017) of both models will still be based on the regular (smoothness uncertainty corrected) edf.
+    In case ``correct_t1=True`` the EDF will be set to the (smoothness uncertainty corrected in case ``correct_V=True``) smoothness bias corrected exprected degrees of freedom (t1 in section 6.1.2 of Wood, 2017),
+    for the GLRT (based on recomendation given in section 6.12.4 in Wood, 2017). The AIC (Wood, 2017) of both models will still be based on the regular (smoothness uncertainty corrected) edf.
 
     The computation here is different to the one performed by the ``compareML`` function in the R-package ``itsadug`` - which rather performs a version of the marginal GLRT
-    (also discussed in Wood, 2017: 6.12.4). The p-value is approximate - very **very** much so if ``correct_V=False`` and the test should not be used to compare models differing in their random effect structures
+    (also discussed in Wood, 2017: 6.12.4). The p-value is approximate - very **very** much so if ``correct_V=False``. Also, the test should not be used to compare models differing in their random effect structures
     (see Wood, 2017: 6.12.4).
 
     References:
@@ -68,6 +69,12 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
     :type alpha: float, optional
     :param grid: How to define the grid of :math:`\lambda` values on which to base the correction - see :func:`correct_VB` for details, defaults to 'JJJ'
     :type grid: str, optional
+    :param a: Minimum :math:`\lambda` value that is included when forming the initial grid when correcting for uncertainty. In addition, any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})`) which are smaller than this are set to this value as well, defaults to 1e-7 the minimum possible estimate
+    :type a: float, optional
+    :param b: Maximum :math:`\lambda` value that is included when forming the initial grid when correcting for uncertainty. In addition, any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})`) which are larger than this are set to this value as well, defaults to 1e7 the maximum possible estimate
+    :type b: float, optional
+    :param df: Degrees of freedom used for the multivariate t distribution used to sample the next set of candidates. Setting this to ``np.inf`` means a multivariate normal is used for sampling, defaults to 40
+    :type df: int, optional
     :param verbose: Whether to print progress information or not, defaults to False
     :type verbose: bool, optional
     :param drop_NA: Whether to drop rows in the **model matrices** corresponding to NAs in the dependent variable vector. Defaults to True.
@@ -98,8 +105,8 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
     if correct_V:
         if verbose:
             print("Correcting for uncertainty in lambda estimates...\n")
-        _,_,DOF1,DOF12,expected_aic1 = correct_VB(model1,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,verbose=verbose,drop_NA=drop_NA,method=method,seed=seed,**bfgs_options)
-        _,_,DOF2,DOF22,expected_aic2 = correct_VB(model2,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,verbose=verbose,drop_NA=drop_NA,method=method,seed=seed,**bfgs_options)
+        _,_,DOF1,DOF12,expected_aic1 = correct_VB(model1,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,seed=seed,**bfgs_options)
+        _,_,DOF2,DOF22,expected_aic2 = correct_VB(model2,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,seed=seed,**bfgs_options)
         
         if correct_t1:
             # Section 6.12.4 suggests replacing t (edf) with t1 (2*t - (F@F).trace()) with F=(X.T@X+S_\llambda)^{-1}@X.T@X for GLRT - with the latter also being corrected for

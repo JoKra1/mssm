@@ -1266,7 +1266,7 @@ class GAMMLSS(GAMM):
         return self.family.get_resid(self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat],*self.overall_mus)
         
 
-    def fit(self,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,progress_bar=True,n_cores=10,seed=0):
+    def fit(self,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,progress_bar=True,n_cores=10,seed=0,init_lambda=None):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -1288,6 +1288,8 @@ class GAMMLSS(GAMM):
         :type n_cores: int,optional
         :param seed: Seed to use for random parameter initialization. Defaults to 0
         :type seed: int,optional
+        :param init_lambda: A set of initial :math:`\lambda` parameters to use by the model. Length of list must match number of parameters to be estimated. Defaults to None
+        :type init_lambda: [float],optional
         """
         
         # Get y
@@ -1319,7 +1321,10 @@ class GAMMLSS(GAMM):
 
         # Start with much weaker penalty than for GAMs
         for pen_i in range(len(gamlss_pen)):
-            gamlss_pen[pen_i].lam = 0.01
+            if init_lambda is None:
+                gamlss_pen[pen_i].lam = 0.01
+            else:
+                gamlss_pen[pen_i].lam = init_lambda[pen_i]
 
         # Initialize overall coefficients
         form_n_coef = [form.n_coef for form in self.formulas]
@@ -1712,7 +1717,7 @@ class GSMM(GAMMLSS):
         """
         return None
     
-    def fit(self,init_coef=None,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,restart=False,progress_bar=True,n_cores=10,seed=0,method="Newton",drop_NA=True,**bfgs_options):
+    def fit(self,init_coef=None,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,restart=False,progress_bar=True,n_cores=10,seed=0,method="Newton",drop_NA=True,init_lambda=None,**bfgs_options):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -1740,6 +1745,8 @@ class GSMM(GAMMLSS):
         :type method: str,optional
         :param drop_NA: Whether to drop rows in the **model matrices** corresponding to NAs in the dependent variable vector. Defaults to True.
         :type drop_NA: bool,optional
+        :param init_lambda: A set of initial :math:`\lambda` parameters to use by the model. Length of list must match number of parameters to be estimated. Defaults to None
+        :type init_lambda: [float],optional
         :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to ``conv_tol``. Note also, that in any case the ``maxiter`` argument is automatically set to ``max_inner``. Defaults to None.
         :type bfgs_options: key=value,optional
         :raises ValueError: Will throw an error when ``method`` is not one of 'Newton', 'BFGS', 'L-BFGS-B'.
@@ -1778,7 +1785,10 @@ class GSMM(GAMMLSS):
 
         # Start with much weaker penalty than for GAMs
         for pen_i in range(len(smooth_pen)):
-            smooth_pen[pen_i].lam = 0.001
+            if init_lambda is None:
+                smooth_pen[pen_i].lam = 0.001
+            else:
+                smooth_pen[pen_i].lam = init_lambda[pen_i]
 
         # Optionally Initialize overall coefficients
         form_n_coef = [form.n_coef for form in self.formulas]

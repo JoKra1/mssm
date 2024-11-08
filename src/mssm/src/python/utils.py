@@ -500,7 +500,7 @@ def REML(llk,nH,coef,scale,penalties):
    # Done
    return reml + lgdetS/2 - lgdetXXS/2 + (Mp*np.log(2*np.pi))/2
 
-def estimateVp(model,nR = 20,lR = 100,n_c=10,verbose=False,drop_NA=True,method="Newton",seed=None,conv_tol=1e-7,id_weight=0.01,**bfgs_options):
+def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=True,method="Newton",seed=None,conv_tol=1e-7,df=40,**bfgs_options):
     """Estimate covariance matrix :math:`\mathbf{V}_{\\boldsymbol{p}}` of posterior for :math:`\mathbf{p} = log(\\boldsymbol{\lambda})`. REML scores are used to
     approximate expectation, similar to what was suggested by Greven & Scheipl (2016).
 
@@ -516,6 +516,10 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,verbose=False,drop_NA=True,method="
     :type lR: int, optional
     :param n_c: Number of cores to use to compute the estimate, defaults to 10
     :type n_c: int, optional
+    :param a: Minimum :math:`\lambda` value that is included when forming the initial grid. In addition, any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})`) which are smaller than this are set to this value as well, defaults to 1e-7 the minimum possible estimate
+    :type a: float, optional
+    :param b: Maximum :math:`\lambda` value that is included when forming the initial grid. In addition, any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})`) which are larger than this are set to this value as well, defaults to 1e7 the maximum possible estimate
+    :type b: float, optional
     :param verbose: Whether to print progress information or not, defaults to False
     :type verbose: bool, optional
     :param drop_NA: Whether to drop rows in the **model matrices** corresponding to NAs in the dependent variable vector. Defaults to True.
@@ -526,8 +530,8 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,verbose=False,drop_NA=True,method="
     :type seed: int,optional
     :param conv_tol: Tolerance used to determine whether estimate has converged. The Frobenius norm of the **difference** in the estimate after the update (``||Vp_next - Vp||``) is compared to ``conv_tol*||Vp_next||``, defaults to 1e-7
     :type conv_tol: float, optional
-    :param id_weight: Value to add to the diagonal of the current estimate of ``Vp`` when sampling the next set of candidates. Is decreased according to ``0.99*id_weight`` after every sampling step, defaults to 0.01
-    :type id_weight: float, optional
+    :param df: Degrees of freedom used for the multivariate t distribution used to sample the next set of candidates. Setting this to ``np.inf`` means a multivariate normal is used for sampling, defaults to 40
+    :type df: int, optional
     :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100. Defaults to None.
     :type bfgs_options: key=value,optional
     :raises ValueError: Will throw an error when ``method`` is not one of 'Newton', 'BFGS', 'L-BFGS-B' and a :class:`mssm.models.GSMM` is to be estimated.
@@ -559,14 +563,14 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,verbose=False,drop_NA=True,method="
     for pi,pen in enumerate(rPen):
         
         # Set up marginal grid from \lambda/lr to \lambda*lr
-        mGrid = np.exp(np.linspace(np.log(max([1e-7,pen.lam/lR])),np.log(min([1e7,pen.lam*lR])),nR))
+        mGrid = np.exp(np.linspace(np.log(max([a,pen.lam/lR])),np.log(min([b,pen.lam*lR])),nR))
         
         # Now create penalty candidates conditional on estimates for all other penalties except current one
         for val in mGrid:
             if abs(val - pen.lam) <= 1e-7:
                 continue
             
-            rGrid.append(np.array([val if pii == pi else np_gen.choice(np.exp(np.linspace(np.log(max([1e-7,pen2.lam/lR])),np.log(min([1e7,pen2.lam*lR])),nR)),size=None) for pii,pen2 in enumerate(rPen)]))
+            rGrid.append(np.array([val if pii == pi else np_gen.choice(np.exp(np.linspace(np.log(max([a,pen2.lam/lR])),np.log(min([b,pen2.lam*lR])),nR)),size=None) for pii,pen2 in enumerate(rPen)]))
     
     # Make sure actual estimate is included once.
     rGrid.append(np.array([pen2.lam for pen2 in rPen]))
@@ -611,12 +615,12 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,verbose=False,drop_NA=True,method="
     
     # Iteratively estimate Vp - covariance matrix of log(\lambda) to guide further REML grid sampling
     if isinstance(family,Family):
-        ep = np.log(np.array([pen.lam for pen in model.formula.penalties]).reshape(-1,1))
+        ep = np.log(np.array([min(b,max(a,pen.lam)) for pen in model.formula.penalties]).reshape(-1,1))
     else:
-        ep = np.log(np.array([pen.lam for pen in model.overall_penalties]).reshape(-1,1))
+        ep = np.log(np.array([min(b,max(a,pen.lam)) for pen in model.overall_penalties]).reshape(-1,1))
 
     # Get first estimate for Vp based on samples collected so far
-    Vp = updateVp(ep,remls,rGrid) + id_weight*np.identity(len(ep))
+    Vp = updateVp(ep,remls,rGrid)
 
     # Now continuously update Vp and generate more REML samples in the process
     n_est = nR
@@ -628,7 +632,7 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,verbose=False,drop_NA=True,method="
         # Generate next \lambda values for which to compute REML, and Vb
         p_sample = []
         while len(p_sample) == 0:
-            p_sample = scp.stats.multivariate_normal.rvs(mean=np.ndarray.flatten(ep),cov=Vp,size=n_est,random_state=seed)
+            p_sample = scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=n_est,random_state=seed)
             p_sample = np.exp(p_sample)
 
             if len(np.ndarray.flatten(ep)) == 1: # Single lambda parameter in model
@@ -641,7 +645,12 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,verbose=False,drop_NA=True,method="
             elif n_est == 1: # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
                 p_sample = np.array([p_sample]).reshape(1,-1)
             
-            p_sample = p_sample[[np.any(np.all(rGrid==lam,axis=1))==False for lam in p_sample]]
+            # Re-sample values we have encountered before.
+            minDiag = 0.1*min(np.sqrt(Vp.diagonal()))
+            for lami in range(p_sample.shape[0]):
+                while np.any(np.max(np.abs(rGrid - p_sample[lami]),axis=1) < minDiag):
+                    seed += 1
+                    p_sample[lami] = np.exp(scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=1,random_state=seed))
 
             if not seed is None:
                 seed += 1
@@ -660,14 +669,7 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,verbose=False,drop_NA=True,method="
             remls.append(reml)
             rGrid = np.concatenate((rGrid,ps.reshape(1,-1)),axis=0)
 
-        # Update Vp - based on additional REML scores available now
-        id_weight *= 0.99
-
-        # Last step should not involve identity at all.
-        if sp == (nR-1):
-            id_weight = 0
-
-        Vp_next = updateVp(ep,remls,rGrid) + id_weight*np.identity(len(ep))
+        Vp_next = updateVp(ep,remls,rGrid)
         
         # Check convergence
         vp_diff_norm = scp.linalg.norm(Vp-Vp_next,ord='fro')
@@ -683,7 +685,7 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,verbose=False,drop_NA=True,method="
                 enumerator.set_description_str(desc="Converged!", refresh=True)
                 enumerator.close()
             break
-    
+    #print(len(np.unique(rGrid,axis=0)),rGrid.shape)
     return Vp
 
 def updateVp(ep,remls,rGrid):
@@ -765,7 +767,7 @@ def _compute_VB_corr_terms_MP(family,address_y,address_dat,address_ptr,address_i
    # Now collect what we need for the remaining terms
    return Linv,coef,reml,scale,edf,llk
 
-def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_t1=False,verbose=False,drop_NA=True,method="Newton",seed=None,**bfgs_options):
+def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',a=1e-7,b=1e7,df=40,n_c=10,form_t=True,form_t1=False,verbose=False,drop_NA=True,method="Newton",seed=None,**bfgs_options):
     """Estimate :math:`\mathbf{V}`, the covariance matrix of the unconditional posterior :math:`\\boldsymbol{\\beta} | y \sim N(\hat{\\boldsymbol{\\beta}},\\mathbf{V})` to account for smoothness uncertainty.
     
     Wood et al. (2016) and Wood (2017) show that when basing conditional versions of model selection criteria or hypothesis
@@ -810,6 +812,12 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
     :type lR: int, optional
     :param grid_type: How to define the grid of :math:`\lambda` values on which to base the correction - see above for details, defaults to 'JJJ'
     :type grid_type: str, optional
+    :param a: Minimum :math:`\lambda` value that is included when forming the initial grid. In addition, any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})`) which are smaller than this are set to this value as well, defaults to 1e-7 the minimum possible estimate
+    :type a: float, optional
+    :param b: Maximum :math:`\lambda` value that is included when forming the initial grid. In addition, any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})`) which are larger than this are set to this value as well, defaults to 1e7 the maximum possible estimate
+    :type b: float, optional
+    :param df: Degrees of freedom used for the multivariate t distribution used to sample the next set of candidates. Setting this to ``np.inf`` means a multivariate normal is used for sampling, defaults to 40
+    :type df: int, optional
     :param n_c: Number of cores to use to compute the correction, defaults to 10
     :type n_c: int, optional
     :param form_t: Whether or not the smoothness uncertainty corrected edf should be computed, defaults to True
@@ -850,7 +858,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
 
     if grid_type == 'GS':
         # Build Full prior grid as discussed by Greven & Scheipl in their comment on Wood et al. (2016)
-        rGrid = [np.exp(np.linspace(np.log(1e-7),np.log(1e7),nR)) for _ in range(nPen)]
+        rGrid = [np.exp(np.linspace(np.log(a),np.log(b),nR)) for _ in range(nPen)]
         rGrid = np.array(list(product(*rGrid)))
     else:
         # Set up grid of nR equidistant values based on marginal grids that cover range from \lambda/lr to \lambda*lr
@@ -860,14 +868,14 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
         for pi,pen in enumerate(rPen):
             
             # Set up marginal grid from \lambda/lr to \lambda*lr
-            mGrid = np.exp(np.linspace(np.log(max([1e-7,pen.lam/lR])),np.log(min([1e7,pen.lam*lR])),nR))
+            mGrid = np.exp(np.linspace(np.log(max([a,pen.lam/lR])),np.log(min([b,pen.lam*lR])),nR))
             
             # Now create penalty candidates conditional on estimates for all other penalties except current one
             for val in mGrid:
                 if abs(val - pen.lam) <= 1e-7:
                     continue
                 
-                rGrid.append(np.array([val if pii == pi else np_gen.choice(np.exp(np.linspace(np.log(max([1e-7,pen2.lam/lR])),np.log(min([1e7,pen2.lam*lR])),nR)),size=None) for pii,pen2 in enumerate(rPen)]))
+                rGrid.append(np.array([val if pii == pi else np_gen.choice(np.exp(np.linspace(np.log(max([a,pen2.lam/lR])),np.log(min([b,pen2.lam*lR])),nR)),size=None) for pii,pen2 in enumerate(rPen)]))
         
         # Make sure actual estimate is included once.
         rGrid.append(np.array([pen2.lam for pen2 in rPen]))
@@ -963,6 +971,8 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
         enumerator = rGrid
         if verbose:
             enumerator = tqdm(rGrid)
+        
+        rGridx = 0
         for r in enumerator:
 
             # Prepare penalties with current lambda candidate r
@@ -982,11 +992,18 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
                 Vb = Linv.T@Linv*scale
                 Vb += coef@coef.T
             else:
-                reml,V,coef,edf,llk = compute_REML_candidate_GSMM(family,init_coef,len(init_coef),model.coef_split_idx,y,Xs,rPen,n_c=n_c,method=method,**bfgs_options)
-                coef = coef.reshape(-1,1)
+                try:
+                    reml,V,coef,edf,llk = compute_REML_candidate_GSMM(family,init_coef,len(init_coef),model.coef_split_idx,y,Xs,rPen,n_c=n_c,method=method,**bfgs_options)
+                    coef = coef.reshape(-1,1)
+                except:
+                    warnings.warn(f"Unable to compute REML score for sample {r}. Skipping.")
+                    rGrid = np.delete(rGrid,rGridx,0)
+                    continue
 
                 # Can already compute first term from correction
                 Vb = V + coef@coef.T
+
+            rGridx += 1 # Only if we actually reach this point..
 
             # and aic under current penalty
             aic = -2*llk + 2*edf
@@ -1001,14 +1018,13 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
 
     if grid_type == "JJJ":
         # Iteratively estimate Vp - covariance matrix of log(\lambda) to guide further REML grid sampling
-        id_weight = 0.1
         if isinstance(family,Family):
-            ep = np.log(np.array([pen.lam for pen in model.formula.penalties]).reshape(-1,1))
+            ep = np.log(np.array([min(b,max(a,pen.lam)) for pen in model.formula.penalties]).reshape(-1,1))
         else:
-            ep = np.log(np.array([pen.lam for pen in model.overall_penalties]).reshape(-1,1))
+            ep = np.log(np.array([min(b,max(a,pen.lam)) for pen in model.overall_penalties]).reshape(-1,1))
 
         # Get first estimate for Vp based on samples collected so far
-        Vp = updateVp(ep,remls,rGrid) + id_weight*np.identity(len(ep))
+        Vp = updateVp(ep,remls,rGrid)
 
         # Now continuously update Vp and generate more REML samples in the process
         n_est = nR
@@ -1064,7 +1080,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
                     # Generate next \lambda values for which to compute REML, and Vb
                     p_sample = []
                     while len(p_sample) == 0:
-                        p_sample = scp.stats.multivariate_normal.rvs(mean=np.ndarray.flatten(ep),cov=Vp,size=n_est,random_state=seed)
+                        p_sample = scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=n_est,random_state=seed)
                         p_sample = np.exp(p_sample)
 
                         if len(np.ndarray.flatten(ep)) == 1: # Single lambda parameter in model
@@ -1077,7 +1093,12 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
                         elif n_est == 1: # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
                             p_sample = np.array([p_sample]).reshape(1,-1)
 
-                        p_sample = p_sample[[np.any(np.all(rGrid==lam,axis=1))==False for lam in p_sample]]
+                        # Re-sample values we have encountered before.
+                        minDiag = 0.1*min(np.sqrt(Vp.diagonal()))
+                        for lami in range(p_sample.shape[0]):
+                            while np.any(np.max(np.abs(rGrid - p_sample[lami]),axis=1) < minDiag):
+                                seed += 1
+                                p_sample[lami] = np.exp(scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=1,random_state=seed))
 
                         if not seed is None:
                             seed += 1
@@ -1104,13 +1125,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
                     rGrid = np.concatenate((rGrid,p_sample),axis=0)
 
                     # Update Vp - based on additional REML scores available now
-                    id_weight *= 0.99
-
-                    # Last step should not involve identity at all.
-                    if sp == (nR-1):
-                        id_weight = 0
-
-                    Vp = updateVp(ep,remls,rGrid) + id_weight*np.identity(len(ep))
+                    Vp = updateVp(ep,remls,rGrid)
             
         else:
             enumerator = range(nR*len(ep))
@@ -1121,7 +1136,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
                 # Generate next \lambda values for which to compute REML, and Vb
                 p_sample = []
                 while len(p_sample) == 0:
-                    p_sample = scp.stats.multivariate_normal.rvs(mean=np.ndarray.flatten(ep),cov=Vp,size=n_est,random_state=seed)
+                    p_sample = scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=n_est,random_state=seed)
                     p_sample = np.exp(p_sample)
 
                     if len(np.ndarray.flatten(ep)) == 1: # Single lambda parameter in model
@@ -1134,7 +1149,13 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
                     elif n_est == 1: # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
                         p_sample = np.array([p_sample]).reshape(1,-1)
                     
-                    p_sample = p_sample[[np.any(np.all(rGrid==lam,axis=1))==False for lam in p_sample]]
+                    # Re-sample values we have encountered before.
+                    minDiag = 0.1*min(np.sqrt(Vp.diagonal()))
+                    for lami in range(p_sample.shape[0]):
+                        
+                        while np.any(np.max(np.abs(rGrid - p_sample[lami]),axis=1) < minDiag):
+                            seed += 1
+                            p_sample[lami] = np.exp(scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=1,random_state=seed))
 
                     if not seed is None:
                         seed += 1
@@ -1155,7 +1176,12 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
                         Vb = Linv.T@Linv*scale
                         Vb += coef@coef.T
                     else:
-                        reml,V,coef,edf,llk = compute_REML_candidate_GSMM(family,init_coef,len(init_coef),model.coef_split_idx,y,Xs,rPen,n_c=n_c,method=method,**bfgs_options)
+                        try:
+                            reml,V,coef,edf,llk = compute_REML_candidate_GSMM(family,init_coef,len(init_coef),model.coef_split_idx,y,Xs,rPen,n_c=n_c,method=method,**bfgs_options)
+                        except:
+                            warnings.warn(f"Unable to compute REML score for sample {np.exp(ps)}. Skipping.")
+                            continue
+
                         coef = coef.reshape(-1,1)
 
                         # Can already compute first term from correction
@@ -1174,13 +1200,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
                     rGrid = np.concatenate((rGrid,ps.reshape(1,-1)),axis=0)
 
                 # Update Vp - based on additional REML scores available now
-                id_weight *= 0.99
-
-                # Last step should not involve identity at all.
-                if sp == (nR-1):
-                    id_weight = 0
-
-                Vp = updateVp(ep,remls,rGrid) + id_weight*np.identity(len(ep))
+                Vp = updateVp(ep,remls,rGrid)
 
     # Compute weights proposed by Greven & Scheipl (2017)
     ws = scp.special.softmax(remls)
@@ -1240,5 +1260,8 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ',n_c=10,form_t=True,form_
     total_edf2 = None
     if form_t1:
         total_edf2 = 2*total_edf - (F@F).trace()
+
+    if verbose:
+        print(f"Correction was based on {rGrid.shape[0]} samples in total.")
 
     return V,LV,total_edf,total_edf2,expected_aic
