@@ -75,7 +75,7 @@ class Test_NUll_penalty_reparam_hard:
     model.fit()
 
     #Compute re-parameterization strategy from Wood (2011)
-    S_emb,S_pinv,_ = compute_S_emb_pinv_det(len(model.coef),formula.penalties,"svd")
+    S_emb,S_pinv,_,_ = compute_S_emb_pinv_det(len(model.coef),formula.penalties,"svd")
     Sj_reps,S_reps,SJ_term_idx,S_idx,S_coefs,Q_reps,_,Mp = reparam(None,formula.penalties,None,option=4)
 
     # For Computing derivative of log(|S_{\lambda}|) with respect to \lambda_j of univariate smooth term (Wood, 2011)
@@ -371,6 +371,77 @@ class Test_te_rs_fact_hard:
 
         comp = "f(['time', 'x']); edf: 16.262\nrs(['fact'],sub); edf: 38.08\nrs(['x', 'fact'],sub):0; edf: 12.841\nrs(['x', 'fact'],sub):1; edf: 14.283\nrs(['x', 'fact'],sub):2; edf: 10.333\n"
         assert comp == capture
+
+class Test_te_rs_fact_QR_hard:
+    # te + random slope with factor
+    sim_dat,_ = sim1(100,random_seed=100)
+
+    # Specify formula 
+    formula = Formula(lhs("y"),[i(),f(["time","x"],te=True,nk=5),rs(["fact"],rf="sub"),rs(["x","fact"],rf="sub")],data=sim_dat)
+
+    # ... and model
+    model = GAMM(formula,Gaussian())
+
+    model.fit(maxiter=100,method="QR")
+
+    def test_GAMedf(self):
+        assert round(self.model.edf,ndigits=3) == 92.799
+
+    def test_GAMsigma(self):
+        _, sigma = self.model.get_pars()
+        assert round(sigma,ndigits=3) == 47.504 
+
+    def test_GAMcoef(self):
+        coef, _ = self.model.get_pars()
+        assert np.allclose(coef,np.array([-8.79466679e-01, -1.42665133e+01, -7.12780629e-01,  3.40596000e+01,
+                                          -1.08752800e+02,  3.50080263e+01,  4.95989498e+00,  1.54738772e+01,
+                                          1.22593309e+01, -1.01770212e+02,  6.94991330e+01,  2.64634317e+00,
+                                          1.79449764e+01,  3.64550157e+00, -7.01295525e+01,  1.05341012e+01,
+                                          2.05535593e+00,  1.00407366e+01,  6.76286123e+00, -4.33860584e+01,
+                                          -2.72537485e+01,  4.40916432e+01, -2.47025735e+01, -3.63239593e+01,
+                                          -1.81123418e+01,  0.00000000e+00,  8.19502434e-01, -1.89869660e+00,
+                                          7.77213135e+00,  2.39231089e+00,  0.00000000e+00,  1.64041596e+01,
+                                          1.89526959e+00,  4.86695363e+00,  7.82711183e+00,  5.40842687e+00,
+                                          -2.02554010e+00,  1.19973402e+01,  5.49455902e+00,  6.32746141e-01,
+                                          7.21936353e+00,  4.22510016e+00,  6.53629678e+00,  2.48923541e+00,
+                                          4.69790311e+00,  0.00000000e+00,  4.61136211e+00, -1.58008162e+01,
+                                          -3.71429482e-01, -1.35877989e+01, -8.82086428e+00, -1.83059447e+00,
+                                          -6.53031959e+00,  6.86532325e-01, -3.83484478e+00, -2.42908161e+01,
+                                          0.00000000e+00, -1.19886816e+00, -8.63507795e-02,  2.30144847e+00,
+                                          -8.15547651e+00, -6.61474003e-01, -1.76980329e+00, -1.03333860e+01,
+                                          7.86808056e-01,  2.08755659e+00,  6.64058356e+00, -6.26749300e+00,
+                                          0.00000000e+00,  5.86426408e+00,  0.00000000e+00,  8.74772877e+00,
+                                          -5.64431505e-01, -4.07788716e+00,  0.00000000e+00, -1.62136613e+00,
+                                          -2.83218352e+00,  0.00000000e+00, -2.43338874e+00,  4.49036680e+00,
+                                          1.02243225e+00, -9.31623039e-01, -1.08309369e+01,  1.17661439e+01,
+                                          -8.92724816e+00,  0.00000000e+00,  1.07740692e-01, -9.10517393e-02,
+                                          -3.49853688e-01,  1.38092435e-01,  0.00000000e+00, -2.56971942e-01,
+                                          9.08873976e-02,  1.98817200e-01, -1.26845516e+00,  4.80118797e-02,
+                                          4.68245147e-02, -8.60959771e-02, -2.06275971e-01,  2.80956072e-02,
+                                          -6.30483694e-01,  1.88441848e-01,  1.59882398e-01,  1.37055533e-01,
+                                          1.55834714e-01,  0.00000000e+00, -8.92050571e-01,  1.43995287e+00,
+                                          -8.08457853e-02,  1.96949080e-01,  2.67802047e-01, -9.13621685e-02,
+                                          1.82404053e-01,  1.25415679e-01,  1.81309059e-01,  4.27980878e+00,
+                                          0.00000000e+00, -4.47337848e-01, -1.98021004e-02,  1.87851009e-01,
+                                          1.39039789e+00, -2.64815249e-01, -2.88913125e-01,  1.82648150e-01,
+                                          1.40675871e-01, -1.47606040e-01,  4.74811072e-01,  4.47699846e-01,
+                                          0.00000000e+00,  1.91152900e-01,  0.00000000e+00,  1.14977007e-01,
+                                          2.60837069e-01, -1.42456244e-01,  0.00000000e+00, -8.95047488e-02,
+                                          -5.00499378e-01,  0.00000000e+00, -1.17699605e-01, -7.29515187e-02,
+                                          5.26788515e-02, -4.35919112e-02,  7.94478361e-01, -7.42621908e-01,
+                                          5.24458034e-01])) 
+
+    def test_GAMlam(self):
+        lam = np.array([p.lam for p in self.model.formula.penalties])
+        assert np.allclose(lam,np.array([2.05987380e-02, 3.49484348e-03, 6.61282336e-01, 2.49880143e+02, 2.85461589e+01, 2.11040098e+02])) 
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        assert round(reml,ndigits=3) == -32225.017 
+
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        assert round(llk,ndigits=3) == -31959.948
 
 class Test_print_parametric_hard:
     # te + random slope with factor

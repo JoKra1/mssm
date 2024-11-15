@@ -3,7 +3,7 @@ import scipy as scp
 import warnings
 from .exp_fam import Family,Gaussian,est_scale,GAMLSSFamily,Identity
 from .penalties import PenType,id_dist_pen,translate_sparse,dataclass
-from .formula import build_sparse_matrix_from_formula,setup_cache,clear_cache,cpp_solvers,pd,Formula,mp,repeat,os,map_csc_to_eigen,math,tqdm,sys
+from .formula import build_sparse_matrix_from_formula,setup_cache,clear_cache,cpp_solvers,pd,Formula,mp,repeat,os,map_csc_to_eigen,math,tqdm,sys,copy
 from functools import reduce
 from multiprocessing import managers,shared_memory
 
@@ -34,6 +34,9 @@ def cpp_solve_am(y,X,S):
 
 def cpp_solve_coef(y,X,S):
    return cpp_solvers.solve_coef(y,*map_csc_to_eigen(X),*map_csc_to_eigen(S))
+
+def cpp_solve_coef_pqr(y,X,E):
+   return cpp_solvers.solve_coef_pqr(y,*map_csc_to_eigen(X),*map_csc_to_eigen(E))
 
 def cpp_solve_coefXX(Xy,XXS):
    return cpp_solvers.solve_coefXX(Xy,*map_csc_to_eigen(XXS))
@@ -92,15 +95,17 @@ def grad_lambda(lgdet_deriv,ldet_deriv,bSb,scale):
    # From Wood & Fasiolo (2016)
    return lgdet_deriv/2 - ldet_deriv/2 - bSb / (2*scale)
 
-def compute_S_emb_pinv_det(col_S,penalties,pinv):
+def compute_S_emb_pinv_det(col_S,penalties,pinv,root=False):
    # Computes final S multiplied with lambda
-   # and the pseudo-inverse of this term.
+   # and the pseudo-inverse of this term. Optionally, the matrix
+   # root of this term can be computed as well.
    S_emb = None
 
    # We need to compute the pseudo-inverse on the penalty block (so sum of all
    # penalties weighted by lambda) for every term so we first collect and sum
    # all term penalties together.
    SJs = [] # Summed SJs for every term
+   DJs = [] # None if summation, otherwise embedded DJ*sqrt(\lambda) - root of corresponding SJ*\lambda
    SJ_terms = [] # How many penalties were summed
    SJ_types = [] # None if summation otherwise penalty type
    SJ_lams = [] # None if summation otherwise penalty lambda
@@ -122,6 +127,7 @@ def compute_S_emb_pinv_det(col_S,penalties,pinv):
       # Now collect the S_J for the pinv calculation in the next step.
       if lti == 0 or lTerm.start_index > SJ_idx_max:
          SJs.append(lTerm.S_J*lTerm.lam)
+         DJs.append(lTerm.D_J_emb*math.sqrt(lTerm.lam))
          SJ_terms.append(1)
          SJ_types.append(lTerm.type)
          SJ_lams.append(lTerm.lam)
@@ -139,6 +145,7 @@ def compute_S_emb_pinv_det(col_S,penalties,pinv):
          SJ_terms[idx_match[0]] += 1
          SJ_types[idx_match[0]] = None
          SJ_lams[idx_match[0]] = None
+         DJs[idx_match[0]] = None
          if SJ_reps[idx_match[0]] != lTerm.rep_sj:
             raise ValueError("Repeat Number for penalty does not match previous penalties repeat number.")
 
@@ -149,12 +156,25 @@ def compute_S_emb_pinv_det(col_S,penalties,pinv):
    S_pinv_cols = []
    cIndexPinv = SJ_idx[0]
 
+   # Optionally compute root of S_\lambda
+   S_root_singles = None
+   S_root_elements = []
+   S_root_rows = []
+   S_root_cols = []
+
    FS_use_rank = []
    for SJi in range(SJ_idx_len):
       # Now handle all pinv calculations because all penalties
       # associated with a term have been collected in SJ
 
       if SJ_terms[SJi] == 1:
+
+         if root:
+            if S_root_singles is None:
+               S_root_singles = copy.deepcopy(DJs[SJi])
+            else:
+               S_root_singles += DJs[SJi]
+
          # No overlap between penalties so we can just leave this block in the
          # pseudo-inverse empty.
          cIndexPinv += (SJs[SJi].shape[1]*SJ_reps[SJi])
@@ -190,6 +210,14 @@ def compute_S_emb_pinv_det(col_S,penalties,pinv):
             rs = [1/s if s > 1e-7 else 0 for s in Sig]
             SJ_pinv = vt.T @ np.diag(rs) @ u.T
             SJ_pinv = scp.sparse.csc_array(SJ_pinv)
+         
+         if root:
+            eig, U =scp.linalg.eigh(SJs[SJi].toarray())
+            D_root = scp.sparse.csc_array(U@np.diag([e**0.5 if e > sys.float_info.epsilon**0.7 else 0 for e in eig]))
+            
+            Dl_dat, Dl_rows, Dl_cols = translate_sparse(D_root)
+            Dl_rows = np.array(Dl_rows)
+            Dl_cols = np.array(Dl_cols)
 
          SJ_pinv_elements,SJ_pinv_rows,SJ_pinv_cols = translate_sparse(SJ_pinv)
 
@@ -201,6 +229,12 @@ def compute_S_emb_pinv_det(col_S,penalties,pinv):
             S_pinv_elements.extend(SJ_pinv_elements)
             S_pinv_rows.extend(SJ_pinv_rows + cIndexPinv)
             S_pinv_cols.extend(SJ_pinv_cols + cIndexPinv)
+
+            if root:
+               S_root_elements.extend(Dl_dat)
+               S_root_rows.extend(Dl_rows + cIndexPinv)
+               S_root_cols.extend(Dl_cols + cIndexPinv)
+
             cIndexPinv += SJ_pinv_shape
          
          for _ in range(SJ_terms[SJi]):
@@ -208,10 +242,16 @@ def compute_S_emb_pinv_det(col_S,penalties,pinv):
          
    S_pinv = scp.sparse.csc_array((S_pinv_elements,(S_pinv_rows,S_pinv_cols)),shape=(col_S,col_S))
 
+   S_root = None
+   if root:
+      S_root = scp.sparse.csc_array((S_root_elements,(S_root_rows,S_root_cols)),shape=(col_S,col_S))
+      if not S_root_singles is None:
+         S_root += S_root_singles
+
    if len(FS_use_rank) != len(penalties):
       raise IndexError("An incorrect number of rank decisions were made.")
    
-   return S_emb, S_pinv, FS_use_rank
+   return S_emb, S_pinv, S_root, FS_use_rank
 
 def PIRLS_pdat_weights(y,mu,eta,family:Family):
    # Compute pseudo-data and weights for Penalized Reweighted Least Squares iteration (Wood, 2017, 6.1.1)
@@ -540,10 +580,31 @@ def update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,pen
    
    return wres,InvCholXXS,total_edf,term_edfs,Bs,scale
 
-def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,S_pinv,FS_use_rank,penalties,n_c,formula,form_Linv):
+def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,S_root,S_pinv,FS_use_rank,penalties,n_c,formula,form_Linv):
    # Solves the additive model for a given set of weights and penalty
    if formula is None:
-      LP, Pr, coef, code = cpp_solve_coef(yb,Xb,S_emb)
+      if S_root is None:
+         LP, Pr, coef, code = cpp_solve_coef(yb,Xb,S_emb)
+      else: # Qr-based
+         RP,Pr1,Pr2,coef,rank,code = cpp_solve_coef_pqr(y,Xb,S_root.T.tocsc())
+
+         # Need to get overall pivot...
+         P1 = compute_eigen_perm(Pr1)
+         P2 = compute_eigen_perm(Pr2)
+         P = P2.T@P1.T
+
+         # Can now unpivot coef
+         coef = coef @ P
+
+         # Now convert so that rest of code can just continue as with Chol
+         LP = RP.T.tocsc()
+         _,Pr,_ = translate_sparse(P.tocsc())
+
+         if rank < S_emb.shape[1]:
+            # Rank defficiency detected during numerical factorization.
+            # Set code > 0
+            code = 1
+
    else:
       #yb is X.T@y and Xb is X.T@X
       LP, Pr, coef, code = cpp_solve_coefXX(yb,Xb + S_emb)
@@ -596,15 +657,17 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,S_pinv,FS_use_
 
 def init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
                   family,col_S,penalties,
-                  pinv,n_c,formula,form_Linv):
+                  pinv,n_c,formula,form_Linv,
+                  method):
    # Initial fitting iteration without step-length control for gam.
 
    # Compute starting estimate S_emb and S_pinv
    if len(penalties) > 0:
-      S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(col_S,penalties,pinv)
+      S_emb,S_pinv,S_root,FS_use_rank = compute_S_emb_pinv_det(col_S,penalties,pinv,root=method=="QR")
    else:
       S_emb = scp.sparse.csc_array((colsX, colsX), dtype=np.float64)
       S_pinv = None
+      S_root = None
       FS_use_rank = None
 
    # Estimate coefficients for starting lambda
@@ -623,7 +686,7 @@ def init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
    total_edf,\
    term_edfs,\
    Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
-                                         X,Xb,family,S_emb,S_pinv,
+                                         X,Xb,family,S_emb,S_root,S_pinv,
                                          FS_use_rank,penalties,n_c,
                                          formula,form_Linv)
    
@@ -834,7 +897,7 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
                         extend_by,o_iter,dev_check,n_c,
                         control_lambda,extend_lambda,
                         exclude_lambda,extension_method_lam,
-                        formula,form_Linv):
+                        formula,form_Linv,method):
    # Propose & perform step-length control for the lambda parameters via the Fellner Schall method
    # by Wood & Fasiolo (2016)
    lam_accepted = False
@@ -842,7 +905,7 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
    while not lam_accepted:
 
       # Re-compute S_emb and S_pinv
-      S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(col_S,penalties,pinv)
+      S_emb,S_pinv,S_root,FS_use_rank = compute_S_emb_pinv_det(col_S,penalties,pinv,method=="QR")
 
       # Update coefficients
       eta,mu,n_coef,\
@@ -852,7 +915,7 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
       total_edf,\
       term_edfs,\
       Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
-                                             X,Xb,family,S_emb,S_pinv,
+                                             X,Xb,family,S_emb,S_root,S_pinv,
                                              FS_use_rank,penalties,n_c,
                                              formula,form_Linv)
       
@@ -914,7 +977,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
                       maxiter=10,pinv="svd",conv_tol=1e-7,
                       extend_lambda=True,control_lambda=True,
                       exclude_lambda=False,extension_method_lam = "nesterov",
-                      form_Linv=True,progress_bar=False,n_c=10):
+                      form_Linv=True,method="Chol",progress_bar=False,n_c=10):
    # Estimates a penalized Generalized additive mixed model, following the steps outlined in Wood, Li, Shaddick, & Augustin (2017)
    # "Generalized Additive Models for Gigadata" referred to as Wood (2017) below.
 
@@ -940,7 +1003,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    # Compute starting estimates
    dev,pen_dev,eta,mu,coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,S_emb = init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
                                                                                                      family,col_S,penalties,
-                                                                                                     pinv,n_c,None,form_Linv)
+                                                                                                     pinv,n_c,None,form_Linv,method)
       
    # Initialize extension variable
    extend_by = initialize_extension(extension_method_lam,penalties)
@@ -1018,7 +1081,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
                                                                                                                                                    extend_by,o_iter,dev_check,n_c,
                                                                                                                                                    control_lambda,extend_lambda,
                                                                                                                                                    exclude_lambda,extension_method_lam,
-                                                                                                                                                   None,form_Linv)
+                                                                                                                                                   None,form_Linv,method)
          fit_info.lambda_updates += lam_checks
          
       else:
@@ -1031,7 +1094,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
          total_edf,\
          term_edfs,\
          _,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
-                                              X,Xb,family,S_emb,None,None,
+                                              X,Xb,family,S_emb,None,None,None,
                                               penalties,n_c,None,form_Linv)
       
       # At this point we:
@@ -1390,7 +1453,7 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
    # Compute starting estimates
    dev,pen_dev,eta,mu,coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,S_emb = init_step_gam(y,Xy,mu,eta,rowsX,colsX,None,XX,
                                                                                                      family,col_S,penalties,
-                                                                                                     pinv,n_c,formula,form_Linv)
+                                                                                                     pinv,n_c,formula,form_Linv,"Chol")
    
    # Initialize extension variable
    extend_by = initialize_extension(extension_method_lam,penalties)
@@ -1458,7 +1521,7 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
                                                                                                                                                    extend_by,o_iter,dev_check,
                                                                                                                                                    n_c,control_lambda,extend_lambda,
                                                                                                                                                    exclude_lambda,extension_method_lam,
-                                                                                                                                                   formula,form_Linv)
+                                                                                                                                                   formula,form_Linv,"Chol")
          fit_info.lambda_updates += lam_checks
       else:
          # If there are no penalties simply perform a newton step
@@ -1470,7 +1533,7 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
          total_edf,\
          term_edfs,\
          _,scale,wres = update_coef_and_scale(y,Xy,None,None,rowsX,colsX,
-                                              None,XX,family,S_emb,None,None,
+                                              None,XX,family,S_emb,None,None,None,
                                               penalties,n_c,formula,form_Linv)
 
       fit_info.iter += 1
@@ -1785,7 +1848,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
     mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
 
     # Build current penalties
-    S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
+    S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
     c_llk = family.llk(y,*mus)
     c_pen_llk = c_llk - coef.T@S_emb@coef
 
@@ -1849,7 +1912,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
             lam_delta.append(dLam)
 
         # Build new penalties
-        S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
+        S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
 
         if extend_lambda and control_lambda:
             # Step size control for smoothing parameters. Not obvious - because we have only approximate REMl
@@ -1896,7 +1959,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
                      lTerm.lam -= extend_by["acc"][lti]
 
                # Rebuild penalties
-               S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
+               S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
             else:
                # Can re-use estimate for next iteration
                coef=next_coef
@@ -2018,7 +2081,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
     was_extended = [False for _ in enumerate(smooth_pen)]
 
     # Build current penalties
-    S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
+    S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
 
     # Compute penalized likelihood for current estimate
     c_llk = family.llk(coef,coef_split_idx,y,Xs)
@@ -2118,7 +2181,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
             lam_delta.append(dLam)
 
         # Build new penalties
-        S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
+        S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
 
         if extend_lambda and control_lambda:
             # Step size control for smoothing parameters. Not obvious - because we have only approximate REMl
@@ -2191,7 +2254,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                         lTerm.lam -= extend_by["acc"][lti]
 
                 # Rebuild penalties
-                S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
+                S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
             else: # Can re-use estimate for next iteration
                coef = next_coef
                c_llk = next_llk

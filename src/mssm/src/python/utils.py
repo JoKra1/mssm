@@ -214,7 +214,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10):
    See :func:`REML` function for more details.
    """
 
-   S_emb,_,_ = compute_S_emb_pinv_det(X.shape[1],penalties,"svd")
+   S_emb,_,_,_ = compute_S_emb_pinv_det(X.shape[1],penalties,"svd")
 
    # Need pseudo-data only in case of GAM
    z = None
@@ -315,7 +315,7 @@ def compute_REML_candidate_GSMM(family,coef,n_coef,coef_split_idx,y,Xs,penalties
    """
 
     # Build current penalties
-    S_emb,S_pinv,FS_use_rank = compute_S_emb_pinv_det(n_coef,penalties,"svd")
+    S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,penalties,"svd")
 
     if isinstance(family,GENSMOOTHFamily): # GSMM
         
@@ -432,7 +432,7 @@ def REML(llk,nH,coef,scale,penalties):
    """ 
 
    # Compute S_\lambda before any re-parameterization
-   S_emb,_,_ = compute_S_emb_pinv_det(len(coef),penalties,"svd")
+   S_emb,_,_,_ = compute_S_emb_pinv_det(len(coef),penalties,"svd")
 
    # Re-parameterize as shown in Wood (2011) to enable stable computation of log(|S_\lambda|+)
    Sj_reps,S_reps,SJ_term_idx,S_idx,S_coefs,Q_reps,_,Mp = reparam(None,penalties,None,option=4)
@@ -743,7 +743,7 @@ def _compute_VB_corr_terms_MP(family,address_y,address_dat,address_ptr,address_i
         rPen[ridx].lam = rc
 
    # Now compute REML - and all other terms needed for correction proposed by Greven & Scheipl (2017)
-   S_emb,_,_ = compute_S_emb_pinv_det(X.shape[1],rPen,"svd")
+   S_emb,_,_,_ = compute_S_emb_pinv_det(X.shape[1],rPen,"svd")
    LP, Pr, coef, code = cpp_solve_coef(y,X,S_emb)
 
    if code != 0:

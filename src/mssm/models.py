@@ -592,7 +592,7 @@ class GAMM:
                 
     ##################################### Fitting #####################################
     
-    def fit(self,maxiter=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=False,extension_method_lam = "nesterov",restart=False,progress_bar=True,n_cores=10):
+    def fit(self,maxiter=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=False,extension_method_lam = "nesterov",restart=False,progress_bar=True,method="Chol",n_cores=10):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -610,6 +610,8 @@ class GAMM:
         :type restart: bool,optional
         :param progress_bar: Whether progress should be displayed (convergence info and time estimate). Defaults to True.
         :type progress_bar: bool,optional
+        :param method: Which method to use to solve for the coefficients. The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR". In that case a QR decomposition is used - which is first pivoted to maximize sparsity in the resulting decomposition but then also pivots for stability in order to get an estimate of rank defficiency. This takes substantially longer. This argument is ignored if ``len(self.formula.file_paths)>0`` that is, if :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` should be created iteratively. Defaults to "Chol".
+        :type method: str,optional
         :param n_cores: Number of cores to use during parts of the estimation that can be done in parallel. Defaults to 10.
         :type n_cores: int,optional
         """
@@ -692,7 +694,7 @@ class GAMM:
                                                                                       conv_tol,extend_lambda,control_lambda,
                                                                                       exclude_lambda,extension_method_lam,
                                                                                       len(self.formula.discretize) == 0,
-                                                                                      progress_bar,n_cores)
+                                                                                      method,progress_bar,n_cores)
             
             self.Wr = Wr
 
