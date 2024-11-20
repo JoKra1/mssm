@@ -44,7 +44,7 @@ std::tuple<Eigen::SparseMatrix<double>,int> chol(long long int Arows, long long 
     return std::make_tuple(std::move(L),0);
 }
 
-std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> cholP(long long int Arows, long long int Acols, long long int Annz,
+std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,int> cholP(long long int Arows, long long int Acols, long long int Annz,
                                                                   py::array_t<double, py::array::f_style | py::array::forcecast> Adata,
                                                                   py::array_t<long long int, py::array::f_style | py::array::forcecast> Aidptr,
                                                                   py::array_t<long long int, py::array::f_style | py::array::forcecast> Aindices){
@@ -54,11 +54,12 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> cholP(long long int 
                                                     (Eigen::SparseMatrix<double,0,long long int>::StorageIndex*) Aindices.data(),
                                                     (Eigen::SparseMatrix<double,0,long long int>::Scalar*) Adata.data());
     // Like chol() but with sparsity preserving pivoting
-    Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver;
-    solver.compute(A);
+    Eigen::SimplicialLLT<Eigen::SparseMatrix<double,0,long long int>> solver;
+    solver.analyzePattern(A.selfadjointView<Eigen::Lower>());
+    solver.factorize(A);
 
     // Also get the permutation
-    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic> P(solver.permutationP());
+    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic,long long int> P(solver.permutationP());
 
     if (solver.info()!=Eigen::Success)
     {
@@ -67,12 +68,12 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> cholP(long long int 
         return std::make_tuple(std::move(id),P.indices(),1);
     }
 
-    Eigen::SparseMatrix<double> L = solver.matrixL();
+    Eigen::SparseMatrix<double,0,long long int> L = solver.matrixL();
     
     return std::make_tuple(std::move(L),P.indices(),0);
 }
 
-std::tuple<Eigen::SparseMatrix<double>,Eigen::SparseMatrix<double>,Eigen::VectorXi, int> pqr(long long int Arows, long long int Acols, long long int Annz,
+std::tuple<Eigen::SparseMatrix<double,0,long long int>,Eigen::SparseMatrix<double,0,long long int>,VectorXi64, int> pqr(long long int Arows, long long int Acols, long long int Annz,
                                                                                              py::array_t<double, py::array::f_style | py::array::forcecast> Adata,
                                                                                              py::array_t<long long int, py::array::f_style | py::array::forcecast> Aidptr,
                                                                                              py::array_t<long long int, py::array::f_style | py::array::forcecast> Aindices){
@@ -82,29 +83,29 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::SparseMatrix<double>,Eigen::Vector
                                                     (Eigen::SparseMatrix<double,0,long long int>::StorageIndex*) Aindices.data(),
                                                     (Eigen::SparseMatrix<double,0,long long int>::Scalar*) Adata.data());
     // Computed column-pivoted QR factorization of A.
-    Eigen::SparseQR<Eigen::SparseMatrix<double>,Eigen::COLAMDOrdering<int>> solver;
+    Eigen::SparseQR<Eigen::SparseMatrix<double,0,long long int>,Eigen::COLAMDOrdering<long long int>> solver;
     solver.setPivotThreshold(sqrt(std::numeric_limits<double>::epsilon())*A.norm());
     solver.compute(A);
 
     // Column permutation matrix
-    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic> P(solver.colsPermutation());
+    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic, long long int> P(solver.colsPermutation());
 
     if(solver.info()!=Eigen::Success)
     {
-        Eigen::SparseMatrix<double> Q(Arows,Acols);
+        Eigen::SparseMatrix<double,0,long long int> Q(Arows,Acols);
         Q.setIdentity();
 
-        Eigen::SparseMatrix<double> R(Arows,Acols);
+        Eigen::SparseMatrix<double,0,long long int> R(Arows,Acols);
         R.setIdentity();
         return std::make_tuple(std::move(Q),std::move(R),P.indices(),1);
     }
 
     // see: https://eigen.tuxfamily.org/dox/classEigen_1_1SparseQR.html
-    Eigen::SparseMatrix<double> Q;
+    Eigen::SparseMatrix<double,0,long long int> Q;
     Q = solver.matrixQ();
 
     // Upper triagonal factor
-    Eigen::SparseMatrix<double> R = solver.matrixR();
+    Eigen::SparseMatrix<double,0,long long int> R = solver.matrixR();
 
     // Upper triagonal factor after applying the permuation.
     //Eigen::SparseMatrix<double> R = solver.matrixR().eval() * P.transpose();
@@ -155,7 +156,7 @@ std::tuple<Eigen::SparseMatrix<double>,VectorXi64, VectorXi64, int,int> spqr(lon
     
 }
 
-std::tuple<Eigen::SparseMatrix<double>, int, int> solve_pqr(long long int Arows, long long int Acols, long long int Annz,
+std::tuple<Eigen::SparseMatrix<double,0,long long int>, int, int> solve_pqr(long long int Arows, long long int Acols, long long int Annz,
                                                        py::array_t<double, py::array::f_style | py::array::forcecast> Adata,
                                                        py::array_t<long long int, py::array::f_style | py::array::forcecast> Aidptr,
                                                        py::array_t<long long int, py::array::f_style | py::array::forcecast> Aindices){
@@ -166,11 +167,12 @@ std::tuple<Eigen::SparseMatrix<double>, int, int> solve_pqr(long long int Arows,
                                                     (Eigen::SparseMatrix<double,0,long long int>::Scalar*) Adata.data());
 
     // Computed column-pivoted QR factorization of A and solve A @ B = I for B (inverse of A)
-    Eigen::SparseQR<Eigen::SparseMatrix<double>,Eigen::AMDOrdering<int>> solver;
-    solver.compute(A);
+    Eigen::SparseQR<Eigen::SparseMatrix<double,0,long long int>,Eigen::AMDOrdering<long long int>> solver;
+    solver.analyzePattern(A.selfadjointView<Eigen::Lower>());
+    solver.factorize(A);
 
     // Also setup identity target for inverse of A
-    Eigen::SparseMatrix<double> id(Acols,Acols);
+    Eigen::SparseMatrix<double,0,long long int> id(Acols,Acols);
     id.setIdentity();
 
     if(solver.info()!=Eigen::Success)
@@ -180,7 +182,7 @@ std::tuple<Eigen::SparseMatrix<double>, int, int> solve_pqr(long long int Arows,
     }
 
     // see: https://eigen.tuxfamily.org/dox/classEigen_1_1SparseQR.html
-    Eigen::SparseMatrix<double> invA(Acols,Acols);
+    Eigen::SparseMatrix<double,0,long long int> invA(Acols,Acols);
     invA = solver.solve(id);
 
     if(solver.info()!=Eigen::Success)
@@ -193,7 +195,7 @@ std::tuple<Eigen::SparseMatrix<double>, int, int> solve_pqr(long long int Arows,
     
 }
 
-std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solve_am(Eigen::VectorXd y, long long int Xrows, long long int Xcols, long long int Xnnz,
+std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,Eigen::VectorXd,int> solve_am(Eigen::VectorXd y, long long int Xrows, long long int Xcols, long long int Xnnz,
                                                                                      py::array_t<double, py::array::f_style | py::array::forcecast> Xdata,
                                                                                      py::array_t<long long int, py::array::f_style | py::array::forcecast> Xidptr,
                                                                                      py::array_t<long long int, py::array::f_style | py::array::forcecast> Xindices,
@@ -221,7 +223,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
                                               (Eigen::SparseMatrix<double,0,long long int>::Scalar*) Sdata.data());
 
     // Prepare and compute Cholesky factor of X' * X + S
-    Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver;
+    Eigen::SimplicialLLT<Eigen::SparseMatrix<double,0,long long int>> solver;
     solver.compute(X.transpose() * X + S);
 
     // Initialize coef vector
@@ -229,7 +231,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
     coef.setZero(Xcols);
 
     // Also setup identity target for inverse of L' (see below)
-    Eigen::SparseMatrix<double> id(Xcols,Xcols);
+    Eigen::SparseMatrix<double,0,long long int> id(Xcols,Xcols);
     id.setIdentity();
 
     // We also need inv(L) * P from P * X' * X + S * P' = L * L'
@@ -237,7 +239,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
     // permutation matrix created for us by eigen.
 
     // First get the permutation
-    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic> P(solver.permutationP());
+    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic, long long int> P(solver.permutationP());
 
     if (solver.info()!=Eigen::Success)
     {
@@ -260,7 +262,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
     return std::make_tuple(std::move(id),P.indices(),std::move(coef),0);
 }
 
-std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> solve_L(long long int Xrows, long long int Xcols, long long int Xnnz,
+std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,int> solve_L(long long int Xrows, long long int Xcols, long long int Xnnz,
                                                                     py::array_t<double, py::array::f_style | py::array::forcecast> Xdata,
                                                                     py::array_t<long long int, py::array::f_style | py::array::forcecast> Xidptr,
                                                                     py::array_t<long long int, py::array::f_style | py::array::forcecast> Xindices,
@@ -288,15 +290,15 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> solve_L(long long in
                                               (Eigen::SparseMatrix<double,0,long long int>::Scalar*) Sdata.data());
 
     // Prepare and compute Cholesky factor of X' * X + S
-    Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver;
+    Eigen::SimplicialLLT<Eigen::SparseMatrix<double,0,long long int>> solver;
     solver.compute(X.transpose() * X + S);
 
     // Setup identity target for inverse of L' (see below)
-    Eigen::SparseMatrix<double> id(Xcols,Xcols);
+    Eigen::SparseMatrix<double,0,long long int> id(Xcols,Xcols);
     id.setIdentity();
 
     // Also get the permutation
-    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic> P(solver.permutationP());
+    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic, long long int> P(solver.permutationP());
 
     if (solver.info()!=Eigen::Success)
     {
@@ -312,7 +314,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> solve_L(long long in
     return std::make_tuple(std::move(id),P.indices(),0);
 }
 
-std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> solve_LXX(long long int Xrows, long long int Xcols, long long int Xnnz,
+std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,int> solve_LXX(long long int Xrows, long long int Xcols, long long int Xnnz,
                                                                       py::array_t<double, py::array::f_style | py::array::forcecast> Xdata,
                                                                       py::array_t<long long int, py::array::f_style | py::array::forcecast> Xidptr,
                                                                       py::array_t<long long int, py::array::f_style | py::array::forcecast> Xindices){
@@ -331,15 +333,16 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> solve_LXX(long long 
                                               (Eigen::SparseMatrix<double,0,long long int>::Scalar*) Xdata.data());
 
     // Prepare and compute Cholesky factor of X' * X + S or X' * X 
-    Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver;
-    solver.compute(XX);
+    Eigen::SimplicialLLT<Eigen::SparseMatrix<double,0,long long int>> solver;
+    solver.analyzePattern(XX.selfadjointView<Eigen::Lower>());
+    solver.factorize(XX);
 
     // Setup identity target for inverse of L' (see below)
-    Eigen::SparseMatrix<double> id(Xcols,Xcols);
+    Eigen::SparseMatrix<double,0,long long int> id(Xcols,Xcols);
     id.setIdentity();
 
     // Also get the permutation
-    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic> P(solver.permutationP());
+    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic, long long int> P(solver.permutationP());
 
     if (solver.info()!=Eigen::Success)
     {
@@ -355,7 +358,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,int> solve_LXX(long long 
     return std::make_tuple(std::move(id),P.indices(),0);
 }
 
-std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solve_coef(Eigen::VectorXd y, long long int Xrows, long long int Xcols, long long int Xnnz,
+std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,Eigen::VectorXd,int> solve_coef(Eigen::VectorXd y, long long int Xrows, long long int Xcols, long long int Xnnz,
                                                                                        py::array_t<double, py::array::f_style | py::array::forcecast> Xdata,
                                                                                        py::array_t<long long int, py::array::f_style | py::array::forcecast> Xidptr,
                                                                                        py::array_t<long long int, py::array::f_style | py::array::forcecast> Xindices,
@@ -383,7 +386,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
                                                     (Eigen::SparseMatrix<double,0,long long int>::Scalar*) Sdata.data());
 
     // Prepare and compute Cholesky factor of X' * X + S
-    Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver;
+    Eigen::SimplicialLLT<Eigen::SparseMatrix<double,0,long long int>> solver;
     solver.compute(X.transpose() * X + S);
 
     // Initialize coef vector
@@ -391,11 +394,11 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
     coef.setZero(Xcols);
 
     // First get the permutation
-    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic> P(solver.permutationP());
+    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic, long long int> P(solver.permutationP());
 
     if (solver.info()!=Eigen::Success)
     {
-        Eigen::SparseMatrix<double> id(Xcols,Xcols);
+        Eigen::SparseMatrix<double,0,long long int> id(Xcols,Xcols);
         id.setIdentity();
         return std::make_tuple(std::move(id),P.indices(),std::move(coef),1);
     }
@@ -405,7 +408,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
 
     if (solver.info()!=Eigen::Success)
     {
-        Eigen::SparseMatrix<double> id(Xcols,Xcols);
+        Eigen::SparseMatrix<double,0,long long int> id(Xcols,Xcols);
         id.setIdentity();
         return std::make_tuple(std::move(id),P.indices(),std::move(coef),2);
     }
@@ -413,7 +416,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
     return std::make_tuple(solver.matrixL(),P.indices(),std::move(coef),0);
 }
 
-std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solve_coefXX(Eigen::VectorXd Xy, long long int Xrows, long long int Xcols, long long int Xnnz,
+std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,Eigen::VectorXd,int> solve_coefXX(Eigen::VectorXd Xy, long long int Xrows, long long int Xcols, long long int Xnnz,
                                                                                          py::array_t<double, py::array::f_style | py::array::forcecast> Xdata,
                                                                                          py::array_t<long long int, py::array::f_style | py::array::forcecast> Xidptr,
                                                                                          py::array_t<long long int, py::array::f_style | py::array::forcecast> Xindices){
@@ -432,7 +435,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
                                                 (Eigen::SparseMatrix<double,0,long long int>::Scalar*) Xdata.data());
 
     // Prepare and compute Cholesky factor of X' * X + S
-    Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver;
+    Eigen::SimplicialLLT<Eigen::SparseMatrix<double,0,long long int>> solver;
     solver.compute(XXS);
 
     // Initialize coef vector
@@ -440,11 +443,11 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
     coef.setZero(Xcols);
 
     // First get the permutation
-    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic> P(solver.permutationP());
+    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic, long long int> P(solver.permutationP());
 
     if (solver.info()!=Eigen::Success)
     {
-        Eigen::SparseMatrix<double> id(Xcols,Xcols);
+        Eigen::SparseMatrix<double,0,long long int> id(Xcols,Xcols);
         id.setIdentity();
         return std::make_tuple(std::move(id),P.indices(),std::move(coef),1);
     }
@@ -454,7 +457,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
 
     if (solver.info()!=Eigen::Success)
     {
-        Eigen::SparseMatrix<double> id(Xcols,Xcols);
+        Eigen::SparseMatrix<double,0,long long int> id(Xcols,Xcols);
         id.setIdentity();
         return std::make_tuple(std::move(id),P.indices(),std::move(coef),2);
     }
@@ -462,7 +465,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,int> solv
     return std::make_tuple(solver.matrixL(),P.indices(),std::move(coef),0);
 }
 
-std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,long long int,int> solve_coef_pqr(Eigen::VectorXd y, long long int Xrows, long long int Xcols, long long int Xnnz,
+std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,Eigen::VectorXd,long long int,int> solve_coef_pqr(Eigen::VectorXd y, long long int Xrows, long long int Xcols, long long int Xnnz,
                                                                                            py::array_t<double, py::array::f_style | py::array::forcecast> Xdata,
                                                                                            py::array_t<long long int, py::array::f_style | py::array::forcecast> Xidptr,
                                                                                            py::array_t<long long int, py::array::f_style | py::array::forcecast> Xindices,
@@ -484,7 +487,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,long long
                                                     (Eigen::SparseMatrix<double,0,long long int>::Scalar*) Edata.data());
 
     // Computed column-pivoted QR factorization of X.
-    Eigen::SparseQR<Eigen::SparseMatrix<double>,Eigen::AMDOrdering<int>> solver;
+    Eigen::SparseQR<Eigen::SparseMatrix<double,0,long long int>,Eigen::AMDOrdering<long long int>> solver;
     solver.setPivotThreshold(sqrt(std::numeric_limits<double>::epsilon())*X.norm());
     solver.compute(X);
 
@@ -493,26 +496,26 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,long long
     coef.setZero(Xcols);
 
     // Column permutation matrix
-    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic> P(solver.colsPermutation());
+    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic, long long int> P(solver.colsPermutation());
 
     if(solver.info()!=Eigen::Success)
     {
-        Eigen::SparseMatrix<double> id(Xcols,Xcols);
+        Eigen::SparseMatrix<double,0,long long int> id(Xcols,Xcols);
         id.setIdentity();
         return std::make_tuple(std::move(id),P.indices(),std::move(coef),0,1);
     }
 
     // Get upper triagonal factor after applying the permuation.
-    Eigen::SparseMatrix<double> RP;
+    Eigen::SparseMatrix<double,0,long long int> RP;
     RP = solver.matrixR();
-    Eigen::SparseMatrix<double> R = RP.topRows(Xcols).eval() * P.transpose();
+    Eigen::SparseMatrix<double,0,long long int> R = RP.topRows(Xcols).eval() * P.transpose();
 
     // Check for rank deficiency
     //ToDo.
 
     // Concatenate R & E
     // Based on: https://stackoverflow.com/questions/42555456
-    Eigen::SparseMatrix<double> RE(2*Xcols,Xcols);
+    Eigen::SparseMatrix<double,0,long long int> RE(2*Xcols,Xcols);
     
     // Pre-allocate storage...
     RE.reserve(R.nonZeros() + E.nonZeros());
@@ -521,7 +524,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,long long
         RE.startVec(c); // .insertBack() doc-string says that this has to be called in advance.
 
         // Fill first Xcols rows in column c with values in same column from R
-        for(Eigen::SparseMatrix<double>::InnerIterator itR(R, c); itR; ++itR){
+        for(Eigen::SparseMatrix<double,0,long long int>::InnerIterator itR(R, c); itR; ++itR){
             RE.insertBack(itR.row(), c) = itR.value();
         }
         
@@ -535,16 +538,16 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,long long
     RE.finalize();
 
     // Now form root of X.T@X + S
-    Eigen::SparseQR<Eigen::SparseMatrix<double>,Eigen::AMDOrdering<int>> solver2;
+    Eigen::SparseQR<Eigen::SparseMatrix<double,0,long long int>,Eigen::AMDOrdering<long long int>> solver2;
     solver2.setPivotThreshold(sqrt(std::numeric_limits<double>::epsilon())*RE.norm());
     solver2.compute(RE);
 
     // Column permutation matrix for second decomposition
-    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic> P2(solver2.colsPermutation());
+    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic, long long int> P2(solver2.colsPermutation());
 
     if(solver2.info()!=Eigen::Success)
     {
-        Eigen::SparseMatrix<double> id(Xcols,Xcols);
+        Eigen::SparseMatrix<double,0,long long int> id(Xcols,Xcols);
         id.setIdentity();
         return std::make_tuple(std::move(id),P2.indices(),std::move(coef),0,2);
     }
@@ -560,7 +563,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,long long
     // = (y.T * Q * QQ[:Xcols,:]).T
     // Q is [Xrows,Xcols], so the second product is [Xcols,1]
     // QQ is [Xcols*2,Xcols] so we have to extract it unfortunately
-    Eigen::SparseMatrix<double> QQ;
+    Eigen::SparseMatrix<double,0,long long int> QQ;
     Eigen::VectorXd Qy,Qy2;
 
     QQ = solver2.matrixQ();
@@ -575,7 +578,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,long long
     coef = QQ.topLeftCorner(Xcols,Xcols).transpose() * Qy;
 
     // Extract root of X.T@X + S
-    Eigen::SparseMatrix<double> R2 = solver2.matrixR().topRows(Xcols);
+    Eigen::SparseMatrix<double,0,long long int> R2 = solver2.matrixR().topRows(Xcols);
 
     // Now do the actual solve - but R2 will not be sparse
     R2.triangularView<Eigen::Upper>().solveInPlace(coef);
@@ -583,7 +586,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXd,long long
     return std::make_tuple(R2,P2.indices(),std::move(coef),solver2.rank(),0);
 }
 
-std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXi,Eigen::VectorXd,long long int,int> solve_coef_pqr2(Eigen::VectorXd y, long long int Xrows, long long int Xcols, long long int Xnnz,
+std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,VectorXi64,Eigen::VectorXd,long long int,int> solve_coef_pqr2(Eigen::VectorXd y, long long int Xrows, long long int Xcols, long long int Xnnz,
                                                                                            py::array_t<double, py::array::f_style | py::array::forcecast> Xdata,
                                                                                            py::array_t<long long int, py::array::f_style | py::array::forcecast> Xidptr,
                                                                                            py::array_t<long long int, py::array::f_style | py::array::forcecast> Xindices,
@@ -611,7 +614,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXi,Eigen::Ve
 
     // Concatenate X & E
     // Based on: https://stackoverflow.com/questions/42555456
-    Eigen::SparseMatrix<double> RE(Xrows+Xcols,Xcols);
+    Eigen::SparseMatrix<double,0,long long int> RE(Xrows+Xcols,Xcols);
     
     // Pre-allocate storage...
     RE.reserve(Xnnz + Ennz);
@@ -635,22 +638,22 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXi,Eigen::Ve
 
     // Compute ordering so that Cholesky factor of X' * X + S is sparse
     // see Golub & Van Loan "Matrix Computations: 4ED" (2013)
-    Eigen::AMDOrdering<int> ordering;
-    Eigen::PermutationMatrix<Eigen::Dynamic, Eigen::Dynamic, int> P1;
-    Eigen::SparseMatrix<double> XXS = RE.transpose() * RE;
+    Eigen::AMDOrdering<long long int> ordering;
+    Eigen::PermutationMatrix<Eigen::Dynamic, Eigen::Dynamic, long long int> P1;
+    Eigen::SparseMatrix<double,0,long long int> XXS = RE.transpose() * RE;
     ordering(XXS.selfadjointView<Eigen::Lower>(), P1);
 
     // Now form root of X.T@X + S
-    Eigen::SparseQR<Eigen::SparseMatrix<double>,Eigen::NaturalOrdering<int>> solver2;
+    Eigen::SparseQR<Eigen::SparseMatrix<double,0,long long int>,Eigen::NaturalOrdering<long long int>> solver2;
     solver2.setPivotThreshold(sqrt(std::numeric_limits<double>::epsilon())*RE.norm());
     solver2.compute(RE*P1); // Now use ordering computed previously to pivot columns
 
     // Column permutation matrix for second decomposition
-    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic> P2(solver2.colsPermutation());
+    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic, long long int> P2(solver2.colsPermutation());
 
     if(solver2.info()!=Eigen::Success)
     {
-        Eigen::SparseMatrix<double> id(Xcols,Xcols);
+        Eigen::SparseMatrix<double,0,long long int> id(Xcols,Xcols);
         id.setIdentity();
         return std::make_tuple(std::move(id),P1.indices(),P2.indices(),std::move(coef),0,2);
     }
@@ -664,7 +667,7 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXi,Eigen::Ve
     coef = Qy.head(Xcols);
 
     // Extract root of X.T@X + S
-    Eigen::SparseMatrix<double> R2 = solver2.matrixR().topRows(Xcols);
+    Eigen::SparseMatrix<double,0,long long int> R2 = solver2.matrixR().topRows(Xcols);
 
     // Now do the actual solve
     R2.triangularView<Eigen::Upper>().solveInPlace(coef);
@@ -672,11 +675,11 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::VectorXi,Eigen::VectorXi,Eigen::Ve
     return std::make_tuple(R2,P1.indices(),P2.indices(),std::move(coef),solver2.rank(),0);
 }
 
-Eigen::SparseMatrix<double> solve_tr(long long int Arows, long long int Acols, long long int Annz,
+Eigen::SparseMatrix<double,0,long long int> solve_tr(long long int Arows, long long int Acols, long long int Annz,
                                      py::array_t<double, py::array::f_style | py::array::forcecast> Adata,
                                      py::array_t<long long int, py::array::f_style | py::array::forcecast> Aidptr,
                                      py::array_t<long long int, py::array::f_style | py::array::forcecast> Aindices,
-                                     Eigen::SparseMatrix<double> C){
+                                     Eigen::SparseMatrix<double,0,long long int> C){
     // Solves A*B=C, where A is lower triangular. This can be utilized to obtain B = inv(A), when C is
     // the identity. Importantly, when A is a n*n matrix then C can also be specified as a n*m block of
     // the identity. In that case, inv(A) can be obtained in parallel.
@@ -691,11 +694,11 @@ Eigen::SparseMatrix<double> solve_tr(long long int Arows, long long int Acols, l
     return C;
 }
 
-Eigen::SparseMatrix<double> backsolve_tr(long long int Arows, long long int Acols, long long int Annz,
+Eigen::SparseMatrix<double,0,long long int> backsolve_tr(long long int Arows, long long int Acols, long long int Annz,
                                          py::array_t<double, py::array::f_style | py::array::forcecast> Adata,
                                          py::array_t<long long int, py::array::f_style | py::array::forcecast> Aidptr,
                                          py::array_t<long long int, py::array::f_style | py::array::forcecast> Aindices,
-                                         Eigen::SparseMatrix<double> C){
+                                         Eigen::SparseMatrix<double,0,long long int> C){
     // Solves A*B=C, where A is UPPER triangular. This can be utilized to obtain B = inv(A), when C is
     // the identity. Importantly, when A is a n*n matrix then C can also be specified as a n*m block of
     // the identity. In that case, inv(A) can be obtained in parallel.
