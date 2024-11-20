@@ -16,6 +16,8 @@ class Fit_info:
    lambda_updates:int=0
    iter:int=0
    code:int=1
+   eps:float or None = None
+   K2:float or None = None
 
 def cpp_chol(A):
    return cpp_solvers.chol(*map_csc_to_eigen(A))
@@ -637,8 +639,10 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,S_root,S_pinv,
    if formula is None:
       if S_root is None:
          LP, Pr, coef, code = cpp_solve_coef(yb,Xb,S_emb)
+         P = compute_eigen_perm(Pr)
+
       else: # Qr-based
-         RP,Pr1,Pr2,coef,rank,code = cpp_solve_coef_pqr(y,Xb,S_root.T.tocsc())
+         RP,Pr1,Pr2,coef,rank,code = cpp_solve_coef_pqr(yb,Xb,S_root.T.tocsc())
 
          # Need to get overall pivot...
          P1 = compute_eigen_perm(Pr1)
@@ -660,6 +664,7 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,S_root,S_pinv,
    else:
       #yb is X.T@y and Xb is X.T@X
       LP, Pr, coef, code = cpp_solve_coefXX(yb,Xb + S_emb)
+      P = compute_eigen_perm(Pr)
 
    if code != 0:
       raise ArithmeticError(f"Solving for coef failed with code {code}. Model is likely unidentifiable.")
@@ -705,7 +710,7 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,S_root,S_pinv,
 
    # Update scale parameter
    wres,InvCholXXS,total_edf,term_edfs,Bs,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,penalties,n_c)
-   return eta,mu,coef,InvCholXXS,lgdetDs,bsbs,total_edf,term_edfs,Bs,scale,wres
+   return eta,mu,coef,P.T@LP,InvCholXXS,lgdetDs,bsbs,total_edf,term_edfs,Bs,scale,wres
 
 def init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
                   family,col_S,penalties,
@@ -732,6 +737,7 @@ def init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
    
    # Solve additive model
    eta,mu,coef,\
+   CholXXS,\
    InvCholXXS,\
    lgdetDs,\
    bsbs,\
@@ -762,7 +768,7 @@ def init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
 
       lam_delta = np.array(lam_delta).reshape(-1,1)
    
-   return dev,pen_dev,eta,mu,coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,S_emb
+   return dev,pen_dev,eta,mu,coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,S_emb
 
 
 def correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,n_pen,S_emb,formula,n_c):
@@ -961,6 +967,7 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
 
       # Update coefficients
       eta,mu,n_coef,\
+      CholXXS,\
       InvCholXXS,\
       lgdetDs,\
       bsbs,\
@@ -1021,7 +1028,7 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
 
       lam_checks += 1
 
-   return eta,mu,n_coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb,lam_checks
+   return eta,mu,n_coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb,lam_checks
 
 ################################################ Main solver ################################################
 
@@ -1029,7 +1036,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
                       maxiter=10,pinv="svd",conv_tol=1e-7,
                       extend_lambda=True,control_lambda=True,
                       exclude_lambda=False,extension_method_lam = "nesterov",
-                      form_Linv=True,method="Chol",progress_bar=False,n_c=10):
+                      form_Linv=True,method="Chol",check_cond=2,progress_bar=False,n_c=10):
    # Estimates a penalized Generalized additive mixed model, following the steps outlined in Wood, Li, Shaddick, & Augustin (2017)
    # "Generalized Additive Models for Gigadata" referred to as Wood (2017) below.
 
@@ -1037,6 +1044,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    rowsX,colsX = X.shape
    coef = None
    n_coef = None
+   K2 = None
 
    # Additive mixed model can simply be fit on y and X
    # Generalized mixed model needs to be fit on weighted X and pseudo-dat
@@ -1053,10 +1061,17 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
       eta = family.link.f(mu)
 
    # Compute starting estimates
-   dev,pen_dev,eta,mu,coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,S_emb = init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
+   dev,pen_dev,eta,mu,coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,S_emb = init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
                                                                                                      family,col_S,penalties,
                                                                                                      pinv,n_c,None,form_Linv,method)
-      
+   
+   if check_cond == 2:
+      K2,_,_,Kcode = est_condition(CholXXS,InvCholXXS,verbose=False)
+      if method == "Chol" and Kcode == 1:
+         raise ArithmeticError(f"Condition number ({K2}) of matrix A, where A.T@A=L.T@L, is larger than 1/sqrt(u), where u is half the machine precision. Try calling ``model.fit()`` with ``method='QR'``.")
+      if method != "Chol" and Kcode == 2:
+         raise ArithmeticError(f"Condition number ({K2}) of matrix A, where A.T@A=L.T@L, is larger than 1/u, where u is half the machine precision. The model estimates are likely inaccurate.")
+
    # Initialize extension variable
    extend_by = initialize_extension(extension_method_lam,penalties)
    was_extended = [False for _ in enumerate(penalties)]
@@ -1127,7 +1142,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
          if o_iter > 0:
             dev_check = dev_diff < 1e-3*pen_dev
 
-         eta,mu,n_coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb,lam_checks = correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
+         eta,mu,n_coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb,lam_checks = correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
                                                                                                                                                    family,col_S,S_emb,penalties,
                                                                                                                                                    was_extended,pinv,lam_delta,
                                                                                                                                                    extend_by,o_iter,dev_check,n_c,
@@ -1140,6 +1155,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
          # If there are no penalties simply perform a newton step
          # for the coefficients only
          eta,mu,n_coef,\
+         CholXXS,\
          InvCholXXS,\
          _,\
          _,\
@@ -1148,6 +1164,14 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
          _,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
                                               X,Xb,family,S_emb,None,None,None,
                                               penalties,n_c,None,form_Linv)
+
+      # Check condition number of current system. 
+      if check_cond == 2:
+         K2,_,_,Kcode = est_condition(CholXXS,InvCholXXS,verbose=progress_bar)
+         if method == "Chol" and Kcode == 1:
+            raise ArithmeticError(f"Condition number ({K2}) of matrix A, where A.T@A=L.T@L, is larger than 1/sqrt(u), where u is half the machine precision. Try calling ``model.fit()`` with ``method='QR'``.")
+         if method != "Chol" and Kcode == 2:
+            raise ArithmeticError(f"Condition number ({K2}) of matrix A, where A.T@A=L.T@L, is larger than 1/u, where u is half the machine precision. The model estimates are likely inaccurate.")
       
       # At this point we:
       #  - have corrected & accepted the lam_deltas added above (step 5)
@@ -1173,6 +1197,16 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
       Lp, Pr, _ = cpp_cholP((Xb.T @ Xb + S_emb).tocsc())
       InvCholXXSP = compute_Linv(Lp,n_c)
       InvCholXXS = apply_eigen_perm(Pr,InvCholXXSP)
+   
+   # Check condition number of current system but only after convergence - and warn only. 
+   if check_cond == 1:
+      K2,_,_,Kcode = est_condition(CholXXS,InvCholXXS,verbose=False)
+      if method == "Chol" and Kcode == 1:
+         warnings.warn(f"Condition number ({K2}) of matrix A, where A.T@A=L.T@L, is larger than 1/sqrt(u), where u is half the machine precision. Try calling ``model.fit()`` with ``method='QR'``.")
+      if method != "Chol" and Kcode == 2:
+         raise warnings.warn(f"Condition number ({K2}) of matrix A, where A.T@A=L.T@L, is larger than 1/u, where u is half the machine precision. The model estimates are likely inaccurate.")
+
+   fit_info.K2 = K2
 
    return coef,eta,wres,Wr,scale,InvCholXXS,total_edf,term_edfs,penalty,fit_info
 
@@ -1503,7 +1537,7 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
    eta = mu
 
    # Compute starting estimates
-   dev,pen_dev,eta,mu,coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,S_emb = init_step_gam(y,Xy,mu,eta,rowsX,colsX,None,XX,
+   dev,pen_dev,eta,mu,coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,S_emb = init_step_gam(y,Xy,mu,eta,rowsX,colsX,None,XX,
                                                                                                      family,col_S,penalties,
                                                                                                      pinv,n_c,formula,form_Linv,"Chol")
    
@@ -1567,7 +1601,7 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
          if o_iter > 0:
             dev_check = dev_diff < 1e-3*pen_dev
 
-         eta,mu,n_coef,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb,lam_checks = correct_lambda_step(y,Xy,None,None,rowsX,colsX,None,XX,
+         eta,mu,n_coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb,lam_checks = correct_lambda_step(y,Xy,None,None,rowsX,colsX,None,XX,
                                                                                                                                                    family,col_S,S_emb,penalties,
                                                                                                                                                    was_extended,pinv,lam_delta,
                                                                                                                                                    extend_by,o_iter,dev_check,
@@ -1579,6 +1613,7 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
          # If there are no penalties simply perform a newton step
          # for the coefficients only
          eta,mu,n_coef,\
+         CHOLXXS,\
          InvCholXXS,\
          _,\
          _,\

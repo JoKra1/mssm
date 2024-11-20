@@ -592,7 +592,7 @@ class GAMM:
                 
     ##################################### Fitting #####################################
     
-    def fit(self,maxiter=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=False,extension_method_lam = "nesterov",restart=False,progress_bar=True,method="Chol",n_cores=10):
+    def fit(self,maxiter=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=False,extension_method_lam = "nesterov",restart=False,progress_bar=True,method="Chol",check_cond=1,n_cores=10):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -612,6 +612,8 @@ class GAMM:
         :type progress_bar: bool,optional
         :param method: Which method to use to solve for the coefficients. The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR". In that case a QR decomposition is used - which is first pivoted to maximize sparsity in the resulting decomposition but then also pivots for stability in order to get an estimate of rank defficiency. This takes substantially longer. This argument is ignored if ``len(self.formula.file_paths)>0`` that is, if :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` should be created iteratively. Defaults to "Chol".
         :type method: str,optional
+        :param check_cond: Whether to obtain an estimate of the condition number for the linear system that is solved. When ``check_cond=0``, no check will be performed. When ``check_cond=1``, an estimate of the condition number for the final system (at convergence) will be computed and warnings will be issued based on the outcome (see :func:`mssm.src.python.gamm_solvers.est_condition`). When ``check_cond=1``, an estimate of the condition number will be performed for each new system (at each iteration of the algorithm) and an error will be raised if the condition number is estimated as too high given the chosen ``method``. Is ignored, if :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` should be created iteratively. Defaults to 1.
+        :type check_cond: int,optional
         :param n_cores: Number of cores to use during parts of the estimation that can be done in parallel. Defaults to 10.
         :type n_cores: int,optional
         """
@@ -694,7 +696,7 @@ class GAMM:
                                                                                       conv_tol,extend_lambda,control_lambda,
                                                                                       exclude_lambda,extension_method_lam,
                                                                                       len(self.formula.discretize) == 0,
-                                                                                      method,progress_bar,n_cores)
+                                                                                      method,check_cond,progress_bar,n_cores)
             
             self.Wr = Wr
 
