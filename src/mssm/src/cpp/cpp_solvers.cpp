@@ -11,6 +11,8 @@
 
 namespace py = pybind11;
 
+typedef Eigen::Vector<long long int, Eigen::Dynamic> VectorXi64;
+
 std::tuple<Eigen::SparseMatrix<double>,int> chol(long long int Arows, long long int Acols, long long int Annz,
                                                  py::array_t<double, py::array::f_style | py::array::forcecast> Adata,
                                                  py::array_t<long long int, py::array::f_style | py::array::forcecast> Aidptr,
@@ -108,6 +110,48 @@ std::tuple<Eigen::SparseMatrix<double>,Eigen::SparseMatrix<double>,Eigen::Vector
     //Eigen::SparseMatrix<double> R = solver.matrixR().eval() * P.transpose();
 
     return std::make_tuple(std::move(Q),R,P.indices(),0);
+    
+}
+
+std::tuple<Eigen::SparseMatrix<double>,VectorXi64, VectorXi64, int,int> spqr(long long int Arows, long long int Acols, long long int Annz,
+                                                                                             py::array_t<double, py::array::f_style | py::array::forcecast> Adata,
+                                                                                             py::array_t<long long int, py::array::f_style | py::array::forcecast> Aidptr,
+                                                                                             py::array_t<long long int, py::array::f_style | py::array::forcecast> Aindices,
+                                                                                             double piv_tol){
+
+    Eigen::Map<Eigen::SparseMatrix<double,0,long long int>> A(Arows,Acols,Annz,
+                                                    (Eigen::SparseMatrix<double,0,long long int>::StorageIndex*) Aidptr.data(),
+                                                    (Eigen::SparseMatrix<double,0,long long int>::StorageIndex*) Aindices.data(),
+                                                    (Eigen::SparseMatrix<double,0,long long int>::Scalar*) Adata.data());
+
+    // Computed column-pivoted QR factorization of symmetric matrix A, with ordering computed so that L - where A=L@L.T - is sparse.
+    // see Golub & Van Loan "Matrix Computations: 4ED" (2013)
+    Eigen::AMDOrdering<long long int> ordering;
+    Eigen::PermutationMatrix<Eigen::Dynamic, Eigen::Dynamic,long long int> P1;
+    ordering(A.selfadjointView<Eigen::Lower>(), P1);
+    
+    // Now permute A columns with P1 - then compute QR decomposition A@P1@P2 = QR
+    // where P2 will be formed with concern for numerical stability if piv_tol << 0.5
+    Eigen::SparseQR<Eigen::SparseMatrix<double,0,long long int>,Eigen::NaturalOrdering<long long int>> solver;
+    solver.setPivotThreshold(pow(std::numeric_limits<double>::epsilon(),piv_tol)*A.norm());
+    solver.compute(A*P1); // Now use ordering computed previously to pivot columns
+
+    // Get second column permutation matrix
+    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic,long long int> P2(solver.colsPermutation());
+
+    if(solver.info()!=Eigen::Success)
+    {
+
+        Eigen::SparseMatrix<double> R(Acols,Acols);
+        R.setIdentity();
+        return std::make_tuple(std::move(R),P1.indices(),P2.indices(),0,1);
+    }
+
+    // Upper triagonal factor
+    Eigen::SparseMatrix<double> R = solver.matrixR();
+
+
+    return std::make_tuple(std::move(R),P1.indices(),P2.indices(),solver.rank(),0);
     
 }
 
@@ -672,6 +716,7 @@ PYBIND11_MODULE(cpp_solvers, m) {
     m.def("chol", &chol, "Compute cholesky factor L of A");
     m.def("cholP", &cholP, "Compute cholesky factor L of A after applying a sparsity enhancing permutation to A");
     m.def("pqr", &pqr, "Perform column pivoted QR decomposition of A");
+    m.def("spqr", &spqr, "Perform column pivoted QR decomposition of symmetric matrix A, so that L - where A=L@L.T - is sparse.");
     m.def("solve_pqr", &solve_pqr, "Perform column pivoted QR decomposition of A, then solve for inverse of A");
     m.def("solve_am", &solve_am, "Solve additive model, return coefficient vector and inverse");
     m.def("solve_L", &solve_L, "Solve cholesky of XX+S");

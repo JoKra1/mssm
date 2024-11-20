@@ -26,6 +26,9 @@ def cpp_cholP(A):
 def cpp_qr(A):
    return cpp_solvers.pqr(*map_csc_to_eigen(A))
 
+def cpp_symqr(A,tol):
+   return cpp_solvers.spqr(*map_csc_to_eigen(A),tol)
+
 def cpp_solve_qr(A):
    return cpp_solvers.solve_pqr(*map_csc_to_eigen(A))
 
@@ -52,6 +55,55 @@ def cpp_solve_tr(A,C):
 
 def cpp_backsolve_tr(A,C):
    return cpp_solvers.backsolve_tr(*map_csc_to_eigen(A),C)
+
+def est_condition(L,Linv,seed=0,verbose=True):
+   """Estimate the condition number ``K`` - the ratio of the largest to smallest singular values - of matrix ``A``, where ``A.T@A = L@L.T``.
+
+   ``L`` and ``Linv`` can either be obtained by Cholesky decomposition, i.e., ``A.T@A = L@L.T`` or
+   by QR decomposition ``A=Q@R`` where ``R=L.T``.
+
+   If ``verbose=True`` (default), separate warnings will be issued in case ``K>(1/(0.5*sqrt(epsilon)))`` and ``K>(1/(0.5*epsilon))``.
+   If the former warning is raised, this indicates that computing ``L`` via a Cholesky decomposition is likely unstable
+   and should be avoided. If the second warning is raised as well, obtaining ``L`` via QR decomposition (of ``A``) is also likely
+   to be unstable (see Golub & Van Loan, 2013).
+
+   References:
+     - Cline et al. (1979). An Estimate for the Condition Number of a Matrix.
+     - Golub & Van Loan (2013). Matrix computations, 4th edition.
+
+   :param L: Cholesky or any other root of ``A.T@A`` as a sparse matrix.
+   :type L: scipy.sparse.csc_array
+   :param Linv: Inverse of Choleksy (or any other root) of ``A.T@A``.
+   :type Linv: scipy.sparse.csc_array
+   :param seed: The seed to use for the random parts of the singular value decomposition. Defaults to 0.
+   :type seed: int or None or numpy.random.Generator
+   :param verbose: Whether or not warnings should be printed. Defaults to True.
+   :type verbose: bool
+   :return: A tuple, containing the estimate of condition number ``K``, an estimate of the largest singular value of ``A``, an estimate of the smallest singular value of ``A``, and a ``code``. The latter will be zero in case no warning was raised, 1 in case the first warning described above was raised, and 2 if the second warning was raised as well.
+   :rtype: (float,float,float,int)
+   """
+
+   # Get unit round-off (Golub & Van Loan, 2013)
+   u = 0.5*np.finfo(float).eps
+
+   # Now get estimates of largest and smallest singular values of A
+   # from norms of L and Linv (Cline et al. 1979)
+   min_sing = scp.sparse.linalg.svds(Linv,k=1,return_singular_vectors=False,random_state=seed)[0]
+   max_sing = scp.sparse.linalg.svds(L,k=1,return_singular_vectors=False,random_state=seed)[0]
+   K = max_sing*min_sing
+   code = 0
+   
+   if K > 1/np.sqrt(u):
+      if verbose:
+         warnings.warn("Condition number of matrix A, where A.T@A=L.T@L, is larger than 1/sqrt(u), where u is half the machine precision.")
+      code = 1
+   
+   if K > 1/u:
+      if verbose:
+         warnings.warn("Condition number of matrix A, where A.T@A=L.T@L, is larger than 1/u, where u is half the machine precision.")
+      code = 2
+   
+   return K, max_sing, 1/min_sing, code
 
 def compute_lgdetD_bsb(rank,cLam,gInv,emb_SJ,cCoef):
    # Derivative of log(|S_lambda|+), the log of the "Generalized determinant", with respect to lambda see Wood, Shaddick, & Augustin, (2017)
