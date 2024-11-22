@@ -1068,9 +1068,9 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    if check_cond == 2:
       K2,_,_,Kcode = est_condition(CholXXS,InvCholXXS,verbose=False)
       if method == "Chol" and Kcode == 1:
-         raise ArithmeticError(f"Condition number ({K2}) of matrix A, where A.T@A=L.T@L, is larger than 1/sqrt(u), where u is half the machine precision. Try calling ``model.fit()`` with ``method='QR'``.")
+         raise ArithmeticError(f"Condition number ({K2}) of matrix A, where A.T@A=X.T@X + S_\lambda, is larger than 1/sqrt(u), where u is half the machine precision. Try calling ``model.fit()`` with ``method='QR'``.")
       if method != "Chol" and Kcode == 2:
-         raise ArithmeticError(f"Condition number ({K2}) of matrix A, where A.T@A=L.T@L, is larger than 1/u, where u is half the machine precision. The model estimates are likely inaccurate.")
+         raise ArithmeticError(f"Condition number ({K2}) of matrix A, where A.T@A=X.T@X + S_\lambda, is larger than 1/u, where u is half the machine precision. The model estimates are likely inaccurate.")
 
    # Initialize extension variable
    extend_by = initialize_extension(extension_method_lam,penalties)
@@ -1169,9 +1169,9 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
       if check_cond == 2:
          K2,_,_,Kcode = est_condition(CholXXS,InvCholXXS,verbose=progress_bar)
          if method == "Chol" and Kcode == 1:
-            raise ArithmeticError(f"Condition number ({K2}) of matrix A, where A.T@A=L.T@L, is larger than 1/sqrt(u), where u is half the machine precision. Try calling ``model.fit()`` with ``method='QR'``.")
+            raise ArithmeticError(f"Condition number ({K2}) of matrix A, where A.T@A=X.T@X + S_\lambda, is larger than 1/sqrt(u), where u is half the machine precision. Try calling ``model.fit()`` with ``method='QR'``.")
          if method != "Chol" and Kcode == 2:
-            raise ArithmeticError(f"Condition number ({K2}) of matrix A, where A.T@A=L.T@L, is larger than 1/u, where u is half the machine precision. The model estimates are likely inaccurate.")
+            raise ArithmeticError(f"Condition number ({K2}) of matrix A, where A.T@A=X.T@X + S_\lambda, is larger than 1/u, where u is half the machine precision. The model estimates are likely inaccurate.")
       
       # At this point we:
       #  - have corrected & accepted the lam_deltas added above (step 5)
@@ -1201,10 +1201,14 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    # Check condition number of current system but only after convergence - and warn only. 
    if check_cond == 1:
       K2,_,_,Kcode = est_condition(CholXXS,InvCholXXS,verbose=False)
+
+      if fit_info.code == 0: # Convergence was reached but Knumber might suggest instable system.
+         fit_info.code = Kcode
+
       if method == "Chol" and Kcode == 1:
-         warnings.warn(f"Condition number ({K2}) of matrix A, where A.T@A=L.T@L, is larger than 1/sqrt(u), where u is half the machine precision. Try calling ``model.fit()`` with ``method='QR'``.")
+         warnings.warn(f"Condition number ({K2}) of matrix A, where A.T@A=X.T@X + S_\lambda, is larger than 1/sqrt(u), where u is half the machine precision. Try calling ``model.fit()`` with ``method='QR'``.")
       if method != "Chol" and Kcode == 2:
-         raise warnings.warn(f"Condition number ({K2}) of matrix A, where A.T@A=L.T@L, is larger than 1/u, where u is half the machine precision. The model estimates are likely inaccurate.")
+         raise warnings.warn(f"Condition number ({K2}) of matrix A, where A.T@A=X.T@X + S_\lambda, is larger than 1/u, where u is half the machine precision. The model estimates are likely inaccurate.")
 
    fit_info.K2 = K2
 
@@ -1780,7 +1784,7 @@ def deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs):
     hessian = scp.sparse.csc_array((h_vals,(h_rows,h_cols)))
     return np.array(grad).reshape(-1,1),hessian
 
-def newton_coef_smooth(coef,grad,H,S_emb):
+def newton_coef_smooth(coef,grad,H,S_emb,method,piv_tol):
     """
     Follows sections 3.1.2 and 3.14 in WPS (2016) to update the coefficients of the GAMLSS model via a
     newton step.
@@ -1797,15 +1801,36 @@ def newton_coef_smooth(coef,grad,H,S_emb):
     nH = -1*H + S_emb
 
     # Diagonal pre-conditioning as suggested by WPS (2016)
-    D = scp.sparse.diags(np.abs(nH.diagonal())**0.5)
+    nHdgr = np.abs(nH.diagonal())**0.5
+    D = scp.sparse.diags(nHdgr)
+    DI = scp.sparse.diags(1/nHdgr) # For cholesky
     nH2 = (D@nH@D).tocsc()
+
+    if method != "Chol":
+         # First perform QR decomposition with aggressive pivot tolerance
+         
+         _,Pr1,Pr2,rank,code = cpp_symqr(nH2,piv_tol)
+         
+         P1 = compute_eigen_perm(Pr1)
+         P2 = compute_eigen_perm(Pr2)
+         P = P2.T@P1.T
+
+         _,Pr,_ = translate_sparse(P.tocsc())
+
+         if code != 0:
+            raise ArithmeticError("Computation of pre-cholesky QR decomposition failed. Model is likely miss-specified.")
 
     # Compute V, inverse of nH
     eps = 0
     code = 1
     while code != 0:
-
-        Lp, Pr, code = cpp_cholP(nH2+eps*scp.sparse.identity(nH2.shape[1],format='csc'))
+        
+        if method == "Chol":
+            Lp, Pr, code = cpp_cholP(nH2+eps*scp.sparse.identity(nH2.shape[1],format='csc'))
+            P = compute_eigen_perm(Pr)
+        else:
+            # Now compute cholesky based on pivoting strategy inferred earlier from QR.
+            Lp, code = cpp_chol((P@(nH2+eps*scp.sparse.identity(nH2.shape[1],format='csc'))@P.T).tocsc())
 
         if code != 0:
             # Adjust identity added to nH
@@ -1826,7 +1851,7 @@ def newton_coef_smooth(coef,grad,H,S_emb):
     # Update coef
     n_coef = coef + (V@pgrad)
 
-    return n_coef,LV,eps
+    return n_coef,DI@P.T@Lp,LV,eps
 
 def correct_coef_step_gammlss(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb):
     """
@@ -1868,7 +1893,7 @@ def correct_coef_step_gammlss(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_
     
     return next_coef,next_split_coef,next_mus,next_etas,next_llk,next_pen_llk
     
-def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,max_inner,min_inner,conv_tol):
+def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,max_inner,min_inner,conv_tol,method,piv_tol):
    """
    Repeatedly perform Newton update with step length control to the coefficient vector - based on
    steps outlined by WPS (2016).
@@ -1888,7 +1913,7 @@ def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,ma
       # Update coef and perform step size control
       if outer > 0 or inner > 0:
          # Update Coefficients
-         next_coef,LV,eps = newton_coef_smooth(coef,grad,H,S_emb)
+         next_coef,L,LV,eps = newton_coef_smooth(coef,grad,H,S_emb,method,piv_tol)
 
          # Prepare to check convergence
          prev_llk_cur_pen = c_llk - coef.T@S_emb@coef
@@ -1903,19 +1928,19 @@ def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,ma
             break # end inner loop and immediately optimize lambda again.
       else:
          # Simply accept next coef step on first iteration
-         coef,LV,_ = newton_coef_smooth(coef,grad,H,S_emb)
+         coef,L,LV,eps = newton_coef_smooth(coef,grad,H,S_emb,method,piv_tol)
          split_coef = np.split(coef,coef_split_idx)
          etas = [Xs[i]@split_coef[i] for i in range(family.n_par)]
          mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
          c_llk = family.llk(y,*mus)
          c_pen_llk = c_llk - coef.T@S_emb@coef
    
-   return coef,split_coef,mus,etas,H,LV,c_llk,c_pen_llk
+   return coef,split_coef,mus,etas,H,L,LV,c_llk,c_pen_llk,eps
     
 def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
                          max_outer=50,max_inner=30,min_inner=1,conv_tol=1e-7,
                          extend_lambda=True,extension_method_lam = "nesterov2",
-                         control_lambda=True,progress_bar=True,n_c=10):
+                         control_lambda=True,method="Chol",check_cond=1,piv_tol=0.175,progress_bar=True,n_c=10):
     """
     Fits a GAMLSS model, following steps outlined by Wood, Pya, & Säfken (2016).
 
@@ -1942,15 +1967,17 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
     iterator = range(max_outer)
     if progress_bar:
         iterator = tqdm(iterator,desc="Fitting",leave=True)
-
+    
+    fit_info = Fit_info()
     for outer in iterator:
 
         # Update coefficients:
         if outer == 0 or extend_lambda == False or (control_lambda and refit):
-            coef,split_coef,mus,etas,H,LV,c_llk,c_pen_llk = update_coef_gammlss(family,mus,y,Xs,coef,
+            coef,split_coef,mus,etas,H,L,LV,c_llk,c_pen_llk,eps = update_coef_gammlss(family,mus,y,Xs,coef,
                                                                                  coef_split_idx,S_emb,
                                                                                  c_llk,outer,max_inner,
-                                                                                 min_inner,conv_tol)
+                                                                                 min_inner,conv_tol,
+                                                                                 method,piv_tol)
             
             # Given new coefficients compute lgdetDs, ldetHS, and bsbs - needed for efs step
             lgdetDs = []
@@ -1966,6 +1993,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
                bsbs.append(bsb)
 
             total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,gamlss_pen,lgdetDs,n_coef,n_c)
+            fit_info.lambda_updates += 1
 
         # Check overall convergence
         if outer > 0:
@@ -1977,6 +2005,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
                 if progress_bar:
                     iterator.set_description_str(desc="Converged!", refresh=True)
                     iterator.close()
+                fit_info.code = 0
                 break
             
         # We need the penalized likelihood of the model at this point for convergence control (step 2 in Wood, 2017 based on step 4 in Wood, Goude, & Shaw, 2016)
@@ -2008,10 +2037,11 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
             # can do is at least undo the acceleration if we over-shoot the approximate derivative...
 
             # First re-compute coef
-            next_coef,split_coef,next_mus,next_etas,H,LV,next_llk,next_pen_llk  = update_coef_gammlss(family,mus,y,Xs,coef,
+            next_coef,split_coef,next_mus,next_etas,H,L,LV,next_llk,next_pen_llk,eps  = update_coef_gammlss(family,mus,y,Xs,coef,
                                                                                                       coef_split_idx,S_emb,
                                                                                                       c_llk,outer,max_inner,
-                                                                                                      min_inner,conv_tol)
+                                                                                                      min_inner,conv_tol,
+                                                                                                      method,piv_tol)
             
             # Now re-compute lgdetDs, ldetHS, and bsbs
             lgdetDs = []
@@ -2027,6 +2057,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
                   bsbs.append(bsb)
 
             total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,gamlss_pen,lgdetDs,n_coef,n_c)
+            fit_info.lambda_updates += 1
             
             # Compute approximate!!! gradient of REML with respect to lambda
             # to check if step size needs to be reduced (part of step 6 in Wood, 2017).
@@ -2056,6 +2087,19 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
                c_pen_llk=next_pen_llk
 
         #print([lterm.lam for lterm in gamlss_pen])
+        fit_info.iter += 1
+    
+    fit_info.eps = eps
+
+    if check_cond == 1:
+      K2,_,_,Kcode = est_condition(L,LV,verbose=False)
+      fit_info.K2 = K2
+
+      if fit_info.code == 0: # Convergence was reached but Knumber might still suggest instable system.
+         fit_info.code = Kcode
+
+      if Kcode > 0:
+         warnings.warn(f"Condition number ({K2}) of matrix A, where A.T@A=H and H is the Hessian of the negative penalized likelihood, is larger than 1/sqrt(u), where u is half the machine precision. Call ``model.fit()`` with ``method='QR/Chol'``, but note that even then estimates are likely to be inaccurate.")
     
     # "Residuals"
     wres = y - Xs[0]@split_coef[0]
@@ -2066,7 +2110,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
     # Calculate actual term-specific edf
     term_edfs = calculate_term_edf(gamlss_pen,term_edfs)
     
-    return coef,etas,mus,wres,H,LV,total_edf,term_edfs,penalty[0,0]
+    return coef,etas,mus,wres,H,LV,total_edf,term_edfs,penalty[0,0],fit_info
 
 ################################################ General Smooth model code ################################################
 
@@ -2100,7 +2144,7 @@ def correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk
     
     return next_coef,next_llk,next_pen_llk
     
-def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,max_inner,min_inner,conv_tol):
+def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,max_inner,min_inner,conv_tol,method,piv_tol):
    """
    Repeatedly perform Newton update with step length control to the coefficient vector - based on
    steps outlined by WPS (2016).
@@ -2118,7 +2162,7 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,max
       # Update coef and perform step size control
       if outer > 0 or inner > 0:
          # Update Coefficients
-         next_coef,LV,eps = newton_coef_smooth(coef,grad,H,S_emb)
+         next_coef,L,LV,eps = newton_coef_smooth(coef,grad,H,S_emb,method,piv_tol)
 
          # Prepare to check convergence
          prev_llk_cur_pen = c_llk - coef.T@S_emb@coef
@@ -2133,18 +2177,18 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,max
             break # end inner loop and immediately optimize lambda again.
       else:
          # Simply accept next coef step on first iteration
-         coef,LV,_ = newton_coef_smooth(coef,grad,H,S_emb)
+         coef,L,LV,eps = newton_coef_smooth(coef,grad,H,S_emb,method,piv_tol)
          c_llk = family.llk(coef,coef_split_idx,y,Xs)
          c_pen_llk = c_llk - coef.T@S_emb@coef
    
-   return coef,H,LV,c_llk,c_pen_llk
+   return coef,H,L,LV,c_llk,c_pen_llk,eps
 
 
 def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smooth_pen,
                               max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,
                               extend_lambda=True,extension_method_lam = "nesterov2",
-                              control_lambda=True,progress_bar=True,
-                              n_c=10,method="Newton",**bfgs_options):
+                              control_lambda=True,optimizer="Newton",method="Chol",check_cond=1,piv_tol=0.175,progress_bar=True,
+                              n_c=10,**bfgs_options):
     """
     Fits a general smooth model, following steps outlined by Wood, Pya, & Säfken (2016). Essentially,
     an even more general version of :func:``solve_gammlss_sparse`` that requires only a function to compute
@@ -2178,26 +2222,29 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
     if progress_bar:
         iterator = tqdm(iterator,desc="Fitting",leave=True)
 
-    if method != "Newton":
+    if optimizer != "Newton":
         # Define negative penalized likelihood function to be minimized via BFGS
         def __neg_pen_llk(coef,coef_split_idx,y,Xs,family,S_emb):
             neg_llk = -1 * family.llk(coef,coef_split_idx,y,Xs)
             return neg_llk + coef.T@S_emb@coef
-    
+        
+    fit_info = Fit_info()
     for outer in iterator:
 
         # Update coefficients:
         if outer == 0 or extend_lambda == False or (control_lambda and refit):
-            if method == "Newton":
-               coef,H,LV,c_llk,c_pen_llk = update_coef_gen_smooth(family,y,Xs,coef,
+            if optimizer == "Newton":
+               coef,H,L,LV,c_llk,c_pen_llk,eps = update_coef_gen_smooth(family,y,Xs,coef,
                                                                   coef_split_idx,S_emb,
                                                                   c_llk,outer,max_inner,
-                                                                  min_inner,conv_tol)
+                                                                  min_inner,conv_tol,
+                                                                  method,piv_tol)
+               fit_info.eps = eps
             else:
                opt = scp.optimize.minimize(__neg_pen_llk,
                                           np.ndarray.flatten(coef),
                                           args=(coef_split_idx,y,Xs,family,S_emb),
-                                          method=method,
+                                          method=optimizer,
                                           options={"maxiter":max_inner,
                                                    **bfgs_options})
                
@@ -2209,9 +2256,9 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                c_pen_llk = c_llk - coef.T@S_emb@coef
 
                # Get inverse of Hessian of penalized likelihood
-               if method == "BFGS":
+               if optimizer == "BFGS":
                   V = scp.sparse.csc_array(opt["hess_inv"])
-               elif method == "L-BFGS-B":
+               elif optimizer == "L-BFGS-B":
                   V = scp.sparse.csc_array(opt.hess_inv.todense())
                V.eliminate_zeros()
 
@@ -2234,6 +2281,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                bsbs.append(bsb)
 
             total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,smooth_pen,lgdetDs,n_coef,n_c)
+            fit_info.lambda_updates += 1
 
         # Check overall convergence
         if outer > 0:
@@ -2245,6 +2293,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                 if progress_bar:
                     iterator.set_description_str(desc="Converged!", refresh=True)
                     iterator.close()
+                fit_info.code = 0
                 break
         
         # We need the penalized likelihood of the model at this point for convergence control (step 2 in Wood, 2017 based on step 4 in Wood, Goude, & Shaw, 2016)
@@ -2277,16 +2326,18 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
             # can do is at least undo the acceleration if we over-shoot the approximate derivative...
 
             # First re-compute coef
-            if method == "Newton":
-                next_coef,H,LV,next_llk,next_pen_llk = update_coef_gen_smooth(family,y,Xs,coef,
+            if optimizer == "Newton":
+                next_coef,H,L,LV,next_llk,next_pen_llk,eps = update_coef_gen_smooth(family,y,Xs,coef,
                                                                 coef_split_idx,S_emb,
                                                                 c_llk,outer,max_inner,
-                                                                min_inner,conv_tol)
+                                                                min_inner,conv_tol,
+                                                                method,piv_tol)
+                fit_info.eps = eps
             else:
                 opt = scp.optimize.minimize(__neg_pen_llk,
                                             np.ndarray.flatten(coef),
                                             args=(coef_split_idx,y,Xs,family,S_emb),
-                                            method=method,
+                                            method=optimizer,
                                             options={"maxiter":max_inner,
                                                      **bfgs_options})
 
@@ -2298,9 +2349,9 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                 next_pen_llk = next_llk - next_coef.T@S_emb@next_coef
 
                 # Get inverse of Hessian of penalized likelihood
-                if method == "BFGS":
+                if optimizer == "BFGS":
                   V = scp.sparse.csc_array(opt["hess_inv"])
-                elif method == "L-BFGS-B":
+                elif optimizer == "L-BFGS-B":
                   V = scp.sparse.csc_array(opt.hess_inv.todense())
                 V.eliminate_zeros()
 
@@ -2323,6 +2374,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                 bsbs.append(bsb)
 
             total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,smooth_pen,lgdetDs,n_coef,n_c)
+            fit_info.lambda_updates += 1
             
             # Compute approximate!!! gradient of REML with respect to lambda
             # to check if step size needs to be reduced (part of step 6 in Wood, 2017).
@@ -2348,6 +2400,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                c_pen_llk = next_pen_llk
 
         #print([lterm.lam for lterm in smooth_pen])
+        fit_info.iter += 1
     
     # Total penalty
     penalty = coef.T@S_emb@coef
@@ -2355,12 +2408,22 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
     # Calculate actual term-specific edf
     term_edfs = calculate_term_edf(smooth_pen,term_edfs)
 
-    if method != "Newton":
+    if optimizer != "Newton":
         # Get an apparoximation of the Hessian of the likelihood
         LHPT = compute_Linv(LVPT)
         LHT = apply_eigen_perm(P,LHPT)
         H = LHT.T@LHT # approximately: negative Hessian of llk + S_emb
         H -= S_emb # approximately: negative Hessian of llk 
-        H *= -1 # approximately: Hessian of llk 
+        H *= -1 # approximately: Hessian of llk
+    else:
+       if check_cond == 1:
+         K2,_,_,Kcode = est_condition(L,LV,verbose=False)
+         fit_info.K2 = K2
 
-    return coef,H,LV,total_edf,term_edfs,penalty[0,0]
+         if fit_info.code == 0: # Convergence was reached but Knumber might suggest instable system.
+            fit_info.code = Kcode
+
+         if Kcode > 0:
+            warnings.warn(f"Condition number ({K2}) of matrix A, where A.T@A=H and H is the Hessian of the negative penalized likelihood, is larger than 1/sqrt(u), where u is half the machine precision. Call ``model.fit()`` with ``method='QR/Chol'``, but note that even then estimates are likely to be inaccurate.")
+
+    return coef,H,LV,total_edf,term_edfs,penalty[0,0],fit_info

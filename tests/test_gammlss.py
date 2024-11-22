@@ -81,6 +81,47 @@ class Test_GAUMLS:
         comp = "\nDistribution parameter: 1\n\nf(['x0']); edf: 9.799 chi^2: 5768.015 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x0']); edf: 6.559 chi^2: 563.181 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         assert comp == capture
 
+class Test_GAUMLS_MIXED:
+    ## Simulate some data - effect of x0 on scale parameter is very very small
+    sim_fit_dat = sim10(n=500,c=0.1,seed=20)
+
+    # Now fit nested models
+
+    # Create Gaussian GAMMLSS family with identity link for mean
+    # and log link for sigma
+    family = GAUMLSS([Identity(),LOGb(-0.3)])
+
+    # We need to model the mean: \mu_i = \alpha + f(x0)
+    sim1_formula_m = Formula(lhs("y"),
+                        [i(),f(["x0"]),f(["x1"]),ri("x4")],
+                        data=sim_fit_dat)
+
+    # and the standard deviation as well: log(\sigma_i) = \alpha + f(x0)
+    sim1_formula_sd = Formula(lhs("y"),
+                        [i(),f(["x2"]),f(["x3"])],
+                        data=sim_fit_dat)
+
+    # Collect both formulas
+    sim1_formulas = [sim1_formula_m,sim1_formula_sd]
+
+    model = GAMMLSS(sim1_formulas,family)
+    model.fit(seed=30,max_outer=250,max_inner=500,extend_lambda=True,method="QR/Chol")
+
+    def test_GAMedf(self):
+        assert round(self.model.edf,ndigits=3) == 26.196
+
+    def test_GAMlam(self):
+        lam = np.array([p.lam for p in self.model.overall_penalties])
+        assert np.allclose(lam,np.array([1.00000000e+07, 6.04907747e+00, 5.14585161e-01, 9.12402158e-01, 5.38284225e+02])) 
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        assert round(reml,ndigits=3) == -1747.292
+
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        assert round(llk,ndigits=3) == -1715.506
+
 class Test_GAMMALS:
 
     # Simulate 500 data points

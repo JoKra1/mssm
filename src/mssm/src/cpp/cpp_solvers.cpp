@@ -149,7 +149,7 @@ std::tuple<Eigen::SparseMatrix<double>,VectorXi64, VectorXi64, int,int> spqr(lon
     }
 
     // Upper triagonal factor
-    Eigen::SparseMatrix<double> R = solver.matrixR();
+    Eigen::SparseMatrix<double> R = solver.matrixR().topLeftCorner(solver.rank(), solver.rank());
 
 
     return std::make_tuple(std::move(R),P1.indices(),P2.indices(),solver.rank(),0);
