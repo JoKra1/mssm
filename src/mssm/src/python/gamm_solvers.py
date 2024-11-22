@@ -13,6 +13,14 @@ MP_SPLIT_SIZE = 2000
 
 @dataclass
 class Fit_info:
+   """Holds information related to convergence (speed) for GAMMs, GAMMLSS, and GSMMs.
+
+   :ivar int lambda_updates: The total number of lambda updates computed during estimation. Initialized with 0.
+   :ivar int iter: The number of outer iterations (a single outer iteration can involve multiple lambda updates) completed during estimation. Initialized with 0.
+   :ivar int code: Convergence status. Anything above 0 indicates that the model did not converge and estimates should be considered carefully. Initialized with 1.
+   :ivar float eps: The fraction added to the last estimate of the negative Hessian of the penalized likelihood during GAMMLSS or GSMM estimation. If this is not 0 - the model should not be considered as converged, irrespective of what ``code`` indicates. This most likely implies that the model is not identifiable. Initialized with ``None`` and ignored for GAMM estimation.
+   :ivar float K2: An estimate for the condition number of matrix ``A``, where ``A.T@A=H`` and ``H`` is the final estimate of the negative Hessian of the penalized likelihood. Only available if ``check_cond>0`` when ``model.fit()`` is called for any model (i.e., GAMM, GAMMLSS, GSMM). Initialized with ``None``.
+   """
    lambda_updates:int=0
    iter:int=0
    code:int=1
@@ -528,6 +536,27 @@ def compute_Linv(L,n_c=10):
 
    return cpp_solve_tr(L,T)
 
+def computetrVS(V,lTerm):
+   """Compute ``tr(V@lTerm.S_j)`` from linear operator of ``V`` obtained from L-BFGS-B optimizer.
+
+   :param V: Linear operator of ``V``, which is the current estimate for the inverse of the negative Hessian of the penalized likelihood.
+   :type V: scipy.sparse.linalg.LinearOperator
+   :param lTerm: Current lambda term for which to compute the trace.
+   :type lTerm: mssm.src.python.penalties.LambdaTerm
+   """
+   tr = 0
+
+   S_start = lTerm.start_index
+   S_len = lTerm.rep_sj * lTerm.S_J.shape[1]
+   S_end = S_start + S_len
+   
+   for cidx in range(S_start,S_end):
+      S_c = lTerm.S_J_emb[:,[cidx]].toarray()
+      VS_c = V.matvec(S_c)
+      tr += VS_c[cidx,0]
+   
+   return tr
+   
 
 def calculate_edf(LP,Pr,InvCholXXS,penalties,lgdetDs,colsX,n_c):
    # Follows steps outlined by Wood & Fasiolo (2017) to compute total degrees of freedom by the model.
@@ -539,8 +568,12 @@ def calculate_edf(LP,Pr,InvCholXXS,penalties,lgdetDs,colsX,n_c):
 
    for lti,lTerm in enumerate(penalties):
       if not InvCholXXS is None:
-         B = InvCholXXS @ lTerm.D_J_emb # Needed for Fellner Schall update (Wood & Fasiolo, 2017)
-         Bps = B.power(2).sum()
+         # Compute B, needed for Fellner Schall update (Wood & Fasiolo, 2017)
+         if isinstance(InvCholXXS,scp.sparse.linalg.LinearOperator):
+            Bps = computetrVS(InvCholXXS,lTerm)
+         else:
+            B = InvCholXXS @ lTerm.D_J_emb 
+            Bps = B.power(2).sum()
       else:
          Bps = compute_B(LP,compute_eigen_perm(Pr),lTerm,n_c)
 
@@ -2258,15 +2291,16 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                # Get inverse of Hessian of penalized likelihood
                if optimizer == "BFGS":
                   V = scp.sparse.csc_array(opt["hess_inv"])
-               elif optimizer == "L-BFGS-B":
-                  V = scp.sparse.csc_array(opt.hess_inv.todense())
-               V.eliminate_zeros()
+                  V.eliminate_zeros()
 
-               # Get Cholesky factor needed for (accelerated) EFS
-               LVPT, P, code = cpp_cholP(V)
-               LVT = apply_eigen_perm(P,LVPT)
-               LV = LVT.T
-            
+                  # Get Cholesky factor needed for (accelerated) EFS
+                  LVPT, P, code = cpp_cholP(V)
+                  LVT = apply_eigen_perm(P,LVPT)
+                  LV = LVT.T
+               elif optimizer == "L-BFGS-B":
+                  # Get linear operator. No need for Cholesky
+                  V = opt.hess_inv
+               
             # Given new coefficients compute lgdetDs, ldetHS, and bsbs - needed for efs step
             lgdetDs = []
             bsbs = []
@@ -2280,7 +2314,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                lgdetDs.append(lgdetD)
                bsbs.append(bsb)
 
-            total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,smooth_pen,lgdetDs,n_coef,n_c)
+            total_edf,term_edfs, ldetHSs = calculate_edf(None,None,V if optimizer=="L-BFGS-B" else LV,smooth_pen,lgdetDs,n_coef,n_c)
             fit_info.lambda_updates += 1
 
         # Check overall convergence
@@ -2351,14 +2385,15 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                 # Get inverse of Hessian of penalized likelihood
                 if optimizer == "BFGS":
                   V = scp.sparse.csc_array(opt["hess_inv"])
-                elif optimizer == "L-BFGS-B":
-                  V = scp.sparse.csc_array(opt.hess_inv.todense())
-                V.eliminate_zeros()
+                  V.eliminate_zeros()
 
-                # Get Cholesky factor needed for (accelerated) EFS
-                LVPT, P, code = cpp_cholP(V)
-                LVT = apply_eigen_perm(P,LVPT)
-                LV = LVT.T
+                  # Get Cholesky factor needed for (accelerated) EFS
+                  LVPT, P, code = cpp_cholP(V)
+                  LVT = apply_eigen_perm(P,LVPT)
+                  LV = LVT.T
+                elif optimizer == "L-BFGS-B":
+                  # Get linear operator. No need for Cholesky
+                  V = opt.hess_inv
             
             # Now re-compute lgdetDs, ldetHS, and bsbs
             lgdetDs = []
@@ -2373,7 +2408,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                 lgdetDs.append(lgdetD)
                 bsbs.append(bsb)
 
-            total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,smooth_pen,lgdetDs,n_coef,n_c)
+            total_edf,term_edfs, ldetHSs = calculate_edf(None,None,V if optimizer=="L-BFGS-B" else LV,smooth_pen,lgdetDs,n_coef,n_c)
             fit_info.lambda_updates += 1
             
             # Compute approximate!!! gradient of REML with respect to lambda
@@ -2409,21 +2444,34 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
     term_edfs = calculate_term_edf(smooth_pen,term_edfs)
 
     if optimizer != "Newton":
-        # Get an apparoximation of the Hessian of the likelihood
+        
+        if optimizer == "L-BFGS-B":
+           # Need to form last V + Chol explicitly during last iteration
+           V = scp.sparse.csc_array(V.todense())
+           V.eliminate_zeros()
+
+           # Get Cholesky factor needed for (accelerated) EFS
+           LVPT, P, code = cpp_cholP(V)
+           LVT = apply_eigen_perm(P,LVPT)
+           LV = LVT.T
+
+        # Get an approximation of the Hessian of the likelihood
         LHPT = compute_Linv(LVPT)
         LHT = apply_eigen_perm(P,LHPT)
-        H = LHT.T@LHT # approximately: negative Hessian of llk + S_emb
+        L = LHT.T
+        H = L@LHT # approximately: negative Hessian of llk + S_emb
         H -= S_emb # approximately: negative Hessian of llk 
         H *= -1 # approximately: Hessian of llk
-    else:
-       if check_cond == 1:
-         K2,_,_,Kcode = est_condition(L,LV,verbose=False)
-         fit_info.K2 = K2
+       
+    if check_cond == 1:
 
-         if fit_info.code == 0: # Convergence was reached but Knumber might suggest instable system.
-            fit_info.code = Kcode
+      K2,_,_,Kcode = est_condition(L,LV,verbose=False)
+      fit_info.K2 = K2
 
-         if Kcode > 0:
-            warnings.warn(f"Condition number ({K2}) of matrix A, where A.T@A=H and H is the Hessian of the negative penalized likelihood, is larger than 1/sqrt(u), where u is half the machine precision. Call ``model.fit()`` with ``method='QR/Chol'``, but note that even then estimates are likely to be inaccurate.")
+      if fit_info.code == 0: # Convergence was reached but Knumber might suggest instable system.
+         fit_info.code = Kcode
+
+      if Kcode > 0:
+         warnings.warn(f"Condition number ({K2}) of matrix A, where A.T@A=H and H is the Hessian of the negative penalized likelihood, is larger than 1/sqrt(u), where u is half the machine precision. Call ``model.fit()`` with ``method='QR/Chol'``, but note that even then estimates are likely to be inaccurate.")
 
     return coef,H,LV,total_edf,term_edfs,penalty[0,0],fit_info

@@ -133,6 +133,18 @@ def TP_pen(S_j,D_j,j,ks,constraint):
 
 @dataclass
 class LambdaTerm:
+  """:math:`\lambda` storage term.
+
+  :ivar scipy.sparse.csc_array S_J: The penalty matrix associated with this lambda term. Note, in case multiple penalty matrices share the same lambda value, the ``rep_sj`` argument determines how many diagonal blocks we need to fill with this penalty matrix to get ``S_J_emb``. Initialized with ``None``.
+  :ivar scipy.sparse.csc_array S_J_emb: A zero-embedded version of the penalty matrix associated with this lambda term. Note, this matrix contains ``rep_sj`` diagonal sub-blocks each filled with ``S_J``. Initialized with ``None``.
+  :ivar scipy.sparse.csc_array D_J_emb: Root of ``S_J_emb``, so that ``D_J_emb@D_J_emb.T=S_J_emb``. Initialized with ``None``.
+  :ivar int rep_sj: How many sequential sub-blocks of ``S_J_emb`` need to be filled with ``S_J``. Useful if all levels of a categorical variable for which a separate smooth is to be estimated are assumed to share the same lambda value. Initialized with 1.
+  :ivar float lam: The current estimate for :math:`\lambda`. Initialized with 1.1.
+  :ivar int start_index: The first row and column in the overall penalty matrix taken up by ``S_J``. Initialized with ``None``.
+  :ivar PenType type: The type of this penalty term. Initialized with ``None``.
+  :ivar int rank: The rank of ``S_J``. Initialized with ``None``.
+  :ivar int term: The index of the term in a :class:`mssm.src.python.formula.Formula` with which this penalty is associated. Initialized with ``None``.
+  """
   # Lambda term storage. Can hold multiple penalties associated with a single lambda
   # value!
   # start_index can be useful in case we want to have multiple penalties on some

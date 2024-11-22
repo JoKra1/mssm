@@ -36,6 +36,22 @@ mssm.src.python.formula module
    :undoc-members:
    :show-inheritance:
 
+mssm.src.python.gamm_solvers module
+------------------------------
+
+.. automodule:: mssm.src.python.gamm_solvers
+   :members: Fit_info
+   :undoc-members:
+   :show-inheritance:
+
+mssm.src.python.penalties module
+------------------------------
+
+.. automodule:: mssm.src.python.penalties
+   :members: LambdaTerm
+   :undoc-members:
+   :show-inheritance:
+
 mssm.src.python.terms module
 ----------------------------
 

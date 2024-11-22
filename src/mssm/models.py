@@ -15,7 +15,6 @@ class GAMM:
     """Class to fit Generalized Additive Mixed Models.
 
     References:
-
      - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
      - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models. https://doi.org/10.1111/j.1467-9868.2010.00749.x
      - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
@@ -32,6 +31,7 @@ class GAMM:
     :ivar scipy.sparse.csc_array lvi: The inverse of the Cholesky factor of the conditional model coefficient covariance matrix. Initialized with ``None``.
     :ivar float penalty: The total penalty applied to the model deviance after fitting as a float. Initialized with ``None``.
     :ivar scipy.sparse.csc_array hessian: Estimated hessian of the log-likelihood. Initialized with ``None``.
+    :ivar Fit_info info: A :class:`Fit_info` instance, with information about convergence (speed) of the model.
     """
 
     def __init__(self,
@@ -946,7 +946,6 @@ class GAMMLSS(GAMM):
         model.fit()
 
     References:
-
      - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
      - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
      - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models. https://doi.org/10.1111/j.1467-9868.2010.00749.x
@@ -960,13 +959,14 @@ class GAMMLSS(GAMM):
     :type family: GAMLSSFamily
     :ivar [[float]] overall_preds: The predicted means for every parameter of ``family`` evaluated for each observation in the training data. Initialized with ``None``.
     :ivar float edf: The model estimated degrees of freedom as a float. Initialized with ``None``.
-    :ivar [float] term_edf: The estimated degrees of freedom per smooth term. Initialized with ``None``.
+    :ivar [float] overall_term_edf: The estimated degrees of freedom per smooth term. Initialized with ``None``.
     :ivar scipy.sparse.csc_array lvi: The inverse of the Cholesky factor of the conditional model coefficient covariance matrix. Initialized with ``None``.
     :ivar float penalty: The total penalty applied to the model deviance after fitting as a float. Initialized with ``None``.
     :ivar [int] overall_coef:  Contains all coefficients estimated for the model. Initialized with ``None``.
     :ivar [int] coef_split_idx: The index at which to split the overall coefficient vector into separate lists - one per parameter of ``family``. Initialized after fitting!
     :ivar scp.sparse.csc_array hessian:  Estimated hessian of the log-likelihood. Initialized with ``None``.
     :ivar [LambdaTerm] overall_penalties:  Contains all penalties estimated for the model. Initialized with ``None``.
+    :ivar Fit_info info: A :class:`Fit_info` instance, with information about convergence (speed) of the model.
     """
     def __init__(self, formulas: [Formula], family: GAMLSSFamily):
         super().__init__(None, family)
@@ -1644,7 +1644,6 @@ class GSMM(GAMMLSS):
         model.fit(init_coef=coef,method="Newton",extend_lambda=False,max_outer=100,seed=10,conv_tol=1e-7,restart=True)
 
     References:
-
      - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
      - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models. https://doi.org/10.1111/j.1467-9868.2010.00749.x
      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
@@ -1657,13 +1656,14 @@ class GSMM(GAMMLSS):
     :param family: A GENSMOOTHFamily family.
     :type family: GENSMOOTHFamily
     :ivar float edf: The model estimated degrees of freedom as a float. Initialized with ``None``.
-    :ivar [float] term_edf: The estimated degrees of freedom per smooth term. Initialized with ``None``.
+    :ivar [float] overall_term_edf: The estimated degrees of freedom per smooth term. Initialized with ``None``.
     :ivar scipy.sparse.csc_array lvi: The inverse of the Cholesky factor of the conditional model coefficient covariance matrix. Initialized with ``None``.
     :ivar float penalty: The total penalty applied to the model deviance after fitting as a float. Initialized with ``None``.
     :ivar [int] overall_coef:  Contains all coefficients estimated for the model. Initialized with ``None``.
     :ivar [int] coef_split_idx: The index at which to split the overall coefficient vector into separate lists - one per parameter of ``family``. Initialized after fitting!
     :ivar scp.sparse.csc_array hessian:  Estimated hessian of the log-likelihood. Initialized with ``None``.
     :ivar [LambdaTerm] overall_penalties:  Contains all penalties estimated for the model. Initialized with ``None``.
+    :ivar Fit_info info: A :class:`Fit_info` instance, with information about convergence (speed) of the model.
     """
 
     def __init__(self, formulas: [Formula], family: GENSMOOTHFamily):
@@ -1827,7 +1827,7 @@ class GSMM(GAMMLSS):
         
         self.overall_coef = coef
         self.edf = total_edf
-        self.term_edf = term_edfs
+        self.overall_term_edf = term_edfs
         self.penalty = penalty
         self.coef_split_idx = coef_split_idx
         self.overall_lvi = LV
