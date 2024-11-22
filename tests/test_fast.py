@@ -160,7 +160,7 @@ class Test_GAMM:
 
 class Test_Binom_GAMM:
 
-    Binomdat = sim3(10000,2,family=Binomial(),seed=20)
+    Binomdat = sim3(10000,0.1,family=Binomial(),seed=20)
 
     formula = Formula(lhs("y"),[i(),f(["x0"]),f(["x1"]),f(["x2"]),f(["x3"])],data=Binomdat)
 

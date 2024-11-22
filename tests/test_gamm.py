@@ -604,7 +604,7 @@ class Test_print_smooth_by_factor_fs_p_hard:
         assert comp == capture
 
 class Test_print_smooth_binomial:
-    Binomdat = sim3(10000,2,family=Binomial(),seed=20)
+    Binomdat = sim3(10000,0.1,family=Binomial(),seed=20)
 
     formula = Formula(lhs("y"),[i(),f(["x0"]),f(["x1"]),f(["x2"]),f(["x3"])],data=Binomdat)
 
@@ -622,7 +622,7 @@ class Test_print_smooth_binomial:
         assert comp == capture
 
 class Test_Vp_estimation:
-    Binomdat = sim3(10000,2,family=Binomial(),seed=20)
+    Binomdat = sim3(10000,0.1,family=Binomial(),seed=20)
 
     formula = Formula(lhs("y"),[i(),f(["x0"]),f(["x1"]),f(["x2"]),f(["x3"])],data=Binomdat)
 
