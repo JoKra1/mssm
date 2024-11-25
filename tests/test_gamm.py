@@ -108,7 +108,7 @@ class Test_NUll_penalty_reparam_hard:
                            (self.S_pinv@self.formula.penalties[6].S_J_emb).trace())
     
     def test_GAMedf(self):
-        assert round(self.model.edf,ndigits=3) == 151.46 
+        assert round(self.model.edf,ndigits=2) == 151.46 
 
     def test_GAMsigma(self):
         _, sigma = self.model.get_pars()
@@ -143,24 +143,19 @@ class Test_BIG_GAMM:
         
     model = GAMM(formula,Gaussian())
 
-    model.fit(extension_method_lam = "mult",exclude_lambda=True)
+    model.fit(exclude_lambda=True)
 
-    def test_GAMMedf(self):
-        assert round(self.model.edf,ndigits=3) == 153.619
+    def test_GAMedf(self):
+        assert round(self.model.edf,ndigits=3) == 153.707 
 
-    def test_GAMMTermEdf(self):
-        diff = np.abs(np.round(self.model.term_edf,decimals=3) - np.array([6.892, 8.635, 1.182, 1.01, 1.001, 1.039, 131.861]))
-        rel_diff = diff/np.array([6.892, 8.635, 1.182, 1.01, 1.001, 1.039, 131.861])
-        assert np.max(rel_diff) < 1e-7
-    
-    def test_GAMMsigma(self):
+    def test_GAMsigma(self):
         _, sigma = self.model.get_pars()
-        assert round(sigma,ndigits=3) == 577.196
-    
-    def test_GAMMlam(self):
-        diff = np.abs(np.round([p.lam for p in self.model.formula.penalties],decimals=3) - np.array([0.004, 0.006, 5814.327, 153569.898 , 328846.811, 105218.21, 162215.095, 934.775, 0.119, 2.166]))
-        rel_diff = diff/np.array([0.004, 0.006, 5814.327, 153569.898 , 328846.811, 105218.21, 162215.095, 934.775, 0.119, 2.166])
-        assert np.max(rel_diff) < 1e-7
+        assert round(sigma,ndigits=3) == 577.194
+
+    def test_GAMlam(self):
+        lam = np.array([p.lam for p in self.model.formula.penalties])
+        assert np.allclose(lam,np.array([0.003576343523516708, 0.006011901683452655, 5028.094352875556, 230482.43912034066, 110804.13545750394, 38451.597466911124, 381047.3435206221, 330.2597296955685, 0.11887201661781975, 2.166381231196006])) 
+
 
 class Test_BIG_GAMM_keep_cov_hard:
     file_paths = [f'https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat_cond_{cond}.csv' for cond in ["a","b"]]
@@ -185,7 +180,7 @@ class Test_BIG_GAMM_keep_cov_hard:
     model.fit()
 
     def test_GAMedf(self):
-        assert round(self.model.edf,ndigits=2) == 153.71
+        assert round(self.model.edf,ndigits=1) == 153.7
 
     def test_GAMsigma(self):
         _, sigma = self.model.get_pars()

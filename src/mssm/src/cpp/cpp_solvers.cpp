@@ -134,7 +134,7 @@ std::tuple<Eigen::SparseMatrix<double>,VectorXi64, VectorXi64, int,int> spqr(lon
     // Now permute A columns with P1 - then compute QR decomposition A@P1@P2 = QR
     // where P2 will be formed with concern for numerical stability if piv_tol << 0.5
     Eigen::SparseQR<Eigen::SparseMatrix<double,0,long long int>,Eigen::NaturalOrdering<long long int>> solver;
-    solver.setPivotThreshold(pow(std::numeric_limits<double>::epsilon(),piv_tol)*A.norm());
+    solver.setPivotThreshold(pow(std::numeric_limits<double>::epsilon(),piv_tol)*sqrt(A.bottomLeftCorner(Acols,Acols).eval().diagonal().array().abs().maxCoeff()));
     solver.compute(A*P1); // Now use ordering computed previously to pivot columns
 
     // Get second column permutation matrix
@@ -645,7 +645,7 @@ std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,VectorXi64,Eig
 
     // Now form root of X.T@X + S
     Eigen::SparseQR<Eigen::SparseMatrix<double,0,long long int>,Eigen::NaturalOrdering<long long int>> solver2;
-    solver2.setPivotThreshold(sqrt(std::numeric_limits<double>::epsilon())*RE.norm());
+    solver2.setPivotThreshold(sqrt(std::numeric_limits<double>::epsilon())*sqrt(XXS.diagonal().array().abs().maxCoeff())); // Find root of absolute maximum on diagonal of XXS and use that for thresholding.
     solver2.compute(RE*P1); // Now use ordering computed previously to pivot columns
 
     // Column permutation matrix for second decomposition

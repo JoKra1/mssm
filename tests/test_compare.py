@@ -109,13 +109,13 @@ class Test_model_comparison2_hard:
     cor_result = compare_CDL(sim_fit_model,sim_fit_model2,nR=5,lR=100,correct_t1=False,n_c=1,grid='JJJ',seed=22,verbose=True)
 
     def test_comp1(self):
-        assert round(self.cor_result['Res. DOF'],ndigits=1) == 1.2
+        assert round(self.cor_result['Res. DOF'],ndigits=1) == 1.1
     
     def test_comp2(self):
-        assert round(self.cor_result['aic_diff'],ndigits=1) == 1.6
+        assert round(self.cor_result['aic_diff'],ndigits=1) == 2.1
     
     def test_comp3(self):
-        assert round(self.uncor_result['Res. DOF'],ndigits=1) == 1.1
+        assert round(self.uncor_result['Res. DOF'],ndigits=1) == 1.0
     
     def test_comp4(self):
-        assert round(self.uncor_result['aic_diff'],ndigits=1) == 1.4
+        assert round(self.uncor_result['aic_diff'],ndigits=1) == 1.9

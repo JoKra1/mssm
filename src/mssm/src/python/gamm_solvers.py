@@ -692,6 +692,7 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,S_root,S_pinv,
          if rank < S_emb.shape[1]:
             # Rank defficiency detected during numerical factorization.
             # Set code > 0
+            warnings.warn(f"Rank deficiency detected. Most likely a result of coefficients {Pr[rank:]} being unidentifiable. Check 'model.formula.coef_names' at the corresponding indices to identify the problematic terms and consider dropping (or penalizing) them.")
             code = 1
 
    else:
@@ -860,8 +861,6 @@ def initialize_extension(method,penalties):
    compute the lambda extensions at every iteration of the fitting iteration.
    """
 
-   extend_by = 1 # Extension factor for lambda update for the Fellner Schall method by Wood & Fasiolo (2016)
-
    if method == "nesterov" or method == "nesterov2":
       extend_by = {"prev_lam":[lterm.lam for lterm in penalties],
                    "acc":[0 for _ in penalties]}
@@ -871,27 +870,14 @@ def initialize_extension(method,penalties):
 def extend_lambda_step(lti,lam,dLam,extend_by,was_extended, method):
    """
    Performs an update to the lambda parameter, ideally extending the step
-   taken without overshooting the objective. Two options are supported.
-   Setting method to "mult" will simply multiply lambda by an extension factor.
-   This one will be increased whenever an extension was successful (extended step
-   did not overshoot) and reset to 1 (no extension), whenever an extension was not
-   succesful. Wood (2017) and Wood & Fasiolo (2016) suggest that such a simple
-   strategy can lead to improved convergence speed.
-
+   taken without overshooting the objective.
+   
    If method is set to "nesterov", a nesterov-like acceleration update is applied to the
    lambda parameter. We fall back to the default startegy by Wood & Fasiolo (2016) to just
-   half the step taken in case the extension was not succesful.
+   half the step taken in case the extension was not succesful (for additive models).
    """
 
-   if method == "mult":
-      extension = lam  + dLam*extend_by
-      if extension < 1e7 and extension > 1e-7:
-         dLam *= extend_by
-         was_extended[lti] = True
-      else:
-         was_extended[lti] = False
-
-   elif method == "nesterov" or method == "nesterov2":
+   if method == "nesterov" or method == "nesterov2":
       # The idea for the correction is based on the derivations in the supplementary materials
       # of Sutskever et al. (2013) - but adapted to use efs_step**2 / |lam_t - lam_{t-1}| for
       # the correction to lambda. So that the next efs update will be calculated from
@@ -905,23 +891,21 @@ def extend_lambda_step(lti,lam,dLam,extend_by,was_extended, method):
       diff_lam = lam - extend_by["prev_lam"][lti]
 
       if method == "nesterov2":
-         diff_lam *= 2
-
-         acc = dLam * min(0.99,abs(dLam)/max(sys.float_info.epsilon,abs(diff_lam)))
+         acc = dLam * min(0.99,abs(dLam)/max(sys.float_info.epsilon,2*abs(diff_lam)))
 
       else:
          acc = np.sign(dLam)*(dLam**2/max(sys.float_info.epsilon,abs(diff_lam)))
 
       extend_by["prev_lam"][lti] = lam
 
-      #if dLam>1 and diff_lam<1:
-      #   acc = 0
+      if dLam>1 and diff_lam<1:
+         acc = 0
       
       extend_by["acc"][lti] = acc
 
       extension = lam + dLam + acc
 
-      if extension < 1e7 and extension > 1e-7 and np.sign(diff_lam) == np.sign(dLam): # and abs(acc) > 0
+      if extension < 1e7 and extension > 1e-7 and np.sign(diff_lam) == np.sign(dLam) and abs(acc) > 0:
          dLam += acc
          was_extended[lti] = True
       else:
@@ -931,56 +915,23 @@ def extend_lambda_step(lti,lam,dLam,extend_by,was_extended, method):
    
    return dLam,extend_by,was_extended
 
-def reduce_lambda_step(lti,lam,dLam,extend_by,was_extended, method):
+def undo_extension_lambda_step(lti,lam,dLam,extend_by, was_extended, method, family):
    """
-   Corrects the lambda step taken if it overshot the objective. Deals with resetting
+   Deals with resetting
    any extension terms.
    """
-   if method == "mult":
-      if extend_by > 1 and was_extended[lti]:
-         # I experimented with just iteratively reducing the step-size but it just takes too many
-         # wasted iterations then. Thus, I now just reset the extension factor below. It can then build up again
-         # if needed.
-         
-         # Make sure correction by extend_by is only applied if an extension was actually used.
-         lam -= dLam
-         dLam /= extend_by
-         lam += dLam
-
-      else: # fall back to the strategy by Wood & Fasiolo (2016) to just half the step.
-         dLam/=2
-         lam -= dLam
-   
-   elif method == "nesterov"  or method == "nesterov2":
+   if method == "nesterov"  or method == "nesterov2":
       # We can simply reset lam by the extension factor computed earlier. If we repeatedly have to half we
       # can fall back to the strategy by Wood & Fasiolo (2016) to just half the step.
-      if was_extended[lti] and extend_by["acc"][lti] != 0:
-         dLam-= extend_by["acc"][lti]
-         lam -= extend_by["acc"][lti]
-         extend_by["acc"][lti] = 0
-      else:
-         dLam/=2
-         lam -= dLam
+      dLam-= extend_by["acc"][lti]
+      lam -= extend_by["acc"][lti]
+      extend_by["acc"][lti] = 0
+      was_extended[lti] = False
 
    else:
       raise ValueError(f"Lambda extension method '{method}' is not implemented.")
 
    return lam, dLam
-
-def adapt_extension_strategy(extend_by,reduced_step,dev_check,method):
-   """
-   Adjusts the step length (currently only for multiplication strategy) depending on whether the previous extension
-   was succesful or not.
-   """
-   if method == "mult":
-      if reduced_step and extend_by > 1:
-         extend_by = 1
-   
-      elif not reduced_step and extend_by < 2 and not dev_check is None and dev_check:
-         # Try longer step next time.
-         extend_by += 0.5
-
-   return extend_by
 
 def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
                         family,col_S,S_emb,penalties,
@@ -1017,25 +968,39 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
       lam_grad = np.array(lam_grad).reshape(-1,1) 
       check = lam_grad.T @ lam_delta
 
-      if check[0,0] < 0 and control_lambda: # because of minimization in Wood (2017) they use a different check (step 7) but idea is the same.
-         # Reset extension or cut the step taken in half
+      # For Generalized models we should not reduce step beyond original EFS update since
+      # criterion maximized is approximate REML. Also, we can probably relax the criterion a
+      # bit, since check will quite often be < 0.
+      check_criterion = 0
+      if (isinstance(family,Gaussian) == False) or (isinstance(family.link,Identity) == False):
+            
+            if dev_check is not None:
+               check_criterion = 1e-7*-abs(dev_check)
+            
+            if check[0,0] < check_criterion: 
+               # Now check whether we extend lambda - and if we do so whether any extension was actually applied.
+               # If not, we still "pass" the check.
+               if (extend_lambda == False) or (np.any(was_extended) == False):
+                  check[0,0] = check_criterion + 1
+
+      # Now check whether we have to correct lambda.
+      # Because of minimization in Wood (2017) they use a different check (step 7) but idea is the same.
+      if check[0,0] < check_criterion and control_lambda: 
+         # Reset extension or cut the step taken in half (for additive models)
          for lti,lTerm in enumerate(penalties):
-            if extend_lambda:
-               lam, dLam = reduce_lambda_step(lti,lTerm.lam,lam_delta[lti][0],extend_by,was_extended, extension_method_lam)
+
+            # Reset extension factor for all terms that were extended.
+            if extend_lambda and was_extended[lti]:
+               lam, dLam = undo_extension_lambda_step(lti,lTerm.lam,lam_delta[lti][0],extend_by,was_extended, extension_method_lam, family)
                lTerm.lam = lam
                lam_delta[lti][0] = dLam
 
-            else: # If no extension is to be used rely on the strategy by Wood & Fasiolo (2016) to just half the step
+            # For Gaussian models only, rely on the strategy by Wood & Fasiolo (2016) to just half the step for additive models 
+            elif isinstance(family,Gaussian) and isinstance(family.link,Identity):
                lam_delta[lti] = lam_delta[lti]/2
                lTerm.lam -= lam_delta[lti][0]
-
-         if extend_lambda:
-            extend_by = adapt_extension_strategy(extend_by,True,dev_check,extension_method_lam)
          
       else:
-         if extend_lambda and lam_checks == 0: 
-            extend_by = adapt_extension_strategy(extend_by,False,dev_check,extension_method_lam)
-
          # Accept the step and propose a new one as well! (part of step 6 in Wood, 2017; here uses efs from Wood & Fasiolo, 2017 to propose new lambda delta)
          lam_accepted = True
          lam_delta = []
@@ -1173,7 +1138,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
          # Now check step length and compute lambda + coef update. (steps 6-7 in Wood, 2017)
          dev_check = None
          if o_iter > 0:
-            dev_check = dev_diff < 1e-3*pen_dev
+            dev_check = pen_dev
 
          eta,mu,n_coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb,lam_checks = correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
                                                                                                                                                    family,col_S,S_emb,penalties,
@@ -1636,7 +1601,7 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
          # Now check step length and compute lambda + coef update.
          dev_check = None
          if o_iter > 0:
-            dev_check = dev_diff < 1e-3*pen_dev
+            dev_check = pen_dev
 
          eta,mu,n_coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb,lam_checks = correct_lambda_step(y,Xy,None,None,rowsX,colsX,None,XX,
                                                                                                                                                    family,col_S,S_emb,penalties,
@@ -2102,7 +2067,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
             # our criterion is approximate, so we can be more lenient (see Wood et al., 2017). 
             
             refit = False
-            if check[0] < 1e-3*-abs(prev_pen_llk): #1e-7*abs(next_pen_llk)
+            if check[0] < 1e-7*-abs(next_pen_llk):
                refit = True
                for lti,lTerm in enumerate(gamlss_pen):
                   if was_extended[lti]:
@@ -2220,7 +2185,8 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,max
 def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smooth_pen,
                               max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,
                               extend_lambda=True,extension_method_lam = "nesterov2",
-                              control_lambda=True,optimizer="Newton",method="Chol",check_cond=1,piv_tol=0.175,progress_bar=True,
+                              control_lambda=True,optimizer="Newton",method="Chol",
+                              check_cond=1,piv_tol=0.175,form_VH=True,progress_bar=True,
                               n_c=10,**bfgs_options):
     """
     Fits a general smooth model, following steps outlined by Wood, Pya, & Säfken (2016). Essentially,
@@ -2420,7 +2386,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
             # Now undo the acceleration if overall direction is **very** off - don't just check against 0 because
             # our criterion is approximate, so we can be more lenient (see Wood et al., 2017).
             refit = False 
-            if check[0] < 1e-3*-abs(prev_pen_llk): #1e-7*abs(next_pen_llk)
+            if check[0] < 1e-7*-abs(next_pen_llk):
                 refit = True
                 for lti,lTerm in enumerate(smooth_pen):
                     if was_extended[lti]:
@@ -2446,24 +2412,31 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
     if optimizer != "Newton":
         
         if optimizer == "L-BFGS-B":
-           # Need to form last V + Chol explicitly during last iteration
-           V = scp.sparse.csc_array(V.todense())
-           V.eliminate_zeros()
+           
+           if form_VH:
+               # Optionally form last V + Chol explicitly during last iteration
+               V = scp.sparse.csc_array(V.todense())
+               V.eliminate_zeros()
 
-           # Get Cholesky factor needed for (accelerated) EFS
-           LVPT, P, code = cpp_cholP(V)
-           LVT = apply_eigen_perm(P,LVPT)
-           LV = LVT.T
+               # Get Cholesky factor needed for (accelerated) EFS
+               LVPT, P, code = cpp_cholP(V)
+               LVT = apply_eigen_perm(P,LVPT)
+               LV = LVT.T
+           else:
+               LV = V # Return operator directly.
 
-        # Get an approximation of the Hessian of the likelihood
-        LHPT = compute_Linv(LVPT)
-        LHT = apply_eigen_perm(P,LHPT)
-        L = LHT.T
-        H = L@LHT # approximately: negative Hessian of llk + S_emb
-        H -= S_emb # approximately: negative Hessian of llk 
-        H *= -1 # approximately: Hessian of llk
+        if (optimizer != "L-BFGS-B") or form_VH:
+            # Get an approximation of the Hessian of the likelihood
+            LHPT = compute_Linv(LVPT)
+            LHT = apply_eigen_perm(P,LHPT)
+            L = LHT.T
+            H = L@LHT # approximately: negative Hessian of llk + S_emb
+            H -= S_emb # approximately: negative Hessian of llk 
+            H *= -1 # approximately: Hessian of llk
+        else:
+           H = None # Do not approximate H
        
-    if check_cond == 1:
+    if check_cond == 1 and ((optimizer != "L-BFGS-B") or form_VH):
 
       K2,_,_,Kcode = est_condition(L,LV,verbose=False)
       fit_info.K2 = K2

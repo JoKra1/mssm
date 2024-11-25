@@ -1270,7 +1270,7 @@ class GAMMLSS(GAMM):
         return self.family.get_resid(self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat],*self.overall_mus)
         
 
-    def fit(self,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,method="Chol",check_cond=1,piv_tol=0.175,progress_bar=True,n_cores=10,seed=0,init_lambda=None):
+    def fit(self,max_outer=50,max_inner=200,min_inner=100,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,method="Chol",check_cond=1,piv_tol=0.04,progress_bar=True,n_cores=10,seed=0,init_lambda=None):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -1290,7 +1290,7 @@ class GAMMLSS(GAMM):
         :type method: str,optional
         :param check_cond: Whether to obtain an estimate of the condition number for the linear system that is solved. When ``check_cond=0``, no check will be performed. When ``check_cond=1``, an estimate of the condition number for the final system (at convergence) will be computed and warnings will be issued based on the outcome (see :func:`mssm.src.python.gamm_solvers.est_condition`). Defaults to 1.
         :type check_cond: int,optional
-        :param piv_tol: Only used when ``method='QR/Chol'``. The numerical pivoting strategy for the preceding QR decomposition then rotates columns to the end in case the norm of it is lower than ``numpy.power(eps,piv_tol) * H.norm()`` - where H is the current estimate for the negative Hessian of the penalized likelihood. Defaults to 0.175.
+        :param piv_tol: Only used when ``method='QR/Chol'``. The numerical pivoting strategy for the preceding QR decomposition then rotates columns to the end in case the norm of it is lower than ``numpy.power(eps,piv_tol) * sqrt(H.diag().abs().max())`` - where H is the current estimate for the negative Hessian of the penalized likelihood. Defaults to 0.04.
         :type piv_tol: float,optional
         :param progress_bar: Whether progress should be displayed (convergence info and time estimate). Defaults to True.
         :type progress_bar: bool,optional
@@ -1657,7 +1657,7 @@ class GSMM(GAMMLSS):
     :type family: GENSMOOTHFamily
     :ivar float edf: The model estimated degrees of freedom as a float. Initialized with ``None``.
     :ivar [float] overall_term_edf: The estimated degrees of freedom per smooth term. Initialized with ``None``.
-    :ivar scipy.sparse.csc_array lvi: The inverse of the Cholesky factor of the conditional model coefficient covariance matrix. Initialized with ``None``.
+    :ivar scipy.sparse.csc_array or scipy.sparse.linalg.LinearOperator lvi: Either the inverse of the Cholesky factor of the conditional model coefficient covariance matrix - or (in case the ``L-BFGS-B`` optimizer was used and ``form_VH`` was set to False when calling ``model.fit()``) a :class:`scipy.sparse.linalg.LinearOperator` of the covariance matrix **not the root**. Initialized with ``None``.
     :ivar float penalty: The total penalty applied to the model deviance after fitting as a float. Initialized with ``None``.
     :ivar [int] overall_coef:  Contains all coefficients estimated for the model. Initialized with ``None``.
     :ivar [int] coef_split_idx: The index at which to split the overall coefficient vector into separate lists - one per parameter of ``family``. Initialized after fitting!
@@ -1728,7 +1728,7 @@ class GSMM(GAMMLSS):
         """
         return None
     
-    def fit(self,init_coef=None,max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,restart=False,optimizer="Newton",method="Chol",check_cond=1,piv_tol=0.175,progress_bar=True,n_cores=10,seed=0,drop_NA=True,init_lambda=None,**bfgs_options):
+    def fit(self,init_coef=None,max_outer=50,max_inner=200,min_inner=100,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,restart=False,optimizer="Newton",method="Chol",check_cond=1,piv_tol=0.04,progress_bar=True,n_cores=10,seed=0,drop_NA=True,init_lambda=None,form_VH=True,**bfgs_options):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -1752,7 +1752,7 @@ class GSMM(GAMMLSS):
         :type method: str,optional
         :param check_cond: Whether to obtain an estimate of the condition number for the linear system that is solved. When ``check_cond=0``, no check will be performed. When ``check_cond=1``, an estimate of the condition number for the final system (at convergence) will be computed and warnings will be issued based on the outcome (see :func:`mssm.src.python.gamm_solvers.est_condition`). Defaults to 1.
         :type check_cond: int,optional
-        :param piv_tol: Only used when ``method='QR/Chol'``. The numerical pivoting strategy for the preceding QR decomposition then rotates columns to the end in case the norm of it is lower than ``numpy.power(eps,piv_tol) * H.norm()`` - where H is the current estimate for the negative Hessian of the penalized likelihood. Defaults to 0.175.
+        :param piv_tol: Only used when ``method='QR/Chol'``. The numerical pivoting strategy for the preceding QR decomposition then rotates columns to the end in case the norm of it is lower than ``numpy.power(eps,piv_tol) * sqrt(H.diag().abs().max())`` - where H is the current estimate for the negative Hessian of the penalized likelihood. Defaults to 0.04.
         :type piv_tol: float,optional
         :param progress_bar: Whether progress should be displayed (convergence info and time estimate). Defaults to True.
         :type progress_bar: bool,optional
@@ -1764,6 +1764,8 @@ class GSMM(GAMMLSS):
         :type drop_NA: bool,optional
         :param init_lambda: A set of initial :math:`\lambda` parameters to use by the model. Length of list must match number of parameters to be estimated. Defaults to None
         :type init_lambda: [float],optional
+        :param form_VH: Whether to explicitly form matrix ``V`` - the estimated inverse of the negative Hessian of the penalized likelihood - and ``H`` - the estimate of said Hessian - when using the ``L-BFGS-B`` optimizer. If set to False, only ``V`` is returned - as a :class:`scipy.sparse.linalg.LinearOperator` - and available in ``self.overall_lvi``. Additionally, ``self.hessian`` will then be equal to ``None``. Note, that this will break default prediction/confidence interval methods - so do not call them. Defaults to True
+        :type form_VH: bool,optional
         :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to ``conv_tol``. Note also, that in any case the ``maxiter`` argument is automatically set to ``max_inner``. Defaults to None.
         :type bfgs_options: key=value,optional
         :raises ValueError: Will throw an error when ``optimizer`` is not one of 'Newton', 'BFGS', 'L-BFGS-B'.
@@ -1823,7 +1825,7 @@ class GSMM(GAMMLSS):
         # Now fit model
         coef,H,LV,total_edf,term_edfs,penalty,fit_info = solve_generalSmooth_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,smooth_pen,
                                                                                     max_outer,max_inner,min_inner,conv_tol,extend_lambda,extension_method_lam,
-                                                                                    control_lambda,optimizer,method,check_cond,piv_tol,progress_bar,n_cores,**bfgs_options)
+                                                                                    control_lambda,optimizer,method,check_cond,piv_tol,form_VH,progress_bar,n_cores,**bfgs_options)
         
         self.overall_coef = coef
         self.edf = total_edf
