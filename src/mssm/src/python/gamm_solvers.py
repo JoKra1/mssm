@@ -1900,6 +1900,7 @@ def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,ma
      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
    """
    # Update coefficients:
+   #converged = False
    for inner in range(max_inner):
       
       # Get derivatives with respect to eta
@@ -1920,6 +1921,7 @@ def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,ma
          coef,split_coef,mus,etas,c_llk,c_pen_llk = correct_coef_step_gammlss(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb)
 
          if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
+            #converged = True
             break
 
          if eps <= 0 and outer > 0 and inner >= (min_inner-1):
@@ -1999,7 +2001,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
             if progress_bar:
                 iterator.set_description_str(desc="Fitting - Conv.: " + "{:.2e}".format((np.abs(prev_pen_llk - c_pen_llk) - conv_tol*np.abs(c_pen_llk))[0,0]), refresh=True)
 
-            if eps <= 0 and (np.abs(prev_pen_llk - c_pen_llk) < conv_tol*np.abs(c_pen_llk)):
+            if np.abs(prev_pen_llk - c_pen_llk) < conv_tol*np.abs(c_pen_llk):
                 if progress_bar:
                     iterator.set_description_str(desc="Converged!", refresh=True)
                     iterator.close()
@@ -2300,7 +2302,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
             if progress_bar:
                 iterator.set_description_str(desc="Fitting - Conv.: " + "{:.2e}".format((np.abs(prev_pen_llk - c_pen_llk) - conv_tol*np.abs(c_pen_llk))[0,0]), refresh=True)
 
-            if eps <= 0 and (np.abs(prev_pen_llk - c_pen_llk) < conv_tol*np.abs(c_pen_llk)):
+            if np.abs(prev_pen_llk - c_pen_llk) < conv_tol*np.abs(c_pen_llk):
                 if progress_bar:
                     iterator.set_description_str(desc="Converged!", refresh=True)
                     iterator.close()

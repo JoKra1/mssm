@@ -1728,7 +1728,7 @@ class GSMM(GAMMLSS):
         """
         return None
     
-    def fit(self,init_coef=None,max_outer=50,max_inner=200,min_inner=100,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,restart=False,optimizer="Newton",method="Chol",check_cond=1,piv_tol=0.04,progress_bar=True,n_cores=10,seed=0,drop_NA=True,init_lambda=None,form_VH=True,use_grad=False,**bfgs_options):
+    def fit(self,init_coef=None,max_outer=50,max_inner=200,min_inner=100,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,restart=False,optimizer="Newton",method="Chol",check_cond=1,piv_tol=0.04,progress_bar=True,n_cores=10,seed=0,drop_NA=True,init_lambda=None,form_VH=True,use_grad=False,build_mat=None,**bfgs_options):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -1768,6 +1768,8 @@ class GSMM(GAMMLSS):
         :type form_VH: bool,optional
         :param use_grad: Whether to pass the :func:`self.family.gradient` function to the ``L-BFGS-B`` or ``BFGS`` optimizer. If set to False, the gradient of the penalized likelihood will be approximated via finite differences. Defaults to False
         :type use_grad: bool,optional
+        :param build_mat: An (optional) list, containing one bool per :class:`mssm.src.python.formula.Formula` in ``self.formulas`` - indicating whether the corresponding model matrix should be built. Useful if multiple formulas specify the same model matrix, in which case only one needs to be built. Defaults to None, which means all model matrices are built.
+        :type build_mat: [bool], optional
         :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to ``conv_tol``. Note also, that in any case the ``maxiter`` argument is automatically set to ``max_inner``. Defaults to None.
         :type bfgs_options: key=value,optional
         :raises ValueError: Will throw an error when ``optimizer`` is not one of 'Newton', 'BFGS', 'L-BFGS-B'.
@@ -1791,11 +1793,12 @@ class GSMM(GAMMLSS):
 
         # Build penalties and model matrices for all formulas
         Xs = []
-        for form in self.formulas:
+        for fi,form in enumerate(self.formulas):
             mod = GAMM(form,family=Gaussian())
-            if self.overall_penalties is None or restart == False:
-                form.build_penalties()
-            Xs.append(mod.get_mmat(drop_NA=drop_NA))
+            if build_mat is None or build_mat[fi]:
+                if self.overall_penalties is None or restart == False:
+                    form.build_penalties()
+                Xs.append(mod.get_mmat(drop_NA=drop_NA))
 
         # Get all penalties
         shared_penalties = embed_shared_penalties(self.formulas)
