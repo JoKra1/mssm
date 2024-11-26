@@ -1728,7 +1728,7 @@ class GSMM(GAMMLSS):
         """
         return None
     
-    def fit(self,init_coef=None,max_outer=50,max_inner=200,min_inner=100,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,restart=False,optimizer="Newton",method="Chol",check_cond=1,piv_tol=0.04,progress_bar=True,n_cores=10,seed=0,drop_NA=True,init_lambda=None,form_VH=True,**bfgs_options):
+    def fit(self,init_coef=None,max_outer=50,max_inner=200,min_inner=100,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,restart=False,optimizer="Newton",method="Chol",check_cond=1,piv_tol=0.04,progress_bar=True,n_cores=10,seed=0,drop_NA=True,init_lambda=None,form_VH=True,use_grad=False,**bfgs_options):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -1766,6 +1766,8 @@ class GSMM(GAMMLSS):
         :type init_lambda: [float],optional
         :param form_VH: Whether to explicitly form matrix ``V`` - the estimated inverse of the negative Hessian of the penalized likelihood - and ``H`` - the estimate of said Hessian - when using the ``L-BFGS-B`` optimizer. If set to False, only ``V`` is returned - as a :class:`scipy.sparse.linalg.LinearOperator` - and available in ``self.overall_lvi``. Additionally, ``self.hessian`` will then be equal to ``None``. Note, that this will break default prediction/confidence interval methods - so do not call them. Defaults to True
         :type form_VH: bool,optional
+        :param use_grad: Whether to pass the :func:`self.family.gradient` function to the ``L-BFGS-B`` or ``BFGS`` optimizer. If set to False, the gradient of the penalized likelihood will be approximated via finite differences. Defaults to False
+        :type use_grad: bool,optional
         :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to ``conv_tol``. Note also, that in any case the ``maxiter`` argument is automatically set to ``max_inner``. Defaults to None.
         :type bfgs_options: key=value,optional
         :raises ValueError: Will throw an error when ``optimizer`` is not one of 'Newton', 'BFGS', 'L-BFGS-B'.
@@ -1825,7 +1827,7 @@ class GSMM(GAMMLSS):
         # Now fit model
         coef,H,LV,total_edf,term_edfs,penalty,fit_info = solve_generalSmooth_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,smooth_pen,
                                                                                     max_outer,max_inner,min_inner,conv_tol,extend_lambda,extension_method_lam,
-                                                                                    control_lambda,optimizer,method,check_cond,piv_tol,form_VH,progress_bar,n_cores,**bfgs_options)
+                                                                                    control_lambda,optimizer,method,check_cond,piv_tol,form_VH,use_grad,progress_bar,n_cores,**bfgs_options)
         
         self.overall_coef = coef
         self.edf = total_edf

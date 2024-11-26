@@ -1970,7 +1970,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
     for outer in iterator:
 
         # Update coefficients:
-        if outer == 0 or extend_lambda == False or (control_lambda and refit):
+        if outer == 0 or extend_lambda == False or control_lambda==False or (control_lambda and refit):
             coef,split_coef,mus,etas,H,L,LV,c_llk,c_pen_llk,eps = update_coef_gammlss(family,mus,y,Xs,coef,
                                                                                  coef_split_idx,S_emb,
                                                                                  c_llk,outer,max_inner,
@@ -1999,7 +1999,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
             if progress_bar:
                 iterator.set_description_str(desc="Fitting - Conv.: " + "{:.2e}".format((np.abs(prev_pen_llk - c_pen_llk) - conv_tol*np.abs(c_pen_llk))[0,0]), refresh=True)
 
-            if np.abs(prev_pen_llk - c_pen_llk) < conv_tol*np.abs(c_pen_llk):
+            if eps <= 0 and (np.abs(prev_pen_llk - c_pen_llk) < conv_tol*np.abs(c_pen_llk)):
                 if progress_bar:
                     iterator.set_description_str(desc="Converged!", refresh=True)
                     iterator.close()
@@ -2186,7 +2186,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                               max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,
                               extend_lambda=True,extension_method_lam = "nesterov2",
                               control_lambda=True,optimizer="Newton",method="Chol",
-                              check_cond=1,piv_tol=0.175,form_VH=True,progress_bar=True,
+                              check_cond=1,piv_tol=0.175,form_VH=True,use_grad=False,progress_bar=True,
                               n_c=10,**bfgs_options):
     """
     Fits a general smooth model, following steps outlined by Wood, Pya, & Säfken (2016). Essentially,
@@ -2223,15 +2223,24 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
 
     if optimizer != "Newton":
         # Define negative penalized likelihood function to be minimized via BFGS
+        # plus function to evaluate negative gradient of penalized likelihood - the
+        # latter is only used if use_grad=True.
         def __neg_pen_llk(coef,coef_split_idx,y,Xs,family,S_emb):
             neg_llk = -1 * family.llk(coef,coef_split_idx,y,Xs)
             return neg_llk + coef.T@S_emb@coef
+        
+        def __neg_pen_grad(coef,coef_split_idx,y,Xs,family,S_emb):
+           # see Wood, Pya & Saefken (2016)
+           grad = family.gradient(coef,coef_split_idx,y,Xs)
+           pgrad = np.array([grad[i] - (S_emb[[i],:]@coef)[0] for i in range(len(grad))])
+           return -1*pgrad.flatten()
+           
         
     fit_info = Fit_info()
     for outer in iterator:
 
         # Update coefficients:
-        if outer == 0 or extend_lambda == False or (control_lambda and refit):
+        if outer == 0 or extend_lambda == False or control_lambda==False or (control_lambda and refit):
             if optimizer == "Newton":
                coef,H,L,LV,c_llk,c_pen_llk,eps = update_coef_gen_smooth(family,y,Xs,coef,
                                                                   coef_split_idx,S_emb,
@@ -2244,9 +2253,11 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                                           np.ndarray.flatten(coef),
                                           args=(coef_split_idx,y,Xs,family,S_emb),
                                           method=optimizer,
+                                          jac = __neg_pen_grad if use_grad else None,
                                           options={"maxiter":max_inner,
                                                    **bfgs_options})
                
+               eps = 0
                # Get coefficient estimate
                coef = opt["x"].reshape(-1,1)
 
@@ -2289,7 +2300,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
             if progress_bar:
                 iterator.set_description_str(desc="Fitting - Conv.: " + "{:.2e}".format((np.abs(prev_pen_llk - c_pen_llk) - conv_tol*np.abs(c_pen_llk))[0,0]), refresh=True)
 
-            if np.abs(prev_pen_llk - c_pen_llk) < conv_tol*np.abs(c_pen_llk):
+            if eps <= 0 and (np.abs(prev_pen_llk - c_pen_llk) < conv_tol*np.abs(c_pen_llk)):
                 if progress_bar:
                     iterator.set_description_str(desc="Converged!", refresh=True)
                     iterator.close()
@@ -2338,9 +2349,11 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                                             np.ndarray.flatten(coef),
                                             args=(coef_split_idx,y,Xs,family,S_emb),
                                             method=optimizer,
+                                            jac = __neg_pen_grad if use_grad else None,
                                             options={"maxiter":max_inner,
                                                      **bfgs_options})
-
+                
+                eps = 0
                 # Get next coefficient estimate
                 next_coef = opt["x"].reshape(-1,1)
 
