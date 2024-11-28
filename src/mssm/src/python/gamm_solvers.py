@@ -2486,7 +2486,7 @@ def correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk
     
     return next_coef,next_llk,next_pen_llk
     
-def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,max_inner,min_inner,conv_tol,method,piv_tol):
+def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,c_llk,outer,max_inner,min_inner,conv_tol,method,piv_tol,keep_drop):
    """
    Repeatedly perform Newton update with step length control to the coefficient vector - based on
    steps outlined by WPS (2016).
@@ -2495,42 +2495,128 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,max
      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
    """
    # Update coefficients:
-   for inner in range(max_inner):
-      
-      # Get llk derivatives with respect to coef
-      grad = family.gradient(coef,coef_split_idx,y,Xs)
-      H = family.hessian(coef,coef_split_idx,y,Xs)
+   if keep_drop is None:
+      converged = False
+      for inner in range(max_inner):
+         
+         # Get llk derivatives with respect to coef
+         grad = family.gradient(coef,coef_split_idx,y,Xs)
+         H = family.hessian(coef,coef_split_idx,y,Xs)
 
-      # Update coef and perform step size control
-      if outer > 0 or inner > 0:
-         # Update Coefficients
-         next_coef,L,LV,eps = newton_coef_smooth(coef,grad,H,S_emb,method,piv_tol)
+         # Update coef and perform step size control
+         if outer > 0 or inner > 0:
+            # Update Coefficients
+            next_coef,L,LV,eps = newton_coef_smooth(coef,grad,H,S_emb,method,piv_tol)
 
-         # Prepare to check convergence
-         prev_llk_cur_pen = c_llk - coef.T@S_emb@coef
+            # Prepare to check convergence
+            prev_llk_cur_pen = c_llk - coef.T@S_emb@coef
 
-         # Perform step length control
-         coef,c_llk,c_pen_llk = correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb)
+            # Perform step length control
+            coef,c_llk,c_pen_llk = correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb)
 
-         if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
-            break
+            if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
+               converged = True
+               if eps <= 0 or method == 'Chol':
+                  break
 
-         if eps <= 0 and outer > 0 and inner >= (min_inner-1):
-            break # end inner loop and immediately optimize lambda again.
-      else:
-         # Simply accept next coef step on first iteration
-         coef,L,LV,eps = newton_coef_smooth(coef,grad,H,S_emb,method,piv_tol)
-         c_llk = family.llk(coef,coef_split_idx,y,Xs)
-         c_pen_llk = c_llk - coef.T@S_emb@coef
+            if eps <= 0 and outer > 0 and inner >= (min_inner-1):
+               break # end inner loop and immediately optimize lambda again.
+         else:
+            # Simply accept next coef step on first iteration
+            coef,L,LV,eps = newton_coef_smooth(coef,grad,H,S_emb,method,piv_tol)
+            c_llk = family.llk(coef,coef_split_idx,y,Xs)
+            c_pen_llk = c_llk - coef.T@S_emb@coef
    
-   return coef,H,L,LV,c_llk,c_pen_llk,eps
+   # In case we coverged check for unidentifiable parameters, as reccomended by Wood. et al (2016)
+   keep = None
+   drop = None
+   if keep_drop is not None or (method == "QR/Chol" and eps > 0 and converged):
+      
+      if keep_drop is not None:
+         keep = keep_drop[0]
+         drop = keep_drop[1]
+      else:
+         # Check for drop
+         keep,drop = identify_drop(H,S_norm)
+
+      if len(drop) == 0:
+         keep = None
+         drop = None
+      
+      #print(drop)
+      # Now we need to continue iterating in smaller problem until convergence
+      if drop is not None:
+         # Prepare zeroed full coef vector
+         full_coef = np.zeros_like(coef)
+
+         # Drop from coef
+         coef = coef[keep]
+
+         # ... from Xs...
+         rXs,rcoef_split_idx = drop_terms_X(Xs,keep)
+         #print(rXs)
+
+         # ... and from S_emb
+         rS_emb = S_emb[keep,:]
+         rS_emb = rS_emb[:,keep]
+
+         # Re-compute llk
+         c_llk = family.llk(coef,rcoef_split_idx,y,rXs)
+         c_pen_llk = c_llk - coef.T@rS_emb@coef
+         
+         # and now repeat Newton iteration
+         for inner in range(max_inner):
+      
+            # Get llk derivatives with respect to coef
+            grad = family.gradient(coef,rcoef_split_idx,y,rXs)
+            H = family.hessian(coef,rcoef_split_idx,y,rXs)
+
+            # Update Coefficients
+            next_coef,L,LV,eps = newton_coef_smooth(coef,grad,H,rS_emb,method,piv_tol)
+
+            # Prepare to check convergence
+            prev_llk_cur_pen = c_llk - coef.T@rS_emb@coef
+
+            # Perform step length control
+            coef,c_llk,c_pen_llk = correct_coef_step_gen_smooth(family,y,rXs,coef,next_coef,rcoef_split_idx,c_llk,rS_emb)
+
+            if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
+                  break
+
+         #print("eps",eps)
+         # converged on smaller problem - now adjust return objects for dropped coef
+
+         # start with coef
+         full_coef[keep] = coef
+         coef = full_coef
+
+         # Now H, L, LV
+         Hdat,Hrow,Hcol = translate_sparse(H)
+         Ldat,Lrow,Lcol = translate_sparse(L.tocsc()) # L@L.T = H_pen
+         LVdat,LVrow,LVcol = translate_sparse(LV) # LV.T@LV = V
+
+         Hrow = keep[Hrow]
+         Hcol = keep[Hcol]
+         Lrow = keep[Lrow]
+         Lcol = keep[Lcol]
+         LVrow = keep[LVrow]
+         LVcol = keep[LVcol]
+
+         H = scp.sparse.csc_array((Hdat,(Hrow,Hcol)),shape=(len(full_coef),len(full_coef)))
+         L = scp.sparse.csc_array((Ldat,(Lrow,Lcol)),shape=(len(full_coef),len(full_coef)))
+         LV = scp.sparse.csc_array((LVdat,(LVrow,LVcol)),shape=(len(full_coef),len(full_coef)))
+         #print((LV.T@LV - V).max(),(LV.T@LV - V).min())
+         #print((L@L.T - nH).max(),(L@L.T - nH).min())
+   
+   return coef,H,L,LV,c_llk,c_pen_llk,eps,keep,drop
 
 
 def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smooth_pen,
                               max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,
                               extend_lambda=True,extension_method_lam = "nesterov2",
                               control_lambda=True,optimizer="Newton",method="Chol",
-                              check_cond=1,piv_tol=0.175,form_VH=True,use_grad=False,progress_bar=True,
+                              check_cond=1,piv_tol=0.175,should_keep_drop=True,
+                              form_VH=True,use_grad=False,progress_bar=True,
                               n_c=10,**bfgs_options):
     """
     Fits a general smooth model, following steps outlined by Wood, Pya, & Säfken (2016). Essentially,
@@ -2556,6 +2642,15 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
 
     # Build current penalties
     S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
+
+    # Build normalized penalty for rank checks (e.g., Wood, Pya & Saefken, 2016)
+    keep_drop = None
+
+    S_norm = copy.deepcopy(smooth_pen[0].S_J_emb)
+    for peni in range(1,len(smooth_pen)):
+       S_norm += smooth_pen[peni].S_J_emb
+    
+    S_norm /= scp.sparse.linalg.norm(S_norm,ord=None)
 
     # Compute penalized likelihood for current estimate
     c_llk = family.llk(coef,coef_split_idx,y,Xs)
@@ -2586,12 +2681,25 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
         # Update coefficients:
         if outer == 0 or extend_lambda == False or control_lambda==False or (control_lambda and refit):
             if optimizer == "Newton":
-               coef,H,L,LV,c_llk,c_pen_llk,eps = update_coef_gen_smooth(family,y,Xs,coef,
-                                                                  coef_split_idx,S_emb,
+               coef,H,L,LV,c_llk,c_pen_llk,eps,keep,drop = update_coef_gen_smooth(family,y,Xs,coef,
+                                                                  coef_split_idx,S_emb,S_norm,
                                                                   c_llk,outer,max_inner,
                                                                   min_inner,conv_tol,
-                                                                  method,piv_tol)
+                                                                  method,piv_tol,keep_drop)
+               
                fit_info.eps = eps
+               if drop is not None:
+
+                  fit_info.dropped = drop
+                  if should_keep_drop:
+                     keep_drop = [keep,drop]
+
+                  # Re-compute penalty matrices in smaller problem space.
+                  old_pen = copy.deepcopy(smooth_pen)
+                  smooth_pen = drop_terms_S(smooth_pen,keep)
+
+                  S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
+
             else:
                opt = scp.optimize.minimize(__neg_pen_llk,
                                           np.ndarray.flatten(coef),
@@ -2601,6 +2709,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                                           options={"maxiter":max_inner,
                                                    **bfgs_options})
                
+               drop = None
                eps = 0
                # Get coefficient estimate
                coef = opt["x"].reshape(-1,1)
@@ -2638,6 +2747,9 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
             total_edf,term_edfs, ldetHSs = calculate_edf(None,None,V if optimizer=="L-BFGS-B" else LV,smooth_pen,lgdetDs,n_coef,n_c)
             fit_info.lambda_updates += 1
 
+            if drop is not None:
+               smooth_pen = old_pen
+
         # Check overall convergence
         if outer > 0:
 
@@ -2665,6 +2777,12 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
             dLam = step_fellner_schall_sparse(lgdetD,ldetHS,bsb[0,0],lTerm.lam,1)
             #print(lgdetD-ldetHS,dLam)
 
+            # For poorly scaled/ill-identifiable problems we cannot rely on the theorems by Wood
+            # & Fasiolo (2017) - so the condition below will ocasionally be met, in which case we just want to
+            # take very small steps until it hopefully gets more stable (due to term dropping or better lambda value).
+            if lgdetD - ldetHS < 0:
+               dLam = np.sign(dLam) * min(abs(lTerm.lam)*0.001,abs(dLam))
+
             if extend_lambda:
                 dLam,extend_by,was_extended = extend_lambda_step(lti,lTerm.lam,dLam,extend_by,was_extended,extension_method_lam)
             lTerm.lam += dLam
@@ -2682,12 +2800,25 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
 
             # First re-compute coef
             if optimizer == "Newton":
-                next_coef,H,L,LV,next_llk,next_pen_llk,eps = update_coef_gen_smooth(family,y,Xs,coef,
-                                                                coef_split_idx,S_emb,
+                next_coef,H,L,LV,next_llk,next_pen_llk,eps,keep,drop = update_coef_gen_smooth(family,y,Xs,coef,
+                                                                coef_split_idx,S_emb,S_norm,
                                                                 c_llk,outer,max_inner,
                                                                 min_inner,conv_tol,
-                                                                method,piv_tol)
+                                                                method,piv_tol,keep_drop)
+                
                 fit_info.eps = eps
+                if drop is not None:
+
+                  fit_info.dropped = drop
+                  if should_keep_drop:
+                     keep_drop = [keep,drop]
+
+                  # Re-compute penalty matrices in smaller problem space.
+                  old_pen = copy.deepcopy(smooth_pen)
+                  smooth_pen = drop_terms_S(smooth_pen,keep)
+
+                  S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
+
             else:
                 opt = scp.optimize.minimize(__neg_pen_llk,
                                             np.ndarray.flatten(coef),
@@ -2697,6 +2828,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                                             options={"maxiter":max_inner,
                                                      **bfgs_options})
                 
+                drop = None
                 eps = 0
                 # Get next coefficient estimate
                 next_coef = opt["x"].reshape(-1,1)
@@ -2733,6 +2865,9 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
 
             total_edf,term_edfs, ldetHSs = calculate_edf(None,None,V if optimizer=="L-BFGS-B" else LV,smooth_pen,lgdetDs,n_coef,n_c)
             fit_info.lambda_updates += 1
+
+            if drop is not None:
+               smooth_pen = old_pen
             
             # Compute approximate!!! gradient of REML with respect to lambda
             # to check if step size needs to be reduced (part of step 6 in Wood, 2017).
@@ -2795,7 +2930,17 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
        
     if check_cond == 1 and ((optimizer != "L-BFGS-B") or form_VH):
 
-      K2,_,_,Kcode = est_condition(L,LV,verbose=False)
+      if drop is not None:
+         # Make sure cond. estimate happens in reduced space.
+         L_drop_K2 = L[keep,:]
+         L_drop_K2 = L_drop_K2[:,keep]
+
+         LV_drop_K2 = LV[keep,:]
+         LV_drop_K2 = LV_drop_K2[:,keep]
+         K2,_,_,Kcode = est_condition(L_drop_K2,LV_drop_K2,verbose=False)
+      else:
+         K2,_,_,Kcode = est_condition(L,LV,verbose=False)
+
       fit_info.K2 = K2
 
       if fit_info.code == 0: # Convergence was reached but Knumber might suggest instable system.

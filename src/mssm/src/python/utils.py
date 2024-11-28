@@ -330,10 +330,10 @@ def compute_REML_candidate_GSMM(family,coef,n_coef,coef_split_idx,y,Xs,penalties
         
         # Estimate coefficients:
         if method == "Newton":
-            coef,H,L,LV,c_llk,_,_ = update_coef_gen_smooth(family,y,Xs,coef,
-                                                               coef_split_idx,S_emb,
+            coef,H,L,LV,c_llk,_,_,_,_ = update_coef_gen_smooth(family,y,Xs,coef,
+                                                               coef_split_idx,S_emb,None,
                                                                c_llk,0,100,
-                                                               100,conv_tol,"Chol",None)
+                                                               100,conv_tol,"Chol",None,None)
             
             V = LV.T @ LV # inverse of hessian of penalized likelihood
             nH = -1*H # negative hessian of likelihood
