@@ -983,7 +983,7 @@ class MULNOMLSS(GAMLSSFamily):
    :type pars: int
    """
    def __init__(self, pars: int) -> None:
-      super().__init__(pars, [LOG() for _ in range(pars)])
+      super().__init__(pars, [LOGb(-1e-9) for _ in range(pars)])
 
       # All derivatives taken from gamlss.dist: https://github.com/gamlss-dev/gamlss.dist but made general for all number of pars.
       # see also: Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.

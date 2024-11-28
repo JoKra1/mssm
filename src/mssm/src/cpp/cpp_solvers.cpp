@@ -13,7 +13,7 @@ namespace py = pybind11;
 
 typedef Eigen::Vector<long long int, Eigen::Dynamic> VectorXi64;
 
-std::tuple<Eigen::SparseMatrix<double>,int> chol(long long int Arows, long long int Acols, long long int Annz,
+std::tuple<Eigen::SparseMatrix<double,0,long long int>,int> chol(long long int Arows, long long int Acols, long long int Annz,
                                                  py::array_t<double, py::array::f_style | py::array::forcecast> Adata,
                                                  py::array_t<long long int, py::array::f_style | py::array::forcecast> Aidptr,
                                                  py::array_t<long long int, py::array::f_style | py::array::forcecast> Aindices){
@@ -29,17 +29,17 @@ std::tuple<Eigen::SparseMatrix<double>,int> chol(long long int Arows, long long 
                                                     (Eigen::SparseMatrix<double,0,long long int>::Scalar*) Adata.data());
 
     // We prevent any sparsity preserving ordering, since we need the un-pivoted factor L so that L * L' = A
-    Eigen::SimplicialLLT<Eigen::SparseMatrix<double>,Eigen::Lower,Eigen::NaturalOrdering<int>> solver;
+    Eigen::SimplicialLLT<Eigen::SparseMatrix<double,0,long long int>,Eigen::Lower,Eigen::NaturalOrdering<long long int>> solver;
     solver.compute(A);
 
     if (solver.info()!=Eigen::Success)
     {
-        Eigen::SparseMatrix<double> id(Arows,Acols);
+        Eigen::SparseMatrix<double,0,long long int> id(Arows,Acols);
         id.setIdentity();
         return std::make_tuple(std::move(id),1);
     }
 
-    Eigen::SparseMatrix<double> L = solver.matrixL();
+    Eigen::SparseMatrix<double,0,long long int> L = solver.matrixL();
     
     return std::make_tuple(std::move(L),0);
 }
@@ -114,7 +114,38 @@ std::tuple<Eigen::SparseMatrix<double,0,long long int>,Eigen::SparseMatrix<doubl
     
 }
 
-std::tuple<Eigen::SparseMatrix<double>,VectorXi64, VectorXi64, int,int> spqr(long long int Arows, long long int Acols, long long int Annz,
+std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,int,int> pqrr(long long int Arows, long long int Acols, long long int Annz,
+                                                                                             py::array_t<double, py::array::f_style | py::array::forcecast> Adata,
+                                                                                             py::array_t<long long int, py::array::f_style | py::array::forcecast> Aidptr,
+                                                                                             py::array_t<long long int, py::array::f_style | py::array::forcecast> Aindices){
+
+    Eigen::Map<Eigen::SparseMatrix<double,0,long long int>> A(Arows,Acols,Annz,
+                                                    (Eigen::SparseMatrix<double,0,long long int>::StorageIndex*) Aidptr.data(),
+                                                    (Eigen::SparseMatrix<double,0,long long int>::StorageIndex*) Aindices.data(),
+                                                    (Eigen::SparseMatrix<double,0,long long int>::Scalar*) Adata.data());
+    // Computed column-pivoted QR factorization of A.
+    Eigen::SparseQR<Eigen::SparseMatrix<double,0,long long int>,Eigen::COLAMDOrdering<long long int>> solver;
+    solver.setPivotThreshold(sqrt(std::numeric_limits<double>::epsilon())*A.norm());
+    solver.compute(A);
+
+    // Column permutation matrix
+    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic, long long int> P(solver.colsPermutation());
+
+    if(solver.info()!=Eigen::Success)
+    {
+        Eigen::SparseMatrix<double,0,long long int> R(Arows,Acols);
+        R.setIdentity();
+        return std::make_tuple(std::move(R),P.indices(),0,1);
+    }
+
+    // Upper triagonal factor before applying the permuation.
+    Eigen::SparseMatrix<double,0,long long int> R = solver.matrixR().topLeftCorner(solver.rank(), solver.rank());//.eval() * P.transpose();
+
+    return std::make_tuple(std::move(R),P.indices(),solver.rank(),0);
+    
+}
+
+std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64, VectorXi64, int,int> spqr(long long int Arows, long long int Acols, long long int Annz,
                                                                                              py::array_t<double, py::array::f_style | py::array::forcecast> Adata,
                                                                                              py::array_t<long long int, py::array::f_style | py::array::forcecast> Aidptr,
                                                                                              py::array_t<long long int, py::array::f_style | py::array::forcecast> Aindices,
@@ -134,7 +165,7 @@ std::tuple<Eigen::SparseMatrix<double>,VectorXi64, VectorXi64, int,int> spqr(lon
     // Now permute A columns with P1 - then compute QR decomposition A@P1@P2 = QR
     // where P2 will be formed with concern for numerical stability if piv_tol << 0.5
     Eigen::SparseQR<Eigen::SparseMatrix<double,0,long long int>,Eigen::NaturalOrdering<long long int>> solver;
-    solver.setPivotThreshold(pow(std::numeric_limits<double>::epsilon(),piv_tol)*sqrt(A.bottomLeftCorner(Acols,Acols).eval().diagonal().array().abs().maxCoeff()));
+    solver.setPivotThreshold(piv_tol*sqrt(A.bottomLeftCorner(Acols,Acols).eval().diagonal().array().abs().maxCoeff())); // Find root of absolute maximum on diagonal of XXS and use that for thresholding.
     solver.compute(A*P1); // Now use ordering computed previously to pivot columns
 
     // Get second column permutation matrix
@@ -645,7 +676,7 @@ std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,VectorXi64,Eig
 
     // Now form root of X.T@X + S
     Eigen::SparseQR<Eigen::SparseMatrix<double,0,long long int>,Eigen::NaturalOrdering<long long int>> solver2;
-    solver2.setPivotThreshold(sqrt(std::numeric_limits<double>::epsilon())*sqrt(XXS.diagonal().array().abs().maxCoeff())); // Find root of absolute maximum on diagonal of XXS and use that for thresholding.
+    //solver2.setPivotThreshold(sqrt(std::numeric_limits<double>::epsilon())*sqrt(XXS.diagonal().array().abs().maxCoeff()));  // Just use default from Davis here.
     solver2.compute(RE*P1); // Now use ordering computed previously to pivot columns
 
     // Column permutation matrix for second decomposition
@@ -719,6 +750,7 @@ PYBIND11_MODULE(cpp_solvers, m) {
     m.def("chol", &chol, "Compute cholesky factor L of A");
     m.def("cholP", &cholP, "Compute cholesky factor L of A after applying a sparsity enhancing permutation to A");
     m.def("pqr", &pqr, "Perform column pivoted QR decomposition of A");
+    m.def("pqrr", &pqrr, "Perform column pivoted QR decomposition of A, but only return R.");
     m.def("spqr", &spqr, "Perform column pivoted QR decomposition of symmetric matrix A, so that L - where A=L@L.T - is sparse.");
     m.def("solve_pqr", &solve_pqr, "Perform column pivoted QR decomposition of A, then solve for inverse of A");
     m.def("solve_am", &solve_am, "Solve additive model, return coefficient vector and inverse");

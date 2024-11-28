@@ -379,10 +379,10 @@ def compute_REML_candidate_GSMM(family,coef,n_coef,coef_split_idx,y,Xs,penalties
         c_llk = family.llk(y,*mus)
 
         # Estimate coefficients
-        coef,split_coef,mus,etas,H,L,LV,c_llk,_,_ = update_coef_gammlss(family,mus,y,Xs,coef,
-                                                                   coef_split_idx,S_emb,
-                                                                   c_llk,0,100,
-                                                                   100,conv_tol,"Chol",None)
+        coef,split_coef,mus,etas,H,L,LV,c_llk,_,_,_,_ = update_coef_gammlss(family,mus,y,Xs,coef,
+                                                                            coef_split_idx,S_emb,None,
+                                                                            c_llk,0,100,
+                                                                            100,conv_tol,"Chol",None,None)
         
         V = LV.T@LV
         nH = -1*H

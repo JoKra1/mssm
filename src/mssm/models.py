@@ -1270,7 +1270,7 @@ class GAMMLSS(GAMM):
         return self.family.get_resid(self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat],*self.overall_mus)
         
 
-    def fit(self,max_outer=50,max_inner=200,min_inner=100,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,method="Chol",check_cond=1,piv_tol=0.04,progress_bar=True,n_cores=10,seed=0,init_lambda=None):
+    def fit(self,max_outer=50,max_inner=200,min_inner=100,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,method="Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),should_keep_drop=True,progress_bar=True,n_cores=10,seed=0,init_lambda=None):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -1286,12 +1286,14 @@ class GAMMLSS(GAMM):
         :type extend_lambda: bool,optional
         :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for whether or not they (approxiately) increase the Laplace approximate restricted maximum likelihood of the model. Enabled by default.
         :type control_lambda: bool,optional
-        :param method: Which method to use to solve for the coefficients. The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR/Chol". In that case a QR decomposition is used - which is first pivoted to maximize sparsity in the resulting decomposition but also pivots for stability in order to get an estimate of rank defficiency. A Cholesky is than used using the combined pivoting strategy obtained from the QR. This takes substantially longer. Defaults to "Chol".
+        :param method: Which method to use to solve for the coefficients. The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR/Chol". In that case a QR decomposition is used - which is first pivoted to maximize sparsity in the resulting decomposition but also pivots for stability in order to get an estimate of rank defficiency. A Cholesky is than used using the combined pivoting strategy obtained from the QR. This takes substantially longer. In addition, when ``method=="QR/Chol"`` fitting will include a check to determine whether some coefficients are unidentifiable - in which case they are dropped and repalced with zeroes in the final coefficient vector. Defaults to "Chol".
         :type method: str,optional
         :param check_cond: Whether to obtain an estimate of the condition number for the linear system that is solved. When ``check_cond=0``, no check will be performed. When ``check_cond=1``, an estimate of the condition number for the final system (at convergence) will be computed and warnings will be issued based on the outcome (see :func:`mssm.src.python.gamm_solvers.est_condition`). Defaults to 1.
         :type check_cond: int,optional
-        :param piv_tol: Only used when ``method='QR/Chol'``. The numerical pivoting strategy for the preceding QR decomposition then rotates columns to the end in case the norm of it is lower than ``numpy.power(eps,piv_tol) * sqrt(H.diag().abs().max())`` - where H is the current estimate for the negative Hessian of the penalized likelihood. Defaults to 0.04.
+        :param piv_tol: Only used when ``method='QR/Chol'``. The numerical pivoting strategy for the preceding QR decomposition then rotates columns to the end in case the norm of it is lower than ``piv_tol * sqrt(H.diag().abs().max())`` - where H is the current estimate for the negative Hessian of the penalized likelihood. Defaults to ``np.power(np.finfo(float).eps,0.04)``.
         :type piv_tol: float,optional
+        :param should_keep_drop: Only used when ``method='QR/Chol'``. If set to True, any coefficients that are dropped during fitting - are permanently excluded from all subsequent iterations. If set to False, this is determined anew at every iteration - **costly**! Defaults to True.
+        :type should_keep_drop: bool,optional
         :param progress_bar: Whether progress should be displayed (convergence info and time estimate). Defaults to True.
         :type progress_bar: bool,optional
         :param n_cores: Number of cores to use during parts of the estimation that can be done in parallel. Defaults to 10.
@@ -1348,7 +1350,7 @@ class GAMMLSS(GAMM):
         coef,etas,mus,wres,H,LV,total_edf,term_edfs,penalty,fit_info = solve_gammlss_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,
                                                                                             gamlss_pen,max_outer,max_inner,min_inner,conv_tol,
                                                                                             extend_lambda,extension_method_lam,control_lambda,
-                                                                                            method,check_cond,piv_tol,progress_bar,n_cores)
+                                                                                            method,check_cond,piv_tol,should_keep_drop,progress_bar,n_cores)
         
         self.overall_coef = coef
         self.overall_preds = etas
@@ -1728,7 +1730,7 @@ class GSMM(GAMMLSS):
         """
         return None
     
-    def fit(self,init_coef=None,max_outer=50,max_inner=200,min_inner=100,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,restart=False,optimizer="Newton",method="Chol",check_cond=1,piv_tol=0.04,progress_bar=True,n_cores=10,seed=0,drop_NA=True,init_lambda=None,form_VH=True,use_grad=False,build_mat=None,**bfgs_options):
+    def fit(self,init_coef=None,max_outer=50,max_inner=200,min_inner=100,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,restart=False,optimizer="Newton",method="Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),progress_bar=True,n_cores=10,seed=0,drop_NA=True,init_lambda=None,form_VH=True,use_grad=False,build_mat=None,**bfgs_options):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -1752,7 +1754,7 @@ class GSMM(GAMMLSS):
         :type method: str,optional
         :param check_cond: Whether to obtain an estimate of the condition number for the linear system that is solved. When ``check_cond=0``, no check will be performed. When ``check_cond=1``, an estimate of the condition number for the final system (at convergence) will be computed and warnings will be issued based on the outcome (see :func:`mssm.src.python.gamm_solvers.est_condition`). Defaults to 1.
         :type check_cond: int,optional
-        :param piv_tol: Only used when ``method='QR/Chol'``. The numerical pivoting strategy for the preceding QR decomposition then rotates columns to the end in case the norm of it is lower than ``numpy.power(eps,piv_tol) * sqrt(H.diag().abs().max())`` - where H is the current estimate for the negative Hessian of the penalized likelihood. Defaults to 0.04.
+        :param piv_tol: Only used when ``method='QR/Chol'``. The numerical pivoting strategy for the preceding QR decomposition then rotates columns to the end in case the norm of it is lower than ``piv_tol * sqrt(H.diag().abs().max())`` - where H is the current estimate for the negative Hessian of the penalized likelihood. Defaults to ``np.power(np.finfo(float).eps,0.04)``.
         :type piv_tol: float,optional
         :param progress_bar: Whether progress should be displayed (convergence info and time estimate). Defaults to True.
         :type progress_bar: bool,optional

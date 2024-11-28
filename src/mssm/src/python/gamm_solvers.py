@@ -3,7 +3,7 @@ import scipy as scp
 import warnings
 from .exp_fam import Family,Gaussian,est_scale,GAMLSSFamily,Identity
 from .penalties import PenType,id_dist_pen,translate_sparse,dataclass
-from .formula import build_sparse_matrix_from_formula,setup_cache,clear_cache,cpp_solvers,pd,Formula,mp,repeat,os,map_csc_to_eigen,math,tqdm,sys,copy
+from .formula import build_sparse_matrix_from_formula,setup_cache,clear_cache,cpp_solvers,pd,Formula,mp,repeat,os,map_csc_to_eigen,math,tqdm,sys,copy,embed_in_S_sparse
 from functools import reduce
 from multiprocessing import managers,shared_memory
 
@@ -20,12 +20,14 @@ class Fit_info:
    :ivar int code: Convergence status. Anything above 0 indicates that the model did not converge and estimates should be considered carefully. Initialized with 1.
    :ivar float eps: The fraction added to the last estimate of the negative Hessian of the penalized likelihood during GAMMLSS or GSMM estimation. If this is not 0 - the model should not be considered as converged, irrespective of what ``code`` indicates. This most likely implies that the model is not identifiable. Initialized with ``None`` and ignored for GAMM estimation.
    :ivar float K2: An estimate for the condition number of matrix ``A``, where ``A.T@A=H`` and ``H`` is the final estimate of the negative Hessian of the penalized likelihood. Only available if ``check_cond>0`` when ``model.fit()`` is called for any model (i.e., GAMM, GAMMLSS, GSMM). Initialized with ``None``.
+   :ivar [int] dropped: The final set of coefficients dropped during GAMMLSS/GSMM estimation when using ``method="QR/Chol"`` or ``None`` in which case no coefficients were dropped. Initialized with 0.
    """
    lambda_updates:int=0
    iter:int=0
    code:int=1
    eps:float or None = None
    K2:float or None = None
+   dropped:[int] or None = None
 
 def cpp_chol(A):
    return cpp_solvers.chol(*map_csc_to_eigen(A))
@@ -35,6 +37,9 @@ def cpp_cholP(A):
 
 def cpp_qr(A):
    return cpp_solvers.pqr(*map_csc_to_eigen(A))
+
+def cpp_qrr(A):
+   return cpp_solvers.pqrr(*map_csc_to_eigen(A))
 
 def cpp_symqr(A,tol):
    return cpp_solvers.spqr(*map_csc_to_eigen(A),tol)
@@ -1799,10 +1804,14 @@ def newton_coef_smooth(coef,grad,H,S_emb,method,piv_tol):
     nH = -1*H + S_emb
 
     # Diagonal pre-conditioning as suggested by WPS (2016)
-    nHdgr = np.abs(nH.diagonal())**0.5
+    nHdgr = nH.diagonal()
+    nHdgr = np.power(np.abs(nHdgr),-0.5)
     D = scp.sparse.diags(nHdgr)
     DI = scp.sparse.diags(1/nHdgr) # For cholesky
+    #D = scp.sparse.identity(nH.shape[1],format='csc')
+    #DI = scp.sparse.identity(nH.shape[1],format='csc')
     nH2 = (D@nH@D).tocsc()
+    #print(max(np.abs(nH.diagonal())),max(np.abs(nH2.diagonal())))
 
     if method != "Chol":
          # First perform QR decomposition with aggressive pivot tolerance
@@ -1828,7 +1837,8 @@ def newton_coef_smooth(coef,grad,H,S_emb,method,piv_tol):
             P = compute_eigen_perm(Pr)
         else:
             # Now compute cholesky based on pivoting strategy inferred earlier from QR.
-            Lp, code = cpp_chol((P@(nH2+eps*scp.sparse.identity(nH2.shape[1],format='csc'))@P.T).tocsc())
+            pNH2 = (P@(nH2+eps*scp.sparse.identity(nH2.shape[1],format='csc'))@P.T).tocsc()
+            Lp, code = cpp_chol(pNH2)
 
         if code != 0:
             # Adjust identity added to nH
@@ -1890,8 +1900,186 @@ def correct_coef_step_gammlss(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_
         n_checks += 1
     
     return next_coef,next_split_coef,next_mus,next_etas,next_llk,next_pen_llk
+
+def identify_drop(H,S_scaled):
+    """
+    Routine to approximately identify the rank of the scaled negative hessian of the penalized likelihood based on Voster (1986).
+
+    Requires ``p+2`` QR decompositions - where ``p`` is approximately the Kernel size of the matrix. Essentially continues to find
+    vectors forming a basis of the Kernel of the matrix and successively drops columns corresponding to the maximum absolute value of the
+    Kernel vectors.
+
+    References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
     
-def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,max_inner,min_inner,conv_tol,method,piv_tol):
+    
+    :param H: Estimate of the hessian of the log-likelihood.
+    :type H: scipy.sparse.csc_array
+    :param S_scaled: Scaled version of the penalty matrix (i.e., unweighted total penalty divided by it's norm).
+    :type S_scaled: scipy.sparse.csc_array
+    """
+
+    rank = H.shape[1]
+    
+    # Form scaled negative hessian of penalized likelihood to check for rank deficincy, as
+    # reccomended by Wood et al. (2016).
+    H_scaled = H / scp.sparse.linalg.norm(H,ord=None)
+
+    nH_scaled = -1*H_scaled + S_scaled
+
+    nHdgr = nH_scaled.diagonal()
+    nHdgr = np.power(np.abs(nHdgr),-0.5)
+    D = scp.sparse.diags(nHdgr)
+    nH_scaled = (D@nH_scaled@D).tocsc()
+    
+    # Find cut-off for singular values considered to be too low. This is heuristic.
+    R,Pr,rank,_ = cpp_qrr(nH_scaled)
+    _,cut_off,_ = scp.sparse.linalg.svds(R,k=1,return_singular_vectors=True,random_state=20,which='SM')
+    #print("cutoff",cut_off*4)
+    #print(rank,nH_scaled.shape[1])
+    
+    drop = []
+    nH_drop = copy.deepcopy(nH_scaled)
+    min_sing = 0.01
+    keep = [cidx for cidx in range(H.shape[1])]
+    # Now follows steps outlined in algorithm 1 of Voster:
+    # - Form QR decomposition of current matrix
+    # - find approximate singular value + vector
+    # - if singular value < cut_off -> vector is approximate Kernel vector
+    # - drop column of current (here also row since nH is symmetric) matrix corresponding to maximum of approximate Kernel vector
+    # - repeat until ingular value > cut_off
+
+    while min_sing < (cut_off*1.1):
+      R,Pr,rank,_  = cpp_qrr(nH_drop)
+      P = compute_eigen_perm(Pr)
+      _,min_sing,vh = scp.sparse.linalg.svds(R,k=1,return_singular_vectors=True,random_state=20,which='SM')
+
+      # Deal with drops during factorization.
+      if rank < nH_drop.shape[1]:
+         drop.extend(Pr[rank:])
+         keep = [cidx for cidx in range(H.shape[1]) if cidx not in drop]
+
+      #print(rank,nH_drop.shape,min_sing)
+      if min_sing > (cut_off*1.1):
+         break
+      
+      # w need to be of original shape
+      w = np.zeros(H.shape[1])
+      wk = (vh@P.T).T # Need to undo pivoting here - depends on method used to compute pivot, here COLAMD.
+      w[keep] = wk.flatten()
+
+      # Drop next col + row and update keep list
+      drop_c = np.argmax(np.abs(w))
+      drop.append(drop_c)
+      keep = [cidx for cidx in range(H.shape[1]) if cidx not in drop]
+      #print(drop_c)
+
+      nH_drop = nH_scaled[keep,:]
+      nH_drop = nH_drop[:,keep]
+
+    drop = np.sort(drop)
+    keep = np.sort(keep)
+
+    #print(drop,rank)
+    
+    return keep,drop
+
+def drop_terms_S(penalties,keep):
+   """Zeros out rows and cols of penalty matrices corresponding to dropped terms. Roots are re-computed as well.
+
+   :param penalties: List of Lambda terms included in the model formula
+   :type penalties: [:class:`mssm.src.python.penalties.LambdaTerm`]
+   :param keep: List of columns/rows to keep.
+   :type keep: [int]
+   :return: List of updated penalties - a copy is made.
+   :rtype: [:class:`mssm.src.python.penalties.LambdaTerm`]
+   """
+   # Don´t actually drop, just zero
+   
+   drop_pen = copy.deepcopy(penalties)
+
+   for peni,pen in enumerate(drop_pen):
+      start_idx = pen.start_index
+      end_idx = start_idx + pen.rep_sj*pen.S_J.shape[1]
+      # Identify coefficients kept for this penalty matrix. Take care to look
+      # out for rep_sj...
+      keep_pen = [cf-start_idx for cf in keep if cf >= start_idx and cf < end_idx]
+
+      needs_drop = len(keep_pen) < (end_idx - start_idx)
+
+      if needs_drop:
+         # If we have repetitions then the easiest solution is the one below - but this
+         # is far from efficient...
+         if pen.rep_sj > 1:
+            pen.S_J = pen.S_J_emb[start_idx:end_idx,start_idx:end_idx]
+            pen.rep_sj = 1
+         
+         # Compute new reduced penalty
+         rS_J = pen.S_J[keep_pen,:]
+         rS_J = rS_J[:,keep_pen]
+
+         # Re-compute root & rank - this will now be very costly for shared penalties.
+         eig, U =scp.linalg.eigh(rS_J.toarray())
+         pen.rank = sum([1 for e in eig if e >  sys.float_info.epsilon**0.7])
+
+         rD_J = scp.sparse.csc_array(U@np.diag([e**0.5 if e > sys.float_info.epsilon**0.7 else 0 for e in eig]))
+
+         # Re-embed in orig shape blocks
+         keep_pen = np.array(keep_pen)
+
+         Sdat,Srow,Scol = translate_sparse(rS_J)
+         Ddat,Drow,Dcol = translate_sparse(rD_J)
+         Srow = keep_pen[Srow]
+         Scol = keep_pen[Scol]
+         Drow = keep_pen[Drow]
+         Dcol = keep_pen[Dcol]
+
+         pen.S_J = scp.sparse.csc_array((Sdat,(Srow,Scol)),shape=penalties[peni].S_J.shape)
+         #print(pen.S_J.toarray())
+         #D_J = scp.sparse.csc_array((Ddat,(Drow,Dcol)),shape=penalties[peni].S_J.shape)
+
+         #print("rPen",(D_J@D_J.T-pen.S_J).min(),(D_J@D_J.T-pen.S_J).max())
+
+         # Now Re-embed in overall zero blocks again
+         pen.D_J_emb,_ = embed_in_S_sparse(Ddat,Drow,Dcol,None,penalties[peni].S_J_emb.shape[1],penalties[peni].S_J.shape[1],start_idx)
+         pen.S_J_emb,_ = embed_in_S_sparse(Sdat,Srow,Scol,None,penalties[peni].S_J_emb.shape[1],penalties[peni].S_J.shape[1],start_idx)
+         #print("rPen2",(pen.D_J_emb@pen.D_J_emb.T-pen.S_J_emb).min(),(pen.D_J_emb@pen.D_J_emb.T-pen.S_J_emb).max())
+   #print(drop_pen)
+   return drop_pen
+
+
+def drop_terms_X(Xs,keep):
+    """Drops cols of model matrices corresponding to dropped terms.
+
+    :param penalties: List of model matrices included in the model formula.
+    :type penalties: [scipy.sparse.csc_array]
+    :param keep: List of columns to keep.
+    :type keep: [int]
+    :return: List of updated model matrices - a copy is made.
+    :rtype: [scipy.sparse.csc_array]
+    """
+    # Drop from model matrices
+    start_idx = 0
+    split_idx = []
+    new_Xs = []
+    for Xi,X in enumerate(Xs):
+        end_idx = start_idx + X.shape[1]
+
+        keep_X = [cf-start_idx for cf in keep if cf >= start_idx and cf < end_idx]
+
+        start_idx += X.shape[1]
+        X = X[:,keep_X]
+        #print(X.shape)
+        new_Xs.append(X)
+
+        if Xi == 0:
+            split_idx.append(X.shape[1])
+        elif Xi < len(Xs)-1:
+            split_idx.append(X.shape[1] + split_idx[-1])
+    
+    return new_Xs,split_idx
+    
+def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,S_norm,c_llk,outer,max_inner,min_inner,conv_tol,method,piv_tol,keep_drop):
    """
    Repeatedly perform Newton update with step length control to the coefficient vector - based on
    steps outlined by WPS (2016).
@@ -1900,47 +2088,142 @@ def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,c_llk,outer,ma
      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
    """
    # Update coefficients:
-   #converged = False
-   for inner in range(max_inner):
+   if keep_drop is None:
+      converged = False
+      for inner in range(max_inner):
+         
+         # Get derivatives with respect to eta
+         d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,mus,family)
+
+         # Get derivatives with respect to coef
+         grad,H = deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs)
+
+         # Update coef and perform step size control
+         if outer > 0 or inner > 0:
+            # Update Coefficients
+            next_coef,L,LV,eps = newton_coef_smooth(coef,grad,H,S_emb,method,piv_tol)
+
+            # Prepare to check convergence
+            prev_llk_cur_pen = c_llk - coef.T@S_emb@coef
+
+            # Perform step length control
+            coef,split_coef,mus,etas,c_llk,c_pen_llk = correct_coef_step_gammlss(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb)
+
+            if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
+               converged = True
+               if eps <= 0 or method == 'Chol':
+                  break
+
+            if eps <= 0 and outer > 0 and inner >= (min_inner-1):
+               break # end inner loop and immediately optimize lambda again.
+         else:
+            # Simply accept next coef step on first iteration
+            coef,L,LV,eps = newton_coef_smooth(coef,grad,H,S_emb,method,piv_tol)
+            split_coef = np.split(coef,coef_split_idx)
+            etas = [Xs[i]@split_coef[i] for i in range(family.n_par)]
+            mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
+            c_llk = family.llk(y,*mus)
+            c_pen_llk = c_llk - coef.T@S_emb@coef
       
-      # Get derivatives with respect to eta
-      d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,mus,family)
-
-      # Get derivatives with respect to coef
-      grad,H = deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs)
-
-      # Update coef and perform step size control
-      if outer > 0 or inner > 0:
-         # Update Coefficients
-         next_coef,L,LV,eps = newton_coef_smooth(coef,grad,H,S_emb,method,piv_tol)
-
-         # Prepare to check convergence
-         prev_llk_cur_pen = c_llk - coef.T@S_emb@coef
-
-         # Perform step length control
-         coef,split_coef,mus,etas,c_llk,c_pen_llk = correct_coef_step_gammlss(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb)
-
-         if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
-            #converged = True
-            break
-
-         if eps <= 0 and outer > 0 and inner >= (min_inner-1):
-            break # end inner loop and immediately optimize lambda again.
-      else:
-         # Simply accept next coef step on first iteration
-         coef,L,LV,eps = newton_coef_smooth(coef,grad,H,S_emb,method,piv_tol)
-         split_coef = np.split(coef,coef_split_idx)
-         etas = [Xs[i]@split_coef[i] for i in range(family.n_par)]
-         mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
-         c_llk = family.llk(y,*mus)
-         c_pen_llk = c_llk - coef.T@S_emb@coef
+      #print(converged,eps)
    
-   return coef,split_coef,mus,etas,H,L,LV,c_llk,c_pen_llk,eps
+   # In case we coverged check for unidentifiable parameters, as reccomended by Wood. et al (2016)
+   keep = None
+   drop = None
+   if keep_drop is not None or (method == "QR/Chol" and eps > 0 and converged):
+      
+      if keep_drop is not None:
+         keep = keep_drop[0]
+         drop = keep_drop[1]
+      else:
+         # Check for drop
+         keep,drop = identify_drop(H,S_norm)
+
+      if len(drop) == 0:
+         keep = None
+         drop = None
+      
+      #print(drop)
+      # Now we need to continue iterating in smaller problem until convergence
+      if drop is not None:
+         # Prepare zeroed full coef vector
+         full_coef = np.zeros_like(coef)
+
+         # Drop from coef
+         coef = coef[keep]
+
+         # ... from Xs...
+         rXs,rcoef_split_idx = drop_terms_X(Xs,keep)
+         #print(rXs)
+
+         # ... and from S_emb
+         rS_emb = S_emb[keep,:]
+         rS_emb = rS_emb[:,keep]
+
+         # Now re-compute split coef, etas, and mus
+         rsplit_coef = np.split(coef,rcoef_split_idx)
+         etas = [rXs[i]@rsplit_coef[i] for i in range(family.n_par)]
+         mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
+
+         # Re-compute llk
+         c_llk = family.llk(y,*mus)
+         c_pen_llk = c_llk - coef.T@rS_emb@coef
+         
+         # and now repeat Newton iteration
+         for inner in range(max_inner):
+      
+            # Get derivatives with respect to eta
+            d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,mus,family)
+
+            # Get derivatives with respect to coef
+            grad,H = deriv_transform_eta_beta(d1eta,d2eta,d2meta,rXs)
+
+            # Update Coefficients
+            next_coef,L,LV,eps = newton_coef_smooth(coef,grad,H,rS_emb,method,piv_tol)
+
+            # Prepare to check convergence
+            prev_llk_cur_pen = c_llk - coef.T@rS_emb@coef
+
+            # Perform step length control
+            coef,rsplit_coef,mus,etas,c_llk,c_pen_llk = correct_coef_step_gammlss(family,y,rXs,coef,next_coef,rcoef_split_idx,c_llk,rS_emb)
+
+            if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
+               break
+
+         #print("eps",eps)
+         # converged on smaller problem - now adjust return objects for dropped coef
+
+         # start with coef
+         full_coef[keep] = coef
+         coef = full_coef
+         #print(coef)
+         split_coef = np.split(coef,coef_split_idx)
+
+         # Now H, L, LV
+         Hdat,Hrow,Hcol = translate_sparse(H)
+         Ldat,Lrow,Lcol = translate_sparse(L.tocsc()) # L@L.T = H_pen
+         LVdat,LVrow,LVcol = translate_sparse(LV) # LV.T@LV = V
+
+         Hrow = keep[Hrow]
+         Hcol = keep[Hcol]
+         Lrow = keep[Lrow]
+         Lcol = keep[Lcol]
+         LVrow = keep[LVrow]
+         LVcol = keep[LVcol]
+
+         H = scp.sparse.csc_array((Hdat,(Hrow,Hcol)),shape=(len(full_coef),len(full_coef)))
+         L = scp.sparse.csc_array((Ldat,(Lrow,Lcol)),shape=(len(full_coef),len(full_coef)))
+         LV = scp.sparse.csc_array((LVdat,(LVrow,LVcol)),shape=(len(full_coef),len(full_coef)))
+         #print((LV.T@LV - V).max(),(LV.T@LV - V).min())
+         #print((L@L.T - nH).max(),(L@L.T - nH).min())
+
+   return coef,split_coef,mus,etas,H,L,LV,c_llk,c_pen_llk,eps,keep,drop
     
 def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
                          max_outer=50,max_inner=30,min_inner=1,conv_tol=1e-7,
                          extend_lambda=True,extension_method_lam = "nesterov2",
-                         control_lambda=True,method="Chol",check_cond=1,piv_tol=0.175,progress_bar=True,n_c=10):
+                         control_lambda=True,method="Chol",check_cond=1,piv_tol=0.175,
+                         should_keep_drop=True,progress_bar=True,n_c=10):
     """
     Fits a GAMLSS model, following steps outlined by Wood, Pya, & Säfken (2016).
 
@@ -1964,6 +2247,15 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
     c_llk = family.llk(y,*mus)
     c_pen_llk = c_llk - coef.T@S_emb@coef
 
+    # Build normalized penalty for rank checks (e.g., Wood, Pya & Saefken, 2016)
+    keep_drop = None
+
+    S_norm = copy.deepcopy(gamlss_pen[0].S_J_emb)
+    for peni in range(1,len(gamlss_pen)):
+       S_norm += gamlss_pen[peni].S_J_emb
+    
+    S_norm /= scp.sparse.linalg.norm(S_norm,ord=None)
+
     iterator = range(max_outer)
     if progress_bar:
         iterator = tqdm(iterator,desc="Fitting",leave=True)
@@ -1973,12 +2265,24 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
 
         # Update coefficients:
         if outer == 0 or extend_lambda == False or control_lambda==False or (control_lambda and refit):
-            coef,split_coef,mus,etas,H,L,LV,c_llk,c_pen_llk,eps = update_coef_gammlss(family,mus,y,Xs,coef,
-                                                                                 coef_split_idx,S_emb,
+            coef,split_coef,mus,etas,H,L,LV,c_llk,c_pen_llk,eps,keep,drop = update_coef_gammlss(family,mus,y,Xs,coef,
+                                                                                 coef_split_idx,S_emb,S_norm,
                                                                                  c_llk,outer,max_inner,
                                                                                  min_inner,conv_tol,
-                                                                                 method,piv_tol)
+                                                                                 method,piv_tol,keep_drop)
             
+            if drop is not None:
+
+               fit_info.dropped = drop
+               if should_keep_drop:
+                  keep_drop = [keep,drop]
+
+               # Re-compute penalty matrices in smaller problem space.
+               old_pen = copy.deepcopy(gamlss_pen)
+               gamlss_pen = drop_terms_S(gamlss_pen,keep)
+
+               S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
+
             # Given new coefficients compute lgdetDs, ldetHS, and bsbs - needed for efs step
             lgdetDs = []
             bsbs = []
@@ -1993,7 +2297,11 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
                bsbs.append(bsb)
 
             total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,gamlss_pen,lgdetDs,n_coef,n_c)
+            #print([l1-l2 for l1,l2 in zip(lgdetDs,ldetHSs)])
             fit_info.lambda_updates += 1
+
+            if drop is not None:
+               gamlss_pen = old_pen
 
         # Check overall convergence
         if outer > 0:
@@ -2021,6 +2329,13 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
             
             #print(lgdetD-ldetHS)
             dLam = step_fellner_schall_sparse(lgdetD,ldetHS,bsb[0,0],lTerm.lam,1)
+
+            # For poorly scaled/ill-identifiable problems we cannot rely on the theorems by Wood
+            # & Fasiolo (2017) - so the condition below will be met, in which case we just want to
+            # take very small steps until it hopefully gets more stable (due to term dropping or better lambda value).
+            if lgdetD - ldetHS < 0:
+               dLam = np.sign(dLam) * min(abs(lTerm.lam)*0.001,abs(dLam))
+
             if extend_lambda:
                 dLam,extend_by,was_extended = extend_lambda_step(lti,lTerm.lam,dLam,extend_by,was_extended,extension_method_lam)
             lTerm.lam += dLam
@@ -2037,12 +2352,24 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
             # can do is at least undo the acceleration if we over-shoot the approximate derivative...
 
             # First re-compute coef
-            next_coef,split_coef,next_mus,next_etas,H,L,LV,next_llk,next_pen_llk,eps  = update_coef_gammlss(family,mus,y,Xs,coef,
-                                                                                                      coef_split_idx,S_emb,
+            next_coef,split_coef,next_mus,next_etas,H,L,LV,next_llk,next_pen_llk,eps,keep,drop  = update_coef_gammlss(family,mus,y,Xs,coef,
+                                                                                                      coef_split_idx,S_emb,S_norm,
                                                                                                       c_llk,outer,max_inner,
                                                                                                       min_inner,conv_tol,
-                                                                                                      method,piv_tol)
+                                                                                                      method,piv_tol,keep_drop)
             
+            if drop is not None:
+
+               fit_info.dropped = drop
+               if should_keep_drop:
+                  keep_drop = [keep,drop]
+
+               # Re-compute penalty matrices in smaller problem space.
+               old_pen = copy.deepcopy(gamlss_pen)
+               gamlss_pen = drop_terms_S(gamlss_pen,keep)
+
+               S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
+
             # Now re-compute lgdetDs, ldetHS, and bsbs
             lgdetDs = []
             bsbs = []
@@ -2057,7 +2384,11 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
                   bsbs.append(bsb)
 
             total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,gamlss_pen,lgdetDs,n_coef,n_c)
+            #print([l1-l2 for l1,l2 in zip(lgdetDs,ldetHSs)])
             fit_info.lambda_updates += 1
+
+            if drop is not None:
+               gamlss_pen = old_pen
             
             # Compute approximate!!! gradient of REML with respect to lambda
             # to check if step size needs to be reduced (part of step 6 in Wood, 2017).
@@ -2092,7 +2423,18 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
     fit_info.eps = eps
 
     if check_cond == 1:
-      K2,_,_,Kcode = est_condition(L,LV,verbose=False)
+
+      if drop is not None:
+         # Make sure cond. estimate happens in reduced space.
+         L_drop_K2 = L[keep,:]
+         L_drop_K2 = L_drop_K2[:,keep]
+
+         LV_drop_K2 = LV[keep,:]
+         LV_drop_K2 = LV_drop_K2[:,keep]
+         K2,_,_,Kcode = est_condition(L_drop_K2,LV_drop_K2,verbose=False)
+      else:
+         K2,_,_,Kcode = est_condition(L,LV,verbose=False)
+
       fit_info.K2 = K2
 
       if fit_info.code == 0: # Convergence was reached but Knumber might still suggest instable system.
