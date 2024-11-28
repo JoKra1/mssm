@@ -277,6 +277,7 @@ def compute_S_emb_pinv_det(col_S,penalties,pinv,root=False):
             rs = [1/s if s > 1e-7 else 0 for s in Sig]
             SJ_pinv = vt.T @ np.diag(rs) @ u.T
             SJ_pinv = scp.sparse.csc_array(SJ_pinv)
+            #print((SJs[SJi]@SJ_pinv@SJs[SJi] - SJs[SJi]).min(),(SJs[SJi]@SJ_pinv@SJs[SJi] - SJs[SJi]).max())
          
          if root:
             eig, U =scp.linalg.eigh(SJs[SJi].toarray())
@@ -1940,7 +1941,7 @@ def identify_drop(H,S_scaled):
     
     drop = []
     nH_drop = copy.deepcopy(nH_scaled)
-    min_sing = 0.01
+    min_sing = 0.95*cut_off
     keep = [cidx for cidx in range(H.shape[1])]
     # Now follows steps outlined in algorithm 1 of Voster:
     # - Form QR decomposition of current matrix
