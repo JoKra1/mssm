@@ -542,8 +542,44 @@ def compute_Linv(L,n_c=10):
 
    return cpp_solve_tr(L,T)
 
+def computetrVS2(t2,S,Y,lTerm):
+   """Compute ``tr(V@lTerm.S_j)`` from linear operator of ``V`` obtained from L-BFGS-B optimizer.
+
+   Relies on equation 3.13 in Byrd, Nocdeal & Schnabel (1992).
+
+   :param t2: ``2m*2m``  matrix from Byrd, Nocdeal & Schnabel (1992).
+   :type t2: numpy.array
+   :param S: ``n*k`` matrix holding first set of update vectors from Byrd, Nocdeal & Schnabel (1992).
+   :type S: numpy.array
+   :param Y: ``n*k`` matrix holding second set of update vectors from Byrd, Nocdeal & Schnabel (1992).
+   :type Y: numpy.array
+   :param lTerm: Current lambda term for which to compute the trace.
+   :type lTerm: mssm.src.python.penalties.LambdaTerm
+   """
+
+   tr = 0
+
+   S_start = lTerm.start_index
+   S_len = lTerm.rep_sj * lTerm.S_J.shape[1]
+   S_end = S_start + S_len
+   
+   for cidx in range(S_start,S_end):
+      S_c = lTerm.S_J_emb[:,[cidx]] # Can remain sparse
+      
+      # Now compute remaining terms 1 and 2 for equation 3.13
+      t1 = np.concatenate((S[[cidx],:],Y[[cidx],:]),axis=1)
+      t3 = np.concatenate((S.T@S_c,Y.T@S_c),axis=0)
+
+      VS_c = lTerm.S_J_emb[[cidx],[cidx]] + t1@t2@t3
+      tr += VS_c[0,0]
+
+   return tr
+
+
 def computetrVS(V,lTerm):
    """Compute ``tr(V@lTerm.S_j)`` from linear operator of ``V`` obtained from L-BFGS-B optimizer.
+
+   Relies on original "dual loop" strategy from Nocedal (1980). Not as efficient as ``computetrVS``.
 
    :param V: Linear operator of ``V``, which is the current estimate for the inverse of the negative Hessian of the penalized likelihood.
    :type V: scipy.sparse.linalg.LinearOperator
@@ -572,11 +608,41 @@ def calculate_edf(LP,Pr,InvCholXXS,penalties,lgdetDs,colsX,n_c):
    Bs = []
    term_edfs = []
 
+   if (not InvCholXXS is None) and isinstance(InvCholXXS,scp.sparse.linalg.LinearOperator):
+      # Following prepares trace computation via equation 3.13 in Byrd, Nocdeal & Schnabel (1992).
+      # First get m (number of implicit hessian updates), yk, sk, and rho from V
+      s, y, rho, m = InvCholXXS.sk, InvCholXXS.yk, InvCholXXS.rho, InvCholXXS.n_corrs
+
+      # Now form S,Y, and D - only have to do this once
+      S = np.array(s).T
+      Y = np.array(y).T
+      DYTY = Y.T@Y
+      DYTY[0,0] += np.dot(s[0],y[0])
+
+      # Now use eq. 2.5 to compute R^{-1} - only have to do this once
+      Rinv0 = 1/np.dot(s[0], y[0]).reshape(1,1)
+      for k in range(1,m):
+      
+         DYTY[k,k] += np.dot(s[k],y[k])
+         
+         Rinv = np.concatenate((np.concatenate((Rinv0,(-rho[k])*Rinv0@S[:,:k].T@Y[:,[k]]),axis=1),
+                                np.concatenate((np.zeros((1,Rinv0.shape[1])),
+                                                np.array([rho[k]]).reshape(1,1)),axis=1)),axis=0)
+         
+         Rinv0 = Rinv
+      
+      # Now pre-compute term 2 in 3.13 used for all S_j
+      t2 = np.zeros((2*m,2*m))
+      t2[:m,:m] = Rinv.T@DYTY@Rinv
+      t2[:m,m:] = -Rinv.T
+      t2[m:,:m] = -Rinv
+
+
    for lti,lTerm in enumerate(penalties):
       if not InvCholXXS is None:
          # Compute B, needed for Fellner Schall update (Wood & Fasiolo, 2017)
          if isinstance(InvCholXXS,scp.sparse.linalg.LinearOperator):
-            Bps = computetrVS(InvCholXXS,lTerm)
+            Bps = computetrVS2(t2,S,Y,lTerm)
          else:
             B = InvCholXXS @ lTerm.D_J_emb 
             Bps = B.power(2).sum()
