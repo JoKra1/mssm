@@ -3,7 +3,7 @@ import scipy as scp
 import warnings
 from .exp_fam import Family,Gaussian,est_scale,GAMLSSFamily,Identity
 from .penalties import PenType,id_dist_pen,translate_sparse,dataclass
-from .formula import build_sparse_matrix_from_formula,setup_cache,clear_cache,cpp_solvers,pd,Formula,mp,repeat,os,map_csc_to_eigen,math,tqdm,sys,copy,embed_in_S_sparse
+from .formula import build_sparse_matrix_from_formula,setup_cache,clear_cache,cpp_solvers,pd,Formula,mp,repeat,os,map_csc_to_eigen,map_csr_to_eigen,math,tqdm,sys,copy,embed_in_S_sparse
 from functools import reduce
 from multiprocessing import managers,shared_memory
 
@@ -28,6 +28,9 @@ class Fit_info:
    eps:float or None = None
    K2:float or None = None
    dropped:[int] or None = None
+
+def cpp_dChol(R,A):
+   return cpp_solvers.dCholdRho(*map_csr_to_eigen(R),*map_csr_to_eigen(A))
 
 def cpp_chol(A):
    return cpp_solvers.chol(*map_csc_to_eigen(A))

@@ -649,7 +649,8 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=
             minDiag = 0.1*min(np.sqrt(Vp.diagonal()))
             for lami in range(p_sample.shape[0]):
                 while np.any(np.max(np.abs(rGrid - p_sample[lami]),axis=1) < minDiag):
-                    seed += 1
+                    if not seed is None:
+                        seed += 1
                     p_sample[lami] = np.exp(scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=1,random_state=seed))
 
             if not seed is None:

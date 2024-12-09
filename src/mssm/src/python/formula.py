@@ -44,6 +44,19 @@ def map_csc_to_eigen(X):
    # Cast to int64 here, since that's what the c++ side expects to be stored in the buffers
    return rows, cols, X.nnz, X.data, X.indptr.astype(np.int64), X.indices.astype(np.int64)
 
+def map_csr_to_eigen(X):
+   """
+   see: :func:`map_csc_to_eigen`
+   """
+
+   if X.format != "csr":
+      raise TypeError(f"Format of sparse matrix passed to c++ MUST be 'csr' but is {X.getformat()}")
+
+   rows, cols = X.shape
+
+   # Cast to int64 here, since that's what the c++ side expects to be stored in the buffers
+   return rows, cols, X.nnz, X.data, X.indptr.astype(np.int64), X.indices.astype(np.int64)
+
 def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
    """
    Options 1 - 3 are natural reparameterization discussed in Wood (2017; 5.4.2)
