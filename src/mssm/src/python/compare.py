@@ -14,12 +14,14 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
                 nR=20,
                 n_c=10,
                 alpha=0.05,
-                grid='JJJ',
+                grid='JJJ3',
                 a=1e-7,b=1e7,df=40,
                 verbose=False,
                 drop_NA=True,
                 method="Newton",
                 seed=None,
+                use_upper=False,
+                shrinkage_weight=0.75,
                 **bfgs_options):
     
     """(Optionally) performs an approximate GLRT on twice the difference in unpenalized likelihood between ``model1`` and ``model2`` (see Wood, 2017).
@@ -105,8 +107,14 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
     if correct_V:
         if verbose:
             print("Correcting for uncertainty in lambda estimates...\n")
-        _,_,DOF1,DOF12,expected_aic1 = correct_VB(model1,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,seed=seed,**bfgs_options)
-        _,_,DOF2,DOF22,expected_aic2 = correct_VB(model2,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,seed=seed,**bfgs_options)
+        
+        #V,LV,Vp,Vpr,edf,total_edf,edf2,total_edf2,upper_edf
+        _,_,_,_,_,DOF1,_,DOF12,upper_edf1 = correct_VB(model1,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,V_shrinkage_weight=shrinkage_weight,only_expected_edf=(use_upper and (correct_t1==False)),seed=seed,**bfgs_options)
+        _,_,_,_,_,DOF2,_,DOF22,upper_edf2 = correct_VB(model2,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,V_shrinkage_weight=shrinkage_weight,only_expected_edf=(use_upper and (correct_t1==False)),seed=seed,**bfgs_options)
+        
+        if use_upper:
+            DOF1 = upper_edf1
+            DOF2 = upper_edf2
         
         if correct_t1:
             # Section 6.12.4 suggests replacing t (edf) with t1 (2*t - (F@F).trace()) with F=(X.T@X+S_\llambda)^{-1}@X.T@X for GLRT - with the latter also being corrected for

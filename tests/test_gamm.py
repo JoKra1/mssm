@@ -625,13 +625,13 @@ class Test_Vp_estimation:
     model = GAMM(formula,Binomial())
     model.fit()
 
-    Vp = estimateVp(model,verbose=True,nR=20,lR=100,conv_tol=1e-2,id_weight=0,seed=20)
+    Vp,_,_,_ = estimateVp(model,strategy="JJJ1")
 
     def test_Vp(self):
-        assert np.allclose(np.round(self.Vp,decimals=2), np.array([[ 0.42, -0.15,  0.  , -0.08],
-                                                                   [-0.15,  1.08,  0.04, -0.16],
-                                                                   [ 0.  ,  0.04,  0.14, -0.07],
-                                                                   [-0.08, -0.16, -0.07,  1.71]]))
+        assert np.allclose(np.round(self.Vp,decimals=3),np.array([[ 2.2810e+00,  9.0000e-03,  3.0000e-03,  2.1000e-02],
+                                                                  [ 9.0000e-03,  2.7790e+00,  1.0000e-03, -2.5000e-02],
+                                                                  [ 3.0000e-03,  1.0000e-03,  4.9400e-01,  2.2000e-02],
+                                                                  [ 2.1000e-02, -2.5000e-02,  2.2000e-02,  1.5408e+01]]))
 
 class Test_diff_hard:
     # pred_diff test

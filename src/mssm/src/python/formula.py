@@ -38,6 +38,9 @@ def map_csc_to_eigen(X):
 
    if X.format != "csc":
       raise TypeError(f"Format of sparse matrix passed to c++ MUST be 'csc' but is {X.getformat()}")
+   
+   if X.has_sorted_indices == False:
+      raise TypeError("Indices of sparse matrix passed to c++ MUST be sorted but are not.")
 
    rows, cols = X.shape
 
@@ -51,6 +54,9 @@ def map_csr_to_eigen(X):
 
    if X.format != "csr":
       raise TypeError(f"Format of sparse matrix passed to c++ MUST be 'csr' but is {X.getformat()}")
+   
+   if X.has_sorted_indices == False:
+      raise TypeError("Indices of sparse matrix passed to c++ MUST be sorted but are not.")
 
    rows, cols = X.shape
 
