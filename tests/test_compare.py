@@ -166,7 +166,7 @@ class Test_Vb_corrections:
         assert np.round(self.total_edf2,decimals=3) == 17.284
 
     def test_edf3(self):
-        assert np.round(self.upper_edf,decimals=3) == 17.303
+        assert np.round(self.upper_edf,decimals=3) == 17.269
 
 class Test_chol_deriv:
     # Test of derivative of cholesky factor computation

@@ -1117,23 +1117,26 @@ def compute_Vb_corr_WPS(Vbr,Vpr,Vr,H,S_emb,penalties,coef,scale=1):
     # Hence: R' = R^{-T}
     # and:   R'.T = R^{-1}
     # So: dR'.Td\rho = dR^{-1}d\rho = R^{-1}@dRd\rho@R^{-1}
-    # and we have to take the transpose!
+    # and we either have to take the transpose or change the flip the indexing in the 5 term sum!
 
     #print((R@Rinv).max())
 
     for dRi in range(len(dRdRhos)):
-        dRdRhos[dRi] = ((Rinv@dRdRhos[dRi])@Rinv).T
+        dRdRhos[dRi] = (Rinv@dRdRhos[dRi])@Rinv
     
     # Now final sum
     Vcc = np.zeros_like(Vc)
     for j in range(Vc.shape[0]):
-        for m in range(Vc.shape[1]):
+        for m in range(j,Vc.shape[1]):
 
             for i in range(len(coef)):
                 for l in range(len(penalties)):
                     for k in range(len(penalties)):
 
-                        Vcc[j,m] += dRdRhos[k][i,j] * Vpr[k,l] * dRdRhos[l][i,m]
+                        Vcc[j,m] += dRdRhos[k][j,i] * Vpr[k,l] * dRdRhos[l][m,i]
+
+                        if m > j:
+                            Vcc[m,j] += dRdRhos[k][m,i] * Vpr[k,l] * dRdRhos[l][j,i]
     
     # Done, don't forget to scale Vcc since nH was unscaled!
     return Vc, scale*Vcc
@@ -1643,7 +1646,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
         # And simple correction of the edf - essentially taking an upper bound of
         # the edf that could be expected, assuming that the uncertainty around edf is approximately
         # normal.
-        upper_edf = model.edf + 2.33*np.sqrt(np.sum(ws*np.power(edfs-model.edf,2)))
+        upper_edf = model.edf + 2.33*np.sqrt(np.sum(ws*np.power(edfs-np.sum(ws*edfs),2)))
         
         if only_expected_edf:
             if verbose and grid_type != "JJJ1":
