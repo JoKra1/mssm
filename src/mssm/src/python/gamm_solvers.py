@@ -1854,15 +1854,20 @@ def deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs):
                   
                   # Get non-zero values for current row in sorted order
                   vals = d2beta.data[d2beta.indptr[0]:d2beta.indptr[1]]
-                  
+
                   h_rows.extend(np.tile(coefi,d2beta.nnz) + hr_idx)
                   h_cols.extend(cols + hc_idx)
                   h_vals.extend(vals)
 
                   # Symmetric 2nd deriv..
-                  h_rows.extend(cols[1:] + hc_idx)
-                  h_cols.extend(np.tile(coefi,d2beta.nnz-1) + hr_idx)
-                  h_vals.extend(vals[1:])
+                  if (cols[0] + hc_idx) == (coefi + hr_idx):
+                     h_rows.extend(cols[1:] + hc_idx)
+                     h_cols.extend(np.tile(coefi,d2beta.nnz-1) + hr_idx)
+                     h_vals.extend(vals[1:])
+                  else:
+                     h_rows.extend(cols + hc_idx)
+                     h_cols.extend(np.tile(coefi,d2beta.nnz) + hr_idx)
+                     h_vals.extend(vals)
 
             hc_idx += Xs[etaj].shape[1]
         hr_idx += Xs[etai].shape[1]
@@ -2032,7 +2037,7 @@ def identify_drop(H,S_scaled):
     # - drop column of current (here also row since nH is symmetric) matrix corresponding to maximum of approximate Kernel vector
     # - repeat until ingular value > cut_off
 
-    while min_sing < (cut_off*1.1):
+    while min_sing < cut_off:
       R,Pr,rank,_  = cpp_qrr(nH_drop)
       P = compute_eigen_perm(Pr)
       _,min_sing,vh = scp.sparse.linalg.svds(R,k=1,return_singular_vectors=True,random_state=20,which='SM')
@@ -2043,8 +2048,14 @@ def identify_drop(H,S_scaled):
          keep = [cidx for cidx in range(H.shape[1]) if cidx not in drop]
 
       #print(rank,nH_drop.shape,min_sing)
-      if min_sing > (cut_off*1.1):
-         break
+      if min_sing > cut_off:
+         # Check if Cholesky works now - otherwise increase cut-off
+         _, _, code = cpp_cholP(nH_drop)
+         if code != 0:
+            cut_off = min_sing
+            min_sing = 0.95*cut_off
+         else:
+            break
       
       # w need to be of original shape
       w = np.zeros(H.shape[1])
@@ -2362,7 +2373,10 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
 
                # Re-compute penalty matrices in smaller problem space.
                old_pen = copy.deepcopy(gamlss_pen)
-               gamlss_pen = drop_terms_S(gamlss_pen,keep)
+               
+               # Should we re-build penalties here to match reduced space? Not sure that's necessary, because
+               # V and LV have zeroes in rows and columns for un-identifiable parameters.
+               #gamlss_pen = drop_terms_S(gamlss_pen,keep)
 
                S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
 
@@ -2449,7 +2463,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
 
                # Re-compute penalty matrices in smaller problem space.
                old_pen = copy.deepcopy(gamlss_pen)
-               gamlss_pen = drop_terms_S(gamlss_pen,keep)
+               #gamlss_pen = drop_terms_S(gamlss_pen,keep)
 
                S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
 
@@ -2500,7 +2514,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
                c_llk=next_llk
                c_pen_llk=next_pen_llk
 
-        #print([lterm.lam for lterm in gamlss_pen])
+        #print(outer,[lterm.lam for lterm in gamlss_pen])
         fit_info.iter += 1
     
     fit_info.eps = eps
@@ -2780,7 +2794,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
 
                   # Re-compute penalty matrices in smaller problem space.
                   old_pen = copy.deepcopy(smooth_pen)
-                  smooth_pen = drop_terms_S(smooth_pen,keep)
+                  #smooth_pen = drop_terms_S(smooth_pen,keep)
 
                   S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
 
@@ -2911,7 +2925,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
 
                   # Re-compute penalty matrices in smaller problem space.
                   old_pen = copy.deepcopy(smooth_pen)
-                  smooth_pen = drop_terms_S(smooth_pen,keep)
+                  #smooth_pen = drop_terms_S(smooth_pen,keep)
 
                   S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
 
