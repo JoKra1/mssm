@@ -2383,7 +2383,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
                
                # Should we re-build penalties here to match reduced space? Not sure that's necessary, because
                # V and LV have zeroes in rows and columns for un-identifiable parameters.
-               #gamlss_pen = drop_terms_S(gamlss_pen,keep)
+               gamlss_pen = drop_terms_S(gamlss_pen,keep)
 
                S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
 
@@ -2470,7 +2470,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
 
                # Re-compute penalty matrices in smaller problem space.
                old_pen = copy.deepcopy(gamlss_pen)
-               #gamlss_pen = drop_terms_S(gamlss_pen,keep)
+               gamlss_pen = drop_terms_S(gamlss_pen,keep)
 
                S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
 
@@ -2801,7 +2801,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
 
                   # Re-compute penalty matrices in smaller problem space.
                   old_pen = copy.deepcopy(smooth_pen)
-                  #smooth_pen = drop_terms_S(smooth_pen,keep)
+                  smooth_pen = drop_terms_S(smooth_pen,keep)
 
                   S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
 
@@ -2932,7 +2932,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
 
                   # Re-compute penalty matrices in smaller problem space.
                   old_pen = copy.deepcopy(smooth_pen)
-                  #smooth_pen = drop_terms_S(smooth_pen,keep)
+                  smooth_pen = drop_terms_S(smooth_pen,keep)
 
                   S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
 
