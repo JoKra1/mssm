@@ -151,10 +151,10 @@ class Test_Vb_corrections:
     _,LI,_,_,_,total_edf2,_,_,upper_edf = correct_VB(model2,grid_type="JJJ2",nR=20,verbose=True,V_shrinkage_weight=1,b=1e7,seed=20,df=2)
 
     def test_Vp1(self):
-        assert np.allclose(np.round(self.Vp1,decimals=3),np.array([[ 1.138000e+00, -5.000000e-03,  1.700000e-02, -1.070000e-01],
-                                                                    [-5.000000e-03,  8.980000e-01,  2.300000e-02, -8.000000e-03],
+        assert np.allclose(np.round(self.Vp1,decimals=3),np.array([[ 1.138000e+00, -5.000000e-03,  1.700000e-02, -1.080000e-01],
+                                                                    [-5.000000e-03,  8.980000e-01,  2.300000e-02, -7.000000e-03],
                                                                     [ 1.700000e-02,  2.300000e-02,  4.670000e-01,  1.050000e-01],
-                                                                    [-1.070000e-01, -8.000000e-03,  1.050000e-01,  5.952048e+03]]))
+                                                                    [-1.080000e-01, -7.000000e-03,  1.050000e-01,  5.955928e+03]]))
     
     def test_Vp2(self):
         assert np.allclose(self.Vp1,self.Vp2)

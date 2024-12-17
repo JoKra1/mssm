@@ -550,8 +550,8 @@ def computetrVS2(t2,S,Y,lTerm):
 
    Relies on equation 3.13 in Byrd, Nocdeal & Schnabel (1992).
 
-   :param t2: ``2m*2m``  matrix from Byrd, Nocdeal & Schnabel (1992).
-   :type t2: numpy.array
+   :param t2: ``2m*2m``  matrix from Byrd, Nocdeal & Schnabel (1992). If ``t2 is None``, then ``V`` is treated like an identity matrix.
+   :type t2: numpy.array or None
    :param S: ``n*k`` matrix holding first set of update vectors from Byrd, Nocdeal & Schnabel (1992).
    :type S: numpy.array
    :param Y: ``n*k`` matrix holding second set of update vectors from Byrd, Nocdeal & Schnabel (1992).
@@ -570,10 +570,14 @@ def computetrVS2(t2,S,Y,lTerm):
       S_c = lTerm.S_J_emb[:,[cidx]] # Can remain sparse
       
       # Now compute remaining terms 1 and 2 for equation 3.13
-      t1 = np.concatenate((S[[cidx],:],Y[[cidx],:]),axis=1)
-      t3 = np.concatenate((S.T@S_c,Y.T@S_c),axis=0)
+      if not t2 is None:
+         t1 = np.concatenate((S[[cidx],:],Y[[cidx],:]),axis=1)
+         t3 = np.concatenate((S.T@S_c,Y.T@S_c),axis=0)
 
-      VS_c = lTerm.S_J_emb[[cidx],[cidx]] + t1@t2@t3
+         VS_c = lTerm.S_J_emb[[cidx],[cidx]] + t1@t2@t3
+      else:
+         VS_c = np.array([lTerm.S_J_emb[[cidx],[cidx]]])
+
       tr += VS_c[0,0]
 
    return tr
@@ -616,29 +620,38 @@ def calculate_edf(LP,Pr,InvCholXXS,penalties,lgdetDs,colsX,n_c):
       # First get m (number of implicit hessian updates), yk, sk, and rho from V
       s, y, rho, m = InvCholXXS.sk, InvCholXXS.yk, InvCholXXS.rho, InvCholXXS.n_corrs
 
-      # Now form S,Y, and D - only have to do this once
-      S = np.array(s).T
-      Y = np.array(y).T
-      DYTY = Y.T@Y
-      DYTY[0,0] += np.dot(s[0],y[0])
+      if m == 0: # L-BFGS routine converged after first step
 
-      # Now use eq. 2.5 to compute R^{-1} - only have to do this once
-      Rinv0 = 1/np.dot(s[0], y[0]).reshape(1,1)
-      for k in range(1,m):
-      
-         DYTY[k,k] += np.dot(s[k],y[k])
+         S = None
+         Y = None
+         t2 = None
+
+      else:
+
+         # Now form S,Y, and D - only have to do this once
+         S = np.array(s).T
+         Y = np.array(y).T
+         DYTY = Y.T@Y
+         DYTY[0,0] += np.dot(s[0],y[0])
+
+         # Now use eq. 2.5 to compute R^{-1} - only have to do this once
+         Rinv0 = 1/np.dot(s[0], y[0]).reshape(1,1)
+         Rinv = Rinv0
+         for k in range(1,m):
          
-         Rinv = np.concatenate((np.concatenate((Rinv0,(-rho[k])*Rinv0@S[:,:k].T@Y[:,[k]]),axis=1),
-                                np.concatenate((np.zeros((1,Rinv0.shape[1])),
-                                                np.array([rho[k]]).reshape(1,1)),axis=1)),axis=0)
+            DYTY[k,k] += np.dot(s[k],y[k])
+            
+            Rinv = np.concatenate((np.concatenate((Rinv0,(-rho[k])*Rinv0@S[:,:k].T@Y[:,[k]]),axis=1),
+                                 np.concatenate((np.zeros((1,Rinv0.shape[1])),
+                                                   np.array([rho[k]]).reshape(1,1)),axis=1)),axis=0)
+            
+            Rinv0 = Rinv
          
-         Rinv0 = Rinv
-      
-      # Now pre-compute term 2 in 3.13 used for all S_j
-      t2 = np.zeros((2*m,2*m))
-      t2[:m,:m] = Rinv.T@DYTY@Rinv
-      t2[:m,m:] = -Rinv.T
-      t2[m:,:m] = -Rinv
+         # Now pre-compute term 2 in 3.13 used for all S_j
+         t2 = np.zeros((2*m,2*m))
+         t2[:m,:m] = Rinv.T@DYTY@Rinv
+         t2[:m,m:] = -Rinv.T
+         t2[m:,:m] = -Rinv
 
 
    for lti,lTerm in enumerate(penalties):
@@ -2746,6 +2759,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
            
         
     fit_info = Fit_info()
+    __old_opt = None
     for outer in iterator:
 
         # Update coefficients:
@@ -2800,7 +2814,19 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                elif optimizer == "L-BFGS-B":
                   # Get linear operator. No need for Cholesky
                   V = opt.hess_inv
-               
+
+                  if __old_opt is not None and V.n_corrs < __old_opt.n_corrs:
+                     # L-BFGS converged quickly, so (inverse) of Hessian might in worst case simply be set to identity
+                     # but we can re-use last approximation of inverse to fill up
+                     for cori in range(__old_opt.n_corrs-1,V.n_corrs-1,-1):
+                        V.sk = np.insert(V.sk,0,__old_opt.sk[cori],axis=0)
+                        V.yk = np.insert(V.yk,0,__old_opt.yk[cori],axis=0)
+                        V.rho = np.insert(V.rho,0,__old_opt.rho[cori],axis=0)
+                     
+                     V.n_corrs = __old_opt.n_corrs
+                  
+                  __old_opt = copy.deepcopy(V)
+
             # Given new coefficients compute lgdetDs, ldetHS, and bsbs - needed for efs step
             lgdetDs = []
             bsbs = []
@@ -2919,6 +2945,18 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                 elif optimizer == "L-BFGS-B":
                   # Get linear operator. No need for Cholesky
                   V = opt.hess_inv
+
+                  if __old_opt is not None and V.n_corrs < __old_opt.n_corrs:
+                     # L-BFGS converged quickly, so (inverse) of Hessian might in worst case simply be set to identity
+                     # but we can re-use last approximation of inverse to fill up
+                     for cori in range(__old_opt.n_corrs-1,V.n_corrs-1,-1):
+                        V.sk = np.insert(V.sk,0,__old_opt.sk[cori],axis=0)
+                        V.yk = np.insert(V.yk,0,__old_opt.yk[cori],axis=0)
+                        V.rho = np.insert(V.rho,0,__old_opt.rho[cori],axis=0)
+
+                     V.n_corrs = __old_opt.n_corrs
+                  
+                  __old_opt = copy.deepcopy(V)
             
             # Now re-compute lgdetDs, ldetHS, and bsbs
             lgdetDs = []
