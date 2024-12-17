@@ -2019,8 +2019,15 @@ def identify_drop(H,S_scaled):
     nHdgr = np.power(np.abs(nHdgr),-0.5)
     D = scp.sparse.diags(nHdgr)
     nH_scaled = (D@nH_scaled@D).tocsc()
-    
-    # Find cut-off for singular values considered to be too low. This is heuristic.
+
+    # Verify that we actually have a problem..
+    keep = [cidx for cidx in range(H.shape[1])]
+    _, _, code = cpp_cholP(nH_scaled)
+
+    if code == 0:
+       return keep, []
+       
+    # Find cut-off for singular values considered to be too low. This is heuristic but now relatively safe since the cholesky failed.
     R,Pr,rank,_ = cpp_qrr(nH_scaled)
     _,cut_off,_ = scp.sparse.linalg.svds(R,k=1,return_singular_vectors=True,random_state=20,which='SM')
     #print("cutoff",cut_off*4)
@@ -2029,13 +2036,12 @@ def identify_drop(H,S_scaled):
     drop = []
     nH_drop = copy.deepcopy(nH_scaled)
     min_sing = 0.95*cut_off
-    keep = [cidx for cidx in range(H.shape[1])]
+
     # Now follows steps outlined in algorithm 1 of Voster:
     # - Form QR decomposition of current matrix
-    # - find approximate singular value + vector
-    # - if singular value < cut_off -> vector is approximate Kernel vector
+    # - find approximate singular value + vector -> vector is approximate Kernel vector
     # - drop column of current (here also row since nH is symmetric) matrix corresponding to maximum of approximate Kernel vector
-    # - repeat until ingular value > cut_off
+    # - check if cholesky works now, otherwise increase cut-off and repeat
 
     while min_sing < cut_off:
       R,Pr,rank,_  = cpp_qrr(nH_drop)
@@ -2046,16 +2052,6 @@ def identify_drop(H,S_scaled):
       if rank < nH_drop.shape[1]:
          drop.extend(Pr[rank:])
          keep = [cidx for cidx in range(H.shape[1]) if cidx not in drop]
-
-      #print(rank,nH_drop.shape,min_sing)
-      if min_sing > cut_off:
-         # Check if Cholesky works now - otherwise increase cut-off
-         _, _, code = cpp_cholP(nH_drop)
-         if code != 0:
-            cut_off = min_sing
-            min_sing = 0.95*cut_off
-         else:
-            break
       
       # w need to be of original shape
       w = np.zeros(H.shape[1])
@@ -2070,6 +2066,17 @@ def identify_drop(H,S_scaled):
 
       nH_drop = nH_scaled[keep,:]
       nH_drop = nH_drop[:,keep]
+
+      #print(rank,nH_drop.shape,min_sing)
+      if min_sing >= cut_off:
+         # Check if Cholesky works now - otherwise increase cut-off
+         _, _, code = cpp_cholP(nH_drop)
+         
+         if code != 0:
+            cut_off = min_sing
+            min_sing = 0.95*cut_off
+         else:
+            break
 
     drop = np.sort(drop)
     keep = np.sort(keep)
@@ -2344,9 +2351,9 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
     # Build normalized penalty for rank checks (e.g., Wood, Pya & Saefken, 2016)
     keep_drop = None
 
-    S_norm = copy.deepcopy(gamlss_pen[0].S_J_emb)
+    S_norm = copy.deepcopy(gamlss_pen[0].S_J_emb)/scp.sparse.linalg.norm(gamlss_pen[0].S_J_emb,ord=None)
     for peni in range(1,len(gamlss_pen)):
-       S_norm += gamlss_pen[peni].S_J_emb
+       S_norm += gamlss_pen[peni].S_J_emb/scp.sparse.linalg.norm(gamlss_pen[peni].S_J_emb,ord=None)
     
     S_norm /= scp.sparse.linalg.norm(S_norm,ord=None)
 
@@ -2743,9 +2750,9 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
     # Build normalized penalty for rank checks (e.g., Wood, Pya & Saefken, 2016)
     keep_drop = None
 
-    S_norm = copy.deepcopy(smooth_pen[0].S_J_emb)
+    S_norm = copy.deepcopy(smooth_pen[0].S_J_emb) / scp.sparse.linalg.norm(smooth_pen[0].S_J_emb,ord=None)
     for peni in range(1,len(smooth_pen)):
-       S_norm += smooth_pen[peni].S_J_emb
+       S_norm += smooth_pen[peni].S_J_emb / scp.sparse.linalg.norm(smooth_pen[peni].S_J_emb,ord=None)
     
     S_norm /= scp.sparse.linalg.norm(S_norm,ord=None)
 
