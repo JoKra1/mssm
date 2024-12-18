@@ -1989,17 +1989,18 @@ def correct_coef_step_gammlss(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_
     
     return next_coef,next_split_coef,next_mus,next_etas,next_llk,next_pen_llk
 
-def identify_drop(H,S_scaled):
+def identify_drop(H,S_scaled,method='LU'):
     """
-    Routine to approximately identify the rank of the scaled negative hessian of the penalized likelihood based on Voster (1986).
+    Routine to approximately identify the rank of the scaled negative hessian of the penalized likelihood based on Foster (1986) and Gotsman & Toledo (2008).
 
-    Requires ``p+2`` QR decompositions - where ``p`` is approximately the Kernel size of the matrix. Essentially continues to find
+    Requires ``p`` QR/LU decompositions - where ``p`` is approximately the Kernel size of the matrix. Essentially continues to find
     vectors forming a basis of the Kernel of the matrix and successively drops columns corresponding to the maximum absolute value of the
-    Kernel vectors.
+    Kernel vectors. This is repeated until we can form a cholesky of the scaled hessian.
 
     References:
      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-    
+     - Foster (1986). Rank and null space calculations using matrix decomposition without column interchanges.
+     - Gotsman & Toledo (2008). On the Computation of Null Spaces of Sparse Rectangular Matrices.
     
     :param H: Estimate of the hessian of the log-likelihood.
     :type H: scipy.sparse.csc_array
@@ -2022,40 +2023,42 @@ def identify_drop(H,S_scaled):
 
     # Verify that we actually have a problem..
     keep = [cidx for cidx in range(H.shape[1])]
+    drop = []
     _, _, code = cpp_cholP(nH_scaled)
 
     if code == 0:
-       return keep, []
-       
-    # Find cut-off for singular values considered to be too low. This is heuristic but now relatively safe since the cholesky failed.
-    R,Pr,rank,_ = cpp_qrr(nH_scaled)
-    _,cut_off,_ = scp.sparse.linalg.svds(R,k=1,return_singular_vectors=True,random_state=20,which='SM')
-    #print("cutoff",cut_off*4)
-    #print(rank,nH_scaled.shape[1])
+       return keep, drop
     
-    drop = []
     nH_drop = copy.deepcopy(nH_scaled)
-    min_sing = 0.95*cut_off
 
-    # Now follows steps outlined in algorithm 1 of Voster:
-    # - Form QR decomposition of current matrix
-    # - find approximate singular value + vector -> vector is approximate Kernel vector
+    # Now follows steps outlined in algorithm 1 of Foster:
+    # - Form QR (or LU) decomposition of current matrix
+    # - find approximate singular value (from R or U) + vector -> vector is approximate Kernel vector
     # - drop column of current (here also row since nH is symmetric) matrix corresponding to maximum of approximate Kernel vector
-    # - check if cholesky works now, otherwise increase cut-off and repeat
+    # - check if cholesky works now, otherwise continue
+    while True:
 
-    while min_sing < cut_off:
-      R,Pr,rank,_  = cpp_qrr(nH_drop)
-      P = compute_eigen_perm(Pr)
-      _,min_sing,vh = scp.sparse.linalg.svds(R,k=1,return_singular_vectors=True,random_state=20,which='SM')
+      # Find Null-vector of R (U) -> which is Nullvector of A@Pc (can ignore row pivoting for LU, see: Gotsman & Toledo; 2008)
+      if method == "QR": # Original proposal by Foster
+         R,Pr,rank,_  = cpp_qrr(nH_drop)
+         P = compute_eigen_perm(Pr)
 
-      # Deal with drops during factorization.
-      if rank < nH_drop.shape[1]:
-         drop.extend(Pr[rank:])
-         keep = [cidx for cidx in range(H.shape[1]) if cidx not in drop]
+         # Deal with drops during factorization.
+         if rank < nH_drop.shape[1]:
+            drop.extend(Pr[rank:])
+            keep = [cidx for cidx in range(H.shape[1]) if cidx not in drop]
+
+      else: # Faster strategy motivated by Gotsman & Toledo
+         lu = scp.sparse.linalg.splu(nH_drop,permc_spec='COLAMD',diag_pivot_thresh=1,options=dict(SymmetricMode=False,IterRefine='Double',Equil=True))
+         R = lu.U
+         P = scp.sparse.csc_matrix((np.ones(nH_drop.shape[1]), (np.arange(nH_drop.shape[1]), lu.perm_c)))
+
+      # Find approximate Null-vector w of nH (See Foster, 1986)
+      _,_,vh = scp.sparse.linalg.svds(R,k=1,return_singular_vectors=True,random_state=20,which='SM')
       
-      # w need to be of original shape
+      # w needs to be of original shape!
       w = np.zeros(H.shape[1])
-      wk = (vh@P.T).T # Need to undo pivoting here - depends on method used to compute pivot, here COLAMD.
+      wk = (vh@P.T).T # Need to undo column-pivoting here - depends on method used to compute pivot, here COLAMD for both.
       w[keep] = wk.flatten()
 
       # Drop next col + row and update keep list
@@ -2067,16 +2070,10 @@ def identify_drop(H,S_scaled):
       nH_drop = nH_scaled[keep,:]
       nH_drop = nH_drop[:,keep]
 
-      #print(rank,nH_drop.shape,min_sing)
-      if min_sing >= cut_off:
-         # Check if Cholesky works now - otherwise increase cut-off
-         _, _, code = cpp_cholP(nH_drop)
-         
-         if code != 0:
-            cut_off = min_sing
-            min_sing = 0.95*cut_off
-         else:
-            break
+      # Check if Cholesky works now - otherwise continue
+      _, _, code = cpp_cholP(nH_drop)
+      if code == 0:
+         break
 
     drop = np.sort(drop)
     keep = np.sort(keep)
