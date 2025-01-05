@@ -684,7 +684,9 @@ class GAMM:
                     model_mat = scp.sparse.vstack(Xs,format='csc')
 
             if len(irstx) > 0:
-                model_mat = model_mat[self.formula.NOT_NA_flat,:]
+                # Scipy 1.15.0 does not like indexing via pd.series object, bug?
+                # anyway, getting values first is fine.
+                model_mat = model_mat[self.formula.NOT_NA_flat.values,:]
 
             # Get initial estimate of mu based on family:
             init_mu_flat = self.family.init_mu(y_flat)
