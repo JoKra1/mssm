@@ -22,7 +22,7 @@ The latest release of mssm can be installed from [pypi](https://pypi.org/project
 ```
 conda create -n mssm_env python=3.13
 conda activate mssm_env
-pip install mssm, mssmViz # 'mssmViz' only needed for plotting
+pip install mssm mssmViz # 'mssmViz' only needed for plotting
 ```
 
 **Note**: pypi will only reflect releases (Basically, the state of the stable branch). If you urgently need a feature currently only available on the main branch, consider building from source.

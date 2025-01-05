@@ -14,6 +14,10 @@ test-skip = "*-win32 *i686"
 test-requires = ["pytest", "pytest-cov", "mssmViz", "numdifftools"]
 test-command = 'pytest {project}/tests/test_fast.py --cov={project}'
 
+# Build for intel macs as well
+[tool.cibuildwheel.macos]
+archs = ["x86_64", "arm64"]
+
 [project]
 dependencies=["numpy >= 1.24.1",
               "pandas >= 1.5.3",
