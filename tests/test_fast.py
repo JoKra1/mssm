@@ -197,7 +197,7 @@ class Test_Binom_GAMM:
 
     # By default, the Binomial family assumes binary data and uses the logit link.
     model = GAMM(formula,Binomial())
-    model.fit()
+    model.fit(max_inner=1)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 13.468 
@@ -238,7 +238,7 @@ class Test_Gamma_GAMM:
 
     # By default, the Gamma family assumes that the model predictions match log(\mu_i), i.e., a log-link is used.
     model = GAMM(formula,Gamma())
-    model.fit()
+    model.fit(max_inner=1)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 17.814 

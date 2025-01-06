@@ -569,7 +569,7 @@ class GAMM:
 
     
         :param type: The type of residual to return for a Generalized model, "Pearson" by default, but can be set to "Deviance" as well. Ignorred for additive models with identity link.
-        :type maxiter: str,optional
+        :type type: str,optional
         :raises ValueError: Will throw an error when called before the model was fitted/before model penalties were formed.
         :return: Empirical residual vector
         :rtype: [float]
@@ -592,12 +592,14 @@ class GAMM:
                 
     ##################################### Fitting #####################################
     
-    def fit(self,maxiter=50,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=False,extension_method_lam = "nesterov",restart=False,method="Chol",check_cond=1,progress_bar=True,n_cores=10):
+    def fit(self,max_outer=50,max_inner=100,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=False,extension_method_lam = "nesterov",restart=False,method="Chol",check_cond=1,progress_bar=True,n_cores=10):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
-        :param maxiter: The maximum number of fitting iterations.
-        :type maxiter: int,optional
+        :param max_outer: The maximum number of fitting iterations. Defaults to 50.
+        :type max_outer: int,optional
+        :param max_inner: The maximum number of fitting iterations to use by the inner Newton step updating the coefficients for Generalized models. Defaults to 100.
+        :type max_inner: int,optional
         :param conv_tol: The relative (change in penalized deviance is compared against ``conv_tol`` * previous penalized deviance) criterion used to determine convergence.
         :type conv_tol: float,optional
         :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the number of new smoothing penalty proposals necessary. Enabled by default.
@@ -694,7 +696,7 @@ class GAMM:
             # Now we have to estimate the model
             coef,eta,wres,Wr,scale,LVI,edf,term_edf,penalty,fit_info = solve_gamm_sparse(init_mu_flat,y_flat,
                                                                                       model_mat,penalties,self.formula.n_coef,
-                                                                                      self.family,maxiter,"svd",
+                                                                                      self.family,max_outer,max_inner,"svd",
                                                                                       conv_tol,extend_lambda,control_lambda,
                                                                                       exclude_lambda,extension_method_lam,
                                                                                       len(self.formula.discretize) == 0,
@@ -718,7 +720,7 @@ class GAMM:
                 raise ValueError("Iteratively building the model matrix is currently only supported for Normal models.")
             
             coef,eta,wres,XX,scale,LVI,edf,term_edf,penalty,fit_info = solve_gamm_sparse2(self.formula,penalties,self.formula.n_coef,
-                                                                                          self.family,maxiter,"svd",
+                                                                                          self.family,max_outer,"svd",
                                                                                           conv_tol,extend_lambda,control_lambda,
                                                                                           exclude_lambda,extension_method_lam,
                                                                                           len(self.formula.discretize) == 0,
@@ -1272,7 +1274,7 @@ class GAMMLSS(GAMM):
         return self.family.get_resid(self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat],*self.overall_mus)
         
 
-    def fit(self,max_outer=50,max_inner=200,min_inner=100,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,method="Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),should_keep_drop=True,progress_bar=True,n_cores=10,seed=0,init_lambda=None):
+    def fit(self,max_outer=50,max_inner=200,min_inner=200,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,method="Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),should_keep_drop=True,progress_bar=True,n_cores=10,seed=0,init_lambda=None):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -1732,7 +1734,7 @@ class GSMM(GAMMLSS):
         """
         return None
     
-    def fit(self,init_coef=None,max_outer=50,max_inner=200,min_inner=100,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,restart=False,optimizer="Newton",method="Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),progress_bar=True,n_cores=10,seed=0,drop_NA=True,init_lambda=None,form_VH=True,use_grad=False,build_mat=None,should_keep_drop=True,**bfgs_options):
+    def fit(self,init_coef=None,max_outer=50,max_inner=200,min_inner=200,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=True,restart=False,optimizer="Newton",method="Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),progress_bar=True,n_cores=10,seed=0,drop_NA=True,init_lambda=None,form_VH=True,use_grad=False,build_mat=None,should_keep_drop=True,**bfgs_options):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 

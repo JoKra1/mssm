@@ -20,7 +20,7 @@ class Test_model_comparisons1_hard:
                                 print_warn=False)
 
     sim_fit_model = GAMM(sim_fit_formula,Gaussian())
-    sim_fit_model.fit(exclude_lambda=False,progress_bar=False,maxiter=100)
+    sim_fit_model.fit(exclude_lambda=False,progress_bar=False,max_outer=100)
 
     sim_fit_formula2 = Formula(lhs("y"),
                                 [i(),f(["x1"],nk=20,rp=1),f(["x2"],nk=20,rp=1),f(["x3"],nk=20,rp=1)],
@@ -28,7 +28,7 @@ class Test_model_comparisons1_hard:
                                 print_warn=False)
 
     sim_fit_model2 = GAMM(sim_fit_formula2,Gaussian())
-    sim_fit_model2.fit(exclude_lambda=False,progress_bar=False,maxiter=100)
+    sim_fit_model2.fit(exclude_lambda=False,progress_bar=False,max_outer=100)
 
     # And perform a couple of bias corrected / smoothness uncertainty corrected / or not / comparisons...
     uncor_result = compare_CDL(sim_fit_model,sim_fit_model2,correct_V=False,correct_t1=False,grid='JJJ3',seed=22)
@@ -133,7 +133,7 @@ class Test_Vb_corrections:
                                 print_warn=False)
 
     model = GAMM(sim_fit_formula,Gaussian())
-    model.fit(exclude_lambda=False,progress_bar=False,maxiter=100)
+    model.fit(exclude_lambda=False,progress_bar=False,max_outer=100)
 
     # Now fit nested models
     sim_fit_formula2 = Formula(lhs("y"),
@@ -142,7 +142,7 @@ class Test_Vb_corrections:
                                 print_warn=False)
 
     model2 = GAMM(sim_fit_formula2,Gaussian())
-    model2.fit(exclude_lambda=False,progress_bar=False,maxiter=100)
+    model2.fit(exclude_lambda=False,progress_bar=False,max_outer=100)
 
     Vp1,_,_,_ = estimateVp(model,strategy="JJJ2",verbose=True,seed=20)
 
@@ -181,7 +181,7 @@ class Test_chol_deriv:
                                 print_warn=False)
 
     sim_fit_model = GAMM(sim_fit_formula,Gaussian())
-    sim_fit_model.fit(exclude_lambda=False,progress_bar=False,maxiter=100)
+    sim_fit_model.fit(exclude_lambda=False,progress_bar=False,max_outer=100)
 
     # Compute hessian of negative penalized llk
     S_emb,_,_,_ = compute_S_emb_pinv_det(sim_fit_model.hessian.shape[1],sim_fit_model.formula.penalties,"svd")

@@ -329,7 +329,20 @@ def PIRLS_pdat_weights(y,mu,eta,family:Family):
    # Calculation is based on a(mu) = 1, so reflects Fisher scoring!
    dy1 = family.link.dy1(mu)
    z = dy1 * (y - mu) + eta
-   w = 1 / (dy1**2 * family.V(mu))
+   w = 1 / (np.power(dy1,2) * family.V(mu))
+   
+   # Take steps, if any of the weights or pseudo-data become nan or inf
+   pirls_cor = 0
+   while np.any(np.isnan(w)) or np.any(np.isinf(w)) or np.any(np.isnan(z)) or np.any(np.isinf(z)) and pirls_cor < 30:
+      mu = (mu + family.init_mu(y))/2 # Draw towards init
+      dy1 = family.link.dy1(mu)
+      z = dy1 * (y - mu) + eta
+      w = 1 / (np.power(dy1,2) * family.V(mu))
+      pirls_cor += 1
+   
+   if pirls_cor > 0:
+      eta = family.link.f(mu)
+
    return z, w
 
 def update_PIRLS(y,yb,mu,eta,X,Xb,family):
@@ -755,6 +768,59 @@ def update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,pen
    
    return wres,InvCholXXS,total_edf,term_edfs,Bs,scale
 
+def update_coef(yb,X,Xb,family,S_emb,S_root,n_c,formula):
+   # Solves the coefficients of an additive model, given weights and penalty.
+   if formula is None:
+      if S_root is None:
+         LP, Pr, coef, code = cpp_solve_coef(yb,Xb,S_emb)
+         P = compute_eigen_perm(Pr)
+
+      else: # Qr-based
+         RP,Pr1,Pr2,coef,rank,code = cpp_solve_coef_pqr(yb,Xb,S_root.T.tocsc())
+
+         # Need to get overall pivot...
+         P1 = compute_eigen_perm(Pr1)
+         P2 = compute_eigen_perm(Pr2)
+         P = P2.T@P1.T
+
+         # Can now unpivot coef
+         coef = coef @ P
+
+         # Now convert so that rest of code can just continue as with Chol
+         LP = RP.T.tocsc()
+         _,Pr,_ = translate_sparse(P.tocsc())
+
+         if rank < S_emb.shape[1]:
+            # Rank defficiency detected during numerical factorization.
+            # Set code > 0
+            warnings.warn(f"Rank deficiency detected. Most likely a result of coefficients {Pr[rank:]} being unidentifiable. Check 'model.formula.coef_names' at the corresponding indices to identify the problematic terms and consider dropping (or penalizing) them.")
+            code = 1
+
+   else:
+      #yb is X.T@y and Xb is X.T@X
+      LP, Pr, coef, code = cpp_solve_coefXX(yb,Xb + S_emb)
+      P = compute_eigen_perm(Pr)
+   
+   # Update mu & eta
+   if formula is None:
+      eta = (X @ coef).reshape(-1,1)
+   else:
+      if formula.keep_cov:
+         eta = keep_eta(formula,coef,n_c)
+      else:
+         eta = []
+         for file in formula.file_paths:
+            eta_file = read_eta(file,formula,coef,n_c)
+            eta.extend(eta_file)
+      eta = np.array(eta)
+
+   mu = eta
+
+   if isinstance(family,Gaussian) == False or isinstance(family.link,Identity) == False:
+      mu = family.link.fi(eta)
+   
+   return eta,mu,coef,Pr,P,LP
+
 def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,S_root,S_pinv,FS_use_rank,penalties,n_c,formula,form_Linv):
    # Solves the additive model for a given set of weights and penalty
    if formula is None:
@@ -1119,7 +1185,7 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
 ################################################ Main solver ################################################
 
 def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
-                      maxiter=10,pinv="svd",conv_tol=1e-7,
+                      maxiter=10,max_inner = 100,pinv="svd",conv_tol=1e-7,
                       extend_lambda=True,control_lambda=True,
                       exclude_lambda=False,extension_method_lam = "nesterov",
                       form_Linv=True,method="Chol",check_cond=2,progress_bar=False,n_c=10):
@@ -1150,6 +1216,8 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    dev,pen_dev,eta,mu,coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,S_emb = init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
                                                                                                      family,col_S,penalties,
                                                                                                      pinv,n_c,None,form_Linv,method)
+   
+   yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta,X,Xb,family)
    
    if check_cond == 2:
       K2,_,_,Kcode = est_condition(CholXXS,InvCholXXS,verbose=False)
@@ -1187,6 +1255,66 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
          # Perform step-length control for the coefficients (Step 3 in Wood, 2017)
          dev,pen_dev,mu,eta,coef = correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,len(penalties),S_emb,None,n_c)
 
+         # Update pseudo-dat weights for next coefficient step (step 1 in Wood, 2017; but moved after the coef correction because z and Wr depend on
+         # mu and eta, which change during the correction but anything that needs to be computed during the correction (deviance) does not depend on
+         # z and Wr).
+         yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta,X,Xb,family)
+
+         # Optionally repeat PIRLS iteration until convergence - this is no longer PQL/Wood, 2017 but will generally be more stable (Wood & Fasiolo, 2017) 
+         if max_inner > 1 and ((isinstance(family,Gaussian) == False) or (isinstance(family.link,Identity) == False)):
+            c_dev_prev = pen_dev
+            S_root = None
+            if len(penalties) > 0:
+               _,S_pinv,S_root,FS_use_rank = compute_S_emb_pinv_det(col_S,penalties,pinv,root=method=="QR")
+
+            for i_iter in range(max_inner - 1):
+               eta,mu,n_coef,Pr,P,LP = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,None)
+
+               dev = family.deviance(y,mu) 
+               pen_dev = dev
+
+               if len(penalties) > 0:
+                  pen_dev += n_coef.T @ S_emb @ n_coef
+
+               # Perform step-length control for the coefficients (repeat step 3 in Wood, 2017)
+               dev,pen_dev,mu,eta,coef = correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,len(penalties),S_emb,None,n_c)
+
+               # Update PIRLS weights
+               yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta,X,Xb,family)
+
+               # Convergence check for inner loop
+               if i_iter > 0:
+                  dev_diff_inner = abs(pen_dev - c_dev_prev)
+                  if dev_diff_inner < 1e-9*pen_dev:
+                     break
+
+               c_dev_prev = pen_dev
+            
+            # Now re-compute scale and Linv
+            # Given new coefficients compute lgdetDs and bsbs - needed for REML gradient and EFS step
+            lgdetDs = None
+            bsbs = None
+            if len(penalties) > 0:
+               lgdetDs = []
+               bsbs = []
+               for lti,lTerm in enumerate(penalties):
+
+                  lt_rank = None
+                  if FS_use_rank[lti]:
+                     lt_rank = lTerm.rank
+
+                  lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
+                  lgdetDs.append(lgdetD)
+                  bsbs.append(bsb)
+            
+            # Solve for inverse of Chol factor of XX+S
+            InvCholXXSP = None
+            if form_Linv:
+               InvCholXXSP = compute_Linv(LP,n_c)
+            
+            wres,InvCholXXS,total_edf,term_edfs,_,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,penalties,n_c)
+            CholXXS = P.T@LP
+
          # Test for convergence (Step 2 in Wood, 2017), implemented based on step 4 in Wood, Goude, & Shaw (2016): Generalized
          # additive models for large data-sets. They reccomend inspecting the change in deviance after a PQL iteration to monitor
          # convergence. Wood (2017) check the REML gradient against a fraction of the current deviance so to determine whether the change
@@ -1204,11 +1332,6 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
                iterator.close()
             fit_info.code = 0
             break
-
-      # Update pseudo-dat weights for next coefficient step (step 1 in Wood, 2017; but moved after the coef correction because z and Wr depend on
-      # mu and eta, which change during the correction but anything that needs to be computed during the correction (deviance) does not depend on
-      # z and Wr).
-      yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta,X,Xb,family)
 
       # We need the deviance and penalized deviance of the model at this point (before completing steps 5-7 (dev_{old} in WGS used for convergence control)
       # for coef step control (step 3 in Wood, 2017) and convergence control (step 2 in Wood, 2017 based on step 4 in Wood, Goude, & Shaw, 2016) respectively

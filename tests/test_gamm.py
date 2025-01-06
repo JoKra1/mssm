@@ -197,7 +197,7 @@ class Test_rs_ri_hard:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(maxiter=100)
+    model.fit(max_outer=100)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 97.613 
@@ -273,7 +273,7 @@ class Test_no_pen_hard:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(maxiter=100)
+    model.fit(max_outer=100)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 6 
@@ -305,7 +305,7 @@ class Test_te_rs_fact_hard:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(maxiter=100)
+    model.fit(max_outer=100)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 92.799 
@@ -377,7 +377,7 @@ class Test_te_rs_fact_QR_hard:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(maxiter=100,method="QR")
+    model.fit(max_outer=100,method="QR")
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 92.799
@@ -448,7 +448,7 @@ class Test_print_parametric_hard:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(maxiter=100)
+    model.fit(max_outer=100)
     
     def test_print_parametric(self):
         capture = io.StringIO()
@@ -469,7 +469,7 @@ class Test_ti_rs_fact_hard:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(maxiter=100)
+    model.fit(max_outer=100)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 104.426 
@@ -566,7 +566,7 @@ class Test_print_smooth_by_factor_p_hard:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(maxiter=100)
+    model.fit(max_outer=100)
     
     def test_print_smooth_p(self):
         capture = io.StringIO()
@@ -587,7 +587,7 @@ class Test_print_smooth_by_factor_fs_p_hard:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(maxiter=100)
+    model.fit(max_outer=100)
     
     def test_print_smooth_p(self):
         capture = io.StringIO()
@@ -643,7 +643,7 @@ class Test_diff_hard:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(maxiter=100)
+    model.fit(max_outer=100)
 
     pred_dat1 = pd.DataFrame({"time":np.linspace(min(sim_dat["time"]),max(sim_dat["time"]),50),
                                 "x":[0 for _ in range(50)],

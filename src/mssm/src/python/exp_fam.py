@@ -119,7 +119,9 @@ class Logit(Link):
       :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: [float]
       """
-      return 1 / ((1 - mu) * mu)
+      d = 1 / ((1 - mu) * mu)
+      #d[np.isnan(d) | np.isinf(d)] = 1
+      return d
 
 class Identity(Link):
    """
