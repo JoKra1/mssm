@@ -8,40 +8,45 @@ import warnings
 def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
                 model2:GAMM or GAMMLSS or GSMM,
                 correct_V:bool=True,
-                correct_t1:bool=True,
-                perform_GLRT:bool=True,
+                correct_t1:bool=False,
+                perform_GLRT:bool=False,
                 lR=100,
-                nR=20,
+                nR=10,
                 n_c=10,
                 alpha=0.05,
-                grid='JJJ3',
+                grid='JJJ2',
                 a=1e-7,b=1e7,df=40,
                 verbose=False,
                 drop_NA=True,
                 method="Newton",
                 seed=None,
-                use_upper=False,
+                use_upper=True,
                 shrinkage_weight=0.75,
                 **bfgs_options):
     
-    """(Optionally) performs an approximate GLRT on twice the difference in unpenalized likelihood between ``model1`` and ``model2`` (see Wood, 2017).
+    """ Computes the AIC difference and (optionally) performs an approximate GLRT on twice the difference in unpenalized likelihood between models ``model1`` and ``model2`` (see Wood et al., 2016).
+    
     For the GLRT to be appropriate ``model1`` should be set to the model containing more effects and ``model2`` should be a nested, simpler, variant of ``model1``.
-    
     For the degrees of freedom for the test, the expected degrees of freedom (EDF) of each model are used (i.e., this is the conditional test discussed in Wood (2017: 6.12.4)).
-    The difference between the models in EDF serves as DoF for computing the Chi-Square statistic.
+    The difference between the models in EDF serves as DoF for computing the Chi-Square statistic. In addition, ``correct_t1`` should be set to True, when computing the GLRT.
     
-    Also computes the AIC difference (see Wood et al., 2016). For each model 2*edf is added to twice the negative (conditional) likelihood to compute the aic (see Wood et al., 2016).
+    To get the AIC for each model, 2*edf is added to twice the negative (conditional) likelihood (see Wood et al., 2016).
     
-    By default (``correct_V=True``), ``mssm`` will attempt to correct the edf for uncertainty in the estimated :math:`\lambda` parameters. This requires computing a costly
-    correction (see Greven & Scheipl, 2016 and the ``correct_VB`` function in the utils module) which will take quite some time for reasonably large models with more than 3-4 smoothing parameters.
-    In that case relying on CIs and penalty-based comparisons might be preferable (see Marra & Wood, 2011 for details on the latter).
+    By default (``correct_V=True``), ``mssm`` will attempt to correct the edf for uncertainty in the estimated :math:`\lambda` parameters. Which correction is computed depends on the
+    choice for the ``grid`` argument. **Approximately** the analytic solution for the correction proposed by Wood, Pya, & Säfken (2016) is computed  when ``grid='JJJ1'`` - which is exact for
+    strictly Gaussian and canonical Generalized additive models. This is not efficient for sparse models and will thus become too expensive for large sparse multi-level models.
+    When setting ``grid='JJJ2'`` (default), the analytic solution proposed by Wood, Pya, & Säfken (2016) is used as a basis for the correction and subsequently refined via numeric integration. This requires a costly sampling step
+    (see Greven & Scheipl, 2016 and the ``correct_VB`` function in the utils module) which will take quite some time for reasonably large models with more than 3-4 smoothing parameters, but remains
+    efficient for sparse multi-level models (assuming ``use_upper`` is set to True and ``correct_t1`` is set to False).
+
+    In case either form of correction is too expensive, it might be better to rely on hypothesis tests for individual smooths, confidence intervals, and penalty-based selection approaches instead (see Marra & Wood, 2011 for details on the latter).
 
     In case ``correct_t1=True`` the EDF will be set to the (smoothness uncertainty corrected in case ``correct_V=True``) smoothness bias corrected exprected degrees of freedom (t1 in section 6.1.2 of Wood, 2017),
-    for the GLRT (based on recomendation given in section 6.12.4 in Wood, 2017). The AIC (Wood, 2017) of both models will still be based on the regular (smoothness uncertainty corrected) edf.
+    for the GLRT (based on recomendation given in section 6.12.4 in Wood, 2017). The AIC (Wood, 2017) of both models will **still be based on the regular (smoothness uncertainty corrected) edf**.
 
     The computation here is different to the one performed by the ``compareML`` function in the R-package ``itsadug`` - which rather performs a version of the marginal GLRT
-    (also discussed in Wood, 2017: 6.12.4). The p-value is approximate - very **very** much so if ``correct_V=False``. Also, the test should not be used to compare models differing in their random effect structures
-    (see Wood, 2017: 6.12.4).
+    (also discussed in Wood, 2017: 6.12.4) - and more similar to the ``anova.gam`` implementation provided by ``mgcv`` (if ``grid='JJJ1'). The returned p-value is approximate - very **very**
+    much so if ``correct_V=False``. Also, the GLRT should **no**t be used to compare models differing in their random effect structures - the AIC is more appropriate for this (see Wood, 2017: 6.12.4).
 
     References:
      - Marra, G., & Wood, S. N. (2011) Practical variable selection for generalized additive models.
@@ -61,19 +66,19 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
     :type correct_t1: bool, optional
     :param perform_GLRT: Whether to perform both a GLRT and to compute the AIC or to only compute the AIC. Defaults to True.
     :type perform_GLRT: bool, optional
-    :param lR: For smoothness uncertainty correction. :math:`\lambda`  Grid (at least the initial one, in case grid_type=="JJJ") is based on `nR` equally-spaced samples from :math:`\lambda/lr` to :math:`\lambda*lr`, defaults to 100
+    :param lR: Deprecated, don't change - for internal use only, defaults to 100
     :type lR: int, optional
-    :param nR: For smoothness uncertainty correction. :math:`\lambda`  Grid (at least the initial one, in case grid_type=="JJJ") is based on `nR` equally-spaced samples from :math:`\lambda/lr` to :math:`\lambda*lr`. In case grid_type=="JJJ", ``nR*len(model.formula.penalties)`` updates to :math:`\mathbf{V}_{\\boldsymbol{p}}` are performed during each of which additional `nR` :math:`\lambda` samples/reml scores are generated/computed, defaults to 20
+    :param nR: In case ``grid="JJJ2"``, ``nR**2*len(model.formula.penalties)`` samples/reml scores are generated/computed to numerically evaluate the expectations necessary for the correction, defaults to 10
     :type nR: int, optional
     :param n_c: Number of cores to use to compute the smoothness uncertaincy correction, defaults to 10
     :type n_c: int, optional
     :param alpha: alpha level of the GLRT. Defaults to 0.05
     :type alpha: float, optional
-    :param grid: How to define the grid of :math:`\lambda` values on which to base the correction - see :func:`correct_VB` for details, defaults to 'JJJ'
+    :param grid: How to compute the smoothness uncertainty correction, defaults to 'JJJ2'
     :type grid: str, optional
-    :param a: Minimum :math:`\lambda` value that is included when forming the initial grid when correcting for uncertainty. In addition, any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})`) which are smaller than this are set to this value as well, defaults to 1e-7 the minimum possible estimate
+    :param a: Minimum :math:`\lambda` value that is included when correcting for uncertainty and ``grid!='JJJ1'``. In addition, any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})`) which are smaller than this are set to this value as well, defaults to 1e-7 the minimum possible estimate
     :type a: float, optional
-    :param b: Maximum :math:`\lambda` value that is included when forming the initial grid when correcting for uncertainty. In addition, any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})`) which are larger than this are set to this value as well, defaults to 1e7 the maximum possible estimate
+    :param b: Maximum :math:`\lambda` value that is included when correcting for uncertainty and ``grid!='JJJ1'``. In addition, any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})`) which are larger than this are set to this value as well, defaults to 1e7 the maximum possible estimate
     :type b: float, optional
     :param df: Degrees of freedom used for the multivariate t distribution used to sample the next set of candidates. Setting this to ``np.inf`` means a multivariate normal is used for sampling, defaults to 40
     :type df: int, optional
@@ -85,6 +90,10 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
     :type method: str,optional
     :param seed: Seed to use for random parts of the correction. Defaults to None
     :type seed: int,optional
+    :param use_upper: Whether to compute edf. from trace of covariance matrix (``use_upper=False``) or based on numeric integration weights. The latter is much more efficient for sparse models. Only makes sense when ``grid='JJJ2'``. Defaults to True
+    :type use_upper: bool,optional
+    :param shrinkage_weight: ``1 - shrinkage_weight`` is the weighting used for the update to the covariance matrix correction proposed by Wood, Pya, & Säfken (2016) based on the numeric integration results when ``grid='JJJ2'``. Setting this to 0 (and ``use_upper=False``) recovers exactly the Greven & Scheipl (2016) correction, however with an adaptive grid. Defaults to False
+    :type shrinkage_weight: float,optional
     :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100. Defaults to None.
     :type bfgs_options: key=value,optional
     :raises ValueError: Will throw an error when ``method`` is not one of 'Newton', 'BFGS', 'L-BFGS-B' and a :class:`mssm.models.GSMM` is to be estimated.

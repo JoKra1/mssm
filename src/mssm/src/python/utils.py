@@ -635,8 +635,8 @@ def REML(llk,nH,coef,scale,penalties):
    return reml + lgdetS/2 - lgdetXXS/2 + (Mp*np.log(2*np.pi))/2
 
 def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=True,optimizer="Newton",seed=None,conv_tol=1e-7,df=40,strategy="JJJ3",**bfgs_options):
-    """Estimate covariance matrix :math:`\mathbf{V}_{\\boldsymbol{p}}` of posterior for :math:`\mathbf{p} = log(\\boldsymbol{\lambda})`. REML scores are used to
-    approximate expectation, similar to what was suggested by Greven & Scheipl (2016).
+    """Estimate covariance matrix :math:`\mathbf{V}_{\\boldsymbol{p}}` of posterior for :math:`\mathbf{p} = log(\\boldsymbol{\lambda})`. Either (see ``strategy`` parameter) based on finite difference approximation or
+    on using REML scores to approximate the expectation for the covariance matrix, similar to what was suggested by Greven & Scheipl (2016).
 
     References:
      - https://en.wikipedia.org/wiki/Estimation_of_covariance_matrices
@@ -662,10 +662,12 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=
     :type optimizer: str,optional
     :param seed: Seed to use for random parts of the estimate. Defaults to None
     :type seed: int,optional
-    :param conv_tol: Tolerance used to determine whether estimate has converged. The Frobenius norm of the **difference** in the estimate after the update (``||Vp_next - Vp||``) is compared to ``conv_tol*||Vp_next||``, defaults to 1e-7
+    :param conv_tol: Deprecated, defaults to 1e-7
     :type conv_tol: float, optional
     :param df: Degrees of freedom used for the multivariate t distribution used to sample the next set of candidates. Setting this to ``np.inf`` means a multivariate normal is used for sampling, defaults to 40
     :type df: int, optional
+    :param strategy: By default (``strategy='JJJ3'``), the expectation for the covariance matrix is approximated via numeric integration. When ``strategy='JJJ1'`` a finite difference approximation is obtained instead. When ``strategy='JJJ2'``, the finite difference approximation is updated through numeric integration iteratively. Defaults to 'JJJ3'
+    :type strategy: str, optional
     :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100. Defaults to None.
     :type bfgs_options: key=value,optional
     :raises ValueError: Will throw an error when ``optimizer`` is not one of 'Newton', 'BFGS', 'L-BFGS-B' and a :class:`mssm.models.GSMM` is to be estimated.
@@ -1153,25 +1155,18 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
     but this requires :math:`\mathbf{V}_{\\boldsymbol{p}}` - an estimate of the covariance matrix of :math:`\\boldsymbol{p}=log(\\boldsymbol{\lambda})`. :math:`\mathbf{V}_{\\boldsymbol{p}}` requires derivatives that are not available
     when using the efs update.
 
-    Greven & Scheipl in their comment to the paper by Wood et al. (2016) show another option to estimate :math:`\mathbf{V}` that does not require :math:`\mathbf{V}_{\\boldsymbol{p}}`,
-    based either on forming a mixture approximation or on the total variance property. The latter is implemented below, based on the
-    equations for the expectations outlined in their response. A problem of this estimate is that a grid of :math:`\\boldsymbol{\lambda}` values needs to be
-    provided covering the prior on :math:`\\boldsymbol{\lambda}` (see Wood 2011 for the relation between smoothness penalties and this prior). For ``mssm`` the
-    default limits on this are 1e-7 and 1e7.
-    
-    However, as the authors already conclude, covering the entire prior range is not that efficient in case more than one :math:`\lambda` is to be estimated.
-    Hence we provide an alternative way to set-up the grid, based on first forming marginal grids for each :math:`\lambda` in :math:`\\boldsymbol{\lambda}` that contain nR equally-spaced
-    samples from :math:`\lambda/lr` to :math:`\lambda*lr`, while all other :math:`\lambda` values are set to random samples between the prior limits. This neglects quite a bit
-    of the prior space. So we use these initial samples to estimate :math:`\mathbf{V}_{\\boldsymbol{p}}` (using the REML weights to approximate the expectation based on Greven & Scheipl; 2016), so that :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})` - see Wood et al. (2016).
-    
-    We then repeatedly sample new :math:`\\boldsymbol{p}` vectors from this normal, followed by updating out estimate of the normal (i.e., :math:`\mathbf{V}_{\\boldsymbol{p}}`) given these samples. Note that until the last sampling step we
-    add small values to the diagonal of :math:`\mathbf{V}_{\\boldsymbol{p}}` to promote exploration. The idea is that this should help us to better explore and with less samples, locally
-    around :math:`\hat{\\boldsymbol{p}}`, the uncertainty than if we would just sample from a grid. We then also later re-compute the REML weights from this normal and
-    then follow the steps outlined by (Greven & Scheipl; 2016) to compute :math:`\mathbf{V}`, rather than computing the approximation suggested by Wood et al. (2016).
-    
-    This is done when argument grid_type = 'JJJ'. Otherwise, the G&S strategy is employed - forming a grid over the full space (from 1e-7 to 1e7,
-    again evaluated for nR equally-spaced values and then permuted for the number of \lambda parameters). Note that
-    the latter can get very expensive quite quickly.
+    Greven & Scheipl (2016) in their comment to the paper by Wood et al. (2016) show another option to estimate :math:`\mathbf{V}` that does not require :math:`\mathbf{V}_{\\boldsymbol{p}}`,
+    based either on the total variance property and numeric integration. The latter is implemented below, based on the
+    equations for the expectations outlined in their response.
+
+    This function implements multiple strategies to correct for smoothing parameter uncertainty, based on the Wood et al. (2016) and Greven & Scheipl (2016) proposals. The most straightforward strategy
+    (``grid_type = 'JJJ1'``) is to obtain a finite difference approximation for :math:`\mathbf{V}_{\\boldsymbol{p}}` and to then complete approximately the Wood et al. (2016) correction (exactly done here only
+    for Gaussian additive or canonical Generalized models). This is too costly for large sparse multi-level models. In those cases, the Greven & Scheipl (2016) proposal is attractive. When ``grid_type = 'JJJ2'``, the
+    approximation to :math:`\mathbf{V}_{\\boldsymbol{p}}` is used to adaptively sample the grid to numerically evaluate the expectations required in their proposal. From this grid, :math:`\mathbf{V}` could then be
+    evaluated as shown by Greven & Scheipl (2016). However, by default :math:`\mathbf{V}` is here obtained by first computing it according to the Wood et al. (2016) correction and then taking a weighted sum of
+    the former (weighted by ``V_shrinkage_weight``) and the :math:`\mathbf{V}` (weighted by ``1-V_shrinkage_weight``) obtained as suggested by Greven & Scheipl (2016). Setting ``V_shrinkage_weight=0`` to 0
+    (and ``only_expected_edf=False``) thus recovers exactly the Greven & Scheipl (2016) correction, albeit based on an adaptive grid. This is not efficient for large sparse models either. However, when setting
+    ``only_expected_edf=True``, :math:`\mathbf{V}` is never actually computed and the uncertainty corrected model edf are instead approximated directly. This remains efficient for large sparse multi-level models.
 
     References:
      - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
@@ -1181,11 +1176,11 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
 
     :param model: GAMM, GAMMLSS, or GSMM model (which has been fitted) for which to estimate :math:`\mathbf{V}`
     :type model: GAMM or GAMMLSS or GSMM
-    :param nR: :math:`\lambda`  Grid (at least the initial one, in case grid_type=="JJJ") is based on `nR` equally-spaced samples from :math:`\lambda/lr` to :math:`\lambda*lr`. In case grid_type=="JJJ", ``nR*len(model.formula.penalties)`` updates to :math:`\mathbf{V}_{\\boldsymbol{p}}` are performed during each of which additional `nR` :math:`\lambda` samples/reml scores are generated/computed, defaults to 20
+    :param nR: In case ``grid="JJJ2"``, ``nR**2*len(model.formula.penalties)`` samples/reml scores are generated/computed to numerically evaluate the expectations necessary for the correction, defaults to 10
     :type nR: int, optional
-    :param lR: :math:`\lambda`  Grid (at least the initial one, in case grid_type=="JJJ") is based on `nR` equally-spaced samples from :math:`\lambda/lr` to :math:`\lambda*lr`, defaults to 100
+    :param lR: Deprecated, don't change - for internal use only, defaults to 100
     :type lR: int, optional
-    :param grid_type: How to define the grid of :math:`\lambda` values on which to base the correction - see above for details, defaults to 'JJJ'
+    :param grid_type: How to compute the smoothness uncertainty correction - see above for details, defaults to 'JJJ3'
     :type grid_type: str, optional
     :param a: Minimum :math:`\lambda` value that is included when forming the initial grid. In addition, any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})`) which are smaller than this are set to this value as well, defaults to 1e-7 the minimum possible estimate
     :type a: float, optional
@@ -1207,11 +1202,15 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
     :type method: str,optional
     :param seed: Seed to use for random parts of the correction. Defaults to None
     :type seed: int,optional
+    :param V_shrinkage_weight: ``1 - shrinkage_weight`` is the weighting used for the update to the covariance matrix correction proposed by Wood, Pya, & Säfken (2016) based on the numeric integration results when ``grid='JJJ2'``. Setting this to 0 (and ``use_upper=False``) recovers exactly the Greven & Scheipl (2016) correction, however with an adaptive grid. Defaults to False
+    :type V_shrinkage_weight: float,optional
+    :param only_expected_edf: Whether to compute edf. from trace of covariance matrix (``use_upper=False``) or based on numeric integration weights. The latter is much more efficient for sparse models. Only makes sense when ``grid='JJJ2'``. Defaults to True
+    :type only_expected_edf: bool,optional
     :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100. Defaults to None.
     :type bfgs_options: key=value,optional
     :raises ValueError: Will throw an error when ``method`` is not one of 'Newton', 'BFGS', 'L-BFGS-B' and a :class:`mssm.models.GSMM` is to be estimated.
-    :return: A tuple containing: V - an estimate of the unconditional covariance matrix, LV - the Cholesky of the former, total_edf - smoothness uncertainty corrected edf, total_edf2 - smoothness uncertainty + smoothness bias corrected edf, expected_aic - an "expected version of the aic" based on a weighted sum (using the reml weights) over all computed aics
-    :rtype: (scipy.sparse.csc_array,scipy.sparse.csc_array,float,float,float) 
+    :return: A tuple containing: V - an estimate of the unconditional covariance matrix, LV - the Cholesky of the former, Vp - an estimate of the covariance matrix for :math:`\\boldsymbol{\\rho}`, Vpr - a root of the former, edf - smoothness uncertainty corrected coefficient-wise edf, total_edf - smoothness uncertainty corrected edf, edf2 - smoothness uncertainty + smoothness bias corrected coefficient-wise edf, total_edf2 - smoothness uncertainty + smoothness bias corrected edf, upper_edf - a heuristic upper bound on the uncertainty corrected edf
+    :rtype: (scipy.sparse.csc_array,scipy.sparse.csc_array,numpyp.array,numpy.array,numpy.array,float,numpy.array,float,float) 
     """
     np_gen = np.random.default_rng(seed)
 
