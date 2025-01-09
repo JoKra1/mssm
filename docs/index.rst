@@ -18,7 +18,7 @@ Use the side-bar on the left to navigate through the document tree (just click o
 Supported Models
 ----------------
 
-Currently, ``mssm`` supports Gaussian (G)AMMs (:func:`mssm.src.python.exp_fam.Gaussian`), Gamma GAMMs (:func:`mssm.src.python.exp_fam.Gamma`), and Binomial GAMMs (:func:`mssm.src.python.exp_fam.Binomial`).
+Currently, ``mssm`` supports Gaussian (G)AMMs (:func:`mssm.src.python.exp_fam.Gaussian`), Gamma GAMMs (:func:`mssm.src.python.exp_fam.Gamma`), Inverse Gaussian GAMMs (:func:`mssm.src.python.exp_fam.InvGauss`), and Binomial GAMMs (:func:`mssm.src.python.exp_fam.Binomial`).
 For GAMMLSS models, Gaussian models (:func:`mssm.src.python.exp_fam.GAUMLSS`), Gamma models (:func:`mssm.src.python.exp_fam.GAMMALS`), and Multionimal models (:func:`mssm.src.python.exp_fam.MULNOMLSS`) are supported.
 If you are missing a family, don't worry - all you need to do is to implement the :func:`mssm.src.python.exp_fam.Family` template class for GAMM models and the :func:`mssm.src.python.exp_fam.GAMLSSFamily` template class for GAMMLSS models.
 

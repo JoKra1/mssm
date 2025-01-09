@@ -795,6 +795,126 @@ class Gamma(Family):
       # Based on Table 3.1 in Wood (2017)
       dev = np.sum(self.D(y,mu))
       return dev
+   
+class InvGauss(Family):
+   """Inverse Gaussian Family. 
+
+   We assume: :math:`Y_i \sim IG(\mu_i,\phi)`. The Inverse Gaussian distribution is usually not expressed in terms of the mean and scale (:math:`\phi`) parameter
+   but rather in terms of a shape and scale parameter - called :math:`\\nu` and :math:`\lambda` respectively (see the scipy implementation).
+   We can simply set :math:`\\nu=\mu` (compare scipy density to the one in table 3.1 of Wood, 2017).
+   Wood (2017) shows that :math:`\phi=1/\lambda`, so this provides :math:`\lambda=1/\phi`
+
+   References:
+
+    - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+    - scipy: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.invgauss.html
+
+   :param link: The link function to be used by the model of the mean of this family. By default set to the log link.
+   :type link: Link
+   :param scale: Known scale parameter for this family - by default set to None so that the scale parameter is estimated.
+   :type scale: float or None, optional
+   """
+
+   def __init__(self, link: Link= LOG(), scale: float = None) -> None:
+      super().__init__(link, True, scale)
+   
+   def V(self,mu):
+      """Variance function for the Inverse Gaussian family.
+
+      The variance of random variable :math:`Y` is proportional to it's mean raised to the third power.
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param mu: a N-dimensional vector of the model prediction/the predicted mean
+      :type mu: [float]
+      :return: mu raised to the power of 3
+      :rtype: [float]
+      """
+      # Faraway (2016)
+      return np.power(mu,3)
+   
+   def lp(self,y,mu,scale=1):
+      """Log-probability of observing every proportion in :math:`\mathbf{y}` under their respective inverse Gaussian with mean = :math:`\\boldsymbol{\mu}`.
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param y: The vector containing each observed value.
+      :type y: [float]
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      :param scale: The (estimated) scale parameter, defaults to 1
+      :type scale: float, optional
+      :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
+      :rtype: [float]
+      """
+      # Need to transform from mean and scale to \nu & \lambda
+      # From Wood (2017), we have that
+      # \phi = 1/\lambda
+      # so \lambda = 1/\phi
+      # From the density in https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.invgauss.html,
+      # we have that \nu=\mu
+      lam = 1/scale
+      nu = mu  
+      return scp.stats.invgauss.logpdf(y,mu=nu/lam,scale=lam)
+   
+   def llk(self,y,mu,scale = 1):
+      """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param y: The vector containing each observation.
+      :type y: [float]
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      :param scale: The (estimated) scale parameter, defaults to 1
+      :type scale: float, optional
+      :return: The log-probability of observing all data under the current model.
+      :rtype: float
+      """
+      return sum(self.lp(y,mu,scale))[0]
+   
+   def D(self,y,mu):
+      """Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param y: The vector containing each observation.
+      :type y: [float]
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      :return: A N-dimensional vector containing the contribution of each data-point to the overall model deviance.
+      :rtype: [float]
+      """
+      # Based on Table 3.1 in Wood (2017)
+      diff = np.power(y - mu,2)
+      prod = np.power(mu,2)*y
+      return diff/prod
+   
+   def deviance(self,y,mu):
+      """Deviance of the model under this family: 2 * (llk_max - llk_c) * scale (Wood, 2017; Faraway, 2016).
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param y: The vector containing each observation.
+      :type y: [float]
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      :return: The model deviance.
+      :rtype: float
+      """
+      # Based on Table 3.1 in Wood (2017)
+      dev = np.sum(self.D(y,mu))
+      return dev
 
 class GAMLSSFamily:
    """Base-class to be implemented by families of Generalized Additive Mixed Models of Location, Scale, and Shape (GAMMLSS; Rigby & Stasinopoulos, 2005).
