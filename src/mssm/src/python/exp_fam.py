@@ -2,17 +2,19 @@ import numpy as np
 import scipy as scp
 import math
 import sys
+import warnings
 
 class Link:
    """
    Link function base class. To be implemented by any link functiion used for GAMMs and GAMMLSS models.
-   Only links used by GAMLSS models require implementing the dy2 function.
+   Only links used by ``GAMLSS`` models require implementing the dy2 function. Note, that care must be taken
+   that every method returns only valid values. Specifically, no returned element may be ``numpy.nan`` or ``numpy.inf``.
    """
    
    def f(self,mu):
       """
       Link function :math:`f()` mapping mean :math:`\\boldsymbol{\mu}` of an exponential family to the model prediction :math:`\\boldsymbol{\eta}`, so that :math:`f(\\boldsymbol{\mu}) = \\boldsymbol{\eta}`.
-      see Wood (2017, 3.1.2) and Faraway (2016)
+      see Wood (2017, 3.1.2) and Faraway (2016).
 
       References:
       
@@ -81,7 +83,12 @@ class Logit(Link):
       :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: [float]
       """
-      return np.log(mu / (1 - mu))
+      with warnings.catch_warnings(): # Divide by 0
+         warnings.simplefilter("ignore")
+         eta = np.log(mu / (1 - mu))
+
+      eta[np.isnan(eta) | np.isinf(eta)] = 0
+      return eta
 
    def fi(self,eta):
       """
@@ -95,7 +102,12 @@ class Logit(Link):
       :param eta: The vector containing the model prediction corresponding to each observation.
       :type eta: [float]
       """
-      return np.exp(eta) / (1 + np.exp(eta))
+      with warnings.catch_warnings(): # Overflow
+         warnings.simplefilter("ignore")
+         mu = np.exp(eta) / (1 + np.exp(eta))
+         
+      mu[np.isnan(mu) | np.isinf(mu)] = 0
+      return mu
    
    def dy1(self,mu):
       """
@@ -119,9 +131,31 @@ class Logit(Link):
       :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: [float]
       """
-      d = 1 / ((1 - mu) * mu)
-      #d[np.isnan(d) | np.isinf(d)] = 1
+      with warnings.catch_warnings(): # Divide by 0
+         warnings.simplefilter("ignore")
+         d = 1 / ((1 - mu) * mu)
+         
+      d[np.isnan(d) | np.isinf(d)] = 0
       return d
+
+   def dy2(self,mu):
+      """
+      Second derivative of :math:`f(\\boldsymbol{\mu})` with respect to :math:`\\boldsymbol{\mu}`. Needed for GAMMLSS models (Wood, 2017).
+
+      References:
+
+       - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      """
+      with warnings.catch_warnings(): # Divide by 0
+         warnings.simplefilter("ignore")
+         d2 = (2 * mu - 1) / (np.power(mu,2) * np.power(1-mu,2))
+
+      d2[np.isnan(d2) | np.isinf(d2)] = 0
+      return d2
 
 class Identity(Link):
    """
@@ -198,7 +232,12 @@ class LOG(Link):
       :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: [float]
       """
-      return np.log(mu)
+      with warnings.catch_warnings(): # log of < 0
+         warnings.simplefilter("ignore")
+         eta = np.log(mu)
+      
+      eta[np.isnan(eta) | np.isinf(eta)] = 0
+      return eta
    
    def fi(self,eta):
       """
@@ -211,7 +250,12 @@ class LOG(Link):
       :param eta: The vector containing the model prediction corresponding to each observation.
       :type eta: [float]
       """
-      return np.exp(eta)
+      with warnings.catch_warnings(): # Overflow
+         warnings.simplefilter("ignore")
+         mu = np.exp(eta)
+      
+      mu[np.isnan(mu) | np.isinf(mu)] = 0
+      return mu
    
    def dy1(self,mu):
       """
@@ -223,7 +267,12 @@ class LOG(Link):
       :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: [float]
       """
-      return 1/mu
+      with warnings.catch_warnings(): # Divide by 0
+         warnings.simplefilter("ignore")
+         d = 1/mu
+
+      d[np.isnan(d) | np.isinf(d)] = 0
+      return d
    
    def dy2(self,mu):
       """
@@ -237,7 +286,12 @@ class LOG(Link):
       :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: [float]
       """
-      return -1*(1/np.power(mu,2))
+      with warnings.catch_warnings(): # Divide by 0
+         warnings.simplefilter("ignore")
+         d2 = -1*(1/np.power(mu,2))
+      
+      d2[np.isnan(d2) | np.isinf(d2)] = 0
+      return d2
 
 class LOGb(Link):
    """
@@ -262,7 +316,12 @@ class LOGb(Link):
       :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: [float]
       """
-      return np.log(mu + self.b)
+      with warnings.catch_warnings(): # Log of < 0
+         warnings.simplefilter("ignore")
+         eta = np.log(mu + self.b)
+
+      eta[np.isnan(eta) | np.isinf(eta)] = 0
+      return eta
    
    def fi(self,eta):
       """
@@ -274,7 +333,12 @@ class LOGb(Link):
       :param eta: The vector containing the model prediction corresponding to each observation.
       :type eta: [float]
       """
-      return np.exp(eta) - self.b
+      with warnings.catch_warnings(): # Overflow
+         warnings.simplefilter("ignore")
+         mu = np.exp(eta) - self.b
+
+      mu[np.isnan(mu) | np.isinf(mu)] = 0
+      return mu
    
    def dy1(self,mu):
       """
@@ -286,7 +350,12 @@ class LOGb(Link):
       :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: [float]
       """
-      return 1/(self.b+mu)
+      with warnings.catch_warnings(): # Divide by 0
+         warnings.simplefilter("ignore")
+         d =  1/(self.b+mu)
+
+      d[np.isnan(d) | np.isinf(d)] = 0
+      return d
    
    def dy2(self,mu):
       """
@@ -300,7 +369,12 @@ class LOGb(Link):
       :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: [float]
       """
-      return -1*(1/np.power(mu+self.b,2))
+      with warnings.catch_warnings(): # Divide by 0
+         warnings.simplefilter("ignore")
+         d2 =  -1*(1/np.power(mu+self.b,2))
+
+      d2[np.isnan(d2) | np.isinf(d2)] = 0
+      return d2
 
 def est_scale(res,rows_X,total_edf):
    """
@@ -338,6 +412,7 @@ class Family:
       self.link = link
       self.twopar = twopar
       self.scale = scale # Known scale parameter!
+      self.is_canonical = False # Canonical link for generalized model?
 
    def init_mu(self,y):
       """
@@ -465,6 +540,7 @@ class Binomial(Family):
       super().__init__(link,False,scale)
       self.n = n # Number of independent samples from Binomial!
       self.__max_llk = None # Needed for Deviance calculation.
+      self.is_canonical = isinstance(link,Logit)
    
    def init_mu(self,y):
       """
@@ -584,6 +660,7 @@ class Gaussian(Family):
    """
    def __init__(self, link: Link=Identity(), scale: float = None) -> None:
       super().__init__(link, True, scale)
+      self.is_canonical = isinstance(link,Identity)
 
    def V(self,mu):
       """Variance function for the Normal family.
@@ -693,6 +770,7 @@ class Gamma(Family):
 
    def __init__(self, link: Link= LOG(), scale: float = None) -> None:
       super().__init__(link, True, scale)
+      self.is_canonical = False # Inverse link not implemented..
    
    def V(self,mu):
       """Variance function for the Gamma family.
@@ -817,6 +895,7 @@ class InvGauss(Family):
 
    def __init__(self, link: Link= LOG(), scale: float = None) -> None:
       super().__init__(link, True, scale)
+      self.is_canonical = False # Modified inverse link not implemented..
    
    def V(self,mu):
       """Variance function for the Inverse Gaussian family.
@@ -1082,6 +1161,96 @@ class GAUMLSS(GAMLSSFamily):
       res = y - mu
       res /= sigma
       return res
+   
+class Binomial2(GAMLSSFamily):
+   """ Another implementation of the Binomial family. That allows estimating binomial models via ``GAMMLSS`` models (And thus full-newton, no PQL!).
+   
+   For this implementation we again assume that we have collected proportions of success, i.e., the dependent variables specified in the model `Formula` needs to hold observed proportions and not counts!
+   If we assume that each observation :math:`y_i` reflects a single independent draw from a binomial, (with :math:`n=1`, and :math:`p_i` being the probability that the result is 1) then the dependent variable should either hold 1 or 0.
+   If we have multiple independent draws from the binomial per observation (i.e., row in our data-frame), then :math:`n` will usually differ between observations/rows in our data-frame (i.e., we observe :math:`k_i` counts of success
+   out of :math:`n_i` draws - so that :math:`y_i=k_i/n_i`). In that case, the `Binomial()` family accepts a vector for argument :math:`\mathbf{n}` (which is simply set to 1 by default, assuming binary data), containing :math:`n_i` for every observation :math:`y_i`.
+
+   In this implementation, the scale parameter is kept fixed/known at 1.
+
+   References:
+
+    - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
+    - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+   :param link: The link function to be used by the model of the mean of this family. By default set to the canonical logit link.
+   :type link: Link
+   :param n: Number of independent draws from a Binomial per observation/row of data-frame. For binary data this can simply be set to 1, which is the default.
+   :type n: int or [int], optional
+   """
+   
+   def __init__(self, link: Link = Logit(),n: int or [int] = 1) -> None:
+      super().__init__(1, [link])
+      self.n = n
+      # All derivatives taken from gamlss.dist: https://github.com/gamlss-dev/gamlss.dist
+      # see also: Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
+      self.d1 = []
+      def d1 (y, mu): num=(y-self.n*mu); denom=(mu*(1-mu)); d = np.zeros_like(mu); denom_val=denom!=0; d[denom_val]=num[denom_val]/denom[denom_val]; return d
+      self.d1.append(d1)
+
+      self.d2 = []
+      def d2(y, mu): denom=(mu*(1-mu)); denom_val=denom!=0; d2 = np.zeros_like(mu); d2[denom_val]=-(self.n/denom[denom_val]); return d2
+      self.d2.append(d2)
+
+      self.d2m = []
+      self.mean_init_fam = Binomial(link=link,n=n)
+   
+   def lp(self,y,mu):
+      """
+      Log-probability of observing every proportion in :math:`\mathbf{y}` under their respective binomial with mean = :math:`\\boldsymbol{\mu}`.
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param y: The vector containing each observed proportion.
+      :type y: [float]
+      :param mu: The vector containing the predicted probability for the response distribution corresponding to each observation.
+      :type mu: [float]
+      :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
+      :rtype: [float]
+      """
+      # y is observed proportion of success
+      return scp.stats.binom.logpmf(k=y*self.n,p=mu,n=self.n)
+   
+   def llk(self,y,mu):
+      """
+      log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param y: The vector containing each observation.
+      :type y: [float]
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      """
+      # y is observed proportion of success
+      return sum(self.lp(y,mu))[0]
+   
+   def get_resid(self,y,mu):
+      """Get standardized residuals for a Binomial model
+      
+      Essentially, the deviance residuals are returned, which are equivalent to :math:`sign(y_i - \mu_i)*D_i^{0.5}`,
+      where :math:`\sum_{i=1,...N} D_i` equals the model deviance (see Wood 2017, section 3.1.7).
+
+      :param y: The vector containing each observed proportion.
+      :type y: [float]
+      :param mu: The vector containing the predicted probability for the response distribution corresponding to each observation.
+      :type mu: [float]
+      :return: A list of deviance residuals that should be ~ N(0,1) if the model is correct.
+      :rtype: [float]
+      """
+      # Based on Table 3.1 in Wood (2017)
+      # Adds float_min**0.9 to log terms that could potentially be zero..
+      k = y*self.n
+      kmu = mu*self.n
+      return 2 * (k*(np.log(k + np.power(sys.float_info.min,0.9)) - np.log(kmu)) + (self.n-k) * (np.log(self.n-k + np.power(sys.float_info.min,0.9)) - np.log(self.n-kmu)))
 
 class MULNOMLSS(GAMLSSFamily):
    """Family for a Multinomial GAMMLSS model (Rigby & Stasinopoulos, 2005).
@@ -1353,3 +1522,172 @@ class GENSMOOTHFamily:
       :type Xs: [scp.sparse.csc_array]
        """
        pass
+   
+class PropHaz(GENSMOOTHFamily):
+   """Family for proportional Hazard model - a type of General Smooth model as discussed by Wood, Pya, & Säfken (2016).
+   
+   Based on Supplementary materials G in Wood, Pya, & Säfken (2016).
+
+   References:
+
+    - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+    - Nocedal & Wright (2006). Numerical Optimization. Springer New York.
+
+   :param ut: Unique event time vector as described by WPS (2016), holding unique event times in decreasing order.
+   :type ut: [int]
+   :param r: Index vector as described by WPS (2016), holding for each data-point the index to it's corresponding event time in ``ut``.
+   :type r: [int]
+   
+   """
+
+   def __init__(self, ut, r):
+      super().__init__(1, [LOG()], ut, r)
+   
+   def llk(self,coef,coef_split_idx,delta,Xs):
+      """Log-likelihood function as defined by Wood, Pya, & Säfken (2016).
+
+      ``delta`` (passed as dependent variable) holds values in ``{0,1}``, indicating whether the event was observed or not.
+      """
+
+      # Extract and define all variables defined by WPS (2016)
+      ut = self.llkargs[0]
+      r = self.llkargs[1]
+      nt = len(ut)
+      X = Xs[0]
+      eta = X@coef
+
+      with warnings.catch_warnings(): # Overflow
+         warnings.simplefilter("ignore")
+         gamma = np.exp(eta)
+      gamma[np.isnan(gamma) | np.isinf(gamma)] = np.power(np.finfo(float).max,0.9)
+
+      # Now compute first sum
+      llk = np.sum(delta*eta)
+
+      # and second sum
+      gamma_p = 0
+      for j in range(nt):
+         ri = r == j
+         dj = np.sum(delta[ri])
+         with warnings.catch_warnings(): # Overflow
+            warnings.simplefilter("ignore")
+            gamma_p += np.sum(gamma[ri])
+
+         if np.isnan(gamma_p) | np.isinf(gamma_p):
+            gamma_p = np.power(np.finfo(float).max,0.9)
+
+         with warnings.catch_warnings(): # Divide by zero
+            warnings.simplefilter("ignore")
+            log_gamma_p = np.log(gamma_p)
+         
+         if np.isnan(log_gamma_p) | np.isinf(log_gamma_p):
+            log_gamma_p = 0
+
+         llk -= dj*log_gamma_p
+
+      return llk
+
+
+   def gradient(self, coef, coef_split_idx, delta, Xs):
+      """Gradient as defined by Wood, Pya, & Säfken (2016).
+
+      ``delta`` (passed as dependent variable) holds values in ``{0,1}``, indicating whether the event was observed or not.
+      """
+      print(coef[:10])
+      # Extract and define all variables defined by WPS (2016)
+      ut = self.llkargs[0]
+      r = self.llkargs[1]
+      nt = len(ut)
+      X = Xs[0]
+      eta = X@coef
+
+      with warnings.catch_warnings(): # Overflow
+         #warnings.simplefilter("ignore")
+         gamma = np.exp(eta)
+      gamma[np.isnan(gamma) | np.isinf(gamma)] = np.power(np.finfo(float).max,0.9)
+      gamma = gamma.reshape(-1,1)
+
+      # Now compute first sum
+      g = delta.T@X
+
+      # and second sum
+      b_p = np.zeros_like(g)
+      
+      gamma_p = 0
+      for j in range(nt):
+         ri = r == j
+         dj = np.sum(delta[ri])
+         gamma_i = (gamma[ri,0]).reshape(-1,1)
+         with warnings.catch_warnings(): # Overflow
+            warnings.simplefilter("ignore")
+            gamma_p += np.sum(gamma_i)
+
+         if np.isnan(gamma_p) | np.isinf(gamma_p):
+            gamma_p = np.power(np.finfo(float).max,0.9)
+
+         X_i = X[ri,:]
+         bi = gamma_i.T@X_i
+         b_p += bi
+         
+         with warnings.catch_warnings(): # Divide by zero
+            warnings.simplefilter("ignore")
+            bpg = b_p/gamma_p
+
+         bpg[np.isnan(bpg) | np.isinf(bpg)] = 0
+
+         g -= dj*bpg
+      
+      return g.flatten()
+
+
+   def hessian(self, coef, coef_split_idx, delta, Xs):
+      """Hessian as defined by Wood, Pya, & Säfken (2016).
+
+      ``delta`` (passed as dependent variable) holds values in ``{0,1}``, indicating whether the event was observed or not.
+      """
+
+      # Extract and define all variables defined by WPS (2016)
+      ut = self.llkargs[0]
+      r = self.llkargs[1]
+      nt = len(ut)
+      X = Xs[0]
+      eta = X@coef
+      
+      with warnings.catch_warnings(): # Overflow
+         warnings.simplefilter("ignore")
+         gamma = np.exp(eta)
+      gamma[np.isnan(gamma) | np.isinf(gamma)] = 0
+      gamma = gamma.reshape(-1,1)
+
+      # Only sum over nt
+      b_p = np.zeros((1,X.shape[1]))
+
+      gamma_p = 0
+      A_p = scp.sparse.csc_array((X.shape[1],X.shape[1]))
+      H = scp.sparse.csc_array((X.shape[1],X.shape[1]))
+      for j in range(nt):
+         ri = r == j
+         dj = np.sum(delta[ri])
+         gamma_i = (gamma[ri,0]).reshape(-1,1)
+         gamma_p += np.sum(gamma_i)
+
+         X_i = X[ri,:]
+         bi = gamma_i.T@X_i
+         b_p += bi
+         
+         A_i = (gamma_i * X_i).T@X_i
+         A_p += A_i
+         
+
+         with warnings.catch_warnings(): # Divide by zero or overflow
+            warnings.simplefilter("ignore")
+            Hj = dj*b_p.T@b_p/np.power(gamma_p,2) - dj*A_p/gamma_p
+         
+         if np.any(np.isnan(Hj)) | np.any(np.isinf(Hj)):
+            continue
+         
+         H += Hj
+
+      return scp.sparse.csc_array(H)
+
+

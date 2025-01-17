@@ -1,7 +1,6 @@
 import numpy as np
 import scipy as scp
-import warnings
-from .exp_fam import Family,Gaussian,est_scale,GAMLSSFamily,Identity
+from .exp_fam import Family,Gaussian,est_scale,GAMLSSFamily,Identity,warnings
 from .penalties import PenType,id_dist_pen,translate_sparse,dataclass
 from .formula import build_sparse_matrix_from_formula,setup_cache,clear_cache,cpp_solvers,pd,Formula,mp,repeat,os,map_csc_to_eigen,map_csr_to_eigen,math,tqdm,sys,copy,embed_in_S_sparse
 from functools import reduce
@@ -329,19 +328,17 @@ def PIRLS_pdat_weights(y,mu,eta,family:Family):
    # Calculation is based on a(mu) = 1, so reflects Fisher scoring!
    dy1 = family.link.dy1(mu)
    z = dy1 * (y - mu) + eta
-   w = 1 / (np.power(dy1,2) * family.V(mu))
-   
-   # Take steps, if any of the weights or pseudo-data become nan or inf
-   pirls_cor = 0
-   while np.any(np.isnan(w)) or np.any(np.isinf(w)) or np.any(np.isnan(z)) or np.any(np.isinf(z)) and pirls_cor < 30:
-      mu = (mu + family.init_mu(y))/2 # Draw towards init
-      dy1 = family.link.dy1(mu)
-      z = dy1 * (y - mu) + eta
+
+   with warnings.catch_warnings(): # Divide by 0
+      warnings.simplefilter("ignore")
       w = 1 / (np.power(dy1,2) * family.V(mu))
-      pirls_cor += 1
-   
-   if pirls_cor > 0:
-      eta = family.link.f(mu)
+
+   # Take steps, if any of the weights or pseudo-data become nan or inf
+   # should not happen if dy1 is implemented safely, but cannot assume that.
+   invalid_idx = np.isnan(w) | np.isnan(z) | np.isinf(w) | np.isinf(z)
+   if np.any(invalid_idx):
+      z[invalid_idx] = 0
+      w[invalid_idx] = 0
 
    return z, w
 
@@ -823,39 +820,7 @@ def update_coef(yb,X,Xb,family,S_emb,S_root,n_c,formula):
 
 def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,S_root,S_pinv,FS_use_rank,penalties,n_c,formula,form_Linv):
    # Solves the additive model for a given set of weights and penalty
-   if formula is None:
-      if S_root is None:
-         LP, Pr, coef, code = cpp_solve_coef(yb,Xb,S_emb)
-         P = compute_eigen_perm(Pr)
-
-      else: # Qr-based
-         RP,Pr1,Pr2,coef,rank,code = cpp_solve_coef_pqr(yb,Xb,S_root.T.tocsc())
-
-         # Need to get overall pivot...
-         P1 = compute_eigen_perm(Pr1)
-         P2 = compute_eigen_perm(Pr2)
-         P = P2.T@P1.T
-
-         # Can now unpivot coef
-         coef = coef @ P
-
-         # Now convert so that rest of code can just continue as with Chol
-         LP = RP.T.tocsc()
-         _,Pr,_ = translate_sparse(P.tocsc())
-
-         if rank < S_emb.shape[1]:
-            # Rank defficiency detected during numerical factorization.
-            # Set code > 0
-            warnings.warn(f"Rank deficiency detected. Most likely a result of coefficients {Pr[rank:]} being unidentifiable. Check 'model.formula.coef_names' at the corresponding indices to identify the problematic terms and consider dropping (or penalizing) them.")
-            code = 1
-
-   else:
-      #yb is X.T@y and Xb is X.T@X
-      LP, Pr, coef, code = cpp_solve_coefXX(yb,Xb + S_emb)
-      P = compute_eigen_perm(Pr)
-
-   if code != 0:
-      raise ArithmeticError(f"Solving for coef failed with code {code}. Model is likely unidentifiable.")
+   eta,mu,coef,Pr,P,LP = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,formula)
    
    # Given new coefficients compute lgdetDs and bsbs - needed for REML gradient and EFS step
    lgdetDs = None
@@ -877,24 +842,6 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,S_root,S_pinv,
    InvCholXXSP = None
    if form_Linv:
       InvCholXXSP = compute_Linv(LP,n_c)
-   
-   # Update mu & eta
-   if formula is None:
-      eta = (X @ coef).reshape(-1,1)
-   else:
-      if formula.keep_cov:
-         eta = keep_eta(formula,coef,n_c)
-      else:
-         eta = []
-         for file in formula.file_paths:
-            eta_file = read_eta(file,formula,coef,n_c)
-            eta.extend(eta_file)
-      eta = np.array(eta)
-
-   mu = eta
-
-   if isinstance(family,Gaussian) == False or isinstance(family.link,Identity) == False:
-      mu = family.link.fi(eta)
 
    # Update scale parameter
    wres,InvCholXXS,total_edf,term_edfs,Bs,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,penalties,n_c)
@@ -1876,7 +1823,16 @@ def deriv_transform_mu_eta(y,means,family:GAMLSSFamily):
     This follows from applying the chain rule and the inversion rule of derivatives
     $\frac{\partial llk(h^{-1}(\eta))}{\partial \eta} = \frac{\partial llk(\mu)}{\partial \mu} \frac{\partial h^{-1}(\eta)}{\partial \eta} = \frac{\partial llk(\mu)}{\partial \mu}\frac{1}{\frac{\partial h(\mu)}{\mu}}$.
     """
-    d1eta = [d1[mui]/ld1[mui] for mui in range(len(means))]
+    # d1eta = [d1[mui]/ld1[mui] for mui in range(len(means))]
+    d1eta = []
+    for mui in range(len(means)):
+       
+       with warnings.catch_warnings(): # Divide by 0
+         warnings.simplefilter("ignore")
+         de = d1[mui]/ld1[mui]
+
+       de[np.isnan(de) | np.isinf(de)] = 0 
+       d1eta.append(de)
 
     # Pure second order derivatives are transformed via A.2 in WPS (2016)
     """
@@ -1896,7 +1852,16 @@ def deriv_transform_mu_eta(y,means,family:GAMLSSFamily):
     Thus, $\frac{\partial llk /\ \partial \eta^1}{\partial \eta^2} =
     \frac{\partial^2 llk}{\partial \mu^1 \partial \mu^2}\frac{1}{\frac{\partial h_2(\mu^2)}{\mu^2}}\frac{1}{\frac{\partial h_1(\mu^1)}{\mu^1}}$.
     """
-    d2eta = [d2[mui]/np.power(ld1[mui],2) - d1[mui]*ld2[mui]/np.power(ld1[mui],3) for mui in range(len(means))]
+    # d2eta = [d2[mui]/np.power(ld1[mui],2) - d1[mui]*ld2[mui]/np.power(ld1[mui],3) for mui in range(len(means))]
+    d2eta = []
+    for mui in range(len(means)):
+       
+       with warnings.catch_warnings(): # Divide by 0
+         warnings.simplefilter("ignore")
+         d2e = d2[mui]/np.power(ld1[mui],2) - d1[mui]*ld2[mui]/np.power(ld1[mui],3)
+      
+       d2e[np.isnan(d2e) | np.isinf(d2e)] = 0
+       d2eta.append(d2e)
 
     # Mixed second derivatives thus also are transformed as proposed by WPS (2016)
     d2meta = []
@@ -1906,7 +1871,13 @@ def deriv_transform_mu_eta(y,means,family:GAMLSSFamily):
             if muj <= mui:
                 continue
             
-            d2meta.append(d2m[mixed_idx] * (1/ld1[mui]) * (1/ld1[muj]))
+            with warnings.catch_warnings(): # Divide by 0
+               warnings.simplefilter("ignore")
+               d2em = d2m[mixed_idx] * (1/ld1[mui]) * (1/ld1[muj])
+            
+            d2em[np.isnan(d2em) | np.isinf(d2em)] = 0
+            d2meta.append(d2em)
+
             mixed_idx += 1
 
     return d1eta,d2eta,d2meta

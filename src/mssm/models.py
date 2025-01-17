@@ -3,7 +3,7 @@ import scipy as scp
 import copy
 from collections.abc import Callable
 from .src.python.formula import Formula,build_sparse_matrix_from_formula,VarType,lhs,ConstType,Constraint,pd,embed_shared_penalties,warnings
-from .src.python.exp_fam import Link,Logit,Identity,LOG,LOGb,Family,Binomial,Gaussian,GAMLSSFamily,GAUMLSS,Gamma,InvGauss,MULNOMLSS,GAMMALS,GENSMOOTHFamily
+from .src.python.exp_fam import Link,Logit,Identity,LOG,LOGb,Family,Binomial,Gaussian,GAMLSSFamily,GAUMLSS,Gamma,InvGauss,Binomial2,MULNOMLSS,GAMMALS,GENSMOOTHFamily,PropHaz
 from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2,solve_gammlss_sparse,solve_generalSmooth_sparse
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 from .src.python.penalties import PenType,LambdaTerm
@@ -1344,12 +1344,14 @@ class GAMMLSS(GAMM):
 
         # Initialize overall coefficients
         form_n_coef = [form.n_coef for form in self.formulas]
-        coef = np.concatenate((m_coef.reshape(-1,1),
-                            *[np.ones((self.formulas[ix].n_coef)).reshape(-1,1) for ix in range(1,self.family.n_par)]))
+        coef = m_coef.reshape(-1,1)
         coef_split_idx = form_n_coef[:-1]
 
-        for coef_i in range(1,len(coef_split_idx)):
-            coef_split_idx[coef_i] += coef_split_idx[coef_i-1]
+        if self.family.n_par > 1:
+            coef = np.concatenate((coef,*[np.ones((self.formulas[ix].n_coef)).reshape(-1,1) for ix in range(1,self.family.n_par)]))
+
+            for coef_i in range(1,len(coef_split_idx)):
+                coef_split_idx[coef_i] += coef_split_idx[coef_i-1]
 
         coef,etas,mus,wres,H,LV,total_edf,term_edfs,penalty,fit_info = solve_gammlss_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,
                                                                                             gamlss_pen,max_outer,max_inner,min_inner,conv_tol,
@@ -1832,8 +1834,10 @@ class GSMM(GAMMLSS):
             coef = scp.stats.norm.rvs(size=n_coef,random_state=seed).reshape(-1,1)
 
         coef_split_idx = form_n_coef[:-1]
-        for coef_i in range(1,len(coef_split_idx)):
-            coef_split_idx[coef_i] += coef_split_idx[coef_i-1]
+
+        if len(self.formulas) > 1:
+            for coef_i in range(1,len(coef_split_idx)):
+                coef_split_idx[coef_i] += coef_split_idx[coef_i-1]
         
         # Now fit model
         coef,H,LV,total_edf,term_edfs,penalty,fit_info = solve_generalSmooth_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,smooth_pen,
