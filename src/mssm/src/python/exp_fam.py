@@ -88,7 +88,6 @@ class Logit(Link):
          warnings.simplefilter("ignore")
          eta = np.log(mu / (1 - mu))
 
-      eta[np.isnan(eta) | np.isinf(eta)] = 0
       return eta
 
    def fi(self,eta):
@@ -107,7 +106,6 @@ class Logit(Link):
          warnings.simplefilter("ignore")
          mu = np.exp(eta) / (1 + np.exp(eta))
          
-      mu[np.isnan(mu) | np.isinf(mu)] = 0
       return mu
    
    def dy1(self,mu):
@@ -136,7 +134,6 @@ class Logit(Link):
          warnings.simplefilter("ignore")
          d = 1 / ((1 - mu) * mu)
          
-      d[np.isnan(d) | np.isinf(d)] = 0
       return d
 
    def dy2(self,mu):
@@ -155,7 +152,6 @@ class Logit(Link):
          warnings.simplefilter("ignore")
          d2 = (2 * mu - 1) / (np.power(mu,2) * np.power(1-mu,2))
 
-      d2[np.isnan(d2) | np.isinf(d2)] = 0
       return d2
 
 class Identity(Link):
@@ -237,7 +233,6 @@ class LOG(Link):
          warnings.simplefilter("ignore")
          eta = np.log(mu)
       
-      eta[np.isnan(eta) | np.isinf(eta)] = 0
       return eta
    
    def fi(self,eta):
@@ -255,7 +250,6 @@ class LOG(Link):
          warnings.simplefilter("ignore")
          mu = np.exp(eta)
       
-      mu[np.isnan(mu) | np.isinf(mu)] = 0
       return mu
    
    def dy1(self,mu):
@@ -272,7 +266,6 @@ class LOG(Link):
          warnings.simplefilter("ignore")
          d = 1/mu
 
-      d[np.isnan(d) | np.isinf(d)] = 0
       return d
    
    def dy2(self,mu):
@@ -291,7 +284,6 @@ class LOG(Link):
          warnings.simplefilter("ignore")
          d2 = -1*(1/np.power(mu,2))
       
-      d2[np.isnan(d2) | np.isinf(d2)] = 0
       return d2
 
 class LOGb(Link):
@@ -321,7 +313,6 @@ class LOGb(Link):
          warnings.simplefilter("ignore")
          eta = np.log(mu + self.b)
 
-      eta[np.isnan(eta) | np.isinf(eta)] = 0
       return eta
    
    def fi(self,eta):
@@ -338,7 +329,6 @@ class LOGb(Link):
          warnings.simplefilter("ignore")
          mu = np.exp(eta) - self.b
 
-      mu[np.isnan(mu) | np.isinf(mu)] = 0
       return mu
    
    def dy1(self,mu):
@@ -355,7 +345,6 @@ class LOGb(Link):
          warnings.simplefilter("ignore")
          d =  1/(self.b+mu)
 
-      d[np.isnan(d) | np.isinf(d)] = 0
       return d
    
    def dy2(self,mu):
@@ -374,7 +363,6 @@ class LOGb(Link):
          warnings.simplefilter("ignore")
          d2 =  -1*(1/np.power(mu+self.b,2))
 
-      d2[np.isnan(d2) | np.isinf(d2)] = 0
       return d2
 
 def est_scale(res,rows_X,total_edf):
@@ -1016,7 +1004,6 @@ class GAMLSSFamily:
    :ivar [Callable] d1: A list holding ``n_par`` functions to evaluate the first partial derivatives of llk with respect to each parameter of the llk. Needs to be initialized when calling :func:`__init__`.
    :ivar [Callable] d2: A list holding ``n_par`` functions to evaluate the second (pure) partial derivatives of llk with respect to each parameter of the llk. Needs to be initialized when calling :func:`__init__`.
    :ivar [Callable] d2m: A list holding ``n_par*(n_par-1)/2`` functions to evaluate the second mixed partial derivatives of llk with respect to each parameter of the llk in **order**: ``d2m[0]`` = :math:`\partial l/\partial \mu_1 \partial \mu_2`, ``d2m[1]`` = :math:`\partial l/\partial \mu_1 \partial \mu_3`, ..., ``d2m[n_par-1]`` = :math:`\partial l/\partial \mu_1 \partial \mu_{n_{par}}`, ``d2m[n_par]`` = :math:`\partial l/\partial \mu_2 \partial \mu_3`, ``d2m[n_par+1]`` = :math:`\partial l/\partial \mu_2 \partial \mu_4`, ... . Needs to be initialized when calling :func:`__init__`.
-   :ivar Family or None mean_init_fam: a :class:`Family` member that is fitted to the data to get an initial estimate of the mean parameter of the assumed distribution. Set to ``None`` if not initialized in the :func:`__init__` constructor of implementations. 
    """
    def __init__(self,pars:int,links:[Link]) -> None:
       self.n_par = pars
@@ -1024,7 +1011,7 @@ class GAMLSSFamily:
       self.d1 = [] # list with functions to evaluate derivative of llk with respect to corresponding mean
       self.d2 = [] # list with function to evaluate pure second derivative of llk with respect to corresponding mean
       self.d2m = [] # list with functions to evaluate mixed second derivative of llk. Order is 12,13,1k,23,24,...
-      self.mean_init_fam:Family or None = None # Family to fit for the mean model to initialize coef.
+   
 
    def llk(self,y,*mus):
       """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
@@ -1077,6 +1064,30 @@ class GAMLSSFamily:
       :rtype: [float]
       """
       pass
+
+   def init_coef(self,models):
+      """(Optional) Function to initialize the coefficients of the model.
+
+      Can return ``None`` , in which case random initialization will be used.
+
+      :param models: A list of :class:`mssm.models.GAMM`'s, - each based on one of the formulas provided to a model.
+      :type models: [mssm.models.GAMM]
+      :return: A ``numpy.array`` of shape (-1,1), holding initial values for all model coefficients.
+      :rtype: numpy array
+      """
+      return None
+   
+   def init_lambda(self,formulas):
+      """(Optional) Function to initialize the smoothing parameters of the model.
+
+      Can return ``None`` , in which case random initialization will be used.
+
+      :param formulas: A list of :class:`mssm.src.python.formula.Formula`'s provided to a model.
+      :type formulas: [mssm.src.python.formula.Formula]
+      :return: A list, holding - for each :math:`\lambda` parameter to be estimated - an initial value.
+      :rtype: [float]
+      """
+      return None
 
 
 class GAUMLSS(GAMLSSFamily):
@@ -1163,6 +1174,27 @@ class GAUMLSS(GAMLSSFamily):
       res /= sigma
       return res
    
+   def init_coef(self, models):
+      """Function to initialize the coefficients of the model.
+
+      Fits a GAMM for the mean and initializes all coef. for the standard deviation to 1.
+
+      :param models: A list of :class:`mssm.models.GAMM`'s, - each based on one of the formulas provided to a model.
+      :type models: [mssm.models.GAMM]
+      :return: A ``numpy.array`` of shape (-1,1), holding initial values for all model coefficients.
+      :rtype: numpy array
+      """
+      
+      mean_model = models[0]
+      mean_model.family = Gaussian(self.links[0])
+      mean_model.fit(progress_bar=False,restart=True)
+
+      m_coef,_ = mean_model.get_pars()
+      coef = np.concatenate((m_coef.reshape(-1,1),np.ones((models[1].formula.n_coef)).reshape(-1,1)))
+
+      return coef
+        
+   
 class Binomial2(GAMLSSFamily):
    """ Another implementation of the Binomial family. That allows estimating binomial models via ``GAMMLSS`` models (And thus full-newton, no PQL!).
    
@@ -1190,15 +1222,14 @@ class Binomial2(GAMLSSFamily):
       # All derivatives taken from gamlss.dist: https://github.com/gamlss-dev/gamlss.dist
       # see also: Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
       self.d1 = []
-      def d1 (y, mu): num=(y-self.n*mu); denom=(mu*(1-mu)); d = np.zeros_like(mu); denom_val=denom!=0; d[denom_val]=num[denom_val]/denom[denom_val]; return d
+      def d1 (y, mu): num=(y-self.n*mu); denom=(mu*(1-mu)); d=num/denom; return d
       self.d1.append(d1)
 
       self.d2 = []
-      def d2(y, mu): denom=(mu*(1-mu)); denom_val=denom!=0; d2 = np.zeros_like(mu); d2[denom_val]=-(self.n/denom[denom_val]); return d2
+      def d2(y, mu): denom=(mu*(1-mu)); d2 =-(self.n/denom); return d2
       self.d2.append(d2)
 
       self.d2m = []
-      self.mean_init_fam = Binomial(link=link,n=n)
    
    def lp(self,y,mu):
       """
@@ -1252,6 +1283,37 @@ class Binomial2(GAMLSSFamily):
       k = y*self.n
       kmu = mu*self.n
       return 2 * (k*(np.log(k + np.power(sys.float_info.min,0.9)) - np.log(kmu)) + (self.n-k) * (np.log(self.n-k + np.power(sys.float_info.min,0.9)) - np.log(self.n-kmu)))
+   
+   def init_coef(self, models):
+      """Function to initialize the coefficients of the model.
+
+      Fits a GAMM (via PQL) for the mean.
+
+      :param models: A list of :class:`mssm.models.GAMM`'s, - each based on one of the formulas provided to a model.
+      :type models: [mssm.models.GAMM]
+      :return: A ``numpy.array`` of shape (-1,1), holding initial values for all model coefficients.
+      :rtype: numpy array
+      """
+      
+      mean_model = models[0]
+      mean_model.family = Binomial(self.links[0])
+      mean_model.fit(progress_bar=False,restart=True)
+
+      coef,_ = mean_model.get_pars()
+      
+      return coef.reshape(-1,1)
+   
+   def init_lambda(self,formulas):
+      """Function to initialize the smoothing parameters of the model.
+
+      Returns values in line with what is used to initialize GAMM
+
+      :param formulas: A list of :class:`mssm.src.python.formula.Formula`'s provided to a model.
+      :type formulas: [mssm.src.python.formula.Formula]
+      :return: A list, holding - for each :math:`\lambda` parameter to be estimated - an initial value.
+      :rtype: [float]
+      """
+      return [1.1 for _ in range(len(formulas[0].penalties))]
 
 class MULNOMLSS(GAMLSSFamily):
    """Family for a Multinomial GAMMLSS model (Rigby & Stasinopoulos, 2005).
@@ -1377,7 +1439,6 @@ class GAMMALS(GAMLSSFamily):
       self.d1 = [lambda y, mu, scale: (y-mu)/(scale*np.power(mu,2)),lambda y, mu, scale: (2/(scale*np.sqrt(scale)))*((y/mu)-np.log(y)+np.log(mu)+np.log(scale)-1+scp.special.digamma(1/(scale)))]
       self.d2 = [lambda y, mu, scale:  -1/(scale*np.power(mu,2)), lambda y, mu, scale: (4/np.power(scale,2))-(4/np.power(scale,3))*scp.special.polygamma(1,1/scale)]
       self.d2m = [lambda y, mu, scale: np.zeros_like(y)]
-      self.mean_init_fam = Gamma(link=links[0])
    
    def lp(self,y,mu,scale):
       """Log-probability of observing every proportion in :math:`\mathbf{y}` under their respective Gamma with mean = :math:`\\boldsymbol{\mu}` and scale = :math:`\\boldsymbol{\phi}`.
@@ -1451,6 +1512,25 @@ class GAMMALS(GAMLSSFamily):
       """
       res = np.sign(y - mu) * np.sqrt(Gamma().D(y,mu)/scale)
       return res
+   
+   def init_coef(self, models):
+      """Function to initialize the coefficients of the model.
+
+      Fits a GAMM for the mean and initializes all coef. for the scale parameter to 1.
+
+      :param models: A list of :class:`mssm.models.GAMM`'s, - each based on one of the formulas provided to a model.
+      :type models: [mssm.models.GAMM]
+      :return: A ``numpy.array`` of shape (-1,1), holding initial values for all model coefficients.
+      :rtype: numpy array
+      """
+      
+      mean_model = models[0]
+      mean_model.family = Gamma(self.links[0])
+      mean_model.fit(progress_bar=False,restart=True)
+
+      m_coef,_ = mean_model.get_pars()
+      coef = np.concatenate((m_coef.reshape(-1,1),np.ones((models[1].formula.n_coef)).reshape(-1,1)))
+      return coef
    
 
 class GENSMOOTHFamily:
@@ -1529,6 +1609,30 @@ class GENSMOOTHFamily:
       :rtype: ``scipy.sparse.csc_array``
        """
        pass
+   
+   def init_coef(self,models):
+      """(Optional) Function to initialize the coefficients of the model.
+
+      Can return ``None`` , in which case random initialization will be used.
+
+      :param models: A list of :class:`mssm.models.GAMM`'s, - each based on one of the formulas provided to a model.
+      :type models: [mssm.models.GAMM]
+      :return: A ``numpy.array`` of shape (-1,1), holding initial values for all model coefficients.
+      :rtype: numpy array
+      """
+      return None
+   
+   def init_lambda(self,formulas):
+      """(Optional) Function to initialize the smoothing parameters of the model.
+
+      Can return ``None`` , in which case random initialization will be used.
+
+      :param formulas: A list of :class:`mssm.src.python.formula.Formula`'s provided to a model.
+      :type formulas: [mssm.src.python.formula.Formula]
+      :return: A list, holding - for each :math:`\lambda` parameter to be estimated - an initial value.
+      :rtype: [float]
+      """
+      return None
    
 class PropHaz(GENSMOOTHFamily):
    """Family for proportional Hazard model - a type of General Smooth model as discussed by Wood, Pya, & Säfken (2016).
@@ -1823,3 +1927,18 @@ class PropHaz(GENSMOOTHFamily):
     
     varS = np.exp(eta) * S * np.power(self.__qs[ti] + np.sum(v@V * v,axis=1).reshape(-1,1),0.5)
     return S, varS    
+
+   def init_coef(self,models):
+      """Function to initialize the coefficients of the model.
+
+      Can return ``None`` , in which case random initialization will be used.
+
+      :param models: A list of :class:`mssm.models.GAMM`'s, - each based on one of the formulas provided to a model.
+      :type models: [mssm.models.GAMM]
+      :return: A ``numpy.array`` of shape (-1,1), holding initial values for all model coefficients.
+      :rtype: numpy array
+      """
+
+      # Just set to very small positive values
+      coef = np.array([1e-4 for _ in range(models[0].formula.n_coef)]).reshape(-1,1)
+      return coef

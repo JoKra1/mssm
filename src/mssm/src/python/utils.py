@@ -4,7 +4,7 @@ import math
 import warnings
 from itertools import permutations,product,repeat
 import copy
-from ..python.gamm_solvers import cpp_backsolve_tr,compute_S_emb_pinv_det,cpp_chol,cpp_solve_coef,update_scale_edf,compute_Linv,apply_eigen_perm,tqdm,managers,shared_memory,cpp_solve_coefXX,update_PIRLS,correct_coef_step,update_coef_gen_smooth,cpp_cholP,update_coef_gammlss,compute_lgdetD_bsb,calculate_edf,compute_eigen_perm,cpp_dChol
+from ..python.gamm_solvers import cpp_backsolve_tr,compute_S_emb_pinv_det,cpp_chol,cpp_solve_coef,update_scale_edf,compute_Linv,apply_eigen_perm,tqdm,managers,shared_memory,cpp_solve_coefXX,update_PIRLS,PIRLS_pdat_weights,correct_coef_step,update_coef_gen_smooth,cpp_cholP,update_coef_gammlss,compute_lgdetD_bsb,calculate_edf,compute_eigen_perm,cpp_dChol
 from ..python.formula import reparam,map_csc_to_eigen,mp
 from ..python.exp_fam import Family,Gaussian, Identity,GAMLSSFamily,GENSMOOTHFamily
 
@@ -350,6 +350,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10):
    # Need pseudo-data only in case of GAM
    z = None
    Wr = None
+   mu_inval = None
 
    if isinstance(family,Gaussian) and isinstance(family.link,Identity):
         # AMM - directly solve for coef
@@ -402,10 +403,13 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10):
 
            # Update eta & mu
            eta = (X @ n_coef).reshape(-1,1)
-           mu = family.link.fi(eta)
+           with warnings.catch_warnings(): # Catch errors with mean computation (e.g., overflow)
+            warnings.simplefilter("ignore")
+            mu = family.link.fi(eta)
 
            # Update deviance
-           dev = family.deviance(y,mu)
+           mu_inval = np.isnan(mu).flatten()
+           dev = family.deviance(y[mu_inval == False],mu[mu_inval == False])
 
            pen_dev = dev + n_coef.T @ S_emb @ n_coef
 
@@ -418,6 +422,18 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10):
            
            # Prepare next step
            c_pen_dev = pen_dev
+      
+       # At this point, Wr/z might not match the dimensions of y and X, because observations might be
+       # excluded at convergence. eta and mu are of correct dimension, so we need to re-compute Wr - this
+       # time with a weight of zero for any dropped obs.
+       inval_check =  np.any(np.isnan(z))
+
+       if inval_check:
+            _, w, inval = PIRLS_pdat_weights(y,mu,eta,family)
+            w[inval] = 0
+
+            # Re-compute weight matrix
+            Wr = scp.sparse.spdiags([np.sqrt(np.ndarray.flatten(w))],[0])
 
        W = Wr@Wr
        nH = (X.T@W@X).tocsc() 
@@ -426,9 +442,15 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10):
    _,_,edf,_,_,scale = update_scale_edf(y,z,eta,Wr,X.shape[0],X.shape[1],LP,None,Pr,None,family,penalties,n_c)
 
    if family.twopar:
-        llk = family.llk(y,mu,scale)
+        if mu_inval is None:
+            llk = family.llk(y,mu,scale)
+        else:
+            llk = family.llk(y[mu_inval == False],mu[mu_inval == False],scale)
    else:
-        llk = family.llk(y,mu)
+        if mu_inval is None:
+            llk = family.llk(y,mu)
+        else:
+            llk = family.llk(y[mu_inval == False],mu[mu_inval == False])
 
    # Now compute REML for candidate
    reml = REML(llk,nH/scale,coef,scale,penalties)

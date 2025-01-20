@@ -1330,34 +1330,34 @@ class GAMMLSS(GAMM):
             form.build_penalties()
             Xs.append(mod.get_mmat())
 
-        # Fit mean model
-        if self.family.mean_init_fam is not None:
-            mean_model = GAMM(self.formulas[0],family=self.family.mean_init_fam)
-            mean_model.fit(progress_bar=False,restart=True)
-            m_coef,_ = mean_model.get_pars()
-        else:
-            m_coef = scp.stats.norm.rvs(size=self.formulas[0].n_coef,random_state=seed).reshape(-1,1)
+        # Initialize coef from family
+        coef = self.family.init_coef([GAMM(form,family=Gaussian()) for form in self.formulas])
 
         # Get GAMMLSS penalties
         shared_penalties = embed_shared_penalties(self.formulas)
         gamlss_pen = [pen for pens in shared_penalties for pen in pens]
         self.overall_penalties = gamlss_pen
 
-        # Start with much weaker penalty than for GAMs
+        # Check for family-wide initialization of lambda values
+        if init_lambda is None:
+            init_lambda = self.family.init_lambda(self.formulas)
+
+        # Else tart with provided values or simply with much weaker penalty than for GAMs
         for pen_i in range(len(gamlss_pen)):
             if init_lambda is None:
                 gamlss_pen[pen_i].lam = 0.01
             else:
                 gamlss_pen[pen_i].lam = init_lambda[pen_i]
 
-        # Initialize overall coefficients
+        # Initialize overall coefficients if not done by family
         form_n_coef = [form.n_coef for form in self.formulas]
-        coef = m_coef.reshape(-1,1)
+        if coef is None:
+            coef = scp.stats.norm.rvs(size=sum(form_n_coef),random_state=seed).reshape(-1,1)
+        
+        # Now get split index
         coef_split_idx = form_n_coef[:-1]
 
         if self.family.n_par > 1:
-            coef = np.concatenate((coef,*[np.ones((self.formulas[ix].n_coef)).reshape(-1,1) for ix in range(1,self.family.n_par)]))
-
             for coef_i in range(1,len(coef_split_idx)):
                 coef_split_idx[coef_i] += coef_split_idx[coef_i-1]
 
@@ -1836,17 +1836,26 @@ class GSMM(GAMMLSS):
         smooth_pen = [pen for pens in shared_penalties for pen in pens]
         self.overall_penalties = smooth_pen
 
-        # Start with much weaker penalty than for GAMs
+        # Check for family-wide initialization of lambda values
+        if init_lambda is None:
+            init_lambda = self.family.init_lambda(self.formulas)
+        
+        # Otherwise initialize with provided values or simply with much weaker penalty than for GAMs
         for pen_i in range(len(smooth_pen)):
             if init_lambda is None:
                 smooth_pen[pen_i].lam = 0.001
             else:
                 smooth_pen[pen_i].lam = init_lambda[pen_i]
 
-        # Optionally Initialize overall coefficients
+        # Initialize overall coefficients
         form_n_coef = [form.n_coef for form in self.formulas]
         n_coef = np.sum(form_n_coef)
 
+        # Again check first for family wide initialization
+        if init_coef is None:
+            init_coef = self.family.init_coef([GAMM(form,family=Gaussian()) for form in self.formulas])
+        
+        # Otherwise again initialize with provided values or randomly
         if not init_coef is None:
             coef = np.array(init_coef).reshape(-1,1)
         else:

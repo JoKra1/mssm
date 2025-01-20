@@ -326,21 +326,21 @@ def compute_S_emb_pinv_det(col_S,penalties,pinv,root=False):
 def PIRLS_pdat_weights(y,mu,eta,family:Family):
    # Compute pseudo-data and weights for Penalized Reweighted Least Squares iteration (Wood, 2017, 6.1.1)
    # Calculation is based on a(mu) = 1, so reflects Fisher scoring!
-   dy1 = family.link.dy1(mu)
-   z = dy1 * (y - mu) + eta
-
-   with warnings.catch_warnings(): # Divide by 0
+   with warnings.catch_warnings(): # Catch divide by 0 in w and errors in dy1 computation
       warnings.simplefilter("ignore")
+      dy1 = family.link.dy1(mu)
+      z = dy1 * (y - mu) + eta
       w = 1 / (np.power(dy1,2) * family.V(mu))
 
-   # Take steps, if any of the weights or pseudo-data become nan or inf
-   # should not happen if dy1 is implemented safely, but cannot assume that.
+   # Prepare to take steps, if any of the weights or pseudo-data become nan or inf
    invalid_idx = np.isnan(w) | np.isnan(z) | np.isinf(w) | np.isinf(z)
-   if np.any(invalid_idx):
-      z[invalid_idx] = 0
-      w[invalid_idx] = 0
 
-   return z, w
+   if np.sum(invalid_idx) == len(y):
+      raise ValueError("Not a single observation provided information for Fisher weights.")
+
+   z[invalid_idx] = np.nan # Make sure this is consistent, for scale computation
+
+   return z, w, invalid_idx.flatten()
 
 def update_PIRLS(y,yb,mu,eta,X,Xb,family):
    # Update the PIRLS weights and data (if the model is not Gaussian)
@@ -349,16 +349,15 @@ def update_PIRLS(y,yb,mu,eta,X,Xb,family):
    Wr = None
 
    if isinstance(family,Gaussian) == False or isinstance(family.link,Identity) == False:
-      # Compute weights and pseudo-dat
-      z, w = PIRLS_pdat_weights(y,mu,eta,family)
+      # Compute weights and pseudo-dat - drop any rows for which z or w is not defined.
+      z, w, inval = PIRLS_pdat_weights(y,mu,eta,family)
 
-      Wr = scp.sparse.spdiags([np.sqrt(np.ndarray.flatten(w))],[0])
+      Wr = scp.sparse.spdiags([np.sqrt(np.ndarray.flatten(w[inval == False]))],[0])
 
       # Update yb and Xb
-      yb = Wr @ z
-      Xb = (Wr @ X).tocsc()
+      yb = Wr @ z[inval == False]
+      Xb = (Wr @ X[inval == False,:]).tocsc()
       
-   
    return yb,Xb,z,Wr
 
 def compute_eigen_perm(Pr):
@@ -739,8 +738,11 @@ def update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,pen
    
    # Calculate Pearson residuals for GAMM (Wood, 3.1.5 & 3.1.7)
    # Standard residuals for AMM
+   dropped = 0
    if isinstance(family,Gaussian) == False or isinstance(family.link,Identity) == False:
-      wres = Wr @ (z - eta)
+      inval = np.isnan(z)
+      dropped = np.sum(inval) # Make sure to only take valid z/eta/w here and for computing the scale
+      wres = Wr @ (z[inval == False] - eta[inval == False]).reshape(-1,1)
    else:
       wres = y - eta
 
@@ -759,7 +761,7 @@ def update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,pen
 
    # Optionally estimate scale parameter
    if family.scale is None:
-      scale = est_scale(wres,rowsX,total_edf)
+      scale = est_scale(wres,rowsX - dropped,total_edf)
    else:
       scale = family.scale
    
@@ -814,7 +816,9 @@ def update_coef(yb,X,Xb,family,S_emb,S_root,n_c,formula):
    mu = eta
 
    if isinstance(family,Gaussian) == False or isinstance(family.link,Identity) == False:
-      mu = family.link.fi(eta)
+      with warnings.catch_warnings(): # Catch errors with mean computation (e.g., overflow)
+         warnings.simplefilter("ignore")
+         mu = family.link.fi(eta)
    
    return eta,mu,coef,Pr,P,LP
 
@@ -885,7 +889,8 @@ def init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
    
    # Deviance under these starting coefficients
    # As well as penalized deviance
-   dev = family.deviance(y,mu)
+   inval = np.isnan(mu).flatten()
+   dev = family.deviance(y[inval == False],mu[inval == False])
    pen_dev = dev
 
    if len(penalties) > 0:
@@ -942,10 +947,13 @@ def correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,n_pen
       mu = eta
 
       if isinstance(family,Gaussian) == False or isinstance(family.link,Identity) == False:
-         mu = family.link.fi(eta)
+         with warnings.catch_warnings(): # Catch errors with mean computation (e.g., overflow)
+            warnings.simplefilter("ignore")
+            mu = family.link.fi(eta)
       
       # Update deviance
-      dev = family.deviance(y,mu)
+      inval = np.isnan(mu).flatten()
+      dev = family.deviance(y[inval == False],mu[inval == False])
 
       # And penalized deviance term
       if n_pen > 0:
@@ -1191,7 +1199,8 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
          # Obtain deviance and penalized deviance terms
          # under **current** lambda for proposed coef (n_coef)
          # and current coef. (see Step 3 in Wood, 2017)
-         dev = family.deviance(y,mu) 
+         inval = np.isnan(mu).flatten()
+         dev = family.deviance(y[inval == False],mu[inval == False])
          pen_dev = dev
          c_dev_prev = prev_dev
 
@@ -1217,7 +1226,8 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
             for i_iter in range(max_inner - 1):
                eta,mu,n_coef,Pr,P,LP = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,None)
 
-               dev = family.deviance(y,mu) 
+               inval = np.isnan(mu).flatten()
+               dev = family.deviance(y[inval == False],mu[inval == False])
                pen_dev = dev
 
                if len(penalties) > 0:
@@ -1348,6 +1358,19 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    # Final term edf
    if not term_edfs is None:
       term_edfs = calculate_term_edf(penalties,term_edfs)
+
+   # At this point, Wr/z might not match the dimensions of y and X, because observations might be
+   # excluded at convergence. eta and mu are of correct dimension, so we need to re-compute Wr - this
+   # time with a weight of zero for any dropped obs.
+   if Wr is not None:
+      inval_check =  np.any(np.isnan(z))
+
+      if inval_check:
+         _, w, inval = PIRLS_pdat_weights(y,mu,eta,family)
+         w[inval] = 0
+
+         # Re-compute weight matrix
+         Wr = scp.sparse.spdiags([np.sqrt(np.ndarray.flatten(w))],[0])
 
    if InvCholXXS is None:
       Lp, Pr, _ = cpp_cholP((Xb.T @ Xb + S_emb).tocsc())
@@ -1809,13 +1832,16 @@ def deriv_transform_mu_eta(y,means,family:GAMLSSFamily):
     References:
      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
     """
-    d1 = [fd1(y,*means) for fd1 in family.d1]
-    d2 = [fd2(y,*means) for fd2 in family.d2]
-    d2m = [fd2m(y,*means) for fd2m in family.d2m]
+    with warnings.catch_warnings(): # Catch warnings associated with derivative evaluation, we handle those below
+         warnings.simplefilter("ignore")
 
-    # Link derivatives
-    ld1 = [family.links[mui].dy1(means[mui]) for mui in range(len(means))]
-    ld2 = [family.links[mui].dy2(means[mui]) for mui in range(len(means))]
+         d1 = [fd1(y,*means) for fd1 in family.d1]
+         d2 = [fd2(y,*means) for fd2 in family.d2]
+         d2m = [fd2m(y,*means) for fd2m in family.d2m]
+
+         # Link derivatives
+         ld1 = [family.links[mui].dy1(means[mui]) for mui in range(len(means))]
+         ld2 = [family.links[mui].dy2(means[mui]) for mui in range(len(means))]
 
     # Transform first order derivatives via A.1 in Wood, Pya, & Säfken (2016)
     """
@@ -2073,10 +2099,21 @@ def correct_coef_step_gammlss(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_
     # Update etas and mus
     next_split_coef = np.split(next_coef,coef_split_idx)
     next_etas = [Xs[i]@next_split_coef[i] for i in range(family.n_par)]
-    next_mus = [family.links[i].fi(next_etas[i]) for i in range(family.n_par)]
+
+    with warnings.catch_warnings(): # Catch warnings associated with mean transformation
+         warnings.simplefilter("ignore")
+         next_mus = [family.links[i].fi(next_etas[i]) for i in range(family.n_par)]
+
+    # Find and exclude invalid indices before evaluating llk
+    inval = np.isnan(next_mus[0])
+
+    if len(coef_split_idx) != 0:
+       for mi in range(1,len(next_mus)):
+          inval = inval |  np.isnan(next_mus[mi])
+    inval = inval.flatten()
     
     # Step size control for newton step.
-    next_llk = family.llk(y,*next_mus)
+    next_llk = family.llk(y[inval == False],*[nmu[inval == False] for nmu in next_mus])
     
     # Evaluate improvement of penalized llk under new and old coef - but in both
     # cases for current lambda (see Wood, Li, Shaddick, & Augustin; 2017)
@@ -2093,11 +2130,21 @@ def correct_coef_step_gammlss(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_
 
         # Update etas and mus again
         next_etas = [Xs[i]@next_split_coef[i] for i in range(family.n_par)]
+        
+        with warnings.catch_warnings(): # Catch warnings associated with mean transformation
+            warnings.simplefilter("ignore")
+            next_mus = [family.links[i].fi(next_etas[i]) for i in range(family.n_par)]
 
-        next_mus = [family.links[i].fi(next_etas[i]) for i in range(family.n_par)]
+        # Find and exclude invalid indices before evaluating llk
+        inval = np.isnan(next_mus[0])
+
+        if len(coef_split_idx) != 0:
+           for mi in range(1,len(next_mus)):
+              inval = inval |  np.isnan(next_mus[mi])
+        inval = inval.flatten()
         
         # Re-evaluate penalized likelihood
-        next_llk = family.llk(y,*next_mus)
+        next_llk = family.llk(y[inval == False],*[nmu[inval == False] for nmu in next_mus])
         next_pen_llk = next_llk - next_coef.T@S_emb@next_coef
         n_checks += 1
     
@@ -2333,8 +2380,20 @@ def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,S_norm,c_llk,o
             coef,L,LV,eps = newton_coef_smooth(coef,grad,H,S_emb,method,piv_tol)
             split_coef = np.split(coef,coef_split_idx)
             etas = [Xs[i]@split_coef[i] for i in range(family.n_par)]
-            mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
-            c_llk = family.llk(y,*mus)
+
+            with warnings.catch_warnings(): # Catch warnings associated with mean transformation
+               warnings.simplefilter("ignore")
+               mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
+
+            # Find and exclude invalid indices before evaluating llk
+            inval = np.isnan(mus[0])
+
+            if len(coef_split_idx) != 0:
+               for mi in range(1,len(mus)):
+                  inval = inval |  np.isnan(mus[mi])
+            inval = inval.flatten()
+
+            c_llk = family.llk(y[inval == False],*[mu[inval == False] for mu in mus])
             c_pen_llk = c_llk - coef.T@S_emb@coef
       
       #print(converged,eps)
@@ -2375,10 +2434,21 @@ def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,S_norm,c_llk,o
          # Now re-compute split coef, etas, and mus
          rsplit_coef = np.split(coef,rcoef_split_idx)
          etas = [rXs[i]@rsplit_coef[i] for i in range(family.n_par)]
-         mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
+
+         with warnings.catch_warnings(): # Catch warnings associated with mean transformation
+            warnings.simplefilter("ignore")
+            mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
+
+         # Find and exclude invalid indices before evaluating llk
+         inval = np.isnan(mus[0])
+
+         if len(coef_split_idx) != 0:
+            for mi in range(1,len(mus)):
+               inval = inval |  np.isnan(mus[mi])
+         inval = inval.flatten()
 
          # Re-compute llk
-         c_llk = family.llk(y,*mus)
+         c_llk = family.llk(y[inval == False],*[mu[inval == False] for mu in mus])
          c_pen_llk = c_llk - coef.T@rS_emb@coef
          
          # and now repeat Newton iteration
@@ -2453,6 +2523,16 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
     # Initialize etas and mus
     etas = [Xs[i]@split_coef[i] for i in range(family.n_par)]
     mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
+
+    # Find and exclude invalid indices before evaluating llk
+    inval = np.isnan(mus[0])
+
+    if len(coef_split_idx) != 0:
+      for mi in range(1,len(mus)):
+         inval = inval |  np.isnan(mus[mi])
+   
+    if np.sum(inval) > 0:
+       raise ValueError("The initial coefficients result in invalid value for at least one predictor. Provide a different set via the family's ``init_coef`` function.")
 
     # Build current penalties
     S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
