@@ -2043,6 +2043,26 @@ def newton_coef_smooth(coef,grad,H,S_emb,method,piv_tol):
 
     return n_coef,DI@P.T@Lp,LV,eps
 
+def gd_coef_smooth(coef,grad,S_emb,a):
+    """
+    Follows sections 3.1.2 and 3.14 in WPS (2016) to update the coefficients of the GAMLSS model via a
+    Gradient descent (ascent actually) step.
+    1) Computes gradient of the penalized likelihood (grad - S_emb@coef)
+    3) Uses this to compute update
+    4) Step size control - happens outside
+
+    References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+    """
+    
+    # Compute penalized gradient
+    pgrad = np.array([grad[i] - (S_emb[[i],:]@coef)[0] for i in range(len(grad))])
+    
+    # Update coef
+    n_coef = coef + a * pgrad
+    
+    return n_coef
+
 def correct_coef_step_gammlss(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb):
     """
     Apply step size correction to Newton update for GAMLSS models, as discussed by WPS (2016).
@@ -2651,7 +2671,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
 
 ################################################ General Smooth model code ################################################
 
-def correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb):
+def correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb,a):
     """
     Apply step size correction to Newton update for general smooth models, as discussed by WPS (2016).
 
@@ -2666,29 +2686,47 @@ def correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk
     # cases for current lambda (see Wood, Li, Shaddick, & Augustin; 2017)
     next_pen_llk = next_llk - next_coef.T@S_emb@next_coef
     prev_llk_cur_pen = c_llk - coef.T@S_emb@coef
-    n_checks = 0
-    while next_pen_llk < prev_llk_cur_pen:
+    
+    for n_checks in range(32):
+        
         if n_checks > 30:
             next_coef = coef
-            
+        
         # Half it if we do not observe an increase in penalized likelihood (WPS, 2016)
         next_coef = (coef + next_coef)/2
         
         # Update pen_llk
         next_llk = family.llk(next_coef,coef_split_idx,y,Xs)
         next_pen_llk = next_llk - next_coef.T@S_emb@next_coef
-        n_checks += 1
+        
+        if next_pen_llk >= prev_llk_cur_pen:
+           break
     
-    return next_coef,next_llk,next_pen_llk
+    # Update step-size for gradient
+    if n_checks > 0 and a > 1e-6:
+       a /= 2
+    elif n_checks == 0 and a < 1:
+       a *= 2
+    
+    return next_coef,next_llk,next_pen_llk,a
     
 def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,c_llk,outer,max_inner,min_inner,conv_tol,method,piv_tol,keep_drop):
    """
-   Repeatedly perform Newton update with step length control to the coefficient vector - based on
+   Repeatedly perform Newton/Graidnet update with step length control to the coefficient vector - based on
    steps outlined by WPS (2016).
 
    References:
      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
    """
+   grad_only = method == "Grad"
+   a = 0.1 # Step-size for gradient only
+
+   if grad_only:
+      H = None
+      L = None
+      LV = None
+      eps = 0
+
    # Update coefficients:
    if keep_drop is None:
       converged = False
@@ -2696,18 +2734,24 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,c_llk,ou
          
          # Get llk derivatives with respect to coef
          grad = family.gradient(coef,coef_split_idx,y,Xs)
-         H = family.hessian(coef,coef_split_idx,y,Xs)
+
+         if grad_only == False:
+            H = family.hessian(coef,coef_split_idx,y,Xs)
 
          # Update coef and perform step size control
          if outer > 0 or inner > 0:
+
             # Update Coefficients
-            next_coef,L,LV,eps = newton_coef_smooth(coef,grad,H,S_emb,method,piv_tol)
+            if grad_only:
+               next_coef = gd_coef_smooth(coef,grad,S_emb,a)
+            else:
+               next_coef,L,LV,eps = newton_coef_smooth(coef,grad,H,S_emb,method,piv_tol)
 
             # Prepare to check convergence
             prev_llk_cur_pen = c_llk - coef.T@S_emb@coef
 
             # Perform step length control
-            coef,c_llk,c_pen_llk = correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb)
+            coef,c_llk,c_pen_llk,a = correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb,a)
 
             if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
                converged = True
@@ -2718,14 +2762,18 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,c_llk,ou
                break # end inner loop and immediately optimize lambda again.
          else:
             # Simply accept next coef step on first iteration
-            coef,L,LV,eps = newton_coef_smooth(coef,grad,H,S_emb,method,piv_tol)
+            if grad_only:
+               coef = gd_coef_smooth(coef,grad,S_emb,a)
+            else:
+               coef,L,LV,eps = newton_coef_smooth(coef,grad,H,S_emb,method,piv_tol)
+
             c_llk = family.llk(coef,coef_split_idx,y,Xs)
             c_pen_llk = c_llk - coef.T@S_emb@coef
    
    # In case we coverged check for unidentifiable parameters, as reccomended by Wood. et al (2016)
    keep = None
    drop = None
-   if keep_drop is not None or (method == "QR/Chol" and eps > 0 and converged):
+   if (grad_only == False) and keep_drop is not None or (method == "QR/Chol" and eps > 0 and converged):
       
       if keep_drop is not None:
          keep = keep_drop[0]
@@ -2773,7 +2821,7 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,c_llk,ou
             prev_llk_cur_pen = c_llk - coef.T@rS_emb@coef
 
             # Perform step length control
-            coef,c_llk,c_pen_llk = correct_coef_step_gen_smooth(family,y,rXs,coef,next_coef,rcoef_split_idx,c_llk,rS_emb)
+            coef,c_llk,c_pen_llk,a = correct_coef_step_gen_smooth(family,y,rXs,coef,next_coef,rcoef_split_idx,c_llk,rS_emb,a)
 
             if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
                   break
@@ -2860,11 +2908,13 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
         # plus function to evaluate negative gradient of penalized likelihood - the
         # latter is only used if use_grad=True.
         def __neg_pen_llk(coef,coef_split_idx,y,Xs,family,S_emb):
+            coef = coef.reshape(-1,1)
             neg_llk = -1 * family.llk(coef,coef_split_idx,y,Xs)
             return neg_llk + coef.T@S_emb@coef
         
         def __neg_pen_grad(coef,coef_split_idx,y,Xs,family,S_emb):
            # see Wood, Pya & Saefken (2016)
+           coef = coef.reshape(-1,1)
            grad = family.gradient(coef,coef_split_idx,y,Xs)
            pgrad = np.array([grad[i] - (S_emb[[i],:]@coef)[0] for i in range(len(grad))])
            return -1*pgrad.flatten()
@@ -2907,7 +2957,33 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                
                drop = None
                eps = 0
-               # Get coefficient estimate
+
+               # Check if we made progress - if not, fall back to GD. Finally, get coefficient estimate
+               coef_copy_grad = copy.deepcopy(coef)
+               while use_grad and (np.linalg.norm(coef - opt["x"].reshape(-1,1)) < 1e-7*np.linalg.norm(coef)):
+                  
+                  # Perform gradient descent first to make progress
+                  coef,_,_,_,_,_,_,_,_ = update_coef_gen_smooth(family,y,Xs,coef,
+                                                                coef_split_idx,S_emb,S_norm,
+                                                                c_llk,outer,50,
+                                                                50,conv_tol,
+                                                                "Grad",piv_tol,None)
+                  
+                  # Then try quasi Newton again
+                  opt = scp.optimize.minimize(__neg_pen_llk,
+                                              np.ndarray.flatten(coef),
+                                              args=(coef_split_idx,y,Xs,family,S_emb),
+                                              method=optimizer,
+                                              jac = __neg_pen_grad if use_grad else None,
+                                              options={"maxiter":max_inner,
+                                                      **bfgs_options})
+
+                  # Check if gradient made progress
+                  if (np.linalg.norm(coef - coef_copy_grad) < 1e-9):
+                     break
+
+                  coef_copy_grad = copy.deepcopy(coef)
+
                coef = opt["x"].reshape(-1,1)
 
                # Compute penalized likelihood for current estimate
@@ -2964,7 +3040,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
             if progress_bar:
                 iterator.set_description_str(desc="Fitting - Conv.: " + "{:.2e}".format((np.abs(prev_pen_llk - c_pen_llk) - conv_tol*np.abs(c_pen_llk))[0,0]), refresh=True)
 
-            if np.abs(prev_pen_llk - c_pen_llk) < conv_tol*np.abs(c_pen_llk):
+            if np.abs(prev_pen_llk - c_pen_llk) < conv_tol*np.abs(c_pen_llk) or (optimizer!="Newton" and np.linalg.norm(coef-prev_coef) < conv_tol*np.linalg.norm(coef)):
                 if progress_bar:
                     iterator.set_description_str(desc="Converged!", refresh=True)
                     iterator.close()
@@ -2973,6 +3049,8 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
         
         # We need the penalized likelihood of the model at this point for convergence control (step 2 in Wood, 2017 based on step 4 in Wood, Goude, & Shaw, 2016)
         prev_pen_llk = c_pen_llk
+        prev_llk = c_llk
+        prev_coef = copy.deepcopy(coef)
 
         # Now compute EFS step
         lam_delta = []
@@ -3038,6 +3116,38 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                 
                 drop = None
                 eps = 0
+               
+                # Check if we made progress - if not, fall back to GD. Finally, get coefficient estimate
+                if use_grad and (np.linalg.norm(coef - opt["x"].reshape(-1,1)) < 1e-7):
+
+                  # Get next coefficient estimate
+                  coef_copy_grad = copy.deepcopy(opt["x"].reshape(-1,1))
+                  next_coef = opt["x"].reshape(-1,1)
+
+                  while (np.linalg.norm(next_coef - opt["x"].reshape(-1,1)) < 1e-7*np.linalg.norm(next_coef)):
+                     
+                     # Perform gradient descent first to make progress
+                     next_coef,_,_,_,_,_,_,_,_ = update_coef_gen_smooth(family,y,Xs,next_coef,
+                                                                  coef_split_idx,S_emb,S_norm,
+                                                                  c_llk,outer,50,
+                                                                  50,conv_tol,
+                                                                  "Grad",piv_tol,None)
+                     
+                     # Then try quasi Newton again
+                     opt = scp.optimize.minimize(__neg_pen_llk,
+                                                np.ndarray.flatten(next_coef),
+                                                args=(coef_split_idx,y,Xs,family,S_emb),
+                                                method=optimizer,
+                                                jac = __neg_pen_grad if use_grad else None,
+                                                options={"maxiter":max_inner,
+                                                         **bfgs_options})
+
+                     # Check if gradient actually made progress
+                     if (np.linalg.norm(next_coef - coef_copy_grad) < 1e-9):
+                        break
+
+                     coef_copy_grad = copy.deepcopy(next_coef)
+
                 # Get next coefficient estimate
                 next_coef = opt["x"].reshape(-1,1)
 

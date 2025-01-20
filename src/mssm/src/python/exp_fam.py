@@ -3,6 +3,7 @@ import scipy as scp
 import math
 import sys
 import warnings
+import copy
 
 class Link:
    """
@@ -1484,7 +1485,7 @@ class GENSMOOTHFamily:
 
        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
-      :param coef: The current coefficient estimate (as np.array of shape (-1,) - so it has to be flattened!).
+      :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be flattened!).
       :type coef: [float]
       :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
       :type coef_split_idx: [int]
@@ -1492,13 +1493,15 @@ class GENSMOOTHFamily:
       :type y: [float]
       :param Xs: A list of sparse model matrices per likelihood parameter.
       :type Xs: [scp.sparse.csc_array]
+      :return: The log-likelihood evaluated at ``coef``.
+      :rtype: float
       """
       pass
    
    def gradient(self,coef,coef_split_idx,y,Xs):
        """Function to evaluate the gradient of the llk at current coefficient estimate ``coef``.
 
-      :param coef: The current coefficient estimate (as np.array of shape (-1,) - so it has to be flattened!).
+      :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be flattened!).
       :type coef: [float]
       :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
       :type coef_split_idx: [int]
@@ -1506,13 +1509,15 @@ class GENSMOOTHFamily:
       :type y: [float]
       :param Xs: A list of sparse model matrices per likelihood parameter.
       :type Xs: [scp.sparse.csc_array]
+      :return: The Gradient of the log-likelihood evaluated at ``coef`` as ``numpy.array``) of shape (-1,1).
+      :rtype: [float]
        """
        pass
    
    def hessian(self,coef,coef_split_idx,y,Xs):
        """Function to evaluate the hessian of the llk at current coefficient estimate ``coef``.
 
-      :param coef: The current coefficient estimate (as np.array of shape (-1,) - so it has to be flattened!).
+      :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be flattened!).
       :type coef: [float]
       :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
       :type coef_split_idx: [int]
@@ -1520,6 +1525,8 @@ class GENSMOOTHFamily:
       :type y: [float]
       :param Xs: A list of sparse model matrices per likelihood parameter.
       :type Xs: [scp.sparse.csc_array]
+      :return: The Hessian of the log-likelihood evaluated at ``coef``.
+      :rtype: ``scipy.sparse.csc_array``
        """
        pass
    
@@ -1533,15 +1540,18 @@ class PropHaz(GENSMOOTHFamily):
     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
     - Nocedal & Wright (2006). Numerical Optimization. Springer New York.
 
-   :param ut: Unique event time vector as described by WPS (2016), holding unique event times in decreasing order.
-   :type ut: [int]
-   :param r: Index vector as described by WPS (2016), holding for each data-point the index to it's corresponding event time in ``ut``.
-   :type r: [int]
+   :param ut: Unique event time vector (each time represnted as ``int``) as described by WPS (2016), holding unique event times in decreasing order.
+   :type ut: numpy.array
+   :param r: Index vector as described by WPS (2016), holding for each data-point (i.e., for each row in ``Xs[0``]) the index to it's corresponding event time in ``ut``.
+   :type r: numpy.array
    
    """
 
    def __init__(self, ut, r):
-      super().__init__(1, [LOG()], ut, r)
+      super().__init__(1, [Identity()], ut, r)
+      self.__hs = None
+      self.__qs = None
+      self.__avs = None
    
    def llk(self,coef,coef_split_idx,delta,Xs):
       """Log-likelihood function as defined by Wood, Pya, & Säfken (2016).
@@ -1593,7 +1603,7 @@ class PropHaz(GENSMOOTHFamily):
 
       ``delta`` (passed as dependent variable) holds values in ``{0,1}``, indicating whether the event was observed or not.
       """
-      print(coef[:10])
+      
       # Extract and define all variables defined by WPS (2016)
       ut = self.llkargs[0]
       r = self.llkargs[1]
@@ -1602,7 +1612,7 @@ class PropHaz(GENSMOOTHFamily):
       eta = X@coef
 
       with warnings.catch_warnings(): # Overflow
-         #warnings.simplefilter("ignore")
+         warnings.simplefilter("ignore")
          gamma = np.exp(eta)
       gamma[np.isnan(gamma) | np.isinf(gamma)] = np.power(np.finfo(float).max,0.9)
       gamma = gamma.reshape(-1,1)
@@ -1637,7 +1647,7 @@ class PropHaz(GENSMOOTHFamily):
 
          g -= dj*bpg
       
-      return g.flatten()
+      return g.reshape(-1,1)
 
 
    def hessian(self, coef, coef_split_idx, delta, Xs):
@@ -1689,5 +1699,127 @@ class PropHaz(GENSMOOTHFamily):
          H += Hj
 
       return scp.sparse.csc_array(H)
+   
+   def __prepare_predictions(self,coef,delta,Xs):
+    """Computes all the quantities defined by Wood, Pya, & Säfken (2016) that are necessary for predictions.
 
+    This includes the base-line hazard, as well as the :math`\mathbf{a}` vectors from WPS (2016). These are assigned to the instance of this family.
 
+    ``delta`` (passed as dependent variable to ``Formula``) holds values in ``{0,1}``, indicating whether the event was observed or not.
+    
+    :param coef: Coefficient vector as ``numpy.array`` of shape (-1,1).
+    :type coef: numpy.array
+    :param delta: Dependent variable passed to :func:`mssm.src.python.formula.Formula`, holds (for each row in ``Xs[0``]) a value in ``{0,1}``, indicating whether for that observation the event was observed or not.
+    :type delta: numpy.array
+    :param Xs The list model matrices (here holding a single model matrix) obtained from :func:`mssm.models.GSMM.get_mmat()``.
+    :type Xs: [scipy.sparse.csc_array]
+    """
+    # Extract and define all variables defined by WPS (2016)
+    ut = self.llkargs[0]
+    r = self.llkargs[1]
+    nt = len(ut)
+    X = Xs[0]
+    eta = X@coef
+
+    with warnings.catch_warnings(): # Overflow
+        warnings.simplefilter("ignore")
+        gamma = np.exp(eta)
+
+    gamma[np.isnan(gamma) | np.isinf(gamma)] = np.power(np.finfo(float).max,0.9)
+    gamma = gamma.reshape(-1,1)
+
+    # We need gamma_ps, b_ps, and djs
+    gamma_ps = []
+    djs = []
+    b_ps = []
+
+    gamma_p = 0
+    b_p = np.zeros((1,X.shape[1]))
+    for j in range(nt):
+        ri = r == j
+
+        # Get dj
+        dj = np.sum(delta[ri])
+        djs.append(dj)
+        
+        # gamma_p
+        gamma_i = (gamma[ri,0]).reshape(-1,1)
+        with warnings.catch_warnings(): # Overflow
+            warnings.simplefilter("ignore")
+            gamma_p += np.sum(gamma_i)
+
+        if np.isnan(gamma_p) | np.isinf(gamma_p):
+            gamma_p = np.power(np.finfo(float).max,0.9)
+        gamma_ps.append(gamma_p)
+        
+        # b_p vector
+        X_i = X[ri,:]
+        bi = gamma_i.T@X_i
+        b_p += bi
+        b_ps.append(copy.deepcopy(b_p))
+    
+    # Now base-line hazard + variance and a vectors
+    hs = np.zeros(nt)
+    qs = np.zeros(nt)
+    avs = [np.zeros_like(b_p) for _ in range(nt)]
+
+    hs[-1] = djs[-1]/gamma_ps[-1]
+    qs[-1] = djs[-1]/np.power(gamma_ps[-1],2)
+    avs[-1] = b_ps[-1] * djs[-1]/np.power(gamma_ps[-1],2)
+    #print(hs[-1],qs[-1])
+
+    for j in range(nt-2,-1,-1):
+        #print(j,hs[j+1])
+        hs[j] = hs[j+1] + djs[j]/gamma_ps[j]
+        qs[j] = qs[j+1] + djs[j]/np.power(gamma_ps[j],2)
+        avs[j] = avs[j+1] + b_ps[j] * djs[j]/np.power(gamma_ps[j],2)
+    
+    self.__hs = hs
+    self.__qs = qs
+    self.__avs = avs
+
+   def get_survival(self,coef,Xs,delta,t,x,V):
+    """Compute survival function + variance at time-point ``t``, given ``k`` optional covariate vector(s) x as defined by Wood, Pya, & Säfken (2016).
+
+    :param coef: Coefficient vector as ``numpy.array`` of shape (-1,1).
+    :type coef: numpy.array
+    :param Xs The list model matrices (here holding a single model matrix) obtained from :func:`mssm.models.GSMM.get_mmat()``.
+    :type Xs: [scipy.sparse.csc_array]
+    :param delta: Dependent variable passed to :func:`mssm.src.python.formula.Formula`, holds (for each row in ``Xs[0``]) a value in ``{0,1}``, indicating whether for that observation the event was observed or not.
+    :type delta: numpy.array
+    :param t: Time-point at which to evaluate the survival function.
+    :type t: int
+    :param x: Optional vector (or matrix) of covariate values. Needs to be of shape ``(k,len(coef))``.
+    :type x: numpy.array
+    :param V: Estimated Co-variance matrix of posterior for ``coef``
+    :type V: scipy.sparse.csc-array
+    :return: Two arrays, the first holds ``k`` survival function estimates, the latter holds ``k`` variance estimates for each of the survival function estimates.
+    :rtype: (numpy.array,numpy.array)
+    """
+
+    if self.__hs is None:
+       self.__prepare_predictions(coef,delta,Xs)
+    
+    # Extract and define all variables defined by WPS (2016)
+    ut = self.llkargs[0]
+    eta = x@coef
+    #print(eta)
+
+    # Find nearest larger time-point
+    if not t in ut:
+        t = min(ut[ut > t])
+
+    # Find index in h corresponding to t
+    ti = ut == t
+    tiv = np.arange(len(ut))[ti][0]
+    #print(t,tiv)
+    
+    # Compute (log) survival
+    lS = -self.__hs[ti] * np.exp(eta)
+    S = np.exp(lS)
+
+    # Compute variance
+    v =  - self.__hs[ti]*x + self.__avs[tiv]
+    
+    varS = np.exp(eta) * S * np.power(self.__qs[ti] + np.sum(v@V * v,axis=1).reshape(-1,1),0.5)
+    return S, varS    

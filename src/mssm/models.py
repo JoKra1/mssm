@@ -1066,11 +1066,13 @@ class GAMMLSS(GAMM):
             self.coef = np.ndarray.flatten(split_coef[formi])
             self.scale=1
             start = 0
-            
-            end = self.coef_split_idx[0]
-            for pari in range(1,formi+1):
-                start = end
-                end += self.formulas[pari].n_coef
+            if len(self.coef_split_idx) == 0:
+                end = form.n_coef
+            else:
+                end = self.coef_split_idx[0]
+                for pari in range(1,formi+1):
+                    start = end
+                    end += self.formulas[pari].n_coef
 
             self.lvi = self.overall_lvi[:,start:end]
 
@@ -1138,10 +1140,13 @@ class GAMMLSS(GAMM):
 
                 # and lvi + scale:
                 start = 0
-                end = self.coef_split_idx[0]
-                for pari in range(1,formi+1):
-                    start = end
-                    end += self.formulas[pari].n_coef
+                if len(self.coef_split_idx) == 0:
+                    end = form.n_coef
+                else:
+                    end = self.coef_split_idx[0]
+                    for pari in range(1,formi+1):
+                        start = end
+                        end += self.formulas[pari].n_coef
 
                 self.lvi = self.overall_lvi[:,start:end]
                 self.scale = 1
@@ -1204,10 +1209,13 @@ class GAMMLSS(GAMM):
 
                 # and lvi + scale:
                 start = 0
-                end = self.coef_split_idx[0]
-                for pari in range(1,formi+1):
-                    start = end
-                    end += self.formulas[pari].n_coef
+                if len(self.coef_split_idx) == 0:
+                    end = form.n_coef
+                else:
+                    end = self.coef_split_idx[0]
+                    for pari in range(1,formi+1):
+                        start = end
+                        end += self.formulas[pari].n_coef
 
                 self.lvi = self.overall_lvi[:,start:end]
                 self.scale = 1
@@ -1404,10 +1412,13 @@ class GAMMLSS(GAMM):
             self.scale=1
             start = 0
             
-            end = self.coef_split_idx[0]
-            for pari in range(1,par+1):
-                start = end
-                end += self.formulas[pari].n_coef
+            if len(self.coef_split_idx) == 0:
+                end = self.formula.n_coef
+            else:
+                end = self.coef_split_idx[0]
+                for pari in range(1,par+1):
+                    start = end
+                    end += self.formulas[pari].n_coef
             self.lvi = self.overall_lvi[:,start:end]
         
             post = super().sample_post(n_ps, use_post, deviations, seed)
@@ -1478,11 +1489,15 @@ class GAMMLSS(GAMM):
         self.coef = np.ndarray.flatten(split_coef[par])
         self.scale=1
         start = 0
-        
-        end = self.coef_split_idx[0]
-        for pari in range(1,par+1):
-            start = end
-            end += self.formulas[pari].n_coef
+
+        if len(self.coef_split_idx) == 0:
+            end = self.formula.n_coef
+        else:
+            end = self.coef_split_idx[0]
+            for pari in range(1,par+1):
+                start = end
+                end += self.formulas[pari].n_coef
+
         self.lvi = self.overall_lvi[:,start:end]
 
         pred = super().predict(use_terms, n_dat, alpha, ci, whole_interval, n_ps, seed)
@@ -1543,10 +1558,14 @@ class GAMMLSS(GAMM):
         self.scale=1
 
         start = 0
-        end = self.coef_split_idx[0]
-        for pari in range(1,par+1):
-            start = end
-            end += self.formulas[pari].n_coef
+        if len(self.coef_split_idx) == 0:
+            end = self.formula.n_coef
+        else:
+            end = self.coef_split_idx[0]
+            for pari in range(1,par+1):
+                start = end
+                end += self.formulas[pari].n_coef
+
         self.lvi = self.overall_lvi[:,start:end]
         
         # Predicted difference
