@@ -3,7 +3,7 @@ import scipy as scp
 import copy
 from collections.abc import Callable
 from .src.python.formula import Formula,build_sparse_matrix_from_formula,VarType,lhs,ConstType,Constraint,pd,embed_shared_penalties,warnings
-from .src.python.exp_fam import Link,Logit,Identity,LOG,LOGb,Family,Binomial,Gaussian,GAMLSSFamily,GAUMLSS,Gamma,InvGauss,Binomial2,MULNOMLSS,GAMMALS,GENSMOOTHFamily,PropHaz
+from .src.python.exp_fam import Link,Logit,Identity,LOG,LOGb,Family,Binomial,Gaussian,GAMLSSFamily,GAUMLSS,Gamma,InvGauss,Binomial2,MULNOMLSS,GAMMALS,GENSMOOTHFamily,PropHaz,Poisson
 from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2,solve_gammlss_sparse,solve_generalSmooth_sparse
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 from .src.python.penalties import PenType,LambdaTerm
@@ -592,7 +592,7 @@ class GAMM:
                 
     ##################################### Fitting #####################################
     
-    def fit(self,max_outer=50,max_inner=100,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=False,extension_method_lam = "nesterov",restart=False,method="Chol",check_cond=1,progress_bar=True,n_cores=10):
+    def fit(self,max_outer=50,max_inner=100,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=False,extension_method_lam = "nesterov",restart=False,method="Chol",check_cond=1,progress_bar=True,n_cores=10,offset = None):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -618,6 +618,8 @@ class GAMM:
         :type progress_bar: bool,optional
         :param n_cores: Number of cores to use during parts of the estimation that can be done in parallel. Defaults to 10.
         :type n_cores: int,optional
+        :param offset: Mimics the behavior of the ``offset`` argument for ``gam`` in ``mgcv`` in R. If a value is provided here (can either be a float or a ``numpy.array`` of shape (-1,1) - if it is an array, then the first dimension has to match the number of observations in the data. NANs present in the dependent variable will be excluded from the offset vector.) then it is consistently added to the linear predictor during estimation. It will **not** be used by any other function of the :class:`GAMM` class (e.g., for prediction). This argument is ignored if ``len(self.formula.file_paths)>0`` that is, if :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` should be created iteratively. Defaults to None.
+        :type offset: float or [float],optional
         """
         # We need to initialize penalties
         if not restart:
@@ -626,6 +628,8 @@ class GAMM:
 
         if penalties is None and restart:
             raise ValueError("Penalties were not initialized. Restart must be set to False.")
+        
+        self.offset = 0
 
         if len(self.formula.file_paths) == 0:
             # We need to build the model matrix once
@@ -650,6 +654,19 @@ class GAMM:
                 cov = None
 
             y_flat = self.formula.y_flat[self.formula.NOT_NA_flat]
+
+            # Offset handling - for strictly additive model just subtract from y and then pass zero
+            # via self.offset (default initialization)
+            if offset is not None:
+
+                # First drop NANs
+                if isinstance(offset,np.ndarray):
+                    offset = offset[self.formula.NOT_NA_flat]
+
+                if not isinstance(self.family,Gaussian) or isinstance(self.family.link,Identity) == False:
+                    self.offset = offset
+                else:
+                    y_flat -= offset
 
             if not self.formula.get_lhs().f is None:
                 # Optionally apply function to dep. var. before fitting.
@@ -700,7 +717,8 @@ class GAMM:
                                                                                       conv_tol,extend_lambda,control_lambda,
                                                                                       exclude_lambda,extension_method_lam,
                                                                                       len(self.formula.discretize) == 0,
-                                                                                      method,check_cond,progress_bar,n_cores)
+                                                                                      method,check_cond,progress_bar,n_cores,
+                                                                                      self.offset)
             
             self.Wr = Wr
 
@@ -709,6 +727,12 @@ class GAMM:
                 self.hessian = -1 * ((model_mat.T@(Wr@Wr)@model_mat).tocsc()/scale)
             else:
                 self.hessian = -1 * ((model_mat.T@model_mat).tocsc()/scale)
+
+                if offset is not None:
+                    # Assign correct offset and re-adjust y_flat + eta
+                    self.offset = offset
+                    y_flat += offset
+                    eta += offset
         
         else:
             # Iteratively build model matrix.

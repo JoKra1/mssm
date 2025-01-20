@@ -519,14 +519,12 @@ class Binomial(Family):
 
    :param link: The link function to be used by the model of the mean of this family. By default set to the canonical logit link.
    :type link: Link
-   :param scale: Known scale parameter for this family - by default set to 1.
-   :type scale: float or None, optional
    :param n: Number of independent draws from a Binomial per observation/row of data-frame. For binary data this can simply be set to 1, which is the default.
    :type n: int or [int], optional
    """
    
-   def __init__(self, link: Link=Logit(), scale: float = 1, n: int or [int] = 1) -> None:
-      super().__init__(link,False,scale)
+   def __init__(self, link: Link=Logit(), n: int or [int] = 1) -> None:
+      super().__init__(link,False,1)
       self.n = n # Number of independent samples from Binomial!
       self.__max_llk = None # Needed for Deviance calculation.
       self.is_canonical = isinstance(link,Logit)
@@ -607,8 +605,8 @@ class Binomial(Family):
       :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: [float]
       """
-      D = 2 * (self.__max_llk - self.llk(y,mu))
-      return D
+      dev = np.sum(self.D(y,mu))
+      return dev
    
    def D(self,y,mu):
       """
@@ -627,7 +625,17 @@ class Binomial(Family):
       # Adds float_min**0.9 to log terms that could potentially be zero..
       k = y*self.n
       kmu = mu*self.n
-      return 2 * (k*(np.log(k + np.power(sys.float_info.min,0.9)) - np.log(kmu)) + (self.n-k) * (np.log(self.n-k + np.power(sys.float_info.min,0.9)) - np.log(self.n-kmu)))
+
+      with warnings.catch_warnings(): # Divide by zero
+         warnings.simplefilter("ignore")
+         ratio1 = np.log(k) - np.log(kmu)
+         ratio2 = np.log(self.n-k) - np.log(self.n-kmu)
+      
+      # Limiting behavior of y.. (see Wood, 2017)
+      ratio1[np.isinf(ratio1)] = 0
+      ratio2[np.isinf(ratio2)] = 0
+
+      return 2 * (k*(ratio1) + ((self.n-k) * ratio2))
 
 
 class Gaussian(Family):
@@ -904,7 +912,7 @@ class InvGauss(Family):
       return np.power(mu,3)
    
    def lp(self,y,mu,scale=1):
-      """Log-probability of observing every proportion in :math:`\mathbf{y}` under their respective inverse Gaussian with mean = :math:`\\boldsymbol{\mu}`.
+      """Log-probability of observing every value in :math:`\mathbf{y}` under their respective inverse Gaussian with mean = :math:`\\boldsymbol{\mu}`.
 
       References:
 
@@ -983,6 +991,143 @@ class InvGauss(Family):
       # Based on Table 3.1 in Wood (2017)
       dev = np.sum(self.D(y,mu))
       return dev
+   
+class Poisson(Family):
+   """Poisson Family. 
+
+   We assume: :math:`Y_i \sim P(\lambda)`. We can simply set :math:`\lambda=\mu` (compare scipy density to the one in table 3.1 of Wood, 2017)
+   and treat the scale parameter of a GAMM (:math:`\phi`) as fixed/known at 1.
+
+   References:
+
+    - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+    - scipy: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.poisson.html
+
+   :param link: The link function to be used by the model of the mean of this family. By default set to the log link.
+   :type link: Link
+   """
+
+   def __init__(self, link: Link= LOG()) -> None:
+      super().__init__(link, False, 1)
+      self.is_canonical = isinstance(link,LOG)
+   
+   def V(self,mu):
+      """Variance function for the Poisson family.
+
+      The variance of random variable :math:`Y` is proportional to it's mean.
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param mu: a N-dimensional vector of the model prediction/the predicted mean
+      :type mu: [float]
+      :return: mu 
+      :rtype: [float]
+      """
+      # Wood (2017)
+      return mu
+   
+   def lp(self,y,mu):
+      """Log-probability of observing every value in :math:`\mathbf{y}` under their respective Poisson with mean = :math:`\\boldsymbol{\mu}`.
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param y: The vector containing each observed value.
+      :type y: [float]
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
+      :rtype: [float]
+      """
+      # Need to transform from mean to \lambda
+      # From Wood (2017) and the density in https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.poisson.html,
+      # we have that \lam=\mu
+      lam = mu
+      return scp.stats.poisson.logpmf(y,mu=lam)
+   
+   def llk(self,y,mu):
+      """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param y: The vector containing each observation.
+      :type y: [float]
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      :param scale: The (estimated) scale parameter, defaults to 1
+      :type scale: float, optional
+      :return: The log-probability of observing all data under the current model.
+      :rtype: float
+      """
+      return sum(self.lp(y,mu))[0]
+   
+   def D(self,y,mu):
+      """Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param y: The vector containing each observation.
+      :type y: [float]
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      :return: A N-dimensional vector containing the contribution of each data-point to the overall model deviance.
+      :rtype: [float]
+      """
+      # Based on Table 3.1 in Wood (2017)
+      diff = y - mu
+
+      with warnings.catch_warnings(): # Divide by zero
+         warnings.simplefilter("ignore")
+         ratio = y*(np.log(y) - np.log(mu))
+
+      ratio[np.isinf(ratio) | np.isnan(ratio)] = 0
+      
+      return 2*ratio - 2*diff
+   
+   def deviance(self,y,mu):
+      """Deviance of the model under this family: 2 * (llk_max - llk_c) * scale (Wood, 2017; Faraway, 2016).
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param y: The vector containing each observation.
+      :type y: [float]
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      :return: The model deviance.
+      :rtype: float
+      """
+      # Based on Table 3.1 in Wood (2017)
+      dev = np.sum(self.D(y,mu))
+      return dev
+   
+   def init_mu(self,y):
+      """
+      Function providing initial :math:`\\boldsymbol{\mu}` vector for Poisson GAMM.
+
+      We shrink extreme observed counts towards mean.
+
+      :param y: The vector containing each observation.
+      :type y: [float]
+      """
+
+      gmu = np.mean(y)
+      norm = y / gmu
+      
+      norm[norm > 1.9] = 1.9
+      norm[norm < 0.1] = 0.1
+      mu = gmu * norm
+
+      return mu
+
 
 class GAMLSSFamily:
    """Base-class to be implemented by families of Generalized Additive Mixed Models of Location, Scale, and Shape (GAMMLSS; Rigby & Stasinopoulos, 2005).

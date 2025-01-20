@@ -335,7 +335,7 @@ def adjust_CI(model,n_ps,b,predi_mat,use_terms,alpha,seed):
 
         return b
 
-def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10):
+def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0):
    """
    Allows to evaluate REML criterion (e.g., Wood, 2011; Wood, 2016) efficiently for
    a set of \lambda values.
@@ -354,12 +354,12 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10):
 
    if isinstance(family,Gaussian) and isinstance(family.link,Identity):
         # AMM - directly solve for coef
-        LP, Pr, coef, code = cpp_solve_coef(y,X,S_emb)
+        LP, Pr, coef, code = cpp_solve_coef(y-offset,X,S_emb)
 
         if code != 0:
             raise ValueError("Forming coefficients for specified penalties was not possible.")
         
-        eta = (X @ coef).reshape(-1,1)
+        eta = (X @ coef).reshape(-1,1) + offset
         mu = eta
         nH = (X.T@X).tocsc()
    else:
@@ -371,7 +371,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10):
        eta = family.link.f(mu)
        
        # First pseudo-dat iteration
-       yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta,X,Xb,family)
+       yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family)
 
        # Solve coef
        LP, Pr, coef, code = cpp_solve_coef(yb,Xb,S_emb)
@@ -380,7 +380,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10):
             raise ValueError("Forming coefficients for specified penalties was not possible.")
 
        # Update eta & mu
-       eta = (X @ coef).reshape(-1,1)
+       eta = (X @ coef).reshape(-1,1) + offset
        mu = family.link.fi(eta)
 
        # Compute deviance
@@ -394,7 +394,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10):
        for newt_iter in range(50):
         
            # Update pseudo-dat
-           yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta,X,Xb,family)
+           yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family)
 
            LP, Pr, n_coef, code = cpp_solve_coef(yb,Xb,S_emb)
            
@@ -402,7 +402,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10):
                 raise ValueError("Forming coefficients for specified penalties was not possible.")
 
            # Update eta & mu
-           eta = (X @ n_coef).reshape(-1,1)
+           eta = (X @ n_coef).reshape(-1,1) + offset
            with warnings.catch_warnings(): # Catch errors with mean computation (e.g., overflow)
             warnings.simplefilter("ignore")
             mu = family.link.fi(eta)
@@ -414,7 +414,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10):
            pen_dev = dev + n_coef.T @ S_emb @ n_coef
 
            # Step-size control:
-           dev,pen_dev,mu,eta,coef = correct_coef_step(coef,n_coef,dev,pen_dev,c_pen_dev,family,eta,mu,y,X,len(penalties),S_emb,None,1)
+           dev,pen_dev,mu,eta,coef = correct_coef_step(coef,n_coef,dev,pen_dev,c_pen_dev,family,eta,mu,y,X,len(penalties),S_emb,None,1,offset)
 
            # Convergence control
            if np.abs(pen_dev - c_pen_dev) < 1e-7*pen_dev:
@@ -429,7 +429,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10):
        inval_check =  np.any(np.isnan(z))
 
        if inval_check:
-            _, w, inval = PIRLS_pdat_weights(y,mu,eta,family)
+            _, w, inval = PIRLS_pdat_weights(y,mu,eta-offset,family)
             w[inval] = 0
 
             # Re-compute weight matrix
@@ -747,7 +747,7 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=
             return -reml
         
         if isinstance(family,Family):
-            nHp = central_hessian(ep.flatten(),reml_wrapper,family,y,X,rPen,n_c)
+            nHp = central_hessian(ep.flatten(),reml_wrapper,family,y,X,rPen,n_c,model.offset)
             #nHp = Hessian(reml_wrapper)(ep.flatten(),family,y,X,rPen,n_c)
         else:
             nHp = central_hessian(ep.flatten(),reml_wrapper,family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=optimizer,**bfgs_options)
@@ -849,7 +849,7 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=
         
         # Now compute REML - and all other terms needed for correction proposed by Greven & Scheipl (2017)
         if isinstance(family,Family):
-            reml,_,_,_,_,_,_ = compute_reml_candidate_GAMM(family,y,X,rPen,n_c)
+            reml,_,_,_,_,_,_ = compute_reml_candidate_GAMM(family,y,X,rPen,n_c,model.offset)
         else:
             reml,_,_,_,_ = compute_REML_candidate_GSMM(family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=optimizer,**bfgs_options)
 
@@ -911,7 +911,7 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=
             
             if isinstance(family,Family):
                 #print([penx.lam for penx in rPen])
-                reml,_,_,_,_,_,_ = compute_reml_candidate_GAMM(family,y,X,rPen,n_c)
+                reml,_,_,_,_,_,_ = compute_reml_candidate_GAMM(family,y,X,rPen,n_c,model.offset)
 
             else:
                 reml,_,_,_,_ = compute_REML_candidate_GSMM(family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=optimizer,**bfgs_options)
@@ -972,7 +972,7 @@ def updateVp(ep,remls,rGrid):
     
     return Vp
 
-def _compute_VB_corr_terms_MP(family,address_y,address_dat,address_ptr,address_idx,address_datXX,address_ptrXX,address_idxXX,shape_y,shape_dat,shape_ptr,shape_datXX,shape_ptrXX,rows,cols,rPen,r):
+def _compute_VB_corr_terms_MP(family,address_y,address_dat,address_ptr,address_idx,address_datXX,address_ptrXX,address_idxXX,shape_y,shape_dat,shape_ptr,shape_datXX,shape_ptrXX,rows,cols,rPen,offset,r):
    """
    Multi-processing code for Grevel & Scheipl correction for Gaussian additive model - see ``correct_VB`` for details.
    """
@@ -1001,12 +1001,12 @@ def _compute_VB_corr_terms_MP(family,address_y,address_dat,address_ptr,address_i
 
    # Now compute REML - and all other terms needed for correction proposed by Greven & Scheipl (2017)
    S_emb,_,_,_ = compute_S_emb_pinv_det(X.shape[1],rPen,"svd")
-   LP, Pr, coef, code = cpp_solve_coef(y,X,S_emb)
+   LP, Pr, coef, code = cpp_solve_coef(y-offset,X,S_emb)
 
    if code != 0:
        raise ValueError("Forming coefficients for specified penalties was not possible.")
    
-   eta = (X @ coef).reshape(-1,1)
+   eta = (X @ coef).reshape(-1,1) + offset
    
    # Compute scale
    _,_,edf,_,_,scale = update_scale_edf(y,None,eta,None,X.shape[0],X.shape[1],LP,None,Pr,None,family,rPen,10)
@@ -1378,7 +1378,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
                        repeat(ptr_mem.name),repeat(idx_mem.name),repeat(dat_memXX.name),
                        repeat(ptr_memXX.name),repeat(idx_memXX.name),repeat(shape_y),
                        repeat(shape_dat),repeat(shape_ptr),repeat(shape_datXX),repeat(shape_ptrXX),
-                       repeat(rows),repeat(cols),repeat(rPen),rGrid)
+                       repeat(rows),repeat(cols),repeat(rPen),repeat(model.offset),rGrid)
             
             Linvs, coefs, remls, scales, edfs, llks = zip(*pool.starmap(_compute_VB_corr_terms_MP,args))
             aics = -2*np.array(llks) + 2*np.array(edfs)
@@ -1406,7 +1406,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
             
             # Now compute REML - and all other terms needed for correction proposed by Greven & Scheipl (2017)
             if isinstance(family,Family):
-                reml,LP,Pr,coef,scale,edf,llk = compute_reml_candidate_GAMM(family,y,X,rPen,n_c)
+                reml,LP,Pr,coef,scale,edf,llk = compute_reml_candidate_GAMM(family,y,X,rPen,n_c,model.offset)
                 coef = coef.reshape(-1,1)
 
                 # Form VB, first solve LP{^-1}
@@ -1536,7 +1536,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
                             repeat(ptr_mem.name),repeat(idx_mem.name),repeat(dat_memXX.name),
                             repeat(ptr_memXX.name),repeat(idx_memXX.name),repeat(shape_y),
                             repeat(shape_dat),repeat(shape_ptr),repeat(shape_datXX),repeat(shape_ptrXX),
-                            repeat(rows),repeat(cols),repeat(rPen),p_sample)
+                            repeat(rows),repeat(cols),repeat(rPen),repeat(model.offset),p_sample)
                     
                     sample_Linvs, sample_coefs, sample_remls, sample_scales, sample_edfs, sample_llks = zip(*pool.starmap(_compute_VB_corr_terms_MP,args))
                     sample_aics = -2*np.array(sample_llks) + 2*np.array(sample_edfs)
@@ -1597,7 +1597,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
                         rPen[ridx].lam = rc
                     
                     if isinstance(family,Family):
-                        reml,LP,Pr,coef,scale,edf,llk = compute_reml_candidate_GAMM(family,y,X,rPen,n_c)
+                        reml,LP,Pr,coef,scale,edf,llk = compute_reml_candidate_GAMM(family,y,X,rPen,n_c,model.offset)
                         coef = coef.reshape(-1,1)
 
                         # Form VB, first solve LP{^-1}
