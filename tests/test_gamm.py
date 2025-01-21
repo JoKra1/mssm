@@ -605,7 +605,7 @@ class Test_print_smooth_binomial:
 
     # By default, the Binomial family assumes binary data and uses the logit link.
     model = GAMM(formula,Binomial())
-    model.fit()
+    model.fit(max_inner=1)
 
     def test_print_smooth_p(self):
         capture = io.StringIO()
@@ -623,7 +623,7 @@ class Test_Vp_estimation:
 
     # By default, the Binomial family assumes binary data and uses the logit link.
     model = GAMM(formula,Binomial())
-    model.fit()
+    model.fit(max_inner=1)
 
     Vp,_,_,_ = estimateVp(model,strategy="JJJ1")
 

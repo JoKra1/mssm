@@ -632,8 +632,8 @@ class Binomial(Family):
          ratio2 = np.log(self.n-k) - np.log(self.n-kmu)
       
       # Limiting behavior of y.. (see Wood, 2017)
-      ratio1[np.isinf(ratio1)] = 0
-      ratio2[np.isinf(ratio2)] = 0
+      ratio1[np.isinf(ratio1) | np.isnan(ratio1)] = 0
+      ratio2[np.isinf(ratio2) | np.isnan(ratio2)] = 0
 
       return 2 * (k*(ratio1) + ((self.n-k) * ratio2))
 

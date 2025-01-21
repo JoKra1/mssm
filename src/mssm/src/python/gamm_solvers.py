@@ -1042,17 +1042,21 @@ def undo_extension_lambda_step(lti,lam,dLam,extend_by, was_extended, method, fam
 
    return lam, dLam
 
-def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
+def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,coef,
                         family,col_S,S_emb,penalties,
                         was_extended,pinv,lam_delta,
                         extend_by,o_iter,dev_check,n_c,
                         control_lambda,extend_lambda,
                         exclude_lambda,extension_method_lam,
-                        formula,form_Linv,method,offset):
+                        formula,form_Linv,method,offset,max_inner):
    # Propose & perform step-length control for the lambda parameters via the Fellner Schall method
    # by Wood & Fasiolo (2016)
    lam_accepted = False
    lam_checks = 0
+
+   # dev_check holds current deviance - but need penalized for lambda step-length (see Wood et al., 2017)
+   pen_dev_check = dev_check + coef.T @ S_emb @ coef 
+
    while not lam_accepted:
 
       # Re-compute S_emb and S_pinv
@@ -1067,9 +1071,73 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
       total_edf,\
       term_edfs,\
       Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
-                                             X,Xb,family,S_emb,S_root,S_pinv,
-                                             FS_use_rank,penalties,n_c,
-                                             formula,form_Linv,offset)
+                                            X,Xb,family,S_emb,S_root,S_pinv,
+                                            FS_use_rank,penalties,n_c,
+                                            formula,form_Linv,offset)
+      
+      # Optionally repeat PIRLS iteration until convergence - this is no longer PQL/Wood, 2017 but will generally be more stable (Wood & Fasiolo, 2017) 
+      if max_inner > 1 and ((isinstance(family,Gaussian) == False) or (isinstance(family.link,Identity) == False)):
+         
+         # If coef. are updated to convergence, we have to check first iter against incoming/old coef
+         # but under current penalty! (see Wood et al., 2017)
+         c_dev_prev = dev_check + coef.T @ S_emb @ coef # dev check holds current deviance
+         n_coef2 = copy.deepcopy(n_coef)
+         n_coef = copy.deepcopy(coef)
+
+         # Update deviance & penalized deviance
+         inval = np.isnan(mu).flatten()
+         dev = family.deviance(y[inval == False],mu[inval == False])
+         pen_dev = dev + n_coef2.T @ S_emb @ n_coef2
+
+         for i_iter in range(max_inner - 1):
+            
+            # Perform step-length control for the coefficients (repeat step 3 in Wood, 2017)
+            dev,pen_dev,mu,eta,n_coef = correct_coef_step(n_coef,n_coef2,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,len(penalties),S_emb,None,n_c,offset)
+
+            # Update PIRLS weights
+            yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family)
+
+            # Convergence check for inner loop
+            if i_iter > 0:
+               dev_diff_inner = abs(pen_dev - c_dev_prev)
+               if dev_diff_inner < 1e-9*pen_dev:
+                  break
+
+            c_dev_prev = pen_dev
+
+            # Now propose next set of coefficients
+            eta,mu,n_coef2,Pr,P,LP = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,None,offset)
+
+            # Update deviance & penalized deviance
+            inval = np.isnan(mu).flatten()
+            dev = family.deviance(y[inval == False],mu[inval == False])
+            pen_dev = dev + n_coef2.T @ S_emb @ n_coef2
+
+         
+         # Now re-compute scale and Linv
+         # Given new coefficients compute lgdetDs and bsbs - needed for REML gradient and EFS step
+         lgdetDs = None
+         bsbs = None
+         if len(penalties) > 0:
+            lgdetDs = []
+            bsbs = []
+            for lti,lTerm in enumerate(penalties):
+
+               lt_rank = None
+               if FS_use_rank[lti]:
+                  lt_rank = lTerm.rank
+
+               lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
+               lgdetDs.append(lgdetD)
+               bsbs.append(bsb)
+         
+         # Solve for inverse of Chol factor of XX+S
+         InvCholXXSP = None
+         if form_Linv:
+            InvCholXXSP = compute_Linv(LP,n_c)
+         
+         wres,InvCholXXS,total_edf,term_edfs,_,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,penalties,n_c)
+         CholXXS = P.T@LP
       
       # Compute gradient of REML with respect to lambda
       # to check if step size needs to be reduced (part of step 6 in Wood, 2017).
@@ -1081,10 +1149,10 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
       # criterion maximized is approximate REML. Also, we can probably relax the criterion a
       # bit, since check will quite often be < 0.
       check_criterion = 0
-      if (isinstance(family,Gaussian) == False) or (isinstance(family.link,Identity) == False):
+      if family.is_canonical == False: #(isinstance(family,Gaussian) == False) or (isinstance(family.link,Identity) == False):
             
-            if dev_check is not None:
-               check_criterion = 1e-7*-abs(dev_check)
+            if o_iter > 0:
+               check_criterion = 1e-7*-abs(pen_dev_check)
             
             if check[0,0] < check_criterion: 
                # Now check whether we extend lambda - and if we do so whether any extension was actually applied.
@@ -1096,6 +1164,7 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
       # Because of minimization in Wood (2017) they use a different check (step 7) but idea is the same.
       if check[0,0] < check_criterion and control_lambda: 
          # Reset extension or cut the step taken in half (for additive models)
+         lam_changes = 0
          for lti,lTerm in enumerate(penalties):
 
             # Reset extension factor for all terms that were extended.
@@ -1103,13 +1172,32 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
                lam, dLam = undo_extension_lambda_step(lti,lTerm.lam,lam_delta[lti][0],extend_by,was_extended, extension_method_lam, family)
                lTerm.lam = lam
                lam_delta[lti][0] = dLam
+               lam_changes += 1
 
-            # For Gaussian models only, rely on the strategy by Wood & Fasiolo (2016) to just half the step for additive models 
-            elif isinstance(family,Gaussian) and isinstance(family.link,Identity):
-               lam_delta[lti] = lam_delta[lti]/2
-               lTerm.lam -= lam_delta[lti][0]
+            # Otherwise, rely on the strategy by Wood & Fasiolo (2016) to just half the step for canonical models.
+            elif family.is_canonical:
+                  lam_delta[lti] = lam_delta[lti]/2
+                  lTerm.lam -= lam_delta[lti][0]
+                  lam_changes += 1
          
-      else:
+         # For non-canonical models or if step becomes extremely small, accept step
+         if lam_changes == 0 or np.linalg.norm(lam_delta) < 1e-7:
+            lam_accepted = True
+         
+         # Also have to reset eta, mu, z, and Wr
+         if max_inner > 1 and ((isinstance(family,Gaussian) == False) or (isinstance(family.link,Identity) == False)):
+            eta = (X @ coef).reshape(-1,1) + offset
+            mu = eta
+
+            if isinstance(family,Gaussian) == False or isinstance(family.link,Identity) == False:
+               with warnings.catch_warnings(): # Catch errors with mean computation (e.g., overflow)
+                  warnings.simplefilter("ignore")
+                  mu = family.link.fi(eta)
+            
+            # Reset PIRLS weights
+            yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family)
+            
+      if check[0,0] >= check_criterion or (control_lambda == False) or lam_accepted:
          # Accept the step and propose a new one as well! (part of step 6 in Wood, 2017; here uses efs from Wood & Fasiolo, 2017 to propose new lambda delta)
          lam_accepted = True
          lam_delta = []
@@ -1135,7 +1223,7 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
 
       lam_checks += 1
 
-   return eta,mu,n_coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb,lam_checks
+   return yb,Xb,z,Wr,eta,mu,n_coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb,lam_checks
 
 ################################################ Main solver ################################################
 
@@ -1209,69 +1297,17 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
             pen_dev += n_coef.T @ S_emb @ n_coef
             c_dev_prev += coef.T @ S_emb @ coef
 
-         # Perform step-length control for the coefficients (Step 3 in Wood, 2017)
-         dev,pen_dev,mu,eta,coef = correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,len(penalties),S_emb,None,n_c,offset)
+         # For Gaussian/PQL, perform step-length control for the coefficients here (Step 3 in Wood, 2017)
+         if max_inner <= 1 or (isinstance(family,Gaussian) and isinstance(family.link,Identity)):
 
-         # Update pseudo-dat weights for next coefficient step (step 1 in Wood, 2017; but moved after the coef correction because z and Wr depend on
-         # mu and eta, which change during the correction but anything that needs to be computed during the correction (deviance) does not depend on
-         # z and Wr).
-         yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta - offset,X,Xb,family)
+            dev,pen_dev,mu,eta,coef = correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,len(penalties),S_emb,None,n_c,offset)
 
-         # Optionally repeat PIRLS iteration until convergence - this is no longer PQL/Wood, 2017 but will generally be more stable (Wood & Fasiolo, 2017) 
-         if max_inner > 1 and ((isinstance(family,Gaussian) == False) or (isinstance(family.link,Identity) == False)):
-            c_dev_prev = pen_dev
-            S_root = None
-            if len(penalties) > 0:
-               _,S_pinv,S_root,FS_use_rank = compute_S_emb_pinv_det(col_S,penalties,pinv,root=method=="QR")
-
-            for i_iter in range(max_inner - 1):
-               eta,mu,n_coef,Pr,P,LP = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,None,offset)
-
-               inval = np.isnan(mu).flatten()
-               dev = family.deviance(y[inval == False],mu[inval == False])
-               pen_dev = dev
-
-               if len(penalties) > 0:
-                  pen_dev += n_coef.T @ S_emb @ n_coef
-
-               # Perform step-length control for the coefficients (repeat step 3 in Wood, 2017)
-               dev,pen_dev,mu,eta,coef = correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,len(penalties),S_emb,None,n_c,offset)
-
-               # Update PIRLS weights
-               yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family)
-
-               # Convergence check for inner loop
-               if i_iter > 0:
-                  dev_diff_inner = abs(pen_dev - c_dev_prev)
-                  if dev_diff_inner < 1e-9*pen_dev:
-                     break
-
-               c_dev_prev = pen_dev
-            
-            # Now re-compute scale and Linv
-            # Given new coefficients compute lgdetDs and bsbs - needed for REML gradient and EFS step
-            lgdetDs = None
-            bsbs = None
-            if len(penalties) > 0:
-               lgdetDs = []
-               bsbs = []
-               for lti,lTerm in enumerate(penalties):
-
-                  lt_rank = None
-                  if FS_use_rank[lti]:
-                     lt_rank = lTerm.rank
-
-                  lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
-                  lgdetDs.append(lgdetD)
-                  bsbs.append(bsb)
-            
-            # Solve for inverse of Chol factor of XX+S
-            InvCholXXSP = None
-            if form_Linv:
-               InvCholXXSP = compute_Linv(LP,n_c)
-            
-            wres,InvCholXXS,total_edf,term_edfs,_,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,penalties,n_c)
-            CholXXS = P.T@LP
+            # Update pseudo-dat weights for next coefficient step (step 1 in Wood, 2017; but moved after the coef correction because z and Wr depend on
+            # mu and eta, which change during the correction but anything that needs to be computed during the correction (deviance) does not depend on
+            # z and Wr).
+            yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta - offset,X,Xb,family)
+         else:
+            coef = n_coef
 
          # Test for convergence (Step 2 in Wood, 2017), implemented based on step 4 in Wood, Goude, & Shaw (2016): Generalized
          # additive models for large data-sets. They reccomend inspecting the change in deviance after a PQL iteration to monitor
@@ -1305,17 +1341,14 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
             #print(lTerm.lam,lam_delta[lti][0])
 
          # Now check step length and compute lambda + coef update. (steps 6-7 in Wood, 2017)
-         dev_check = None
-         if o_iter > 0:
-            dev_check = pen_dev
-
-         eta,mu,n_coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb,lam_checks = correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,
-                                                                                                                                                   family,col_S,S_emb,penalties,
-                                                                                                                                                   was_extended,pinv,lam_delta,
-                                                                                                                                                   extend_by,o_iter,dev_check,n_c,
-                                                                                                                                                   control_lambda,extend_lambda,
-                                                                                                                                                   exclude_lambda,extension_method_lam,
-                                                                                                                                                   None,form_Linv,method,offset)
+         yb,Xb,z,Wr,eta,mu,n_coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb,lam_checks = correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,coef,
+                                                                                                                                                                     family,col_S,S_emb,penalties,
+                                                                                                                                                                     was_extended,pinv,lam_delta,
+                                                                                                                                                                     extend_by,o_iter,dev,n_c,
+                                                                                                                                                                     control_lambda,extend_lambda,
+                                                                                                                                                                     exclude_lambda,extension_method_lam,
+                                                                                                                                                                     None,form_Linv,method,offset,max_inner)
+         
          fit_info.lambda_updates += lam_checks
          
       else:
@@ -1781,17 +1814,13 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
             #print(lTerm.lam,lam_delta[lti][0])
 
          # Now check step length and compute lambda + coef update.
-         dev_check = None
-         if o_iter > 0:
-            dev_check = pen_dev
-
-         eta,mu,n_coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb,lam_checks = correct_lambda_step(y,Xy,None,None,rowsX,colsX,None,XX,
-                                                                                                                                                   family,col_S,S_emb,penalties,
-                                                                                                                                                   was_extended,pinv,lam_delta,
-                                                                                                                                                   extend_by,o_iter,dev_check,
-                                                                                                                                                   n_c,control_lambda,extend_lambda,
-                                                                                                                                                   exclude_lambda,extension_method_lam,
-                                                                                                                                                   formula,form_Linv,"Chol",0)
+         _,_,_,_,eta,mu,n_coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb,lam_checks = correct_lambda_step(y,Xy,None,None,rowsX,colsX,None,XX,coef,
+                                                                                                                                                                        family,col_S,S_emb,penalties,
+                                                                                                                                                                        was_extended,pinv,lam_delta,
+                                                                                                                                                                        extend_by,o_iter,dev,
+                                                                                                                                                                        n_c,control_lambda,extend_lambda,
+                                                                                                                                                                        exclude_lambda,extension_method_lam,
+                                                                                                                                                                        formula,form_Linv,"Chol",0,1)
          fit_info.lambda_updates += lam_checks
       else:
          # If there are no penalties simply perform a newton step
