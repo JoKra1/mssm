@@ -1100,7 +1100,7 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,coef,
             # Convergence check for inner loop
             if i_iter > 0:
                dev_diff_inner = abs(pen_dev - c_dev_prev)
-               if dev_diff_inner < 1e-9*pen_dev:
+               if dev_diff_inner < 1e-9*pen_dev or i_iter == max_inner - 2:
                   break
 
             c_dev_prev = pen_dev
@@ -2530,6 +2530,128 @@ def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,S_norm,c_llk,o
          #print((L@L.T - nH).max(),(L@L.T - nH).min())
 
    return coef,split_coef,mus,etas,H,L,LV,c_llk,c_pen_llk,eps,keep,drop
+
+def correct_lambda_step_gamlss(family,mus,y,Xs,S_norm,n_coef,coef,
+                               coef_split_idx,gamlss_pen,lam_delta,
+                               extend_by,was_extended,c_llk,fit_info,outer,
+                               max_inner,min_inner,conv_tol,method,
+                               piv_tol,keep_drop,extend_lambda,
+                               extension_method_lam,control_lambda,n_c):
+   
+   # Fitting routine with step size control for smoothing parameters of GAMMLSS models. Not obvious - because we have only approximate REMl
+   # and approximate derivative, because we drop the last term involving the derivative of the negative penalized
+   # Hessian with respect to the smoothing parameters (see section 4 in Wood & Fasiolo, 2017). However, what we
+   # can do is at least undo the acceleration if we over-shoot the approximate derivative...
+
+   lam_accepted = False
+   while lam_accepted == False:
+
+      # Build new penalties
+      S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
+   
+      # First re-compute coef
+      next_coef,split_coef,next_mus,next_etas,H,L,LV,next_llk,next_pen_llk,eps,keep,drop  = update_coef_gammlss(family,mus,y,Xs,coef,
+                                                                                                                coef_split_idx,S_emb,S_norm,
+                                                                                                                c_llk,outer,max_inner,
+                                                                                                                min_inner,conv_tol,
+                                                                                                                method,piv_tol,keep_drop)
+      
+      # Handle any drop
+      if drop is not None:
+
+         fit_info.dropped = drop
+
+         # Re-compute penalty matrices in smaller problem space.
+         old_pen = copy.deepcopy(gamlss_pen)
+         gamlss_pen = drop_terms_S(gamlss_pen,keep)
+
+         S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
+
+      # Now re-compute lgdetDs, ldetHS, and bsbs
+      lgdetDs = []
+      bsbs = []
+      for lti,lTerm in enumerate(gamlss_pen):
+
+            lt_rank = None
+            if FS_use_rank[lti]:
+               lt_rank = lTerm.rank
+
+            lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,next_coef)
+            lgdetDs.append(lgdetD)
+            bsbs.append(bsb)
+
+      total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,gamlss_pen,lgdetDs,n_coef,n_c)
+      #print([l1-l2 for l1,l2 in zip(lgdetDs,ldetHSs)])
+      fit_info.lambda_updates += 1
+
+      if drop is not None:
+         gamlss_pen = old_pen
+
+      # Can exit loop here, no extension and no control
+      if outer == 0  or (control_lambda < 1) or (extend_lambda == False and control_lambda < 2):
+         lam_accepted = True
+         continue
+
+      # Compute approximate!!! gradient of REML with respect to lambda
+      # to check if step size needs to be reduced (part of step 6 in Wood, 2017).
+      lam_grad = [grad_lambda(lgdetDs[lti],ldetHSs[lti],bsbs[lti],1) for lti in range(len(gamlss_pen))]
+      lam_grad = np.array(lam_grad).reshape(-1,1) 
+      check = lam_grad.T @ lam_delta
+
+      # Now undo the acceleration if overall direction is **very** off - don't just check against 0 because
+      # our criterion is approximate, so we can be more lenient (see Wood et al., 2017).
+      lam_changes = 0 
+      if check[0] < 1e-7*-abs(next_pen_llk):
+         for lti,lTerm in enumerate(gamlss_pen):
+
+            # For extended terms undo extension
+            if extend_lambda and was_extended[lti]:
+               lam, dLam = undo_extension_lambda_step(lti,lTerm.lam,lam_delta[lti],extend_by,was_extended, extension_method_lam, None)
+
+               lTerm.lam = lam
+               lam_delta[lti] = dLam
+               lam_changes += 1
+            
+            elif control_lambda == 2:
+               # Continue to half step - this is not necessarily because we overshoot the REML
+               # (because we only have approximate gradient), but can help preventing that models
+               # oscillate around estimates.
+               lam_delta[lti] = lam_delta[lti]/2
+               lTerm.lam -= lam_delta[lti]
+               lam_changes += 1
+         
+         # If we did not change anything, simply accept
+         if lam_changes == 0 or np.linalg.norm(lam_delta) < 1e-7:
+            lam_accepted = True
+      
+      # If we pass the check we can simply accept.
+      else:
+         lam_accepted = True
+            
+   # At this point we have accepted the step - so we can propose a new one
+   lam_delta = []
+   for lti,lTerm in enumerate(gamlss_pen):
+
+      lgdetD = lgdetDs[lti]
+      ldetHS = ldetHSs[lti]
+      bsb = bsbs[lti]
+      
+      #print(lgdetD-ldetHS)
+      dLam = step_fellner_schall_sparse(lgdetD,ldetHS,bsb[0,0],lTerm.lam,1)
+
+      # For poorly scaled/ill-identifiable problems we cannot rely on the theorems by Wood
+      # & Fasiolo (2017) - so the condition below will be met, in which case we just want to
+      # take very small steps until it hopefully gets more stable (due to term dropping or better lambda value).
+      if lgdetD - ldetHS < 0:
+         dLam = np.sign(dLam) * min(abs(lTerm.lam)*0.001,abs(dLam))
+
+      if extend_lambda:
+            dLam,extend_by,was_extended = extend_lambda_step(lti,lTerm.lam,dLam,extend_by,was_extended,extension_method_lam)
+
+      lam_delta.append(dLam)
+
+   return next_coef,split_coef,next_mus,next_etas,H,L,LV,next_llk,next_pen_llk,eps,keep,drop,S_emb,total_edf,term_edfs,lam_delta
+
     
 def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
                          max_outer=50,max_inner=30,min_inner=1,conv_tol=1e-7,
@@ -2565,7 +2687,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
        raise ValueError("The initial coefficients result in invalid value for at least one predictor. Provide a different set via the family's ``init_coef`` function.")
 
     # Build current penalties
-    S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
+    S_emb,_,_,_ = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
     c_llk = family.llk(y,*mus)
     c_pen_llk = c_llk - coef.T@S_emb@coef
 
@@ -2583,167 +2705,52 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
         iterator = tqdm(iterator,desc="Fitting",leave=True)
     
     fit_info = Fit_info()
+    lam_delta = []
     for outer in iterator:
+      
+      # 1) Update coef for given lambda
+      # 2) Check lambda -> repeat 1 if necessary
+      # 3) Propose new lambda
+      coef,split_coef,mus,etas,H,L,LV,c_llk,\
+      c_pen_llk,eps,keep,drop,S_emb,\
+      total_edf,term_edfs,lam_delta = correct_lambda_step_gamlss(family,mus,y,Xs,S_norm,n_coef,coef,
+                                                                  coef_split_idx,gamlss_pen,lam_delta,
+                                                                  extend_by,was_extended,c_llk,fit_info,outer,
+                                                                  max_inner,min_inner,conv_tol,method,
+                                                                  piv_tol,keep_drop,extend_lambda,
+                                                                  extension_method_lam,control_lambda,n_c)
+      
+      if drop is not None:
+         if should_keep_drop:
+            keep_drop = [keep,drop]
 
-        # Update coefficients:
-        if outer == 0 or extend_lambda == False or control_lambda==False or (control_lambda and refit):
-            coef,split_coef,mus,etas,H,L,LV,c_llk,c_pen_llk,eps,keep,drop = update_coef_gammlss(family,mus,y,Xs,coef,
-                                                                                 coef_split_idx,S_emb,S_norm,
-                                                                                 c_llk,outer,max_inner,
-                                                                                 min_inner,conv_tol,
-                                                                                 method,piv_tol,keep_drop)
+      fit_info.iter += 1
+
+      # Check convergence
+      if outer > 0:
+         if progress_bar:
+               iterator.set_description_str(desc="Fitting - Conv.: " + "{:.2e}".format((np.abs(prev_pen_llk - c_pen_llk) - conv_tol*np.abs(c_pen_llk))[0,0]), refresh=True)
+
+         if np.abs(prev_pen_llk - c_pen_llk) < conv_tol*np.abs(c_pen_llk):
+               if progress_bar:
+                  iterator.set_description_str(desc="Converged!", refresh=True)
+                  iterator.close()
+               fit_info.code = 0
+               break
             
-            if drop is not None:
+      # We need the penalized likelihood of the model at this point for convergence control (step 2 in Wood, 2017 based on step 4 in Wood, Goude, & Shaw, 2016)
+      prev_pen_llk = c_pen_llk
 
-               fit_info.dropped = drop
-               if should_keep_drop:
-                  keep_drop = [keep,drop]
+      # And ultimately apply new proposed lambda step
+      for lti,lTerm in enumerate(gamlss_pen):
+         lTerm.lam += lam_delta[lti]
 
-               # Re-compute penalty matrices in smaller problem space.
-               old_pen = copy.deepcopy(gamlss_pen)
-               
-               # Should we re-build penalties here to match reduced space? Not sure that's necessary, because
-               # V and LV have zeroes in rows and columns for un-identifiable parameters.
-               gamlss_pen = drop_terms_S(gamlss_pen,keep)
-
-               S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
-
-            # Given new coefficients compute lgdetDs, ldetHS, and bsbs - needed for efs step
-            lgdetDs = []
-            bsbs = []
-            for lti,lTerm in enumerate(gamlss_pen):
-
-               lt_rank = None
-               if FS_use_rank[lti]:
-                  lt_rank = lTerm.rank
-
-               lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
-               lgdetDs.append(lgdetD)
-               bsbs.append(bsb)
-
-            total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,gamlss_pen,lgdetDs,n_coef,n_c)
-            #print([l1-l2 for l1,l2 in zip(lgdetDs,ldetHSs)])
-            fit_info.lambda_updates += 1
-
-            if drop is not None:
-               gamlss_pen = old_pen
-
-        # Check overall convergence
-        if outer > 0:
-
-            if progress_bar:
-                iterator.set_description_str(desc="Fitting - Conv.: " + "{:.2e}".format((np.abs(prev_pen_llk - c_pen_llk) - conv_tol*np.abs(c_pen_llk))[0,0]), refresh=True)
-
-            if np.abs(prev_pen_llk - c_pen_llk) < conv_tol*np.abs(c_pen_llk):
-                if progress_bar:
-                    iterator.set_description_str(desc="Converged!", refresh=True)
-                    iterator.close()
-                fit_info.code = 0
-                break
-            
-        # We need the penalized likelihood of the model at this point for convergence control (step 2 in Wood, 2017 based on step 4 in Wood, Goude, & Shaw, 2016)
-        prev_pen_llk = c_pen_llk
-        
-        # Now compute EFS step
-        lam_delta = []
-        for lti,lTerm in enumerate(gamlss_pen):
-
-            lgdetD = lgdetDs[lti]
-            ldetHS = ldetHSs[lti]
-            bsb = bsbs[lti]
-            
-            #print(lgdetD-ldetHS)
-            dLam = step_fellner_schall_sparse(lgdetD,ldetHS,bsb[0,0],lTerm.lam,1)
-
-            # For poorly scaled/ill-identifiable problems we cannot rely on the theorems by Wood
-            # & Fasiolo (2017) - so the condition below will be met, in which case we just want to
-            # take very small steps until it hopefully gets more stable (due to term dropping or better lambda value).
-            if lgdetD - ldetHS < 0:
-               dLam = np.sign(dLam) * min(abs(lTerm.lam)*0.001,abs(dLam))
-
-            if extend_lambda:
-                dLam,extend_by,was_extended = extend_lambda_step(lti,lTerm.lam,dLam,extend_by,was_extended,extension_method_lam)
-            lTerm.lam += dLam
-
-            lam_delta.append(dLam)
-
-        # Build new penalties
-        S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
-
-        if extend_lambda and control_lambda:
-            # Step size control for smoothing parameters. Not obvious - because we have only approximate REMl
-            # and approximate derivative, because we drop the last term involving the derivative of the negative penalized
-            # Hessian with respect to the smoothing parameters (see section 4 in Wood & Fasiolo, 2017). However, what we
-            # can do is at least undo the acceleration if we over-shoot the approximate derivative...
-
-            # First re-compute coef
-            next_coef,split_coef,next_mus,next_etas,H,L,LV,next_llk,next_pen_llk,eps,keep,drop  = update_coef_gammlss(family,mus,y,Xs,coef,
-                                                                                                      coef_split_idx,S_emb,S_norm,
-                                                                                                      c_llk,outer,max_inner,
-                                                                                                      min_inner,conv_tol,
-                                                                                                      method,piv_tol,keep_drop)
-            
-            if drop is not None:
-
-               fit_info.dropped = drop
-               if should_keep_drop:
-                  keep_drop = [keep,drop]
-
-               # Re-compute penalty matrices in smaller problem space.
-               old_pen = copy.deepcopy(gamlss_pen)
-               gamlss_pen = drop_terms_S(gamlss_pen,keep)
-
-               S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
-
-            # Now re-compute lgdetDs, ldetHS, and bsbs
-            lgdetDs = []
-            bsbs = []
-            for lti,lTerm in enumerate(gamlss_pen):
-
-                  lt_rank = None
-                  if FS_use_rank[lti]:
-                     lt_rank = lTerm.rank
-
-                  lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,next_coef)
-                  lgdetDs.append(lgdetD)
-                  bsbs.append(bsb)
-
-            total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,gamlss_pen,lgdetDs,n_coef,n_c)
-            #print([l1-l2 for l1,l2 in zip(lgdetDs,ldetHSs)])
-            fit_info.lambda_updates += 1
-
-            if drop is not None:
-               gamlss_pen = old_pen
-            
-            # Compute approximate!!! gradient of REML with respect to lambda
-            # to check if step size needs to be reduced (part of step 6 in Wood, 2017).
-            lam_grad = [grad_lambda(lgdetDs[lti],ldetHSs[lti],bsbs[lti],1) for lti in range(len(gamlss_pen))]
-            lam_grad = np.array(lam_grad).reshape(-1,1) 
-            check = lam_grad.T @ lam_delta
-
-            # Now undo the acceleration if overall direction is **very** off - don't just check against 0 because
-            # our criterion is approximate, so we can be more lenient (see Wood et al., 2017). 
-            
-            refit = False
-            if check[0] < 1e-7*-abs(next_pen_llk):
-               refit = True
-               for lti,lTerm in enumerate(gamlss_pen):
-                  if was_extended[lti]:
-
-                     lTerm.lam -= extend_by["acc"][lti]
-
-               # Rebuild penalties
-               S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,gamlss_pen,"svd")
-            else:
-               # Can re-use estimate for next iteration
-               coef=next_coef
-               mus=next_mus
-               etas=next_etas
-               c_llk=next_llk
-               c_pen_llk=next_pen_llk
-
-        #print(outer,[lterm.lam for lterm in gamlss_pen])
-        fit_info.iter += 1
+      # At this point we have:
+      # 1) Estimated coef given lambda
+      # 2) Performed checks on lambda and re-estimated coefficients if necessary
+      # 3) Proposed lambda updates
+      # 4) Checked for convergence
+      # 5) Applied the new update lambdas so that we can go to the next iteration
     
     fit_info.eps = eps
 
@@ -2963,6 +2970,208 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,c_llk,ou
    
    return coef,H,L,LV,c_llk,c_pen_llk,eps,keep,drop
 
+def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,coef,
+                                    coef_split_idx,smooth_pen,lam_delta,
+                                    extend_by,was_extended,c_llk,fit_info,outer,
+                                    max_inner,min_inner,conv_tol,method,optimizer,
+                                    __old_opt,use_grad,__neg_pen_llk,__neg_pen_grad,piv_tol,keep_drop,extend_lambda,
+                                    extension_method_lam,control_lambda,n_c,
+                                    bfgs_options):
+   # Fitting iteration and step size control for smoothing parameters of general smooth model.
+   # Basically a more general copy of the function for gammlss. Again, step-size control is not obvious - because we have only approximate REMl
+   # and approximate derivative, because we drop the last term involving the derivative of the negative penalized
+   # Hessian with respect to the smoothing parameters (see section 4 in Wood & Fasiolo, 2017). However, what we
+   # can do is at least undo the acceleration if we over-shoot the approximate derivative...
+
+   lam_accepted = False
+   while lam_accepted == False:
+      
+      # Build new penalties
+      S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
+
+      # Then re-compute coef
+      if optimizer == "Newton":
+         next_coef,H,L,LV,next_llk,next_pen_llk,eps,keep,drop = update_coef_gen_smooth(family,y,Xs,coef,
+                                                                                       coef_split_idx,S_emb,S_norm,
+                                                                                       c_llk,outer,max_inner,
+                                                                                       min_inner,conv_tol,
+                                                                                       method,piv_tol,keep_drop)
+         
+         V = None
+            
+         if drop is not None:
+            fit_info.dropped = drop
+            
+            # Re-compute penalty matrices in smaller problem space.
+            old_pen = copy.deepcopy(smooth_pen)
+            smooth_pen = drop_terms_S(smooth_pen,keep)
+
+            S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
+
+      else:
+         opt = scp.optimize.minimize(__neg_pen_llk,
+                                    np.ndarray.flatten(coef),
+                                    args=(coef_split_idx,y,Xs,family,S_emb),
+                                    method=optimizer,
+                                    jac = __neg_pen_grad if use_grad else None,
+                                    options={"maxiter":max_inner,
+                                             **bfgs_options})
+         
+         H = None
+         L = None
+         keep = None
+         drop = None
+         eps = 0
+      
+         # Check if we made progress - if not, fall back to GD. Finally, get coefficient estimate
+         if use_grad and (np.linalg.norm(coef - opt["x"].reshape(-1,1)) < 1e-7):
+
+            # Get next coefficient estimate
+            coef_copy_grad = copy.deepcopy(opt["x"].reshape(-1,1))
+            next_coef = opt["x"].reshape(-1,1)
+
+            while (np.linalg.norm(next_coef - opt["x"].reshape(-1,1)) < 1e-7*np.linalg.norm(next_coef)):
+            
+               # Perform gradient descent first to make progress
+               next_coef,_,_,_,_,_,_,_,_ = update_coef_gen_smooth(family,y,Xs,next_coef,
+                                                            coef_split_idx,S_emb,S_norm,
+                                                            c_llk,outer,50,
+                                                            50,conv_tol,
+                                                            "Grad",piv_tol,None)
+               
+               # Then try quasi Newton again
+               opt = scp.optimize.minimize(__neg_pen_llk,
+                                          np.ndarray.flatten(next_coef),
+                                          args=(coef_split_idx,y,Xs,family,S_emb),
+                                          method=optimizer,
+                                          jac = __neg_pen_grad if use_grad else None,
+                                          options={"maxiter":max_inner,
+                                                   **bfgs_options})
+
+               # Check if gradient actually made progress
+               if (np.linalg.norm(next_coef - coef_copy_grad) < 1e-9):
+                  break
+
+               coef_copy_grad = copy.deepcopy(next_coef)
+
+         # Get next coefficient estimate
+         next_coef = opt["x"].reshape(-1,1)
+
+         # Compute penalized likelihood for next estimate
+         next_llk = family.llk(next_coef,coef_split_idx,y,Xs)
+         next_pen_llk = next_llk - next_coef.T@S_emb@next_coef
+
+         # Get inverse of Hessian of penalized likelihood
+         if optimizer == "BFGS":
+            V = scp.sparse.csc_array(opt["hess_inv"])
+            V.eliminate_zeros()
+
+            # Get Cholesky factor needed for (accelerated) EFS
+            LVPT, P, code = cpp_cholP(V)
+            LVT = apply_eigen_perm(P,LVPT)
+            LV = LVT.T
+         elif optimizer == "L-BFGS-B":
+            # Get linear operator. No need for Cholesky
+            V = opt.hess_inv
+            LV = None
+
+            if __old_opt is not None and V.n_corrs < __old_opt.n_corrs:
+               # L-BFGS converged quickly, so (inverse) of Hessian might in worst case simply be set to identity
+               # but we can re-use last approximation of inverse to fill up
+               for cori in range(__old_opt.n_corrs-1,V.n_corrs-1,-1):
+                  V.sk = np.insert(V.sk,0,__old_opt.sk[cori],axis=0)
+                  V.yk = np.insert(V.yk,0,__old_opt.yk[cori],axis=0)
+                  V.rho = np.insert(V.rho,0,__old_opt.rho[cori],axis=0)
+
+               V.n_corrs = __old_opt.n_corrs
+            
+            __old_opt = copy.deepcopy(V)
+      
+      fit_info.eps = eps
+      
+      # Now re-compute lgdetDs, ldetHS, and bsbs
+      lgdetDs = []
+      bsbs = []
+      for lti,lTerm in enumerate(smooth_pen):
+
+            lt_rank = None
+            if FS_use_rank[lti]:
+               lt_rank = lTerm.rank
+
+            lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,next_coef)
+            lgdetDs.append(lgdetD)
+            bsbs.append(bsb)
+
+      total_edf,term_edfs, ldetHSs = calculate_edf(None,None,V if optimizer=="L-BFGS-B" else LV,smooth_pen,lgdetDs,n_coef,n_c)
+      fit_info.lambda_updates += 1
+
+      if drop is not None:
+         smooth_pen = old_pen
+
+      # Can exit loop here, no extension and no control
+      if outer == 0  or (control_lambda < 1) or (extend_lambda == False and control_lambda < 2):
+         lam_accepted = True
+         continue
+      
+      # Compute approximate!!! gradient of REML with respect to lambda
+      # to check if step size needs to be reduced (part of step 6 in Wood, 2017).
+      lam_grad = [grad_lambda(lgdetDs[lti],ldetHSs[lti],bsbs[lti],1) for lti in range(len(smooth_pen))]
+      lam_grad = np.array(lam_grad).reshape(-1,1) 
+      check = lam_grad.T @ lam_delta
+
+      # Now undo the acceleration if overall direction is **very** off - don't just check against 0 because
+      # our criterion is approximate, so we can be more lenient (see Wood et al., 2017).
+      lam_changes = 0 
+      if check[0] < 1e-7*-abs(next_pen_llk):
+         for lti,lTerm in enumerate(smooth_pen):
+
+            # For extended terms undo extension
+            if extend_lambda and was_extended[lti]:
+               lam, dLam = undo_extension_lambda_step(lti,lTerm.lam,lam_delta[lti],extend_by,was_extended, extension_method_lam, None)
+
+               lTerm.lam = lam
+               lam_delta[lti] = dLam
+               lam_changes += 1
+            
+            elif control_lambda == 2:
+               # Continue to half step - this is not necessarily because we overshoot the REML
+               # (because we only have approximate gradient), but can help preventing that models
+               # oscillate around estimates.
+               lam_delta[lti] = lam_delta[lti]/2
+               lTerm.lam -= lam_delta[lti]
+               lam_changes += 1
+         
+         # If we did not change anything, simply accept
+         if lam_changes == 0 or np.linalg.norm(lam_delta) < 1e-7:
+            lam_accepted = True
+      
+      # If we pass the check we can simply accept.
+      else:
+         lam_accepted = True
+   
+   # At this point we have accepted the lambda step and can propose a new one!
+   lam_delta = []
+   for lti,lTerm in enumerate(smooth_pen):
+
+      lgdetD = lgdetDs[lti]
+      ldetHS = ldetHSs[lti]
+      bsb = bsbs[lti]
+      
+      dLam = step_fellner_schall_sparse(lgdetD,ldetHS,bsb[0,0],lTerm.lam,1)
+      #print(lgdetD-ldetHS,dLam)
+
+      # For poorly scaled/ill-identifiable problems we cannot rely on the theorems by Wood
+      # & Fasiolo (2017) - so the condition below will ocasionally be met, in which case we just want to
+      # take very small steps until it hopefully gets more stable (due to term dropping or better lambda value).
+      if lgdetD - ldetHS < 0:
+         dLam = np.sign(dLam) * min(abs(lTerm.lam)*0.001,abs(dLam))
+
+      if extend_lambda:
+            dLam,extend_by,was_extended = extend_lambda_step(lti,lTerm.lam,dLam,extend_by,was_extended,extension_method_lam)
+
+      lam_delta.append(dLam)
+   
+   return next_coef,H,L,LV,V,next_llk,next_pen_llk,__old_opt,keep,drop,S_emb,total_edf,term_edfs,lam_delta
 
 def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smooth_pen,
                               max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,
@@ -3008,333 +3217,84 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
     # Compute penalized likelihood for current estimate
     c_llk = family.llk(coef,coef_split_idx,y,Xs)
     c_pen_llk = c_llk - coef.T@S_emb@coef
+
+    __neg_pen_llk = None
+    __neg_pen_grad = None
+    if optimizer != "Newton":
+      # Define negative penalized likelihood function to be minimized via BFGS
+      # plus function to evaluate negative gradient of penalized likelihood - the
+      # latter is only used if use_grad=True.
+      def __neg_pen_llk(coef,coef_split_idx,y,Xs,family,S_emb):
+         coef = coef.reshape(-1,1)
+         neg_llk = -1 * family.llk(coef,coef_split_idx,y,Xs)
+         return neg_llk + coef.T@S_emb@coef
+      
+      def __neg_pen_grad(coef,coef_split_idx,y,Xs,family,S_emb):
+         # see Wood, Pya & Saefken (2016)
+         coef = coef.reshape(-1,1)
+         grad = family.gradient(coef,coef_split_idx,y,Xs)
+         pgrad = np.array([grad[i] - (S_emb[[i],:]@coef)[0] for i in range(len(grad))])
+         return -1*pgrad.flatten()
     
     iterator = range(max_outer)
     if progress_bar:
         iterator = tqdm(iterator,desc="Fitting",leave=True)
-
-    if optimizer != "Newton":
-        # Define negative penalized likelihood function to be minimized via BFGS
-        # plus function to evaluate negative gradient of penalized likelihood - the
-        # latter is only used if use_grad=True.
-        def __neg_pen_llk(coef,coef_split_idx,y,Xs,family,S_emb):
-            coef = coef.reshape(-1,1)
-            neg_llk = -1 * family.llk(coef,coef_split_idx,y,Xs)
-            return neg_llk + coef.T@S_emb@coef
-        
-        def __neg_pen_grad(coef,coef_split_idx,y,Xs,family,S_emb):
-           # see Wood, Pya & Saefken (2016)
-           coef = coef.reshape(-1,1)
-           grad = family.gradient(coef,coef_split_idx,y,Xs)
-           pgrad = np.array([grad[i] - (S_emb[[i],:]@coef)[0] for i in range(len(grad))])
-           return -1*pgrad.flatten()
-           
         
     fit_info = Fit_info()
     __old_opt = None
+    lam_delta = []
     for outer in iterator:
 
-        # Update coefficients:
-        if outer == 0 or extend_lambda == False or control_lambda==False or (control_lambda and refit):
-            if optimizer == "Newton":
-               coef,H,L,LV,c_llk,c_pen_llk,eps,keep,drop = update_coef_gen_smooth(family,y,Xs,coef,
-                                                                  coef_split_idx,S_emb,S_norm,
-                                                                  c_llk,outer,max_inner,
-                                                                  min_inner,conv_tol,
-                                                                  method,piv_tol,keep_drop)
-               
-               fit_info.eps = eps
-               if drop is not None:
+      # 1) Update coef for given lambda
+      # 2) Check lambda -> repeat 1 if necessary
+      # 3) Propose new lambda
+      coef,H,L,LV,V,c_llk,c_pen_llk,\
+      __old_opt,keep,drop,S_emb,\
+      total_edf,term_edfs,lam_delta = correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,coef,
+                                                                           coef_split_idx,smooth_pen,lam_delta,
+                                                                           extend_by,was_extended,c_llk,fit_info,outer,
+                                                                           max_inner,min_inner,conv_tol,method,optimizer,
+                                                                           __old_opt,use_grad,__neg_pen_llk,__neg_pen_grad,
+                                                                           piv_tol,keep_drop,extend_lambda,
+                                                                           extension_method_lam,control_lambda,n_c,
+                                                                           bfgs_options)
 
-                  fit_info.dropped = drop
-                  if should_keep_drop:
-                     keep_drop = [keep,drop]
+      if drop is not None:
+         if should_keep_drop:
+            keep_drop = [keep,drop]
 
-                  # Re-compute penalty matrices in smaller problem space.
-                  old_pen = copy.deepcopy(smooth_pen)
-                  smooth_pen = drop_terms_S(smooth_pen,keep)
+      # Check overall convergence
+      fit_info.iter += 1
+      if outer > 0:
 
-                  S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
+         if progress_bar:
+               iterator.set_description_str(desc="Fitting - Conv.: " + "{:.2e}".format((np.abs(prev_pen_llk - c_pen_llk) - conv_tol*np.abs(c_pen_llk))[0,0]), refresh=True)
 
-            else:
-               opt = scp.optimize.minimize(__neg_pen_llk,
-                                          np.ndarray.flatten(coef),
-                                          args=(coef_split_idx,y,Xs,family,S_emb),
-                                          method=optimizer,
-                                          jac = __neg_pen_grad if use_grad else None,
-                                          options={"maxiter":max_inner,
-                                                   **bfgs_options})
-               
-               drop = None
-               eps = 0
-
-               # Check if we made progress - if not, fall back to GD. Finally, get coefficient estimate
-               coef_copy_grad = copy.deepcopy(coef)
-               while use_grad and (np.linalg.norm(coef - opt["x"].reshape(-1,1)) < 1e-7*np.linalg.norm(coef)):
-                  
-                  # Perform gradient descent first to make progress
-                  coef,_,_,_,_,_,_,_,_ = update_coef_gen_smooth(family,y,Xs,coef,
-                                                                coef_split_idx,S_emb,S_norm,
-                                                                c_llk,outer,50,
-                                                                50,conv_tol,
-                                                                "Grad",piv_tol,None)
-                  
-                  # Then try quasi Newton again
-                  opt = scp.optimize.minimize(__neg_pen_llk,
-                                              np.ndarray.flatten(coef),
-                                              args=(coef_split_idx,y,Xs,family,S_emb),
-                                              method=optimizer,
-                                              jac = __neg_pen_grad if use_grad else None,
-                                              options={"maxiter":max_inner,
-                                                      **bfgs_options})
-
-                  # Check if gradient made progress
-                  if (np.linalg.norm(coef - coef_copy_grad) < 1e-9):
-                     break
-
-                  coef_copy_grad = copy.deepcopy(coef)
-
-               coef = opt["x"].reshape(-1,1)
-
-               # Compute penalized likelihood for current estimate
-               c_llk = family.llk(coef,coef_split_idx,y,Xs)
-               c_pen_llk = c_llk - coef.T@S_emb@coef
-
-               # Get inverse of Hessian of penalized likelihood
-               if optimizer == "BFGS":
-                  V = scp.sparse.csc_array(opt["hess_inv"])
-                  V.eliminate_zeros()
-
-                  # Get Cholesky factor needed for (accelerated) EFS
-                  LVPT, P, code = cpp_cholP(V)
-                  LVT = apply_eigen_perm(P,LVPT)
-                  LV = LVT.T
-               elif optimizer == "L-BFGS-B":
-                  # Get linear operator. No need for Cholesky
-                  V = opt.hess_inv
-
-                  if __old_opt is not None and V.n_corrs < __old_opt.n_corrs:
-                     # L-BFGS converged quickly, so (inverse) of Hessian might in worst case simply be set to identity
-                     # but we can re-use last approximation of inverse to fill up
-                     for cori in range(__old_opt.n_corrs-1,V.n_corrs-1,-1):
-                        V.sk = np.insert(V.sk,0,__old_opt.sk[cori],axis=0)
-                        V.yk = np.insert(V.yk,0,__old_opt.yk[cori],axis=0)
-                        V.rho = np.insert(V.rho,0,__old_opt.rho[cori],axis=0)
-                     
-                     V.n_corrs = __old_opt.n_corrs
-                  
-                  __old_opt = copy.deepcopy(V)
-
-            # Given new coefficients compute lgdetDs, ldetHS, and bsbs - needed for efs step
-            lgdetDs = []
-            bsbs = []
-            for lti,lTerm in enumerate(smooth_pen):
-
-               lt_rank = None
-               if FS_use_rank[lti]:
-                  lt_rank = lTerm.rank
-
-               lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
-               lgdetDs.append(lgdetD)
-               bsbs.append(bsb)
-
-            total_edf,term_edfs, ldetHSs = calculate_edf(None,None,V if optimizer=="L-BFGS-B" else LV,smooth_pen,lgdetDs,n_coef,n_c)
-            fit_info.lambda_updates += 1
-
-            if drop is not None:
-               smooth_pen = old_pen
-
-        # Check overall convergence
-        if outer > 0:
-
-            if progress_bar:
-                iterator.set_description_str(desc="Fitting - Conv.: " + "{:.2e}".format((np.abs(prev_pen_llk - c_pen_llk) - conv_tol*np.abs(c_pen_llk))[0,0]), refresh=True)
-
-            if np.abs(prev_pen_llk - c_pen_llk) < conv_tol*np.abs(c_pen_llk) or (optimizer!="Newton" and np.linalg.norm(coef-prev_coef) < conv_tol*np.linalg.norm(coef)):
-                if progress_bar:
-                    iterator.set_description_str(desc="Converged!", refresh=True)
-                    iterator.close()
-                fit_info.code = 0
-                break
+         if np.abs(prev_pen_llk - c_pen_llk) < conv_tol*np.abs(c_pen_llk) or (optimizer!="Newton" and np.linalg.norm(coef-prev_coef) < conv_tol*np.linalg.norm(coef)):
+               if progress_bar:
+                  iterator.set_description_str(desc="Converged!", refresh=True)
+                  iterator.close()
+               fit_info.code = 0
+               break
         
-        # We need the penalized likelihood of the model at this point for convergence control (step 2 in Wood, 2017 based on step 4 in Wood, Goude, & Shaw, 2016)
-        prev_pen_llk = c_pen_llk
-        prev_llk = c_llk
-        prev_coef = copy.deepcopy(coef)
+      # We need the penalized likelihood of the model at this point for convergence control (step 2 in Wood, 2017 based on step 4 in Wood, Goude, & Shaw, 2016)
+      prev_pen_llk = c_pen_llk
+      prev_llk = c_llk
+      prev_coef = copy.deepcopy(coef)
 
-        # Now compute EFS step
-        lam_delta = []
-        for lti,lTerm in enumerate(smooth_pen):
+      # And ultimately apply new proposed lambda step
+      for lti,lTerm in enumerate(smooth_pen):
+         lTerm.lam += lam_delta[lti]
 
-            lgdetD = lgdetDs[lti]
-            ldetHS = ldetHSs[lti]
-            bsb = bsbs[lti]
-            
-            dLam = step_fellner_schall_sparse(lgdetD,ldetHS,bsb[0,0],lTerm.lam,1)
-            #print(lgdetD-ldetHS,dLam)
+      # At this point we have:
+      # 1) Estimated coef given lambda
+      # 2) Performed checks on lambda and re-estimated coefficients if necessary
+      # 3) Proposed lambda updates
+      # 4) Checked for convergence
+      # 5) Applied the new update lambdas so that we can go to the next iteration
 
-            # For poorly scaled/ill-identifiable problems we cannot rely on the theorems by Wood
-            # & Fasiolo (2017) - so the condition below will ocasionally be met, in which case we just want to
-            # take very small steps until it hopefully gets more stable (due to term dropping or better lambda value).
-            if lgdetD - ldetHS < 0:
-               dLam = np.sign(dLam) * min(abs(lTerm.lam)*0.001,abs(dLam))
-
-            if extend_lambda:
-                dLam,extend_by,was_extended = extend_lambda_step(lti,lTerm.lam,dLam,extend_by,was_extended,extension_method_lam)
-            lTerm.lam += dLam
-
-            lam_delta.append(dLam)
-
-        # Build new penalties
-        S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
-
-        if extend_lambda and control_lambda:
-            # Step size control for smoothing parameters. Not obvious - because we have only approximate REMl
-            # and approximate derivative, because we drop the last term involving the derivative of the negative penalized
-            # Hessian with respect to the smoothing parameters (see section 4 in Wood & Fasiolo, 2017). However, what we
-            # can do is at least undo the acceleration if we over-shoot the approximate derivative...
-
-            # First re-compute coef
-            if optimizer == "Newton":
-                next_coef,H,L,LV,next_llk,next_pen_llk,eps,keep,drop = update_coef_gen_smooth(family,y,Xs,coef,
-                                                                coef_split_idx,S_emb,S_norm,
-                                                                c_llk,outer,max_inner,
-                                                                min_inner,conv_tol,
-                                                                method,piv_tol,keep_drop)
-                
-                fit_info.eps = eps
-                if drop is not None:
-
-                  fit_info.dropped = drop
-                  if should_keep_drop:
-                     keep_drop = [keep,drop]
-
-                  # Re-compute penalty matrices in smaller problem space.
-                  old_pen = copy.deepcopy(smooth_pen)
-                  smooth_pen = drop_terms_S(smooth_pen,keep)
-
-                  S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
-
-            else:
-                opt = scp.optimize.minimize(__neg_pen_llk,
-                                            np.ndarray.flatten(coef),
-                                            args=(coef_split_idx,y,Xs,family,S_emb),
-                                            method=optimizer,
-                                            jac = __neg_pen_grad if use_grad else None,
-                                            options={"maxiter":max_inner,
-                                                     **bfgs_options})
-                
-                drop = None
-                eps = 0
-               
-                # Check if we made progress - if not, fall back to GD. Finally, get coefficient estimate
-                if use_grad and (np.linalg.norm(coef - opt["x"].reshape(-1,1)) < 1e-7):
-
-                  # Get next coefficient estimate
-                  coef_copy_grad = copy.deepcopy(opt["x"].reshape(-1,1))
-                  next_coef = opt["x"].reshape(-1,1)
-
-                  while (np.linalg.norm(next_coef - opt["x"].reshape(-1,1)) < 1e-7*np.linalg.norm(next_coef)):
-                     
-                     # Perform gradient descent first to make progress
-                     next_coef,_,_,_,_,_,_,_,_ = update_coef_gen_smooth(family,y,Xs,next_coef,
-                                                                  coef_split_idx,S_emb,S_norm,
-                                                                  c_llk,outer,50,
-                                                                  50,conv_tol,
-                                                                  "Grad",piv_tol,None)
-                     
-                     # Then try quasi Newton again
-                     opt = scp.optimize.minimize(__neg_pen_llk,
-                                                np.ndarray.flatten(next_coef),
-                                                args=(coef_split_idx,y,Xs,family,S_emb),
-                                                method=optimizer,
-                                                jac = __neg_pen_grad if use_grad else None,
-                                                options={"maxiter":max_inner,
-                                                         **bfgs_options})
-
-                     # Check if gradient actually made progress
-                     if (np.linalg.norm(next_coef - coef_copy_grad) < 1e-9):
-                        break
-
-                     coef_copy_grad = copy.deepcopy(next_coef)
-
-                # Get next coefficient estimate
-                next_coef = opt["x"].reshape(-1,1)
-
-                # Compute penalized likelihood for next estimate
-                next_llk = family.llk(next_coef,coef_split_idx,y,Xs)
-                next_pen_llk = next_llk - next_coef.T@S_emb@next_coef
-
-                # Get inverse of Hessian of penalized likelihood
-                if optimizer == "BFGS":
-                  V = scp.sparse.csc_array(opt["hess_inv"])
-                  V.eliminate_zeros()
-
-                  # Get Cholesky factor needed for (accelerated) EFS
-                  LVPT, P, code = cpp_cholP(V)
-                  LVT = apply_eigen_perm(P,LVPT)
-                  LV = LVT.T
-                elif optimizer == "L-BFGS-B":
-                  # Get linear operator. No need for Cholesky
-                  V = opt.hess_inv
-
-                  if __old_opt is not None and V.n_corrs < __old_opt.n_corrs:
-                     # L-BFGS converged quickly, so (inverse) of Hessian might in worst case simply be set to identity
-                     # but we can re-use last approximation of inverse to fill up
-                     for cori in range(__old_opt.n_corrs-1,V.n_corrs-1,-1):
-                        V.sk = np.insert(V.sk,0,__old_opt.sk[cori],axis=0)
-                        V.yk = np.insert(V.yk,0,__old_opt.yk[cori],axis=0)
-                        V.rho = np.insert(V.rho,0,__old_opt.rho[cori],axis=0)
-
-                     V.n_corrs = __old_opt.n_corrs
-                  
-                  __old_opt = copy.deepcopy(V)
-            
-            # Now re-compute lgdetDs, ldetHS, and bsbs
-            lgdetDs = []
-            bsbs = []
-            for lti,lTerm in enumerate(smooth_pen):
-
-                lt_rank = None
-                if FS_use_rank[lti]:
-                    lt_rank = lTerm.rank
-
-                lgdetD,bsb = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,next_coef)
-                lgdetDs.append(lgdetD)
-                bsbs.append(bsb)
-
-            total_edf,term_edfs, ldetHSs = calculate_edf(None,None,V if optimizer=="L-BFGS-B" else LV,smooth_pen,lgdetDs,n_coef,n_c)
-            fit_info.lambda_updates += 1
-
-            if drop is not None:
-               smooth_pen = old_pen
-            
-            # Compute approximate!!! gradient of REML with respect to lambda
-            # to check if step size needs to be reduced (part of step 6 in Wood, 2017).
-            lam_grad = [grad_lambda(lgdetDs[lti],ldetHSs[lti],bsbs[lti],1) for lti in range(len(smooth_pen))]
-            lam_grad = np.array(lam_grad).reshape(-1,1) 
-            check = lam_grad.T @ lam_delta
-
-            # Now undo the acceleration if overall direction is **very** off - don't just check against 0 because
-            # our criterion is approximate, so we can be more lenient (see Wood et al., 2017).
-            refit = False 
-            if check[0] < 1e-7*-abs(next_pen_llk):
-                refit = True
-                for lti,lTerm in enumerate(smooth_pen):
-                    if was_extended[lti]:
-
-                        lTerm.lam -= extend_by["acc"][lti]
-
-                # Rebuild penalties
-                S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
-            else: # Can re-use estimate for next iteration
-               coef = next_coef
-               c_llk = next_llk
-               c_pen_llk = next_pen_llk
-
-        #print([lterm.lam for lterm in smooth_pen])
-        fit_info.iter += 1
-    
+      #print([lterm.lam for lterm in smooth_pen])
+        
     # Total penalty
     penalty = coef.T@S_emb@coef
 
@@ -3343,21 +3303,21 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
 
     if optimizer != "Newton":
         
-        if optimizer == "L-BFGS-B":
-           
-           if form_VH:
-               # Optionally form last V + Chol explicitly during last iteration
+        # Optionally form last V + Chol explicitly during last iteration
+        # when working with L-BFGS - with BFGS we have all of this anyway.
+        # We can then also compute a crude approximation of the Hessian of the
+        # llk from V..
+         if (form_VH and optimizer == "L-BFGS-B") or optimizer == "BFGS":
+
+            if optimizer == "L-BFGS-B":
                V = scp.sparse.csc_array(V.todense())
                V.eliminate_zeros()
 
-               # Get Cholesky factor needed for (accelerated) EFS
-               LVPT, P, code = cpp_cholP(V)
-               LVT = apply_eigen_perm(P,LVPT)
-               LV = LVT.T
-           else:
-               LV = V # Return operator directly.
+            # Get Cholesky factor needed for (accelerated) EFS
+            LVPT, P, code = cpp_cholP(V)
+            LVT = apply_eigen_perm(P,LVPT)
+            LV = LVT.T
 
-        if (optimizer != "L-BFGS-B") or form_VH:
             # Get an approximation of the Hessian of the likelihood
             LHPT = compute_Linv(LVPT)
             LHT = apply_eigen_perm(P,LHPT)
@@ -3365,8 +3325,10 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
             H = L@LHT # approximately: negative Hessian of llk + S_emb
             H -= S_emb # approximately: negative Hessian of llk 
             H *= -1 # approximately: Hessian of llk
-        else:
-           H = None # Do not approximate H
+
+         else:
+            LV = V # Return operator directly.
+            H = None # Do not approximate H.
        
     if check_cond == 1 and ((optimizer != "L-BFGS-B") or form_VH):
 
