@@ -1805,6 +1805,10 @@ class PropHaz(GENSMOOTHFamily):
    def llk(self,coef,coef_split_idx,delta,Xs):
       """Log-likelihood function as defined by Wood, Pya, & Säfken (2016).
 
+      References:
+
+       - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+
       ``delta`` (passed as dependent variable) holds values in ``{0,1}``, indicating whether the event was observed or not.
       """
 
@@ -1849,6 +1853,10 @@ class PropHaz(GENSMOOTHFamily):
 
    def gradient(self, coef, coef_split_idx, delta, Xs):
       """Gradient as defined by Wood, Pya, & Säfken (2016).
+
+      References:
+
+       - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
 
       ``delta`` (passed as dependent variable) holds values in ``{0,1}``, indicating whether the event was observed or not.
       """
@@ -1902,6 +1910,10 @@ class PropHaz(GENSMOOTHFamily):
    def hessian(self, coef, coef_split_idx, delta, Xs):
       """Hessian as defined by Wood, Pya, & Säfken (2016).
 
+      References:
+
+       - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+
       ``delta`` (passed as dependent variable) holds values in ``{0,1}``, indicating whether the event was observed or not.
       """
 
@@ -1952,10 +1964,14 @@ class PropHaz(GENSMOOTHFamily):
    def __prepare_predictions(self,coef,delta,Xs):
     """Computes all the quantities defined by Wood, Pya, & Säfken (2016) that are necessary for predictions.
 
-    This includes the base-line hazard, as well as the :math`\mathbf{a}` vectors from WPS (2016). These are assigned to the instance of this family.
+    This includes the cumulative base-line hazard, as well as the :math`\mathbf{a}` vectors from WPS (2016). These are assigned to the instance of this family.
 
     ``delta`` (passed as dependent variable to ``Formula``) holds values in ``{0,1}``, indicating whether the event was observed or not.
     
+    References:
+
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+
     :param coef: Coefficient vector as ``numpy.array`` of shape (-1,1).
     :type coef: numpy.array
     :param delta: Dependent variable passed to :func:`mssm.src.python.formula.Formula`, holds (for each row in ``Xs[0``]) a value in ``{0,1}``, indicating whether for that observation the event was observed or not.
@@ -2027,8 +2043,37 @@ class PropHaz(GENSMOOTHFamily):
     self.__qs = qs
     self.__avs = avs
 
+   
+   def get_baseline_hazard(self,coef,delta,Xs):
+    """Get the cumulative baseline hazard function + variance estimate as defined by Wood, Pya, & Säfken (2016).
+
+    The function is evaluated for all ``k`` unique event times that were available in the data.
+
+    References:
+
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+
+    :param coef: Coefficient vector as ``numpy.array`` of shape (-1,1).
+    :type coef: numpy.array
+    :param Xs The list model matrices (here holding a single model matrix) obtained from :func:`mssm.models.GSMM.get_mmat()``.
+    :type Xs: [scipy.sparse.csc_array]
+    :param delta: Dependent variable passed to :func:`mssm.src.python.formula.Formula`, holds (for each row in ``Xs[0``]) a value in ``{0,1}``, indicating whether for that observation the event was observed or not.
+    :type delta: numpy.array
+    :return: Two arrays, the first holds ``k`` baseline hazard function estimates, the latter holds ``k`` variance estimates for each of the survival function estimates.
+    :rtype: (numpy.array,numpy.array)
+    """
+
+    if self.__hs is None:
+       self.__prepare_predictions(coef,delta,Xs)
+    
+    return self.__hs,self.__qs
+
    def get_survival(self,coef,Xs,delta,t,x,V):
     """Compute survival function + variance at time-point ``t``, given ``k`` optional covariate vector(s) x as defined by Wood, Pya, & Säfken (2016).
+
+    References:
+
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
 
     :param coef: Coefficient vector as ``numpy.array`` of shape (-1,1).
     :type coef: numpy.array
@@ -2075,8 +2120,6 @@ class PropHaz(GENSMOOTHFamily):
 
    def init_coef(self,models):
       """Function to initialize the coefficients of the model.
-
-      Can return ``None`` , in which case random initialization will be used.
 
       :param models: A list of :class:`mssm.models.GAMM`'s, - each based on one of the formulas provided to a model.
       :type models: [mssm.models.GAMM]

@@ -628,10 +628,10 @@ class Test_Vp_estimation:
     Vp,_,_,_ = estimateVp(model,strategy="JJJ1")
 
     def test_Vp(self):
-        assert np.allclose(np.round(self.Vp,decimals=3),np.array([[ 2.2810e+00,  9.0000e-03,  3.0000e-03,  2.1000e-02],
-                                                                  [ 9.0000e-03,  2.7790e+00,  1.0000e-03, -2.5000e-02],
-                                                                  [ 3.0000e-03,  1.0000e-03,  4.9400e-01,  2.2000e-02],
-                                                                  [ 2.1000e-02, -2.5000e-02,  2.2000e-02,  1.5408e+01]]))
+        assert np.allclose(np.round(self.Vp,decimals=3),np.array([[ 2.280e+00,  9.000e-03,  3.000e-03,  2.100e-02],
+                                                                  [ 9.000e-03,  2.778e+00,  1.000e-03, -2.500e-02],
+                                                                  [ 3.000e-03,  1.000e-03,  4.940e-01,  2.200e-02],
+                                                                  [ 2.100e-02, -2.500e-02,  2.200e-02,  1.540e+01]]))
 
 class Test_diff_hard:
     # pred_diff test

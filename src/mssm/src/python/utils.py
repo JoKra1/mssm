@@ -335,7 +335,7 @@ def adjust_CI(model,n_ps,b,predi_mat,use_terms,alpha,seed):
 
         return b
 
-def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0):
+def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0,init_eta=None):
    """
    Allows to evaluate REML criterion (e.g., Wood, 2011; Wood, 2016) efficiently for
    a set of \lambda values.
@@ -366,10 +366,14 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0):
        # GAMM - have to repeat Newton step
        yb = y
        Xb = X
-
-       mu = family.init_mu(y)
-       eta = family.link.f(mu)
        
+       if init_eta is None:
+            mu = family.init_mu(y)
+            eta = family.link.f(mu)
+       else:
+           eta = init_eta
+           mu = family.link.fi(eta)
+
        # First pseudo-dat iteration
        yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family)
 
@@ -391,21 +395,21 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0):
        pen_dev = c_pen_dev + 1e7
 
        # Now repeat until convergence
-       for newt_iter in range(50):
-        
+       for newt_iter in range(100):
+           
            # Update pseudo-dat
            yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family)
 
            LP, Pr, n_coef, code = cpp_solve_coef(yb,Xb,S_emb)
            
            if code != 0:
-                raise ValueError("Forming coefficients for specified penalties was not possible.")
+                raise ValueError(f"Forming coefficients at iteration {newt_iter} for specified penalties was not possible.")
 
            # Update eta & mu
            eta = (X @ n_coef).reshape(-1,1) + offset
            with warnings.catch_warnings(): # Catch errors with mean computation (e.g., overflow)
-            warnings.simplefilter("ignore")
-            mu = family.link.fi(eta)
+                warnings.simplefilter("ignore")
+                mu = family.link.fi(eta)
 
            # Update deviance
            mu_inval = np.isnan(mu).flatten()
@@ -747,8 +751,8 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=
             return -reml
         
         if isinstance(family,Family):
-            nHp = central_hessian(ep.flatten(),reml_wrapper,family,y,X,rPen,n_c,model.offset)
-            #nHp = Hessian(reml_wrapper)(ep.flatten(),family,y,X,rPen,n_c)
+            nHp = central_hessian(ep.flatten(),reml_wrapper,family,y,X,rPen,n_c,model.offset,model.pred)
+            #nHp = Hessian(reml_wrapper)(ep.flatten(),family,y,X,rPen,n_c,model.offset,model.pred)
         else:
             nHp = central_hessian(ep.flatten(),reml_wrapper,family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=optimizer,**bfgs_options)
         
