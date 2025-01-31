@@ -144,6 +144,8 @@ class f(GammTerm):
     :type variables: list[str]
     :param by: A string corresponding to a factor in ``data`` passed to ``Formula``. Separate f(``variables``) (and smoothness penalties) will be estimated per level of ``by``.
     :type by: str, optional
+    :param by_cont: A string corresponding to a numerical variable in ``data`` passed to ``Formula``. The model matrix for the estimated smooth term f(``variables``) will be multiplied by the column of this variable. Can be used to estimate 'varying coefficient' models but also to set up binary smooths or to only estimate a smooth term for specific levels of a factor (i.e., what is possible for ordered factors in R & mgcv).
+    :type by_cont: str, optional
     :param binary: A list containing two strings. The first string corresponds to a factor in ``data`` passed to ``Formula``. A separate f(``variables``) will be estimated for the level of this factor corresponding to the second string.
     :type binary: [str,str], optional
     :param id: Only useful in combination with specifying a ``by`` variable. If ``id`` is set to any integer the penalties placed on the separate f(``variables``) will share a single smoothness penalty.
@@ -174,6 +176,7 @@ class f(GammTerm):
 
     def __init__(self,variables:list,
                 by:str=None,
+                by_cont:str=None,
                 binary:list[str,str] or None = None,
                 id:int=None,
                 nk:int or list[int] = 9,
@@ -235,6 +238,7 @@ class f(GammTerm):
         self.binary_level = None
         self.id = id
         self.has_null_penalty = penalize_null
+        self.by_cont = by_cont
 
         # Tensor bases can each have different number of basis functions
         if len(variables) == 1 or isinstance(nk,list):
@@ -252,6 +256,8 @@ class f(GammTerm):
            self.name += f",by={binary[1]})"
         else:
            self.name += ")"
+        if by_cont is not None:
+           self.name += f",by_c={by_cont})"
 
 class fs(f):
    """
@@ -340,7 +346,7 @@ class fs(f):
 
       penalty = [penalties.PenType.DIFFERENCE]
       pen_kwargs = [{"m":m}]
-      super().__init__(variables, rf, None, 99, nk+1, False, rp, penalties.ConstType.QR, False,
+      super().__init__(variables, rf, None, None, 99, nk+1, False, rp, penalties.ConstType.QR, False,
                        basis, basis_kwargs,
                        True, True, penalty, pen_kwargs)
       
@@ -455,6 +461,7 @@ class irf(GammTerm):
         self.event_onset = event_onset
         self.by = by
         self.id = id
+        self.by_cont = None
 
         # nk can also be a list for irf smooths.
         if len(variables) == 1 or isinstance(nk,list):
@@ -693,6 +700,7 @@ class rs(GammTerm):
         super().__init__(variables, TermType.RANDSLOPE, True, [penalties.PenType.IDENTITY], [{}])
         self.var_coef = None
         self.by = rf
+        self.by_cont = None
 
         # Term name
         self.name = f"rs({variables},{rf})"

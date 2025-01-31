@@ -630,7 +630,7 @@ def computeH_Brust(s,y,rho,H0):
 def computeH(s,y,rho,H0,make_psd=False,omega=1):
    """Computes explicitly the negative Hessian of the penalized likelihood :math:`\mathbf{H}` from the L-BFGS-B optimizer info.
 
-   Relies on equations 2.16 in Byrd, Nocdeal & Schnabel (1992). Adapted here to work for the case where ``H0``:math:`=\mathbf{I}*\omega + \mathbf{S}_{\lambda}` and
+   Relies on equations 2.16 in Byrd, Nocdeal & Schnabel (1992). Adapted here to work for the case where ``H0``:math:`=\mathbf{I}*\omega + \mathbf{S}_{\lambda}*omega` and
    we need :math:`\mathbf{I}*\omega + \mathbf{U}\mathbf{D}\mathbf{U}^T` to be PSD. :math:`\mathbf{U}\mathbf{D}\mathbf{U}^T` is the update matrix for the
    negative Hessian of the penalized likelihood, **not** the inverse (:math:`\mathbf{V}`)! For this the implicit eigenvalue decomposition of Brust (2024) is used.
 
@@ -744,7 +744,7 @@ def computeH(s,y,rho,H0,make_psd=False,omega=1):
    t3 = np.concatenate((S.T@H0,Y.T),axis=0)
 
 
-   # We have H0 + U@D@U.T with H0 = I*omega + S_emb and U@D@U.T=t1@(-t2)@t1.T
+   # We have H0 + U@D@U.T with H0 = I*omega + S_emb*omega and U@D@U.T=t1@(-t2)@t1.T
    # Now enforce that I*omega + t1@(-t2)@t1.T is psd
    if make_psd:
       correction = t1@(-1*invt2_sort)@t3
@@ -827,7 +827,7 @@ def computeV(s,y,rho,V0):
 def compute_t1_shifted_t2_t3(s,y,rho,H0,omega=1,form='Byrd'):
    """Computes the compact update to get the inverse of the negative Hessian of the penalized likelihood :math:`\mathbf{V}` from the L-BFGS-B optimizer info.
 
-   Relies on equations 2.16 and 3.13 in Byrd, Nocdeal & Schnabel (1992) or on 2.6 in Brust (2024). Adapted here to work for the case where ``H0``:math:`=\mathbf{I}*\omega + \mathbf{S}_{\lambda}` and
+   Relies on equations 2.16 and 3.13 in Byrd, Nocdeal & Schnabel (1992) or on 2.6 in Brust (2024). Adapted here to work for the case where ``H0``:math:`=\mathbf{I}*\omega + \mathbf{S}_{\lambda}*\omega` and
    we need :math:`\mathbf{I}*\omega + \mathbf{U}\mathbf{D}\mathbf{U}^T` to be PSD. :math:`\mathbf{U}\mathbf{D}\mathbf{U}^T` is the update matrix for the
    negative Hessian of the penalized likelihood, **not** the inverse (:math:`\mathbf{V}`)! For this the implicit eigenvalue decomposition of Brust (2024) is used.
 
@@ -990,7 +990,7 @@ def compute_t1_shifted_t2_t3(s,y,rho,H0,omega=1,form='Byrd'):
       shifted_t2 = t2
 
 
-   # We have H0 + U@D@U.T with H0 = I*omega + S_emb and U@D@U.T=t1@(-t2)@t1.T
+   # We have H0 + U@D@U.T with H0 = I*omega + S_emb*omega and U@D@U.T=t1@(-t2)@t1.T
    # Now enforce that I*omega + t1@(-t2)@t1.T is psd
 
    # Compute implicit eigen decomposition as shown by Brust (2024)
@@ -1024,7 +1024,185 @@ def compute_t1_shifted_t2_t3(s,y,rho,H0,omega=1,form='Byrd'):
 
    return t1, shifted_t2, shifted_invt2, t3, 0
 
-def computetrVS3(t1,t2,t3,lTerm,V0):
+
+def compute_H_adjust_ev(s,y,rho,H0,omega=1,form='Byrd'):
+   """Computes the non-zero eigenvalues of the update to get the negative Hessian of the penalized likelihood :math:`\mathcal{H}` from the L-BFGS-B optimizer info.
+
+   Relies on equations 2.16 and 3.13 in Byrd, Nocdeal & Schnabel (1992) or on 2.6 in Brust (2024). Adapted here to work for the case where ``H0``:math:`=\mathbf{I}*\omega + \mathbf{S}_{\lambda}*\omega` and
+   we need the eigenvalues for :math:`\mathbf{I}*\omega + \mathbf{U}\mathbf{D}\mathbf{U}^T`. To get those, we simply add ``omega`` to the evs of :math:`\mathbf{U}\mathbf{D}\mathbf{U}^T`
+
+   References:
+    - Brust, J. J. (2025). Useful Compact Representations for Data-Fitting (arXiv:2403.12206). arXiv. https://doi.org/10.48550/arXiv.2403.12206
+    - Byrd, R. H., Nocedal, J., & Schnabel, R. B. (1994). Representations of quasi-Newton matrices and their use in limited memory methods. Mathematical Programming, 63(1), 129–156. https://doi.org/10.1007/BF01582063
+
+   :param s: List holding the first set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
+   :type s: [numpy.array]
+   :param y: List holding the second set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
+   :type y: [numpy.array]
+   :param rho: List holding element-wise ```1/y.T@s`` from Byrd, Nocdeal & Schnabel (1992).
+   :type rho: [numpy.array]
+   :param H0: Initial estimate for the hessian fo the negative penalized likelihood. Here some multiple of the identity (multiplied by ``omega``) plus the embedded penalty matrix.
+   :type H0: scipy.sparse.csc_array
+   :param omega: Multiple used to get initial estimate for the hessian fo the negative penalized likelihood. Defaults to 1.
+   :type omega: float, optional
+   :param form: Which compact form to compute - the one from Byrd et al. (1992) or the one from Brust (2024). Defaults to "Byrd".
+   :type form: float, optional
+   """
+
+   # Number of updates?
+   m = len(y)
+
+   # Now form S,Y, and D
+   S = np.array(s).T
+   Y = np.array(y).T
+
+   if form == "Byrd": # Compact representation from Byrd, Nocdeal & Schnabel (1992)
+   
+      STS = S.T@H0@S
+      DK = np.identity(m)
+      DK[0,0] *= np.dot(s[0],y[0])
+
+      # Now use eq. 2.5 to compute R - only have to do this once
+      R0 = np.dot(s[0], y[0]).reshape(1,1)
+      R = R0
+      for k in range(1,m):
+      
+         DK[k,k] *= np.dot(s[k],y[k])
+         
+         R = np.concatenate((np.concatenate((R0,S[:,:k].T@Y[:,[k]]),axis=1),
+                           np.concatenate((np.zeros((1,R0.shape[1])),
+                                                np.array([1/rho[k]]).reshape(1,1)),axis=1)),axis=0)
+         
+         R0 = R
+      
+      # Eq 2.22
+      L = S.T@Y - R
+
+      # Now compute term 2 in 3.13 of Byrd, Nocdeal & Schnabel (1992)
+      t2 = np.zeros((2*m,2*m))
+      t2[:m,:m] = STS
+      t2[:m,m:] = L
+      t2[m:,:m] = L.T
+      t2[m:,m:] = -1*DK
+
+      # We actually need the inverse to compute H
+
+      # Eq 2.26 of Byrd, Nocdeal & Schnabel (1992)
+      Dinv = copy.deepcopy(DK)
+      Dpow = copy.deepcopy(DK)
+      Dnpow = copy.deepcopy(DK)
+      for k in range(m):
+         Dinv[k,k] = 1/Dinv[k,k]
+         Dpow[k,k] = np.power(Dpow[k,k],0.5)
+         Dnpow[k,k] = np.power(Dnpow[k,k],-0.5)
+
+      JJT = STS + L@Dinv@L.T
+      J = scp.linalg.cholesky(JJT, lower=True)
+
+      t2L = np.zeros((2*m,2*m))
+      t2L[:m,:m] = Dpow
+      t2L[m:,:m] = (-1*L)@Dnpow
+      t2L[m:,m:] = J
+
+      t2U = np.zeros((2*m,2*m))
+      t2U[:m,:m] = -1*Dpow
+      t2U[:m:,m:] = Dnpow@L.T
+      t2U[m:,m:] = J.T
+
+      t2_flip = t2L@t2U
+
+      invt2L = scp.linalg.inv(t2L)
+      invT2U = scp.linalg.inv(t2U)
+      invt2 = invt2L.T@invT2U.T
+
+      t2_sort = np.zeros((2*m,2*m))
+      # top left <- bottom right
+      t2_sort[:m,:m] = t2_flip[m:,m:]
+      # top right <- bottom left
+      t2_sort[:m,m:] = t2_flip[m:,:m]
+      # bottom left <- top right
+      t2_sort[m:,:m] = t2_flip[:m,m:]
+      # bottom right <- top left
+      t2_sort[m:,m:] = t2_flip[:m,:m]
+
+      invt2_sort = np.zeros((2*m,2*m))
+      # top left <- bottom right
+      invt2_sort[:m,:m] = invt2[m:,m:]
+      # top right <- bottom left
+      invt2_sort[:m,m:] = invt2[m:,:m]
+      # bottom left <- top right
+      invt2_sort[m:,:m] = invt2[:m,m:]
+      # bottom right <- top left
+      invt2_sort[m:,m:] = invt2[:m,:m]
+
+      # And t1 and t3
+      t1 = np.concatenate((H0@S,Y),axis=1)
+      t3 = np.concatenate((S.T@H0,Y.T),axis=0)
+
+      shifted_invt2 = -1*invt2_sort
+      shifted_t2 = -1*t2_sort
+   else: #  Brust (2024)
+      C = S
+
+      # Compute D & R
+      D = np.identity(m)
+      D[0,0] *= np.dot(s[0],y[0])
+
+      # Now use eq. 2.5 of Brust (2024) to compute R.
+      # This is the same as in Byrd, R. H., Nocedal, J., & Schnabel, R. B. (1994) essentially.
+      R0 = np.dot(s[0], y[0]).reshape(1,1)
+      R = R0
+      for k in range(1,m):
+      
+         D[k,k] *= np.dot(s[k],y[k])
+         
+         R = np.concatenate((np.concatenate((R0,S[:,:k].T@Y[:,[k]]),axis=1),
+                           np.concatenate((np.zeros((1,R0.shape[1])),
+                                                np.array([1/rho[k]]).reshape(1,1)),axis=1)),axis=0)
+         
+         R0 = R
+      
+      # Compute C.T@S and extract the upper triangular part from that matrix as shown by Brust (2024)
+      CTS = C.T@S
+      RCS = np.triu(CTS)
+
+      # We now need inverse of RCS
+      RCS_inv = scp.linalg.solve_triangular(RCS, np.identity(m),lower=False)
+
+      # Can now form inverse of middle block from Brust (2024)
+      t2inv = np.zeros((2*m,2*m))
+      t2inv[:m,:m] = (-1*RCS_inv.T) @ (R + R.T - (D + S.T@H0@S)) @ RCS_inv # Upper left
+      t2inv[:m,m:] = RCS_inv.T # Upper right
+      t2inv[m:,:m] = RCS_inv # Lower left
+      #t2inv[m:,m:] = 0 # Lower right remains empty
+
+      t2 = np.zeros((2*m,2*m))
+      t2[:m,m:] = RCS # Upper right
+      t2[m:,:m] = RCS.T # Lower left
+      t2[m:,m:] = (R + R.T - (D + S.T@H0@S)) # Lower right
+
+      # Can now compute remaining terms to compute H as shown by Brust (2024)
+      t1 = np.concatenate((C,Y - H0@S),axis=1)
+      t3 = np.concatenate((C.T, (Y - H0@S).T),axis=0)
+
+      # H = H0 + t1@t2inv@t3
+      shifted_invt2 = t2inv
+      shifted_t2 = t2
+
+
+   # We have H0 + U@D@U.T with H0 = I*omega + S_emb*\omega and U@D@U.T=t1@(-t2)@t1.T
+   # Now enforce that I*omega + t1@(-t2)@t1.T is psd
+
+   # Compute implicit eigen decomposition as shown by Brust (2024)
+   Q,R = scp.linalg.qr(t1,mode='economic')
+   Rit2R = R@(shifted_invt2)@R.T
+
+   # ev holds non-zero eigenvalues of U@D@U.T (e.g., Brust, 2024)
+   ev, P = scp.linalg.eigh(Rit2R,driver='ev')
+   
+   return ev + omega
+
+def computetrVS3(t1,t2,t3,lTerm,V0,omega=1):
    """Compute ``tr(V@lTerm.S_j)`` from linear operator of ``V`` obtained from L-BFGS-B optimizer.
 
    Relies on equation 3.13 in Byrd, Nocdeal & Schnabel (1992). Adapted to ensure positive semi-definitiness required
@@ -1052,7 +1230,7 @@ def computetrVS3(t1,t2,t3,lTerm,V0):
    S_end = S_start + S_len
    
    for cidx in range(S_start,S_end):
-      S_c = lTerm.S_J_emb[:,[cidx]] # Can remain sparse
+      S_c = omega*lTerm.S_J_emb[:,[cidx]] # Can remain sparse
 
       # Now compute product with vector in compact form
       if not t2 is None:
@@ -1147,8 +1325,8 @@ def calculate_edf(LP,Pr,InvCholXXS,penalties,lgdetDs,colsX,n_c):
       S_emb,_,_,_ = compute_S_emb_pinv_det(colsX,penalties,"svd")
 
       # And initial approximation for the hessian...
-      H0 = scp.sparse.identity(colsX,format='csc')*omega
-      H0 += S_emb
+      H0 = scp.sparse.identity(colsX,format='csc') + S_emb
+      H0 *= omega
 
       Lp, Pr, _ = cpp_cholP(H0)
       P = compute_eigen_perm(Pr)
@@ -1181,7 +1359,7 @@ def calculate_edf(LP,Pr,InvCholXXS,penalties,lgdetDs,colsX,n_c):
          # V = V0 - V0@nt1@ (nt2 + nt1.T@V0@nt1)^-1 @ nt1.t@V0
          #
 
-         nt1,nt2,_,nt3,_ = compute_t1_shifted_t2_t3(s,y,rho,H0,omega,"Brust")
+         nt1,nt2,_,nt3,_ = compute_t1_shifted_t2_t3(s,y,rho,H0,omega,"Byrd")
 
          # Compute inverse:
          invt2 = nt2 + nt3@V0@nt1
@@ -1205,7 +1383,7 @@ def calculate_edf(LP,Pr,InvCholXXS,penalties,lgdetDs,colsX,n_c):
       if not InvCholXXS is None:
          # Compute B, needed for Fellner Schall update (Wood & Fasiolo, 2017)
          if isinstance(InvCholXXS,scp.sparse.linalg.LinearOperator):
-               Bps = computetrVS3(t1,t2,t3,lTerm,V0)
+               Bps = computetrVS3(t1,t2,t3,lTerm,V0,omega)
          else:
             B = InvCholXXS @ lTerm.D_J_emb 
             Bps = B.power(2).sum()
@@ -3547,6 +3725,7 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,coef,
             S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
 
       else:
+         # First penalized problem..
          opt = scp.optimize.minimize(__neg_pen_llk,
                                     np.ndarray.flatten(coef),
                                     args=(coef_split_idx,y,Xs,family,S_emb),
@@ -3555,8 +3734,7 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,coef,
                                     options={"maxiter":max_inner,
                                              **bfgs_options})
          
-
-         # Take a gradient step on llk not penalized at current coef est
+         # Get estimate of ev of hessian of un-penalized llk at estimated penalized coef
          opt_raw = scp.optimize.minimize(__neg_pen_llk,
                                           np.ndarray.flatten(opt["x"].reshape(-1,1)),
                                           args=(coef_split_idx,y,Xs,family,scp.sparse.csc_matrix((n_coef, n_coef))),
@@ -3565,8 +3743,6 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,coef,
                                           options={"maxiter":2,
                                                    **bfgs_options})
 
-         #print(opt)
-         
          H = None
          L = None
          keep = None
@@ -3627,11 +3803,6 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,coef,
             V = opt.hess_inv
             LV = None
 
-            # From Nocedal & Wright, 2004
-            next_omega = np.dot(opt_raw.hess_inv.yk[0],opt_raw.hess_inv.sk[0])/np.dot(opt_raw.hess_inv.yk[0],opt_raw.hess_inv.yk[0])
-            next_omega = max(1,(1/next_omega)/(n_coef))
-            V.omega = next_omega
-
             if __old_opt is not None and V.n_corrs < __old_opt.n_corrs:
                # L-BFGS converged quickly, so (inverse) of Hessian might in worst case simply be set to identity
                # but we can re-use last approximation of inverse to fill up
@@ -3641,6 +3812,14 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,coef,
                   V.rho = np.insert(V.rho,0,__old_opt.rho[cori],axis=0)
 
                V.n_corrs = __old_opt.n_corrs
+            
+            # From Nocedal & Wright, 2004 -> scaling of H0 is reciprocal of scaling of V0
+            if V.n_corrs == 0:
+               V.omega = 1
+            else:
+               V.omega = 1/(np.dot(opt_raw.hess_inv.yk[0],opt_raw.hess_inv.sk[0])/np.dot(opt_raw.hess_inv.yk[0],opt_raw.hess_inv.yk[0]))
+            
+            #print(V.omega)
             
             __old_opt = copy.deepcopy(V)
             """

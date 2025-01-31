@@ -1067,6 +1067,23 @@ class Formula():
                     
                     if isinstance(term, f) and not term.binary is None:
                         term.binary_level = self.__factor_codings[t_by][term.binary[1]]
+                
+                if not term.by_cont is None: # Continuous variable to be multiplied with model matrix for this term.
+                   t_by_cont = term.by_cont
+
+                   if len(self.file_paths) == 0 and not t_by_cont in self.__data.columns:
+                        raise KeyError(f"By_cont-variable '{t_by_cont}' attributed to term {ti} does not exist in dataframe.")
+                   
+                   if len(self.file_paths) == 0:
+                        vartype = data[t_by_cont].dtype
+                   else:
+                        vartype = read_dtype(t_by_cont,self.file_paths[0],self.file_loading_kwargs)
+
+                   if vartype not in ['float64','int64']:
+                     raise TypeError(f"Variable '{t_by_cont}' attributed to term {ti} must be numeric but is not.")
+                   
+                   cvi = self.__encode_var(t_by_cont,vartype,cvi,codebook)
+                   
     
         if self.__n_irf > 0:
            self.__has_irf = True
@@ -2533,6 +2550,11 @@ def build_smooth_term_matrix(ci,sti,sterm,var_map,var_mins,var_maxs,factor_level
 
    m_rows, m_cols = matrix_term.shape
    #print(m_cols)
+
+   # Multiply each row of model matrix by value in by_cont
+   if sterm.by_cont is not None:
+      by_cont_cov = cov_flat[:,var_map[sterm.by_cont]]
+      matrix_term *= by_cont_cov.reshape(-1,1)
    
    # Handle optional by keyword
    if sterm.by is not None:
@@ -2661,7 +2683,7 @@ def build_sparse_matrix_from_formula(terms,has_intercept,
                                      var_mins,var_maxs,
                                      factor_levels,cov_flat,
                                      cov,pool=None,use_only=None,
-                                     tol=1e-10):
+                                     tol=0):
    
    """Builds the entire model-matrix specified by a formula."""
    n_y = cov_flat.shape[0]
