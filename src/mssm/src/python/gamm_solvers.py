@@ -630,7 +630,7 @@ def computeH_Brust(s,y,rho,H0):
 def computeH(s,y,rho,H0,make_psd=False,omega=1):
    """Computes explicitly the negative Hessian of the penalized likelihood :math:`\mathbf{H}` from the L-BFGS-B optimizer info.
 
-   Relies on equations 2.16 in Byrd, Nocdeal & Schnabel (1992). Adapted here to work for the case where ``H0``:math:`=\mathbf{I}*\omega + \mathbf{S}_{\lambda}*omega` and
+   Relies on equations 2.16 in Byrd, Nocdeal & Schnabel (1992). Adapted here to work for the case where ``H0``:math:`=\mathbf{I}*\omega + \mathbf{S}_{\lambda}` and
    we need :math:`\mathbf{I}*\omega + \mathbf{U}\mathbf{D}\mathbf{U}^T` to be PSD. :math:`\mathbf{U}\mathbf{D}\mathbf{U}^T` is the update matrix for the
    negative Hessian of the penalized likelihood, **not** the inverse (:math:`\mathbf{V}`)! For this the implicit eigenvalue decomposition of Brust (2024) is used.
 
@@ -744,7 +744,7 @@ def computeH(s,y,rho,H0,make_psd=False,omega=1):
    t3 = np.concatenate((S.T@H0,Y.T),axis=0)
 
 
-   # We have H0 + U@D@U.T with H0 = I*omega + S_emb*omega and U@D@U.T=t1@(-t2)@t1.T
+   # We have H0 + U@D@U.T with H0 = I*omega + S_emb and U@D@U.T=t1@(-t2)@t1.T
    # Now enforce that I*omega + t1@(-t2)@t1.T is psd
    if make_psd:
       correction = t1@(-1*invt2_sort)@t3
@@ -827,7 +827,7 @@ def computeV(s,y,rho,V0):
 def compute_t1_shifted_t2_t3(s,y,rho,H0,omega=1,form='Byrd'):
    """Computes the compact update to get the inverse of the negative Hessian of the penalized likelihood :math:`\mathbf{V}` from the L-BFGS-B optimizer info.
 
-   Relies on equations 2.16 and 3.13 in Byrd, Nocdeal & Schnabel (1992) or on 2.6 in Brust (2024). Adapted here to work for the case where ``H0``:math:`=\mathbf{I}*\omega + \mathbf{S}_{\lambda}*\omega` and
+   Relies on equations 2.16 and 3.13 in Byrd, Nocdeal & Schnabel (1992) or on 2.6 in Brust (2024). Adapted here to work for the case where ``H0``:math:`=\mathbf{I}*\omega + \mathbf{S}_{\lambda}` and
    we need :math:`\mathbf{I}*\omega + \mathbf{U}\mathbf{D}\mathbf{U}^T` to be PSD. :math:`\mathbf{U}\mathbf{D}\mathbf{U}^T` is the update matrix for the
    negative Hessian of the penalized likelihood, **not** the inverse (:math:`\mathbf{V}`)! For this the implicit eigenvalue decomposition of Brust (2024) is used.
 
@@ -990,7 +990,7 @@ def compute_t1_shifted_t2_t3(s,y,rho,H0,omega=1,form='Byrd'):
       shifted_t2 = t2
 
 
-   # We have H0 + U@D@U.T with H0 = I*omega + S_emb*omega and U@D@U.T=t1@(-t2)@t1.T
+   # We have H0 + U@D@U.T with H0 = I*omega + S_emb and U@D@U.T=t1@(-t2)@t1.T
    # Now enforce that I*omega + t1@(-t2)@t1.T is psd
 
    # Compute implicit eigen decomposition as shown by Brust (2024)
@@ -1028,7 +1028,7 @@ def compute_t1_shifted_t2_t3(s,y,rho,H0,omega=1,form='Byrd'):
 def compute_H_adjust_ev(s,y,rho,H0,omega=1,form='Byrd'):
    """Computes the non-zero eigenvalues of the update to get the negative Hessian of the penalized likelihood :math:`\mathcal{H}` from the L-BFGS-B optimizer info.
 
-   Relies on equations 2.16 and 3.13 in Byrd, Nocdeal & Schnabel (1992) or on 2.6 in Brust (2024). Adapted here to work for the case where ``H0``:math:`=\mathbf{I}*\omega + \mathbf{S}_{\lambda}*\omega` and
+   Relies on equations 2.16 and 3.13 in Byrd, Nocdeal & Schnabel (1992) or on 2.6 in Brust (2024). Adapted here to work for the case where ``H0``:math:`=\mathbf{I}*\omega + \mathbf{S}_{\lambda}` and
    we need the eigenvalues for :math:`\mathbf{I}*\omega + \mathbf{U}\mathbf{D}\mathbf{U}^T`. To get those, we simply add ``omega`` to the evs of :math:`\mathbf{U}\mathbf{D}\mathbf{U}^T`
 
    References:
@@ -1190,7 +1190,7 @@ def compute_H_adjust_ev(s,y,rho,H0,omega=1,form='Byrd'):
       shifted_t2 = t2
 
 
-   # We have H0 + U@D@U.T with H0 = I*omega + S_emb*\omega and U@D@U.T=t1@(-t2)@t1.T
+   # We have H0 + U@D@U.T with H0 = I*omega + S_emb and U@D@U.T=t1@(-t2)@t1.T
    # Now enforce that I*omega + t1@(-t2)@t1.T is psd
 
    # Compute implicit eigen decomposition as shown by Brust (2024)
@@ -1202,7 +1202,7 @@ def compute_H_adjust_ev(s,y,rho,H0,omega=1,form='Byrd'):
    
    return ev + omega
 
-def computetrVS3(t1,t2,t3,lTerm,V0,omega=1):
+def computetrVS3(t1,t2,t3,lTerm,V0):
    """Compute ``tr(V@lTerm.S_j)`` from linear operator of ``V`` obtained from L-BFGS-B optimizer.
 
    Relies on equation 3.13 in Byrd, Nocdeal & Schnabel (1992). Adapted to ensure positive semi-definitiness required
@@ -1230,7 +1230,7 @@ def computetrVS3(t1,t2,t3,lTerm,V0,omega=1):
    S_end = S_start + S_len
    
    for cidx in range(S_start,S_end):
-      S_c = omega*lTerm.S_J_emb[:,[cidx]] # Can remain sparse
+      S_c = lTerm.S_J_emb[:,[cidx]] # Can remain sparse
 
       # Now compute product with vector in compact form
       if not t2 is None:
@@ -1325,8 +1325,7 @@ def calculate_edf(LP,Pr,InvCholXXS,penalties,lgdetDs,colsX,n_c):
       S_emb,_,_,_ = compute_S_emb_pinv_det(colsX,penalties,"svd")
 
       # And initial approximation for the hessian...
-      H0 = scp.sparse.identity(colsX,format='csc') + S_emb
-      H0 *= omega
+      H0 = (scp.sparse.identity(colsX,format='csc')*omega) + S_emb
 
       Lp, Pr, _ = cpp_cholP(H0)
       P = compute_eigen_perm(Pr)
@@ -1383,7 +1382,7 @@ def calculate_edf(LP,Pr,InvCholXXS,penalties,lgdetDs,colsX,n_c):
       if not InvCholXXS is None:
          # Compute B, needed for Fellner Schall update (Wood & Fasiolo, 2017)
          if isinstance(InvCholXXS,scp.sparse.linalg.LinearOperator):
-               Bps = computetrVS3(t1,t2,t3,lTerm,V0,omega)
+               Bps = computetrVS3(t1,t2,t3,lTerm,V0)
          else:
             B = InvCholXXS @ lTerm.D_J_emb 
             Bps = B.power(2).sum()
@@ -3725,7 +3724,30 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,coef,
             S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,smooth_pen,"svd")
 
       else:
-         # First penalized problem..
+
+         if outer == 0:
+            # Get estimate of ev of hessian of un-penalized llk at estimated penalized coef
+            opt_raw = scp.optimize.minimize(__neg_pen_llk,
+                                             np.ndarray.flatten(coef),
+                                             args=(coef_split_idx,y,Xs,family,scp.sparse.csc_matrix((n_coef, n_coef))),
+                                             method=optimizer,
+                                             jac = __neg_pen_grad if use_grad else None,
+                                             options={"maxiter":max_inner,
+                                                      **bfgs_options})
+            
+            if opt_raw.hess_inv.n_corrs > 0:
+
+               H_y, H_s, H_rho = opt_raw.hess_inv.yk, opt_raw.hess_inv.sk, opt_raw.hess_inv.rho
+               
+               # From Nocedal & Wright, 2004:
+               omega_Raw = np.dot(opt_raw.hess_inv.yk[-1],opt_raw.hess_inv.yk[-1])/np.dot(opt_raw.hess_inv.yk[-1],opt_raw.hess_inv.sk[-1])
+
+               H_ev = compute_H_adjust_ev(H_s,H_y,H_rho,scp.sparse.identity(n_coef,format='csc')*omega_Raw,omega_Raw,"Byrd")
+
+               H_ev = H_ev[H_ev >=0]
+               
+
+         # Now penalized problem..
          opt = scp.optimize.minimize(__neg_pen_llk,
                                     np.ndarray.flatten(coef),
                                     args=(coef_split_idx,y,Xs,family,S_emb),
@@ -3733,15 +3755,6 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,coef,
                                     jac = __neg_pen_grad if use_grad else None,
                                     options={"maxiter":max_inner,
                                              **bfgs_options})
-         
-         # Get estimate of ev of hessian of un-penalized llk at estimated penalized coef
-         opt_raw = scp.optimize.minimize(__neg_pen_llk,
-                                          np.ndarray.flatten(opt["x"].reshape(-1,1)),
-                                          args=(coef_split_idx,y,Xs,family,scp.sparse.csc_matrix((n_coef, n_coef))),
-                                          method=optimizer,
-                                          jac = __neg_pen_grad if use_grad else None,
-                                          options={"maxiter":2,
-                                                   **bfgs_options})
 
          H = None
          L = None
@@ -3813,15 +3826,17 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,coef,
 
                V.n_corrs = __old_opt.n_corrs
             
-            # From Nocedal & Wright, 2004 -> scaling of H0 is reciprocal of scaling of V0
-            if V.n_corrs == 0:
-               V.omega = 1
+            # Scale identity by small eigenvalue of hessian of negative llk
+            if __old_opt is None:
+               if opt_raw.hess_inv.n_corrs == 0:
+                  V.omega = 1
+               else:
+                  V.omega = np.min(H_ev)
             else:
-               V.omega = 1/(np.dot(opt_raw.hess_inv.yk[0],opt_raw.hess_inv.sk[0])/np.dot(opt_raw.hess_inv.yk[0],opt_raw.hess_inv.yk[0]))
-            
-            #print(V.omega)
+               V.omega = __old_opt.omega
             
             __old_opt = copy.deepcopy(V)
+            #print(V.omega)
             """
 
             # L-BFGS converged immediately, but we can use approximation from previous iteration.
