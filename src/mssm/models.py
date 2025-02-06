@@ -1823,7 +1823,7 @@ class GSMM(GAMMLSS):
         :type build_mat: [bool], optional
         :param should_keep_drop: Only used when ``method='QR/Chol'`` and ``optimizer='Newton'``. If set to True, any coefficients that are dropped during fitting - are permanently excluded from all subsequent iterations. If set to False, this is determined anew at every iteration - **costly**! Defaults to True.
         :type should_keep_drop: bool,optional
-        :param gamma: Setting this to a value larger than 1 promotes smoother models! Defaults to 1.
+        :param gamma: Setting this to a value larger than 1 promotes more complex (less smooth) models. Setting this to a value smaller than 1 (but must be > 0) promotes smoother models! Defaults to 1.
         :type gamma: float,optional
         :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to ``conv_tol``. Note also, that in any case the ``maxiter`` argument is automatically set to ``max_inner``. Defaults to None.
         :type bfgs_options: key=value,optional
