@@ -88,7 +88,7 @@ class GAMM:
 
         pen = 0
         if penalized:
-            pen = self.penalty
+            pen = 0.5*self.penalty
         if self.pred is not None:
             mu = self.pred
             if isinstance(self.family,Gaussian) == False or isinstance(self.family.link,Identity) == False:
@@ -1033,7 +1033,7 @@ class GAMMLSS(GAMM):
 
         pen = 0
         if penalized:
-            pen = self.penalty
+            pen = 0.5*self.penalty
         if self.overall_preds is not None:
             mus = [self.family.links[i].fi(self.overall_preds[i]) for i in range(self.family.n_par)]
             return self.family.llk(self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat],*mus) - pen
@@ -1736,7 +1736,7 @@ class GSMM(GAMMLSS):
 
         pen = 0
         if penalized:
-            pen = self.penalty
+            pen = 0.5*self.penalty
         if self.overall_coef is not None:
 
             y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
@@ -1779,7 +1779,7 @@ class GSMM(GAMMLSS):
         """
         return None
     
-    def fit(self,init_coef=None,max_outer=50,max_inner=200,min_inner=200,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=1,restart=False,optimizer="Newton",method="Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),progress_bar=True,n_cores=10,seed=0,drop_NA=True,init_lambda=None,form_VH=True,use_grad=False,build_mat=None,should_keep_drop=True,gamma=1,**bfgs_options):
+    def fit(self,init_coef=None,max_outer=50,max_inner=200,min_inner=200,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=1,restart=False,optimizer="Newton",method="Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),progress_bar=True,n_cores=10,seed=0,drop_NA=True,init_lambda=None,form_VH=True,use_grad=False,build_mat=None,should_keep_drop=True,gamma=1,qEFSH='SR1',overwrite_coef=True,**bfgs_options):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -1797,9 +1797,9 @@ class GSMM(GAMMLSS):
         :type control_lambda: int,optional
         :param restart: Whether fitting should be resumed. Only possible if the same model has previously completed at least one fitting iteration.
         :type restart: bool,optional
-        :param optimizer: Which optimizer to use to estimate the coefficients - supports "Newton", "BFGS", and "L-BFGS-B". In case of the former, ``self.family`` needs to implement :func:`gradient` and :func:`hessian`. Defaults to "Newton"
+        :param optimizer: Deprecated. Defaults to "Newton"
         :type optimizer: str,optional
-        :param method: Which method to use to solve for the coefficients. The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR/Chol". In that case a QR decomposition is used - which is first pivoted to maximize sparsity in the resulting decomposition but also pivots for stability in order to get an estimate of rank defficiency. A Cholesky is than used using the combined pivoting strategy obtained from the QR. This takes substantially longer. Defaults to "Chol".
+        :param method: Which method to use to solve for the coefficients (and smoothing parameters). The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR/Chol". In that case a QR decomposition is used - which is first pivoted to maximize sparsity in the resulting decomposition but also pivots for stability in order to get an estimate of rank defficiency. A Cholesky is than used using the combined pivoting strategy obtained from the QR. This takes substantially longer. If this is set to ``'qEFS'``, then the coefficients are estimated via quasi netwon and the smoothing penalties are estimated from the quasi newton approximation to the hessian. This only requieres first derviative information. Defaults to "Chol".
         :type method: str,optional
         :param check_cond: Whether to obtain an estimate of the condition number for the linear system that is solved. When ``check_cond=0``, no check will be performed. When ``check_cond=1``, an estimate of the condition number for the final system (at convergence) will be computed and warnings will be issued based on the outcome (see :func:`mssm.src.python.gamm_solvers.est_condition`). Defaults to 1.
         :type check_cond: int,optional
@@ -1815,23 +1815,30 @@ class GSMM(GAMMLSS):
         :type drop_NA: bool,optional
         :param init_lambda: A set of initial :math:`\lambda` parameters to use by the model. Length of list must match number of parameters to be estimated. Defaults to None
         :type init_lambda: [float],optional
-        :param form_VH: Whether to explicitly form matrix ``V`` - the estimated inverse of the negative Hessian of the penalized likelihood - and ``H`` - the estimate of said Hessian - when using the ``L-BFGS-B`` optimizer. If set to False, only ``V`` is returned - as a :class:`scipy.sparse.linalg.LinearOperator` - and available in ``self.overall_lvi``. Additionally, ``self.hessian`` will then be equal to ``None``. Note, that this will break default prediction/confidence interval methods - so do not call them. Defaults to True
+        :param form_VH: Whether to explicitly form matrix ``V`` - the estimated inverse of the negative Hessian of the penalized likelihood - and ``H`` - the estimate of said Hessian - when using the ``qEFS`` method. If set to False, only ``V`` is returned - as a :class:`scipy.sparse.linalg.LinearOperator` - and available in ``self.overall_lvi``. Additionally, ``self.hessian`` will then be equal to ``None``. Note, that this will break default prediction/confidence interval methods - so do not call them. Defaults to True
         :type form_VH: bool,optional
-        :param use_grad: Whether to pass the :func:`self.family.gradient` function to the ``L-BFGS-B`` or ``BFGS`` optimizer. If set to False, the gradient of the penalized likelihood will be approximated via finite differences. Defaults to False
+        :param use_grad: Whether to pass the :func:`self.family.gradient` function to the quasi newton optimizer. If set to False, the gradient of the penalized likelihood will be approximated via finite differences. Defaults to False
         :type use_grad: bool,optional
         :param build_mat: An (optional) list, containing one bool per :class:`mssm.src.python.formula.Formula` in ``self.formulas`` - indicating whether the corresponding model matrix should be built. Useful if multiple formulas specify the same model matrix, in which case only one needs to be built. **Do not make use of this (i.e., pass anything other than None) if you set ``method='QR/Chol'``, since the rank deficiency handling will break for shared matrices.** Defaults to None, which means all model matrices are built.
         :type build_mat: [bool], optional
-        :param should_keep_drop: Only used when ``method='QR/Chol'`` and ``optimizer='Newton'``. If set to True, any coefficients that are dropped during fitting - are permanently excluded from all subsequent iterations. If set to False, this is determined anew at every iteration - **costly**! Defaults to True.
+        :param should_keep_drop: Only used when ``method='QR/Chol'``. If set to True, any coefficients that are dropped during fitting - are permanently excluded from all subsequent iterations. If set to False, this is determined anew at every iteration - **costly**! Defaults to True.
         :type should_keep_drop: bool,optional
         :param gamma: Setting this to a value larger than 1 promotes more complex (less smooth) models. Setting this to a value smaller than 1 (but must be > 0) promotes smoother models! Defaults to 1.
         :type gamma: float,optional
-        :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to ``conv_tol``. Note also, that in any case the ``maxiter`` argument is automatically set to ``max_inner``. Defaults to None.
+        :param qEFSH: Should the hessian approximation use a symmetric rank 1 update (``qEFSH='SR1'``) that is forced to result in positive definiteness of the approximation or the standard bfgs update (``qEFSH='BFGS'``) . Defaults to 'SR1'.
+        :type qEFSH: str,optional
+        :param overwrite_coef: Whether the initial coefficients passed to the optimization routine should be over-written by the solution obtained for the un-penalized version of the problem when ``method='qEFS'``. Setting this to False will be useful when passing coefficients from a simpler model to initialize a more complex one. Defaults to True.
+        :type overwrite_coef: bool,optional
+        :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If none are provided, the ``gtol`` argument will be initialized to ``conv_tol``. Note also, that in any case the ``maxiter`` argument is automatically set to ``max_inner``. Defaults to None.
         :type bfgs_options: key=value,optional
         :raises ValueError: Will throw an error when ``optimizer`` is not one of 'Newton', 'BFGS', 'L-BFGS-B'.
         """
 
         if not bfgs_options:
-            bfgs_options = {"gtol":conv_tol}
+            bfgs_options = {"gtol":conv_tol,
+                            "ftol":1e-9,
+                            "maxcor":30,
+                            "maxls":100}
 
         if not optimizer in ["Newton", "BFGS", "L-BFGS-B"]:
             raise ValueError("'optimizer' needs to be set to one of 'Newton', 'BFGS', 'L-BFGS-B'.")
@@ -1897,7 +1904,7 @@ class GSMM(GAMMLSS):
         coef,H,LV,total_edf,term_edfs,penalty,fit_info = solve_generalSmooth_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,smooth_pen,
                                                                                     max_outer,max_inner,min_inner,conv_tol,extend_lambda,extension_method_lam,
                                                                                     control_lambda,optimizer,method,check_cond,piv_tol,should_keep_drop,form_VH,
-                                                                                    use_grad,gamma,progress_bar,n_cores,**bfgs_options)
+                                                                                    use_grad,gamma,qEFSH,overwrite_coef,progress_bar,n_cores,**bfgs_options)
         
         self.overall_coef = coef
         self.edf = total_edf

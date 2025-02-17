@@ -144,11 +144,11 @@ class Test_Vb_corrections:
     model2 = GAMM(sim_fit_formula2,Gaussian())
     model2.fit(exclude_lambda=False,progress_bar=False,max_outer=100)
 
-    Vp1,_,_,_ = estimateVp(model,strategy="JJJ2",verbose=True,seed=20)
+    Vp1,_,_,_ = estimateVp(model,strategy="JJJ1",verbose=True,seed=20)
 
     _,_,Vp2,_,_,total_edf,_,_,_ = correct_VB(model,grid_type="JJJ1",nR=20,verbose=True,V_shrinkage_weight=0.75,b=1e7,seed=20,df=2)
 
-    _,LI,_,_,_,total_edf2,_,_,upper_edf = correct_VB(model2,grid_type="JJJ2",nR=20,verbose=True,V_shrinkage_weight=1,b=1e7,seed=20,df=2)
+    _,LI,_,_,_,total_edf2,_,_,upper_edf = correct_VB(model2,grid_type="JJJ2",nR=20,verbose=True,V_shrinkage_weight=1,b=1e7,seed=20,df=2,refine_Vp=True)
 
     def test_Vp1(self):
         assert np.allclose(np.round(self.Vp1,decimals=3),np.array([[ 1.138000e+00, -5.000000e-03,  1.700000e-02, -1.080000e-01],

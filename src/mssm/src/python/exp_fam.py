@@ -1822,7 +1822,6 @@ class PropHaz(GENSMOOTHFamily):
       with warnings.catch_warnings(): # Overflow
          warnings.simplefilter("ignore")
          gamma = np.exp(eta)
-      gamma[np.isnan(gamma) | np.isinf(gamma)] = np.power(np.finfo(float).max,0.9)
 
       # Now compute first sum
       llk = np.sum(delta*eta)
@@ -1836,15 +1835,10 @@ class PropHaz(GENSMOOTHFamily):
             warnings.simplefilter("ignore")
             gamma_p += np.sum(gamma[ri])
 
-         if np.isnan(gamma_p) | np.isinf(gamma_p):
-            gamma_p = np.power(np.finfo(float).max,0.9)
-
          with warnings.catch_warnings(): # Divide by zero
             warnings.simplefilter("ignore")
             log_gamma_p = np.log(gamma_p)
          
-         if np.isnan(log_gamma_p) | np.isinf(log_gamma_p):
-            log_gamma_p = 0
 
          llk -= dj*log_gamma_p
 
@@ -1871,7 +1865,6 @@ class PropHaz(GENSMOOTHFamily):
       with warnings.catch_warnings(): # Overflow
          warnings.simplefilter("ignore")
          gamma = np.exp(eta)
-      gamma[np.isnan(gamma) | np.isinf(gamma)] = np.power(np.finfo(float).max,0.9)
       gamma = gamma.reshape(-1,1)
 
       # Now compute first sum
@@ -1889,9 +1882,6 @@ class PropHaz(GENSMOOTHFamily):
             warnings.simplefilter("ignore")
             gamma_p += np.sum(gamma_i)
 
-         if np.isnan(gamma_p) | np.isinf(gamma_p):
-            gamma_p = np.power(np.finfo(float).max,0.9)
-
          X_i = X[ri,:]
          bi = gamma_i.T@X_i
          b_p += bi
@@ -1899,8 +1889,6 @@ class PropHaz(GENSMOOTHFamily):
          with warnings.catch_warnings(): # Divide by zero
             warnings.simplefilter("ignore")
             bpg = b_p/gamma_p
-
-         bpg[np.isnan(bpg) | np.isinf(bpg)] = 0
 
          g -= dj*bpg
       
@@ -1927,7 +1915,6 @@ class PropHaz(GENSMOOTHFamily):
       with warnings.catch_warnings(): # Overflow
          warnings.simplefilter("ignore")
          gamma = np.exp(eta)
-      gamma[np.isnan(gamma) | np.isinf(gamma)] = 0
       gamma = gamma.reshape(-1,1)
 
       # Only sum over nt
@@ -1953,9 +1940,6 @@ class PropHaz(GENSMOOTHFamily):
          with warnings.catch_warnings(): # Divide by zero or overflow
             warnings.simplefilter("ignore")
             Hj = dj*b_p.T@b_p/np.power(gamma_p,2) - dj*A_p/gamma_p
-         
-         if np.any(np.isnan(Hj)) | np.any(np.isinf(Hj)):
-            continue
          
          H += Hj
 

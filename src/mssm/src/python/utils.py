@@ -4,7 +4,7 @@ import math
 import warnings
 from itertools import permutations,product,repeat
 import copy
-from ..python.gamm_solvers import cpp_backsolve_tr,compute_S_emb_pinv_det,cpp_chol,cpp_solve_coef,update_scale_edf,compute_Linv,apply_eigen_perm,tqdm,managers,shared_memory,cpp_solve_coefXX,update_PIRLS,PIRLS_pdat_weights,correct_coef_step,update_coef_gen_smooth,cpp_cholP,update_coef_gammlss,compute_lgdetD_bsb,calculate_edf,compute_eigen_perm,cpp_dChol
+from ..python.gamm_solvers import cpp_backsolve_tr,compute_S_emb_pinv_det,cpp_chol,cpp_solve_coef,update_scale_edf,compute_Linv,apply_eigen_perm,tqdm,managers,shared_memory,cpp_solve_coefXX,update_PIRLS,PIRLS_pdat_weights,correct_coef_step,update_coef_gen_smooth,cpp_cholP,update_coef_gammlss,compute_lgdetD_bsb,calculate_edf,compute_eigen_perm,cpp_dChol,computeHSR1,computeH,update_coef
 from ..python.formula import reparam,map_csc_to_eigen,mp
 from ..python.exp_fam import Family,Gaussian, Identity,GAMLSSFamily,GENSMOOTHFamily
 
@@ -335,7 +335,7 @@ def adjust_CI(model,n_ps,b,predi_mat,use_terms,alpha,seed):
 
         return b
 
-def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0,init_eta=None):
+def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0,init_eta=None,method='Chol'):
    """
    Allows to evaluate REML criterion (e.g., Wood, 2011; Wood, 2016) efficiently for
    a set of \lambda values.
@@ -345,7 +345,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0,init_eta=No
    See :func:`REML` function for more details.
    """
 
-   S_emb,_,_,_ = compute_S_emb_pinv_det(X.shape[1],penalties,"svd")
+   S_emb,_,S_root,_ = compute_S_emb_pinv_det(X.shape[1],penalties,"svd",method != 'Chol')
 
    # Need pseudo-data only in case of GAM
    z = None
@@ -354,13 +354,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0,init_eta=No
 
    if isinstance(family,Gaussian) and isinstance(family.link,Identity):
         # AMM - directly solve for coef
-        LP, Pr, coef, code = cpp_solve_coef(y-offset,X,S_emb)
-
-        if code != 0:
-            raise ValueError("Forming coefficients for specified penalties was not possible.")
-        
-        eta = (X @ coef).reshape(-1,1) + offset
-        mu = eta
+        eta,mu,coef,Pr,_,LP = update_coef(y-offset,X,X,family,S_emb,S_root,n_c,None,0)
         nH = (X.T@X).tocsc()
    else:
        # GAMM - have to repeat Newton step
@@ -378,54 +372,37 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0,init_eta=No
        yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family)
 
        # Solve coef
-       LP, Pr, coef, code = cpp_solve_coef(yb,Xb,S_emb)
-
-       if code != 0:
-            raise ValueError("Forming coefficients for specified penalties was not possible.")
-
-       # Update eta & mu
-       eta = (X @ coef).reshape(-1,1) + offset
-       mu = family.link.fi(eta)
-
-       # Compute deviance
-       dev = family.deviance(y,mu)
-
-       # And penalized deviance term
-       c_pen_dev = dev + coef.T @ S_emb @ coef
-       pen_dev = c_pen_dev + 1e7
+       eta,mu,coef,Pr,_,LP = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,None,offset)
 
        # Now repeat until convergence
-       for newt_iter in range(100):
-           
-           # Update pseudo-dat
-           yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family)
+       inval = np.isnan(mu).flatten()
+       dev = family.deviance(y[inval == False],mu[inval == False])
+       pen_dev = dev + coef.T @ S_emb @ coef
 
-           LP, Pr, n_coef, code = cpp_solve_coef(yb,Xb,S_emb)
-           
-           if code != 0:
-                raise ValueError(f"Forming coefficients at iteration {newt_iter} for specified penalties was not possible.")
+       for newt_iter in range(500):
+            
+            # Perform step-length control for the coefficients (repeat step 3 in Wood, 2017)
+            if newt_iter > 0:
+                dev,pen_dev,mu,eta,coef = correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,len(penalties),S_emb,None,n_c,offset)
 
-           # Update eta & mu
-           eta = (X @ n_coef).reshape(-1,1) + offset
-           with warnings.catch_warnings(): # Catch errors with mean computation (e.g., overflow)
-                warnings.simplefilter("ignore")
-                mu = family.link.fi(eta)
+            # Update PIRLS weights
+            yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family)
 
-           # Update deviance
-           mu_inval = np.isnan(mu).flatten()
-           dev = family.deviance(y[mu_inval == False],mu[mu_inval == False])
+            # Convergence check for inner loop
+            if newt_iter > 0:
+                dev_diff_inner = abs(pen_dev - c_dev_prev)
+                if dev_diff_inner < 1e-9*pen_dev or newt_iter == 499:
+                    break
 
-           pen_dev = dev + n_coef.T @ S_emb @ n_coef
+            c_dev_prev = pen_dev
 
-           # Step-size control:
-           dev,pen_dev,mu,eta,coef = correct_coef_step(coef,n_coef,dev,pen_dev,c_pen_dev,family,eta,mu,y,X,len(penalties),S_emb,None,1,offset)
+            # Now propose next set of coefficients
+            eta,mu,n_coef,Pr,_,LP = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,None,offset)
 
-           # Convergence control
-           if np.abs(pen_dev - c_pen_dev) < 1e-7*pen_dev:
-                break
-           
-           # Prepare next step
-           c_pen_dev = pen_dev
+            # Update deviance & penalized deviance
+            inval = np.isnan(mu).flatten()
+            dev = family.deviance(y[inval == False],mu[inval == False])
+            pen_dev = dev + n_coef.T @ S_emb @ n_coef
       
        # At this point, Wr/z might not match the dimensions of y and X, because observations might be
        # excluded at convergence. eta and mu are of correct dimension, so we need to re-compute Wr - this
@@ -437,9 +414,11 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0,init_eta=No
             w[inval] = 0
 
             # Re-compute weight matrix
-            Wr = scp.sparse.spdiags([np.sqrt(np.ndarray.flatten(w))],[0])
-
-       W = Wr@Wr
+            Wr_fix = scp.sparse.spdiags([np.sqrt(np.ndarray.flatten(w))],[0])
+       else:
+           Wr_fix = Wr
+           
+       W = Wr_fix@Wr_fix
        nH = (X.T@W@X).tocsc() 
 
    # Get edf and optionally estimate scale (scale will be kept at fixed (e.g., 1) for Generalized case)
@@ -461,7 +440,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0,init_eta=No
 
    return reml,LP,Pr,coef,scale,edf,llk
 
-def compute_REML_candidate_GSMM(family,y,Xs,penalties,coef,n_coef,coef_split_idx,method="Newton",conv_tol=1e-7,n_c=10,**bfgs_options):
+def compute_REML_candidate_GSMM(family,y,Xs,penalties,coef,n_coef,coef_split_idx,method="Chol",conv_tol=1e-7,n_c=10,**bfgs_options):
     """
     Allows to evaluate REML criterion (e.g., Wood, 2011; Wood, 2016) efficiently for
     a set of \lambda values for a GSMM or GAMMLSS.
@@ -479,52 +458,67 @@ def compute_REML_candidate_GSMM(family,y,Xs,penalties,coef,n_coef,coef_split_idx
         # Compute likelihood for current estimate
         c_llk = family.llk(coef,coef_split_idx,y,Xs)
 
-        if method != "Newton":
-            # Define negative penalized likelihood function to be minimized via BFGS
-            def __neg_pen_llk(coef,coef_split_idx,y,Xs,family,S_emb):
+        __old_opt = None
+        if method == "qEFS":
+            # Define wrapper for negative (penalized) likelihood function plus function to evaluate negative gradient of the former likelihood
+            # to compute line-search.
+            def __neg_llk(coef,coef_split_idx,y,Xs,family,S_emb):
+                coef = coef.reshape(-1,1)
                 neg_llk = -1 * family.llk(coef,coef_split_idx,y,Xs)
-                return neg_llk + coef.T@S_emb@coef
-        
-        # Estimate coefficients:
-        if method == "Newton":
-            coef,H,L,LV,c_llk,_,_,_,_ = update_coef_gen_smooth(family,y,Xs,coef,
-                                                               coef_split_idx,S_emb,None,
-                                                               c_llk,0,100,
-                                                               100,conv_tol,"Chol",None,None,None)
+                return neg_llk + 0.5*coef.T@S_emb@coef
             
-            V = LV.T @ LV # inverse of hessian of penalized likelihood
-            nH = -1*H # negative hessian of likelihood
-        else:
-            opt = scp.optimize.minimize(__neg_pen_llk,
-                                        np.ndarray.flatten(coef),
-                                        args=(coef_split_idx,y,Xs,family,S_emb),
-                                        method=method,
-                                        options={"maxiter":100,
-                                                 **bfgs_options})
+            def __neg_grad(coef,coef_split_idx,y,Xs,family,S_emb):
+                # see Wood, Pya & Saefken (2016)
+                coef = coef.reshape(-1,1)
+                grad = family.gradient(coef,coef_split_idx,y,Xs)
+                pgrad = np.array([grad[i] - (S_emb[[i],:]@coef)[0] for i in range(len(grad))])
+                return -1*pgrad.flatten()
             
-            # Get coefficient estimate
-            coef = opt["x"].reshape(-1,1)
+            # Optimize un-penalized problem first to get a good starting estimate for hessian.
+            opt_raw = scp.optimize.minimize(__neg_llk,
+                                           np.ndarray.flatten(coef),
+                                           args=(coef_split_idx,y,Xs,family,scp.sparse.csc_matrix((len(coef), len(coef)))),
+                                           method="L-BFGS-B",
+                                           jac = __neg_grad,
+                                           options={"maxiter":1000,
+                                                    **bfgs_options})
 
-            # Compute penalized likelihood for current estimate
+            coef = opt_raw["x"].reshape(-1,1)
             c_llk = family.llk(coef,coef_split_idx,y,Xs)
+            __old_opt = opt_raw.hess_inv
+            __old_opt.method = 'qEFS'
+            __old_opt.nit = opt_raw["nit"]
+            __old_opt.form = 'BFGS'
+            __old_opt.bfgs_options = bfgs_options
 
-            # Get inverse of Hessian of penalized likelihood
-            if method == "BFGS":
-               V = scp.sparse.csc_array(opt["hess_inv"])
-            elif method == "L-BFGS-B":
-               V = scp.sparse.csc_array(opt.hess_inv.todense())
-            V.eliminate_zeros()
+            H_y, H_s = opt_raw.hess_inv.yk, opt_raw.hess_inv.sk
+               
+            # Get scaling for hessian from Nocedal & Wright, 2004:
+            omega_Raw = np.dot(H_y[-1],H_y[-1])/np.dot(H_y[-1],H_s[-1])
+            __old_opt.omega = omega_Raw#np.min(H_ev)
+        
 
-            # Get Cholesky factor needed for (accelerated) EFS
-            LVPT, P, code = cpp_cholP(V)
-            LVT = apply_eigen_perm(P,LVPT)
-            LV = LVT.T
+        coef,H,L,LV,c_llk,_,_,_,_ = update_coef_gen_smooth(family,y,Xs,coef,
+                                                            coef_split_idx,S_emb,None,
+                                                            c_llk,0,1000,
+                                                            1000,conv_tol,method,None,None,__old_opt)
+        
+        if method == 'qEFS':
+            
+            # Get an approximation of the Hessian of the likelihood
+            if LV.form == 'SR1':
+               H = computeHSR1(LV.sk,LV.yk,LV.rho,scp.sparse.identity(len(coef),format='csc')*LV.omega,omega=LV.omega,make_psd=True)
+            else:
+               H = computeH(LV.sk,LV.yk,LV.rho,scp.sparse.identity(len(coef),format='csc')*LV.omega,omega=LV.omega,make_psd=True)
 
-            # Get an apparoximation of the Hessian of the likelihood
-            LHPT = compute_Linv(LVPT)
-            LHT = apply_eigen_perm(P,LHPT)
-            nH = LHT.T@LHT # approximately: negative Hessian of llk + S_emb
-            nH -= S_emb # approximately: negative Hessian of llk 
+            # Get Cholesky factor of approximate inverse of penalized hessian (needed for CIs)
+            pH = scp.sparse.csc_array(H + S_emb)
+            Lp, Pr, _ = cpp_cholP(pH)
+            LVp0 = compute_Linv(Lp,10)
+            LV = apply_eigen_perm(Pr,LVp0)
+        
+        V = LV.T @ LV # inverse of hessian of penalized likelihood
+        nH = -1*H # negative hessian of likelihood
 
     else: # GAMMLSS
         split_coef = np.split(coef,coef_split_idx)
@@ -660,7 +654,7 @@ def REML(llk,nH,coef,scale,penalties):
    # Done
    return reml + lgdetS/2 - lgdetXXS/2 + (Mp*np.log(2*np.pi))/2
 
-def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=True,optimizer="Newton",seed=None,conv_tol=1e-7,df=40,strategy="JJJ3",**bfgs_options):
+def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=True,method="Chol",seed=None,conv_tol=1e-7,df=40,strategy="JJJ3",**bfgs_options):
     """Estimate covariance matrix :math:`\mathbf{V}_{\\boldsymbol{p}}` of posterior for :math:`\mathbf{p} = log(\\boldsymbol{\lambda})`. Either (see ``strategy`` parameter) based on finite difference approximation or
     on using REML scores to approximate the expectation for the covariance matrix, similar to what was suggested by Greven & Scheipl (2016).
 
@@ -684,8 +678,8 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=
     :type verbose: bool, optional
     :param drop_NA: Whether to drop rows in the **model matrices** corresponding to NAs in the dependent variable vector. Defaults to True.
     :type drop_NA: bool,optional
-    :param optimizer: Which optimizer to use to estimate the coefficients for more general smooth models - supports "Newton", "BFGS", and "L-BFGS-B". In case of the former, ``self.family`` needs to implement :func:`gradient` and :func:`hessian`. Defaults to "Newton"
-    :type optimizer: str,optional
+    :param method: Which method to use to solve for the coefficients (and smoothing parameters). The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR/Chol". In that case a QR decomposition is used - which is first pivoted to maximize sparsity in the resulting decomposition but also pivots for stability in order to get an estimate of rank defficiency. A Cholesky is than used using the combined pivoting strategy obtained from the QR. This takes substantially longer. If this is set to ``'qEFS'``, then the coefficients are estimated via quasi netwon and the smoothing penalties are estimated from the quasi newton approximation to the hessian. This only requieres first derviative information. Defaults to "Chol".
+    :type method: str,optional
     :param seed: Seed to use for random parts of the estimate. Defaults to None
     :type seed: int,optional
     :param conv_tol: Deprecated, defaults to 1e-7
@@ -696,7 +690,6 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=
     :type strategy: str, optional
     :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100. Defaults to None.
     :type bfgs_options: key=value,optional
-    :raises ValueError: Will throw an error when ``optimizer`` is not one of 'Newton', 'BFGS', 'L-BFGS-B' and a :class:`mssm.models.GSMM` is to be estimated.
     :return: An estimate of the covariance matrix of the posterior for :math:`\mathbf{p} = log(\\boldsymbol{\lambda})`
     :rtype: numpy.array
     """
@@ -706,10 +699,11 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=
 
     if isinstance(family,GENSMOOTHFamily):
         if not bfgs_options:
-            bfgs_options = {"gtol":1e-3}
+            bfgs_options = {"gtol":conv_tol,
+                            "ftol":1e-9,
+                            "maxcor":30,
+                            "maxls":100}
 
-        if not optimizer in ["Newton", "BFGS", "L-BFGS-B"]:
-            raise ValueError("'optimizer' needs to be set to one of 'Newton', 'BFGS', 'L-BFGS-B'.")
 
     if isinstance(family,Family):
         rPen = copy.deepcopy(model.formula.penalties)
@@ -751,10 +745,10 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=
             return -reml
         
         if isinstance(family,Family):
-            nHp = central_hessian(ep.flatten(),reml_wrapper,family,y,X,rPen,n_c,model.offset,model.pred)
+            nHp = central_hessian(ep.flatten(),reml_wrapper,family,y,X,rPen,n_c,model.offset,model.pred,method)
             #nHp = Hessian(reml_wrapper)(ep.flatten(),family,y,X,rPen,n_c,model.offset,model.pred)
         else:
-            nHp = central_hessian(ep.flatten(),reml_wrapper,family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=optimizer,**bfgs_options)
+            nHp = central_hessian(ep.flatten(),reml_wrapper,family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=method,**bfgs_options)
         
         # Vp is now simply [nHp]^{-1}
         # but we should rely on an eigen decomposition so that we can naturally produce a generalized inverse as discussed by
@@ -853,9 +847,9 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=
         
         # Now compute REML - and all other terms needed for correction proposed by Greven & Scheipl (2017)
         if isinstance(family,Family):
-            reml,_,_,_,_,_,_ = compute_reml_candidate_GAMM(family,y,X,rPen,n_c,model.offset)
+            reml,_,_,_,_,_,_ = compute_reml_candidate_GAMM(family,y,X,rPen,n_c,model.offset,method=method)
         else:
-            reml,_,_,_,_ = compute_REML_candidate_GSMM(family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=optimizer,**bfgs_options)
+            reml,_,_,_,_ = compute_REML_candidate_GSMM(family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=method,**bfgs_options)
 
         # Now collect what we need for updating Vp
         remls.append(reml)
@@ -915,10 +909,10 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=
             
             if isinstance(family,Family):
                 #print([penx.lam for penx in rPen])
-                reml,_,_,_,_,_,_ = compute_reml_candidate_GAMM(family,y,X,rPen,n_c,model.offset)
+                reml,_,_,_,_,_,_ = compute_reml_candidate_GAMM(family,y,X,rPen,n_c,model.offset,method=method)
 
             else:
-                reml,_,_,_,_ = compute_REML_candidate_GSMM(family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=optimizer,**bfgs_options)
+                reml,_,_,_,_ = compute_REML_candidate_GSMM(family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=method,**bfgs_options)
 
             # Collect new remls and update grid of log(lambdas)
             remls.append(reml)
@@ -1028,6 +1022,131 @@ def _compute_VB_corr_terms_MP(family,address_y,address_dat,address_ptr,address_i
    # Now collect what we need for the remaining terms
    return Linv,coef,reml,scale,edf,llk
 
+def compute_Vp_WPS(Vbr,H,S_emb,penalties,coef,scale=1):
+    """ Computes the inverse of what is approximately the negative Hessian of the Laplace approximate REML criterion with respect to the log smoothing penalties.
+
+    The derivatives computed are only exact for Gaussian additive models and canonical generalized additive models. For all other models they are in-exact in that they
+    assume that the hessian of the log-likelihood does not depend on :math:`\lambda` (or :math:`log(\lambda)`), so they are essentially the PQL derivatives of Wood et al. (2017).
+    The inverse computed here acts as an approximation to the covariance matrix of the log smoothing parameters.
+
+    References:
+     - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
+     - Wood, S. N., Pya, N., Saefken, B., (2016). Smoothing Parameter and Model Selection for General Smooth Models
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+     - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models for Gigadata: Modeling the U.K. Black Smoke Network Daily Data.
+
+    :param Vbr: Transpose of root for the estimate for the (unscaled) covariance matrix of :math:`\\boldsymbol{\\beta} | y, \\boldsymbol{\lambda}` - the coefficients estimated by the model.
+    :type Vbr: scipy.sparse.csc_array
+    :param H: The Hessian of the log-likelihood
+    :type H: scipy.sparse.csc_array
+    :param S_emb: The weighted penalty matrix.
+    :type S_emb: scipy.sparse.csc_array
+    :param penalties: A list holding the :class:`Lambdaterm`s estimated for the model.
+    :type penalties: [LambdaTerm]
+    :param coef: An array holding the estimated regression coefficients. Has to be of shape (-1,1)
+    :type coef: numpy.array
+    :param scale: Any scale parameter estimated as part of the model. Can be omitted for more generic models beyond GAMMs. Defaults to 1.
+    :type scale: float
+    """
+    # Form nH - the negative hessian of the penalized llk - note, H is scaled by \phi for GAMMs, so have to do the same for S_emb:
+    nH = (-1*H) + S_emb/scale
+
+    # Get partial derivatives of coef with respect to log(lambda) - see Wood (2017):
+    dBetadRhos = np.zeros((len(coef),len(penalties)))
+
+    # Vbr.T@Vbr*scale = nH^{-1} - Vbr is available in model.lvi or model.overall_lvi after fitting
+    for peni,pen in enumerate(penalties):
+        # Given in Wood (2017)
+        dBetadRhos[:,[peni]] = -pen.lam *  (Vbr.T @ (Vbr @ (pen.S_J_emb @ coef)))
+
+    # Also need to apply re-parameterization from Wood (2011) to the penalties and S_emb
+    Sj_reps,S_reps,SJ_term_idx,SJ_idx,S_coefs,Q_reps,_,Mp = reparam(None,penalties,None,option=4)
+
+    # Need the inverse of each re-parameterized S_rep
+    S_inv_reps = []
+    for S_rep in S_reps:
+        LS,code = cpp_chol(S_rep.tocsc())
+        if code != 0:
+            raise ArithmeticError("Could not compute Cholesky of reparameterized S_rep.")
+        LSinv = compute_Linv(LS)
+        S_inv_rep = LSinv.T@LSinv
+        S_inv_reps.append(S_inv_rep)
+
+    Vp = np.zeros((len(penalties),len(penalties)))
+
+    # Now can accumulate hessian of reml with respect to log(lambda)
+    grp_idx = 0
+    for peni in range(len(penalties)):
+        
+        # Keep track of which S_rep/group this S_i belongs to
+        for grp_i,grp in enumerate(SJ_term_idx):
+            if peni in grp:
+                grp_idx = grp_i
+                break
+        
+        for penj in range(peni,len(penalties)):
+
+            gamma = peni == penj
+
+            # Compute first term:
+            t1 = -1*dBetadRhos[:,[peni]].T @ (nH @ dBetadRhos[:,[penj]])
+
+            # Derivatives of BSB (Wood et al., 2017 has the correct ones)
+            t2 = ((penalties[peni].lam/(scale) * coef.T@penalties[peni].S_J_emb@dBetadRhos[:,[penj]]) + (penalties[penj].lam/(scale) * coef.T@penalties[penj].S_J_emb@dBetadRhos[:,[peni]]))
+            
+            if gamma:
+                t2 += penalties[peni].lam/(2*scale) * coef.T@penalties[peni].S_J_emb@coef
+            
+            # Now derivative of the log-determinant of S_emb. Only defined if peni==penj or both are in the same group
+            t3 = 0
+            if gamma or penj in SJ_term_idx[grp_idx]:
+                t3 = -1* penalties[peni].lam * penalties[penj].lam * penalties[peni].rep_sj * (S_inv_reps[grp_idx]@Sj_reps[penj].S_J@S_inv_reps[grp_idx]@Sj_reps[peni].S_J).trace()
+
+                if gamma:
+                    t3 += penalties[peni].lam * penalties[peni].rep_sj * (S_inv_reps[grp_idx]@Sj_reps[peni].S_J).trace()
+
+                t3 = 0.5*t3
+            
+            # Now second partial derivative of hessian of negative penalized likelihood with respect to log(lambda) - assuming that H does not
+            # depend on log(lambda)
+            t4 = 0.5 * ((penalties[peni].S_J_emb*penalties[peni].lam) @ Vbr.T @ Vbr @ (penalties[penj].S_J_emb*penalties[penj].lam) @ Vbr.T @ Vbr).trace()
+
+            # And first
+            t5 = 0
+            if gamma:
+                t5 = 0.5 * (Vbr.T @ Vbr @ (penalties[peni].S_J_emb*penalties[peni].lam)).trace()
+            
+            # Collect result
+            Vpij = t1 - t2 + t3 + t4 - t5
+            Vp[peni,penj] = Vpij
+
+            if peni != penj:
+                Vp[penj,peni] = Vpij
+
+    # Vp is now simply inv(-Vp) but we should rely on an eigen decomposition so that we can naturally produce a generalized inverse as discussed by
+    # WPS (2016).
+    Hp = copy.deepcopy(Vp)
+
+    eig, U =scp.linalg.eigh(-Vp)
+    ire = np.zeros_like(eig)
+    ire[eig > 0] = 1/np.sqrt(eig[eig > 0]) # Only compute inverse for eig values larger than zero, setting rem. ones to zero yields generalized invserse. 
+    Ri = np.diag(ire)@U.T # Root of Vp
+
+    Vp = Ri.T@Ri
+
+    # Now, in mgcv a regularized version is computed as well, which essentially sets all positive eigenvalues
+    # to a positive minimum. This regularized version is utilized in the smoothness uncertainty correction, so we compute it
+    # as well.
+    # See: https://github.com/cran/mgcv/blob/aff4560d187dfd7d98c7bd367f5a0076faf129b7/R/gam.fit3.r#L1010
+    ire2 = np.zeros_like(eig)
+    ire2[eig > 0] = 1/np.sqrt(eig[eig > 0] + 0.1)
+    Rir = np.diag(ire2)@U.T # Root of regularized Vp
+
+    Vpr = Rir.T@Rir
+            
+    return Vp, Vpr, Ri, Rir, Hp
+
+
 def compute_Vb_corr_WPS(Vbr,Vpr,Vr,H,S_emb,penalties,coef,scale=1):
     """Computes both correction terms for ``Vb`` or :math:`\mathbf{V}_{\\boldsymbol{\\beta}}`, which is the co-variance matrix for the conditional posterior of :math:`\\boldsymbol{\\beta}` so that
     :math:`\\boldsymbol{\\beta} | y, \\boldsymbol{\lambda} \sim N(\hat{\\boldsymbol{\\beta}},\mathbf{V}_{\\boldsymbol{\\beta}})`, described by Wood, Pya, & Säfken (2016).
@@ -1049,8 +1168,8 @@ def compute_Vb_corr_WPS(Vbr,Vpr,Vr,H,S_emb,penalties,coef,scale=1):
     :type S_emb: scipy.sparse.csc_array
     :param penalties: A list holding the :class:`Lambdaterm`s estimated for the model.
     :type penalties: [LambdaTerm]
-    :param penalties: An array holding the estimated regression coefficients. Has to be of shape (-1,1)
-    :type penalties: numpy.array
+    :param coef: An array holding the estimated regression coefficients. Has to be of shape (-1,1)
+    :type coef: numpy.array
     :param scale: Any scale parameter estimated as part of the model. Can be omitted for more generic models beyond GAMMs. Defaults to 1.
     :type scale: float
     :raises ArithmeticError: Will throw an error when the negative Hessian of the penalized likelihood is ill-scaled so that a Cholesky decomposition fails.
@@ -1170,7 +1289,7 @@ def compute_Vb_corr_WPS(Vbr,Vpr,Vr,H,S_emb,penalties,coef,scale=1):
     return Vc, scale*Vcc
 
 
-def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_t=True,form_t1=False,verbose=False,drop_NA=True,method="Newton",V_shrinkage_weight=0.75,only_expected_edf=False,seed=None,**bfgs_options):
+def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_t=True,form_t1=False,verbose=False,drop_NA=True,method="Chol",V_shrinkage_weight=0.75,only_expected_edf=False,refine_Vp=False,Vp_fidiff=True,seed=None,**bfgs_options):
     """Estimate :math:`\mathbf{V}`, the covariance matrix of the unconditional posterior :math:`\\boldsymbol{\\beta} | y \sim N(\hat{\\boldsymbol{\\beta}},\\mathbf{V})` to account for smoothness uncertainty.
     
     Wood et al. (2016) and Wood (2017) show that when basing conditional versions of model selection criteria or hypothesis
@@ -1224,17 +1343,20 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
     :type verbose: bool, optional
     :param drop_NA: Whether to drop rows in the **model matrices** corresponding to NAs in the dependent variable vector. Defaults to True.
     :type drop_NA: bool,optional
-    :param method: Which method to use to estimate the coefficients - supports "Newton", "BFGS", and "L-BFGS-B". In case of the former, ``self.family`` needs to implement :func:`gradient` and :func:`hessian`. Defaults to "Newton"
+    :param method: Which method to use to solve for the coefficients (and smoothing parameters). The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR/Chol". In that case a QR decomposition is used - which is first pivoted to maximize sparsity in the resulting decomposition but also pivots for stability in order to get an estimate of rank defficiency. A Cholesky is than used using the combined pivoting strategy obtained from the QR. This takes substantially longer. If this is set to ``'qEFS'``, then the coefficients are estimated via quasi netwon and the smoothing penalties are estimated from the quasi newton approximation to the hessian. This only requieres first derviative information. Defaults to "Chol".
     :type method: str,optional
-    :param seed: Seed to use for random parts of the correction. Defaults to None
-    :type seed: int,optional
     :param V_shrinkage_weight: ``1 - shrinkage_weight`` is the weighting used for the update to the covariance matrix correction proposed by Wood, Pya, & Säfken (2016) based on the numeric integration results when ``grid='JJJ2'``. Setting this to 0 (and ``use_upper=False``) recovers exactly the Greven & Scheipl (2016) correction, however with an adaptive grid. Defaults to False
     :type V_shrinkage_weight: float,optional
-    :param only_expected_edf: Whether to compute edf. from trace of covariance matrix (``use_upper=False``) or based on numeric integration weights. The latter is much more efficient for sparse models. Only makes sense when ``grid='JJJ2'``. Defaults to True
+    :param only_expected_edf: Whether to compute edf. from trace of covariance matrix (``use_upper=False``) or based on numeric integration weights. The latter is much more efficient for sparse models. Only makes sense when ``grid_type='JJJ2'``. Defaults to True
     :type only_expected_edf: bool,optional
+    :param refine_Vp: Whether or not to refine the initial estimate of :math:`\mathbf{V}_{\\boldsymbol{p}}` (obtained from a finite difference or PQL approximation) for ``grid_type='JJJ2'`` based on the generated samples. Defaults to False
+    :type refine_Vp: bool,optional
+    :param Vp_fidiff: Whether to rely on a finite difference approximation to compute :math:`\mathbf{V}_{\\boldsymbol{p}}` for grid_type ``JJJ1`` and ``JJJ2`` or on a PQL approximation. The latter is exact for Gaussian and canonical GAMs and far cheaper if many penalties are to be estimated. Defaults to True (Finite difference approximation)
+    :type Vp_fidiff: bool,optional
+    :param seed: Seed to use for random parts of the correction. Defaults to None
+    :type seed: int,optional
     :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100. Defaults to None.
     :type bfgs_options: key=value,optional
-    :raises ValueError: Will throw an error when ``method`` is not one of 'Newton', 'BFGS', 'L-BFGS-B' and a :class:`mssm.models.GSMM` is to be estimated.
     :return: A tuple containing: V - an estimate of the unconditional covariance matrix, LV - the Cholesky of the former, Vp - an estimate of the covariance matrix for :math:`\\boldsymbol{\\rho}`, Vpr - a root of the former, edf - smoothness uncertainty corrected coefficient-wise edf, total_edf - smoothness uncertainty corrected edf, edf2 - smoothness uncertainty + smoothness bias corrected coefficient-wise edf, total_edf2 - smoothness uncertainty + smoothness bias corrected edf, upper_edf - a heuristic upper bound on the uncertainty corrected edf
     :rtype: (scipy.sparse.csc_array,scipy.sparse.csc_array,numpyp.array,numpy.array,numpy.array,float,numpy.array,float,float) 
     """
@@ -1247,10 +1369,9 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
 
     if isinstance(family,GENSMOOTHFamily):
         if not bfgs_options:
-            bfgs_options = {"gtol":1e-3}
-
-        if not method in ["Newton", "BFGS", "L-BFGS-B"]:
-            raise ValueError("'method' needs to be set to one of 'Newton', 'BFGS', 'L-BFGS-B'.")
+            bfgs_options = {"ftol":1e-9,
+                            "maxcor":30,
+                            "maxls":100}
 
     if isinstance(family,Family):
         nPen = len(model.formula.penalties)
@@ -1282,7 +1403,16 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
     Vpr = None
     if grid_type == "JJJ1" or grid_type == "JJJ2":
         # Approximate Vp via finitie differencing
-        Vp, Vpr, Vr, Vrr = estimateVp(model,n_c=n_c,strategy="JJJ1")
+        if Vp_fidiff:
+            Vp, Vpr, Vr, Vrr = estimateVp(model,n_c=n_c,strategy="JJJ1")
+        else:
+            # Take PQL approximation instead
+            Vp, Vpr, Vr, Vrr, _ = compute_Vp_WPS(model.lvi if isinstance(family,Family) else model.overall_lvi,
+                                                 model.hessian,
+                                                 S_emb,
+                                                 model.formula.penalties if isinstance(family,Family) else model.overall_penalties,
+                                                 model.coef.reshape(-1,1) if isinstance(family,Family) else model.overall_coef.reshape(-1,1),
+                                                 scale=orig_scale if isinstance(family,Family) else 1)
 
         # Compute approximate WPS (2016) correction
         if grid_type == "JJJ1":
@@ -1410,7 +1540,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
             
             # Now compute REML - and all other terms needed for correction proposed by Greven & Scheipl (2017)
             if isinstance(family,Family):
-                reml,LP,Pr,coef,scale,edf,llk = compute_reml_candidate_GAMM(family,y,X,rPen,n_c,model.offset)
+                reml,LP,Pr,coef,scale,edf,llk = compute_reml_candidate_GAMM(family,y,X,rPen,n_c,model.offset,method=method)
                 coef = coef.reshape(-1,1)
 
                 # Form VB, first solve LP{^-1}
@@ -1559,7 +1689,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
                     Vp_next = updateVp(ep,remls,rGrid)
                     if grid_type == "JJJ3":
                         Vp = Vp_next
-                    elif grid_type == "JJJ2":
+                    elif grid_type == "JJJ2" and refine_Vp:
                         Vp = 0.99*Vp + 0.01*Vp_next
             
         else:
@@ -1601,7 +1731,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
                         rPen[ridx].lam = rc
                     
                     if isinstance(family,Family):
-                        reml,LP,Pr,coef,scale,edf,llk = compute_reml_candidate_GAMM(family,y,X,rPen,n_c,model.offset)
+                        reml,LP,Pr,coef,scale,edf,llk = compute_reml_candidate_GAMM(family,y,X,rPen,n_c,model.offset,method=method)
                         coef = coef.reshape(-1,1)
 
                         # Form VB, first solve LP{^-1}
@@ -1639,19 +1769,20 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
                 Vp_next = updateVp(ep,remls,rGrid)
                 if grid_type == "JJJ3":
                     Vp = Vp_next
-                elif grid_type == "JJJ2":
+                elif grid_type == "JJJ2" and refine_Vp:
                     Vp = 0.99*Vp + 0.01*Vp_next
     
     if grid_type == "JJJ2":
-        # Re-compute root of regularized VP (at this point Vp actually holds refined Vpr)
-        eig, U =scp.linalg.eigh(Vp)
-        ire = np.zeros_like(eig)
-        ire[eig > 0] = np.sqrt(eig[eig > 0])
-        Vrr = np.diag(ire)@U.T # Root of refined regularized Vp
+        # Re-compute root of regularized VP (at this point Vp might actually hold refined Vpr)
+        if refine_Vp:
+            eig, U =scp.linalg.eigh(Vp)
+            ire = np.zeros_like(eig)
+            ire[eig > 0] = np.sqrt(eig[eig > 0])
+            Vrr = np.diag(ire)@U.T # Root of refined regularized Vp
 
-        # Make sure Vp is original
-        Vpr = copy.deepcopy(Vp)
-        Vp = orig_Vp
+            # Make sure Vp is original
+            Vpr = copy.deepcopy(Vp)
+            Vp = orig_Vp
 
         # Compute approximate WPS (2016) correction
         if V_shrinkage_weight > 0:
