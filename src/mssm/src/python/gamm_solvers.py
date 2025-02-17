@@ -904,10 +904,10 @@ def computeVSR1(s,y,rho,V0,omega=1,make_psd=False,explicit=True):
       
       if np.sum(fix_idx) > 0:
          #print("fix VSR1",np.sum(fix_idx),omega,1/omega)
-         ev[fix_idx] =  (-1*omega) + np.power(np.finfo(float).eps,0.9)
+         ev[fix_idx] =  (-1*omega) #+ np.power(np.finfo(float).eps,0.9)
 
-         while np.any(np.abs(ev) < 1e-7):
-            ev[np.abs(ev) < 1e-7] += np.power(np.finfo(float).eps,0.7)
+         #while np.any(np.abs(ev) < 1e-7):
+         #   ev[np.abs(ev) < 1e-7] += np.power(np.finfo(float).eps,0.7)
 
          #print(f"implicit ev post shift. abs min: {np.min(np.abs(ev))}, min: {np.min(ev)}, min + 1: {np.min(ev+omega)}, max + 1: {np.max(ev+omega)}",ev[:10]+omega)
 
@@ -996,10 +996,10 @@ def computeHSR1(s,y,rho,H0,omega=1,make_psd=False,explicit=True):
       
       if np.sum(fix_idx) > 0:
          #print("fix VSR1",np.sum(fix_idx),omega,1/omega)
-         ev[fix_idx] =  (-1*omega) + np.power(np.finfo(float).eps,0.9)
+         ev[fix_idx] =  (-1*omega) #+ np.power(np.finfo(float).eps,0.9)
 
-         while np.any(np.abs(ev) < 1e-7):
-            ev[np.abs(ev) < 1e-7] += np.power(np.finfo(float).eps,0.7)
+         #while np.any(np.abs(ev) < 1e-7):
+         #   ev[np.abs(ev) < 1e-7] += np.power(np.finfo(float).eps,0.7)
 
          #print(f"implicit ev post shift. abs min: {np.min(np.abs(ev))}, min: {np.min(ev)}, min + 1: {np.min(ev+omega)}, max + 1: {np.max(ev+omega)}",ev[:10]+omega)
 
@@ -1229,10 +1229,13 @@ def compute_t1_shifted_t2_t3(s,y,rho,H0,omega=1,form='Byrd'):
    
    if np.sum(fix_idx) > 0:
       #print("fix",np.sum(fix_idx),omega)
-      ev[fix_idx] =  (-1*omega) + np.power(np.finfo(float).eps,0.9)
+      ev[fix_idx] =  (-1*omega)
+      
+      if form != "ByrdSR1":
+         ev[fix_idx] += np.power(np.finfo(float).eps,0.9)
 
-      while np.any(np.abs(ev) < 1e-7):
-         ev[np.abs(ev) < 1e-7] += np.power(np.finfo(float).eps,0.7)
+         while np.any(np.abs(ev) < 1e-7):
+            ev[np.abs(ev) < 1e-7] += np.power(np.finfo(float).eps,0.7)
 
       #print(f"implicit ev post shift. abs min: {np.min(np.abs(ev))}, min: {np.min(ev)}, min + 1: {np.min(ev+omega)}, max + 1: {np.max(ev+omega)}",ev[:10]+omega)
 
@@ -1245,7 +1248,10 @@ def compute_t1_shifted_t2_t3(s,y,rho,H0,omega=1,form='Byrd'):
       t1 = Q @ P
       t3 = P.T@Q.T
       shifted_invt2=np.diag(ev)
-      shifted_t2 = np.diag(1/ev)
+      if form != "ByrdSR1":
+         shifted_t2 = np.diag(1/ev)
+      else:
+         shifted_t2 = np.diag([1/evi if np.abs(evi) != 0 else 0 for evi in ev])
 
    return t1, shifted_t2, shifted_invt2, t3, 0
 
@@ -1577,29 +1583,42 @@ def calculate_edf(LP,Pr,InvCholXXS,penalties,lgdetDs,colsX,n_c):
       else:
          
          # Now compute compact representation of V.
-         # Below we get ninvt2, with the shifted Eigenvalues so that
-         # H = H0 + nt1 @ ninvt2 @ nt3 - where H0 = I*omega + S_emb and I*omega + nt1 @ ninvt2 @ nt3
+         # Below we get int2, with the shifted Eigenvalues so that
+         # H = H0 + nt1 @ int2 @ nt3 - where H0 = I*omega + S_emb and I*omega + nt1 @ int2 @ nt3
          # is PSD.
          # Now, using the Woodbury identity:
-         # V = (H)^-1 = V0 - V0@nt1@ (ninvt2^-1 + nt3@V0@nt1)^-1 @ nt3@V0
+         # V = (H)^-1 = V0 - V0@nt1@ (int2^-1 + nt3@V0@nt1)^-1 @ nt3@V0
          #
-         # since nt3=nt1.T, and ninvt2^-1 = nt2 we have:
+         # since nt3=nt1.T, and int2^-1 = nt2 we have:
          #
          # V = V0 - V0@nt1@ (nt2 + nt1.T@V0@nt1)^-1 @ nt1.t@V0
          #
 
-         nt1,nt2,_,nt3,_ = compute_t1_shifted_t2_t3(s,y,rho,H0,omega,"ByrdSR1" if form == 'SR1' else "Byrd")
+         nt1,nt2,int2,nt3,_ = compute_t1_shifted_t2_t3(s,y,rho,H0,omega,"ByrdSR1" if form == 'SR1' else "Byrd")
 
          # Compute inverse:
-         invt2 = nt2 + nt3@V0@nt1
+         if form != 'SR1':
+            invt2 = nt2 + nt3@V0@nt1
 
-         U,sv_invt2,VT = scp.linalg.svd(invt2,lapack_driver='gesvd')
+            U,sv_invt2,VT = scp.linalg.svd(invt2,lapack_driver='gesvd')
 
-         # Nowe we can compute all parts for the Woodbury identy to obtain V
-         t2 = VT.T @ np.diag(1/sv_invt2)  @  U.T
+            # Nowe we can compute all parts for the Woodbury identy to obtain V
+            t2 = VT.T @ np.diag(1/sv_invt2)  @  U.T
 
-         t1 = V0@nt1
-         t3 = nt3@V0
+            t1 = V0@nt1
+            t3 = nt3@V0
+         else:
+            # When using SR1 int2 is potentially singular, so we need a modified Woodbury that accounts for that.
+            # This is given by eq. 23 in Henderson & Searle (1981):
+            invt2 = np.identity(int2.shape[1]) + int2@nt3@V0@nt1
+
+            U,sv_invt2,VT = scp.linalg.svd(invt2,lapack_driver='gesvd')
+
+            # Nowe we can again compute all parts for the modified Woodbury identy to obtain V
+            t2 = VT.T @ np.diag(1/sv_invt2)  @  U.T
+
+            t1 = V0@nt1
+            t3 = int2@nt3@V0
 
          # We now have: V = V0 - V0@nt1@t2@nt3@V0, but don't have to form that explcitly!
          #V3 = V0 - V0@nt1@t2@nt3@V0
@@ -4021,28 +4040,41 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,c_llk,ou
 
                   # Can now form penalized gradient and approximate penalized hessian to update penalized
                   # coefficients. Important: pass un-penalized hessian here!
-                  # Because # Below we get ninvt2
-                  # H = H0 + nt1 @ ninvt2 @ nt3; that is the estimate of the negative un-penalized hessian of llk
+                  # Because # Below we get int2
+                  # H = H0 + nt1 @ int2 @ nt3; that is the estimate of the negative un-penalized hessian of llk
                   # Now we replace H0 with pH0 - which is really: H0 + S_emb.
                   # Now H is our estimate of the negative hessian of the penalized llk.
                   # Now, using the Woodbury identity:
-                  # pV = (H)^-1 = pV0 - pV0@nt1@ (ninvt2^-1 + nt3@pV0@nt1)^-1 @ nt3@pV0
+                  # pV = (H)^-1 = pV0 - pV0@nt1@ (int2^-1 + nt3@pV0@nt1)^-1 @ nt3@pV0
                   #
-                  # since nt3=nt1.T, and ninvt2^-1 = nt2 we have:
+                  # since nt3=nt1.T, and int2^-1 = nt2 we have:
                   #
                   # pV = pV0 - pV0@nt1@ (nt2 + nt1.T@pV0@nt1)^-1 @ nt1.t@pV0
-                  nt1,nt2,_,nt3,_ = compute_t1_shifted_t2_t3(V_raw.sk,V_raw.yk,V_raw.rho,H0,omega,"ByrdSR1" if form == 'SR1' else "Byrd")
+                  nt1,nt2,int2,nt3,_ = compute_t1_shifted_t2_t3(V_raw.sk,V_raw.yk,V_raw.rho,H0,omega,"ByrdSR1" if form == 'SR1' else "Byrd")
 
                   # Compute inverse:
-                  invt2 = nt2 + nt3@pV0@nt1
+                  if form != 'SR1':
+                     invt2 = nt2 + nt3@pV0@nt1
 
-                  U,sv_invt2,VT = scp.linalg.svd(invt2,lapack_driver='gesvd')
+                     U,sv_invt2,VT = scp.linalg.svd(invt2,lapack_driver='gesvd')
 
-                  # Nowe we can compute all parts for the Woodbury identy to obtain pV
-                  t2 = VT.T @ np.diag(1/sv_invt2)  @  U.T
+                     # Nowe we can compute all parts for the Woodbury identy to obtain pV
+                     t2 = VT.T @ np.diag(1/sv_invt2)  @  U.T
 
-                  t1 = pV0@nt1
-                  t3 = nt3@pV0
+                     t1 = pV0@nt1
+                     t3 = nt3@pV0
+                  else:
+                     # When using SR1 int2 is potentially singular, so we need a modified Woodbury inverse that accounts for that.
+                     # This is given by eq. 23 in Henderson & Searle (1981):
+                     invt2 = np.identity(int2.shape[1]) + int2@nt3@V0@nt1
+
+                     U,sv_invt2,VT = scp.linalg.svd(invt2,lapack_driver='gesvd')
+
+                     # Nowe we can compute all parts for the modified Woodbury identy to obtain V
+                     t2 = VT.T @ np.diag(1/sv_invt2)  @  U.T
+
+                     t1 = V0@nt1
+                     t3 = int2@nt3@V0
                   # We now have: pV = pV0 - pV0@nt1@t2@nt3@pV0, but don't have to form that explcitly!
 
                # All we need at this point is to form the penalized gradient. # And then we can compute
@@ -4355,6 +4387,9 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,coef,
       total_edf2,term_edfs2, ldetHSs2 = calculate_edf(None,None,__old_opt,smooth_pen,lgdetDs,n_coef,n_c)
       diff1 = [np.abs((lgdetDs[lti] - ldetHSs[lti]) - bsbs[lti]) for lti in range(len(smooth_pen))]
       diff2 = [np.abs((lgdetDs[lti] - ldetHSs2[lti]) - bsbs[lti]) for lti in range(len(smooth_pen))]
+      #print([(lgdetDs[lti] - ldetHSs[lti]) - bsbs[lti] for lti in range(len(smooth_pen))])
+      #print([(lgdetDs[lti] - ldetHSs2[lti]) - bsbs[lti] for lti in range(len(smooth_pen))])
+      #print(np.mean(diff2),np.mean(diff1))
 
       if np.mean(diff2) < np.mean(diff1):
          # Reset approximation to previous one
