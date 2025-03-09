@@ -422,7 +422,10 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0,init_eta=No
        nH = (X.T@W@X).tocsc() 
 
    # Get edf and optionally estimate scale (scale will be kept at fixed (e.g., 1) for Generalized case)
+   #InvCholXXSP = compute_Linv(LP,n_c)
    _,_,edf,_,_,scale = update_scale_edf(y,z,eta,Wr,X.shape[0],X.shape[1],LP,None,Pr,None,family,penalties,n_c)
+   #print(edf-(InvCholXXS.T@InvCholXXS@nH).trace())
+   #edf = (InvCholXXS.T@InvCholXXS@nH).trace()
 
    if family.twopar:
         if mu_inval is None:
@@ -499,7 +502,7 @@ def compute_REML_candidate_GSMM(family,y,Xs,penalties,coef,n_coef,coef_split_idx
         
 
         coef,H,L,LV,c_llk,_,_,_,_ = update_coef_gen_smooth(family,y,Xs,coef,
-                                                            coef_split_idx,S_emb,None,
+                                                            coef_split_idx,S_emb,None,None,
                                                             c_llk,0,1000,
                                                             1000,conv_tol,method,None,None,__old_opt)
         
@@ -531,7 +534,7 @@ def compute_REML_candidate_GSMM(family,y,Xs,penalties,coef,n_coef,coef_split_idx
 
         # Estimate coefficients
         coef,split_coef,mus,etas,H,L,LV,c_llk,_,_,_,_ = update_coef_gammlss(family,mus,y,Xs,coef,
-                                                                            coef_split_idx,S_emb,None,
+                                                                            coef_split_idx,S_emb,None,None,
                                                                             c_llk,0,100,
                                                                             100,conv_tol,"Chol",None,None)
         
@@ -1144,7 +1147,7 @@ def compute_Vp_WPS(Vbr,H,S_emb,penalties,coef,scale=1):
 
     Vpr = Rir.T@Rir
             
-    return Vp, Vpr, Ri, Rir, Hp
+    return Vp, Vpr, Ri, Rir, Hp, dBetadRhos
 
 
 def compute_Vb_corr_WPS(Vbr,Vpr,Vr,H,S_emb,penalties,coef,scale=1):
@@ -1289,7 +1292,7 @@ def compute_Vb_corr_WPS(Vbr,Vpr,Vr,H,S_emb,penalties,coef,scale=1):
     return Vc, scale*Vcc
 
 
-def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_t=True,form_t1=False,verbose=False,drop_NA=True,method="Chol",V_shrinkage_weight=0.75,only_expected_edf=False,refine_Vp=False,Vp_fidiff=True,seed=None,**bfgs_options):
+def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_t=True,form_t1=False,verbose=False,drop_NA=True,method="Chol",only_expected_edf=False,refine_Vp=False,Vp_fidiff=True,use_reml_weights=True,seed=None,**bfgs_options):
     """Estimate :math:`\mathbf{V}`, the covariance matrix of the unconditional posterior :math:`\\boldsymbol{\\beta} | y \sim N(\hat{\\boldsymbol{\\beta}},\\mathbf{V})` to account for smoothness uncertainty.
     
     Wood et al. (2016) and Wood (2017) show that when basing conditional versions of model selection criteria or hypothesis
@@ -1345,14 +1348,14 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
     :type drop_NA: bool,optional
     :param method: Which method to use to solve for the coefficients (and smoothing parameters). The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR/Chol". In that case a QR decomposition is used - which is first pivoted to maximize sparsity in the resulting decomposition but also pivots for stability in order to get an estimate of rank defficiency. A Cholesky is than used using the combined pivoting strategy obtained from the QR. This takes substantially longer. If this is set to ``'qEFS'``, then the coefficients are estimated via quasi netwon and the smoothing penalties are estimated from the quasi newton approximation to the hessian. This only requieres first derviative information. Defaults to "Chol".
     :type method: str,optional
-    :param V_shrinkage_weight: ``1 - shrinkage_weight`` is the weighting used for the update to the covariance matrix correction proposed by Wood, Pya, & Säfken (2016) based on the numeric integration results when ``grid='JJJ2'``. Setting this to 0 (and ``use_upper=False``) recovers exactly the Greven & Scheipl (2016) correction, however with an adaptive grid. Defaults to False
-    :type V_shrinkage_weight: float,optional
     :param only_expected_edf: Whether to compute edf. from trace of covariance matrix (``use_upper=False``) or based on numeric integration weights. The latter is much more efficient for sparse models. Only makes sense when ``grid_type='JJJ2'``. Defaults to True
     :type only_expected_edf: bool,optional
     :param refine_Vp: Whether or not to refine the initial estimate of :math:`\mathbf{V}_{\\boldsymbol{p}}` (obtained from a finite difference or PQL approximation) for ``grid_type='JJJ2'`` based on the generated samples. Defaults to False
     :type refine_Vp: bool,optional
     :param Vp_fidiff: Whether to rely on a finite difference approximation to compute :math:`\mathbf{V}_{\\boldsymbol{p}}` for grid_type ``JJJ1`` and ``JJJ2`` or on a PQL approximation. The latter is exact for Gaussian and canonical GAMs and far cheaper if many penalties are to be estimated. Defaults to True (Finite difference approximation)
     :type Vp_fidiff: bool,optional
+    :param use_reml_weights: Whether to rely on REMl scores to compute the numerical integration when ``grid_type != 'JJJ1'`` or on the log-densities of :math:`\mathbf{V}_{\\boldsymbol{p}}` - the latter assumes that the unconditional posterior is normal. Defaults to True (REML scores are used)
+    :type use_reml_weights: bool,optional
     :param seed: Seed to use for random parts of the correction. Defaults to None
     :type seed: int,optional
     :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100. Defaults to None.
@@ -1364,8 +1367,8 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
 
     family = model.family
 
-    if not grid_type in ["GS","JJJ1","JJJ2","JJJ3"]:
-        raise ValueError("'grid_type' has to be set to one of 'GS', 'JJJ1', 'JJJ2', or 'JJJ3'.")
+    if not grid_type in ["JJJ1","JJJ2","JJJ3"]:
+        raise ValueError("'grid_type' has to be set to one of 'JJJ1', 'JJJ2', or 'JJJ3'.")
 
     if isinstance(family,GENSMOOTHFamily):
         if not bfgs_options:
@@ -1401,13 +1404,13 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
 
     Vp = None
     Vpr = None
-    if grid_type == "JJJ1" or grid_type == "JJJ2":
+    if grid_type == "JJJ1" or grid_type == "JJJ2" or grid_type == "JJJ3":
         # Approximate Vp via finitie differencing
         if Vp_fidiff:
             Vp, Vpr, Vr, Vrr = estimateVp(model,n_c=n_c,strategy="JJJ1")
         else:
             # Take PQL approximation instead
-            Vp, Vpr, Vr, Vrr, _ = compute_Vp_WPS(model.lvi if isinstance(family,Family) else model.overall_lvi,
+            Vp, Vpr, Vr, Vrr, _, dBetadRhos = compute_Vp_WPS(model.lvi if isinstance(family,Family) else model.overall_lvi,
                                                  model.hessian,
                                                  S_emb,
                                                  model.formula.penalties if isinstance(family,Family) else model.overall_penalties,
@@ -1424,35 +1427,14 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
             if isinstance(family,Family):
                 V = Vc + Vcc + ((model.lvi.T@model.lvi)*orig_scale)
             else:
-                V = Vc + Vcc + model.lvi.T@model.lvi
+                V = Vc + Vcc + model.overall_lvi.T@model.overall_lvi
         
-        if grid_type == "JJJ2": # Refine Vpr estimate
+        if grid_type == "JJJ2" or grid_type == "JJJ3": # Might want to refine Vpr estimate
             orig_Vp = copy.deepcopy(Vp)
             Vp = Vpr
 
     rGrid = []
-    if grid_type == 'GS':
-        # Build Full prior grid as discussed by Greven & Scheipl in their comment on Wood et al. (2016)
-        rGrid = [np.exp(np.linspace(np.log(a),np.log(b),nR)) for _ in range(nPen)]
-        rGrid = np.array(list(product(*rGrid)))
-
-    elif grid_type == 'JJJ3':
-        # Set up grid of nR equidistant values based on marginal grids that cover range from \lambda/lr to \lambda*lr
-        # conditional on all estimated penalty values except the current one.
-        
-        for pi,pen in enumerate(rPen):
-            
-            # Set up marginal grid from \lambda/lr to \lambda*lr
-            mGrid = np.exp(np.linspace(np.log(max([a,pen.lam/lR])),np.log(min([b,pen.lam*lR])),nR))
-            
-            # Now create penalty candidates conditional on estimates for all other penalties except current one
-            for val in mGrid:
-                if abs(val - pen.lam) <= 1e-7:
-                    continue
-                
-                rGrid.append(np.array([val if pii == pi else np_gen.choice(np.exp(np.linspace(np.log(max([a,pen2.lam/lR])),np.log(min([b,pen2.lam*lR])),nR)),size=None) for pii,pen2 in enumerate(rPen)]))
-    
-    if grid_type != 'GS' and grid_type != "JJJ1":
+    if grid_type != "JJJ1":
         # Make sure actual estimate is included once.
         rGrid.append(np.array([pen2.lam for pen2 in rPen]))
         rGrid = np.array(rGrid)
@@ -1462,7 +1444,6 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
     coefs = []
     edfs = []
     llks = []
-    aics = []
 
     if isinstance(family,Gaussian) and X.shape[1] < 2000 and isinstance(family.link,Identity) and n_c > 1 and grid_type != "JJJ1": # Parallelize grid search
         with managers.SharedMemoryManager() as manager, mp.Pool(processes=n_c) as pool:
@@ -1515,21 +1496,17 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
                        repeat(rows),repeat(cols),repeat(rPen),repeat(model.offset),rGrid)
             
             Linvs, coefs, remls, scales, edfs, llks = zip(*pool.starmap(_compute_VB_corr_terms_MP,args))
-            aics = -2*np.array(llks) + 2*np.array(edfs)
 
-            if grid_type == "JJJ2" or grid_type == "JJJ3":
+            if only_expected_edf == False:
                 Linvs = list(Linvs)
-                coefs = list(coefs)
-                remls = list(remls)
-                scales = list(scales)
-                edfs = list(edfs)
-                llks = list(llks)
-                aics = list(aics)
+            coefs = list(coefs)
+            remls = list(remls)
+            scales = list(scales)
+            edfs = list(edfs)
+            llks = list(llks)
 
     elif grid_type != "JJJ1": # Better to parallelize inverse computation necessary to obtain Vb
         enumerator = rGrid
-        if verbose and grid_type == "JJJ3":
-            enumerator = tqdm(rGrid)
         
         rGridx = 0
         for r in enumerator:
@@ -1547,9 +1524,9 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
                 LPinv = compute_Linv(LP,n_c)
                 Linv = apply_eigen_perm(Pr,LPinv)
 
-                # Can already compute first term from correction
+                # Collect conditional posterior covariance matrix for this set of coef
                 Vb = Linv.T@Linv*scale
-                Vb += coef@coef.T
+                #Vb += coef@coef.T
             else:
                 try:
                     reml,V,coef,edf,llk = compute_REML_candidate_GSMM(family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=method,**bfgs_options)
@@ -1559,32 +1536,26 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
                     rGrid = np.delete(rGrid,rGridx,0)
                     continue
 
-                # Can already compute first term from correction
-                Vb = V + coef@coef.T
+                # Collect conditional posterior covariance matrix for this set of coef
+                Vb = V# + coef@coef.T
 
             rGridx += 1 # Only if we actually reach this point..
 
-            # and aic under current penalty
-            aic = -2*llk + 2*edf
-
             # Now collect what we need for the remaining terms
-            Vs.append(Vb)
             coefs.append(coef)
             remls.append(reml)
             edfs.append(edf)
             llks.append(llk)
-            aics.append(aic)
+            if only_expected_edf == False:
+                Vs.append(Vb)
 
-    if grid_type != "GS" and grid_type != "JJJ1":
+    if grid_type != "JJJ1":
         # Iteratively estimate/refine (JJJ3 vs JJJ2) Vp - covariance matrix of log(\lambda) to guide further REML grid sampling
         if isinstance(family,Family):
             ep = np.log(np.array([min(b,max(a,pen.lam)) for pen in model.formula.penalties]).reshape(-1,1))
         else:
             ep = np.log(np.array([min(b,max(a,pen.lam)) for pen in model.overall_penalties]).reshape(-1,1))
         #print(ep)
-        # Get first estimate for Vp based on samples collected so far
-        if grid_type == "JJJ3":
-            Vp = updateVp(ep,remls,rGrid)
 
         # Now continuously update Vp and generate more REML samples in the process
         n_est = nR
@@ -1673,23 +1644,20 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
                             repeat(rows),repeat(cols),repeat(rPen),repeat(model.offset),p_sample)
                     
                     sample_Linvs, sample_coefs, sample_remls, sample_scales, sample_edfs, sample_llks = zip(*pool.starmap(_compute_VB_corr_terms_MP,args))
-                    sample_aics = -2*np.array(sample_llks) + 2*np.array(sample_edfs)
-
-                    Linvs.extend(list(sample_Linvs))
+                    
+                    if only_expected_edf == False:
+                        Linvs.extend(list(sample_Linvs))
                     scales.extend(list(sample_scales))
                     coefs.extend(list(sample_coefs))
                     remls.extend(list(sample_remls))
                     edfs.extend(list(sample_edfs))
                     llks.extend(list(sample_llks))
-                    aics.extend(list(sample_aics))
 
                     rGrid = np.concatenate((rGrid,p_sample),axis=0)
 
                     # Update Vp - based on additional REML scores available now
                     Vp_next = updateVp(ep,remls,rGrid)
-                    if grid_type == "JJJ3":
-                        Vp = Vp_next
-                    elif grid_type == "JJJ2" and refine_Vp:
+                    if (grid_type == "JJJ2" or grid_type == "JJJ3") and refine_Vp:
                         Vp = 0.99*Vp + 0.01*Vp_next
             
         else:
@@ -1738,9 +1706,9 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
                         LPinv = compute_Linv(LP,n_c)
                         Linv = apply_eigen_perm(Pr,LPinv)
 
-                        # Can already compute first term from correction
+                        # Collect conditional posterior covariance matrix for this set of coef
                         Vb = Linv.T@Linv*scale
-                        Vb += coef@coef.T
+                        #Vb += coef@coef.T
                     else:
                         try:
                             reml,V,coef,edf,llk = compute_REML_candidate_GSMM(family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=method,**bfgs_options)
@@ -1750,29 +1718,24 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
 
                         coef = coef.reshape(-1,1)
 
-                        # Can already compute first term from correction
-                        Vb = V + coef@coef.T
-
-                    # and aic under current penalty
-                    aic = -2*llk + 2*edf
+                        # Collect conditional posterior covariance matrix for this set of coef
+                        Vb = V #+ coef@coef.T
 
                     # Collect all necessary objects for G&S correction.
-                    Vs.append(Vb)
                     coefs.append(coef)
                     remls.append(reml)
                     edfs.append(edf)
                     llks.append(llk)
-                    aics.append(aic)
+                    if only_expected_edf == False:
+                        Vs.append(Vb)
                     rGrid = np.concatenate((rGrid,ps.reshape(1,-1)),axis=0)
 
                 # Update Vp - based on additional REML scores available now
                 Vp_next = updateVp(ep,remls,rGrid)
-                if grid_type == "JJJ3":
-                    Vp = Vp_next
-                elif grid_type == "JJJ2" and refine_Vp:
+                if (grid_type == "JJJ2" or grid_type == "JJJ3") and refine_Vp:
                     Vp = 0.99*Vp + 0.01*Vp_next
     
-    if grid_type == "JJJ2":
+    if grid_type == "JJJ2" or grid_type == "JJJ3":
         # Re-compute root of regularized VP (at this point Vp might actually hold refined Vpr)
         if refine_Vp:
             eig, U =scp.linalg.eigh(Vp)
@@ -1783,65 +1746,109 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
             # Make sure Vp is original
             Vpr = copy.deepcopy(Vp)
             Vp = orig_Vp
-
-        # Compute approximate WPS (2016) correction
-        if V_shrinkage_weight > 0:
-            if isinstance(family,Family):
-                Vc,Vcc = compute_Vb_corr_WPS(model.lvi,Vpr,Vr,model.hessian,S_emb,model.formula.penalties,model.coef.reshape(-1,1),scale=orig_scale)
-            else:
-                Vc,Vcc = compute_Vb_corr_WPS(model.overall_lvi,Vpr,Vr,model.hessian,S_emb,model.overall_penalties,model.overall_coef.reshape(-1,1))
+    ###################################################### Compute tau ###################################################### 
 
     if grid_type != "JJJ1":
         # Compute weights proposed by Greven & Scheipl (2017)
-        ws = scp.special.softmax(remls)
-        #if grid_type != "GS":
+        if use_reml_weights:
+            ws = scp.special.softmax(remls)
+        else:
             # Use the estimated normal to compute weights instead.
-            #ws2 = scp.stats.multivariate_normal.logpdf(np.log(rGrid),mean=np.ndarray.flatten(ep),cov=Vp)
-            #ws = scp.special.softmax(ws2)
+            ws2 = scp.stats.multivariate_normal.logpdf(np.log(rGrid),mean=np.ndarray.flatten(ep),cov=Vpr,allow_singular=True)
+            ws = scp.special.softmax(ws2)
 
-        # And simple correction of the edf - essentially taking an upper bound of
-        # the edf that could be expected, assuming that the uncertainty around edf is approximately
-        # normal.
-        upper_edf = model.edf + 2.33*np.sqrt(np.sum(ws*np.power(edfs-np.sum(ws*edfs),2)))
-        
-        if only_expected_edf:
-            if verbose and grid_type != "JJJ1":
-                print(f"Correction was based on {rGrid.shape[0]} samples in total.")
+        # Compute correction of edf directly..
+        upper_edf = max(model.edf,np.sum(ws*edfs))
+        #print(model.edf,np.sum(ws*edfs))
 
-            return None,None,None,None,None,None,None,None,upper_edf
+        if grid_type == 'JJJ2':
+            # Can now add remaining correction term
+            Vcr= Vr @ dBetadRhos.T
+            
+            # Now have Vc = Vcr.T @ Vcr, so:
+            # tr(Vc@(-1*model.hessian)) = tr(Vcr.T @ Vcr@(-1*model.hessian)) = tr(Vcr@ (-1*model.hessian)@Vcr.T)
+            #upper_edf += (Vc@(-1*model.hessian)).trace()
+            upper_edf += (Vcr@ (-1*model.hessian)@Vcr.T).trace()
 
-        # Now compute \hat{cov(\boldsymbol{\beta}|y)}
-        if isinstance(family,Gaussian) and X.shape[1] < 2000 and isinstance(family.link,Identity) and n_c > 1:
-            # E_{p|y}[V_\boldsymbol{\beta}(\lambda)] + E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] in Greven & Scheipl (2017)
-            Vr1 = ws[0]* ((Linvs[0].T@Linvs[0]*scales[0]) + (coefs[0]@coefs[0].T))
+        elif grid_type == 'JJJ3':
+            # Correct based on expectations instead
+            tr1 = ws[0]* (coefs[0].T@(-1*model.hessian)@coefs[0])[0,0]
 
             # E_{p|y}[\boldsymbol{\beta}] in Greven & Scheipl (2017)
-            Vr2 = ws[0]*coefs[0] 
+            tr2 = ws[0]*coefs[0] 
             
             # Now sum over remaining r
             for ri in range(1,len(rGrid)):
-                Vr1 += ws[ri]*((Linvs[ri].T@Linvs[ri]*scales[ri]) + (coefs[ri]@coefs[ri].T))
-                Vr2 += ws[ri]*coefs[ri]
+                tr1 += ws[ri]* (coefs[ri].T@(-1*model.hessian)@coefs[ri])[0,0]
+                tr2 += ws[ri]*coefs[ri]
+            
+            upper_edf += tr1 - (tr2.T@(-1*model.hessian)@tr2)[0,0]
+        
+        if only_expected_edf:
+            if verbose:
+                print(f"Correction was based on {rGrid.shape[0]} samples in total.")
 
-        else:
-            Vr1 = ws[0]*Vs[0] 
-            Vr2 = ws[0]*coefs[0] 
+            return None,None,None,None,None,None,None,None,upper_edf
+        
+        ###################################################### Compute full covariance matrix ###################################################### 
 
-            for ri in range(1,len(rGrid)):
-                Vr1 += ws[ri]*Vs[ri]
-                Vr2 += ws[ri]*coefs[ri]
+        if grid_type == 'JJJ2':
+            if isinstance(family,Gaussian) and X.shape[1] < 2000 and isinstance(family.link,Identity) and n_c > 1:
+                # E_{p|y}[V_\boldsymbol{\beta}(\lambda)] + E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] in Greven & Scheipl (2017)
+                Vr1 = ws[0]* (Linvs[0].T@Linvs[0]*scales[0])
 
-        # Now, Greven & Scheipl provide final estimate =
-        # E_{p|y}[V_\boldsymbol{\beta}(\lambda)] + E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] - E_{p|y}[\boldsymbol{\beta}] E_{p|y}[\boldsymbol{\beta}]^T
-        V = Vr1 - (Vr2@Vr2.T)
+                # Now sum over remaining r
+                for ri in range(1,len(rGrid)):
+                    Vr1 += ws[ri]*((Linvs[ri].T@Linvs[ri]*scales[ri]))
 
-        if grid_type == "JJJ2" and V_shrinkage_weight > 0:
-            # Have WPS correction terms, can compute V based on those and then refine this via V computed above
-            # weights are essentially chosen arbitrarily...
-            if isinstance(family,Family):
-                V = V_shrinkage_weight*(Vc + Vcc + ((model.lvi.T@model.lvi)*orig_scale)) + (1-V_shrinkage_weight)*V
             else:
-                V = V_shrinkage_weight*(Vc + Vcc + model.lvi.T@model.lvi) + (1-V_shrinkage_weight)*V
+                Vr1 = ws[0]*Vs[0]
+
+                for ri in range(1,len(rGrid)):
+                    Vr1 += ws[ri]*Vs[ri]
+            
+            if (Vr1@(-1*model.hessian)).trace() < model.edf:
+                if isinstance(family,Family):
+                    Vr1 = model.lvi.T@model.lvi*orig_scale
+                else:
+                    Vr1 = model.overall_lvi.T@model.overall_lvi
+
+            V = Vr1 + Vcr.T @ Vcr
+
+        elif grid_type == 'JJJ3':
+
+            # Now compute \hat{cov(\boldsymbol{\beta}|y)}
+            if isinstance(family,Gaussian) and X.shape[1] < 2000 and isinstance(family.link,Identity) and n_c > 1:
+                # E_{p|y}[V_\boldsymbol{\beta}(\lambda)] + E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] in Greven & Scheipl (2017)
+                Vr1 = ws[0]* ((Linvs[0].T@Linvs[0]*scales[0]) + (coefs[0]@coefs[0].T))
+
+                # E_{p|y}[\boldsymbol{\beta}] in Greven & Scheipl (2017)
+                Vr2 = ws[0]*coefs[0] 
+                
+                # Now sum over remaining r
+                for ri in range(1,len(rGrid)):
+                    Vr1 += ws[ri]*((Linvs[ri].T@Linvs[ri]*scales[ri]) + (coefs[ri]@coefs[ri].T))
+                    Vr2 += ws[ri]*coefs[ri]
+
+            else:
+                Vr1 = ws[0]*(Vs[0] + (coefs[0]@coefs[0].T))
+                Vr2 = ws[0]*coefs[0] 
+
+                for ri in range(1,len(rGrid)):
+                    Vr1 += ws[ri]*(Vs[ri] + (coefs[ri]@coefs[ri].T))
+                    Vr2 += ws[ri]*coefs[ri]
+
+            # Now, Greven & Scheipl provide final estimate =
+            # E_{p|y}[V_\boldsymbol{\beta}(\lambda)] + E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] - E_{p|y}[\boldsymbol{\beta}] E_{p|y}[\boldsymbol{\beta}]^T
+            V = Vr1 - (Vr2@Vr2.T)
+
+            #if grid_type == "JJJ2" and V_shrinkage_weight > 0:
+                # Have WPS correction terms, can compute V based on those and then refine this via V computed above
+                # weights are essentially chosen arbitrarily...
+            #    if isinstance(family,Family):
+            #        V = V_shrinkage_weight*(Vc + Vcc + ((model.lvi.T@model.lvi)*orig_scale)) + (1-V_shrinkage_weight)*V
+            #    else:
+            #        V = V_shrinkage_weight*(Vc + Vcc + model.overall_lvi.T@model.overall_lvi) + (1-V_shrinkage_weight)*V
             
     else:
         upper_edf = None
@@ -1849,7 +1856,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
     # Check V is full rank - can use LV for sampling as well..
     LV,code = cpp_chol(scp.sparse.csc_array(V))
     if code != 0:
-        raise ValueError("Failed to estimate unconditional covariance matrix.")
+        raise ValueError("Failed to estimate marginal covariance matrix for ecoefficients.")
 
     # Compute corrected edf (e.g., for AIC; Wood, Pya, & Saefken, 2016)
     total_edf = None
@@ -1868,7 +1875,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
     
     # In mgcv, an upper limit is enforced on edf and total_edf when they are uncertainty corrected - based on t1 in section 6.1.2 of Wood (2017)
     # so the same is done here.
-    if grid_type == "JJJ1" or grid_type == "JJJ2":
+    if grid_type == "JJJ1" or grid_type == "JJJ2" or grid_type == "JJJ3":
         if isinstance(family,Family):
             if isinstance(family,Gaussian) and isinstance(family.link,Identity): # Strictly additive case
                 ucF = (model.lvi.T@model.lvi)@((X.T@X))
@@ -1876,7 +1883,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
                 W = model.Wr@model.Wr
                 ucF = (model.lvi.T@model.lvi)@((X.T@W@X))
         else: # GSMM/GAMLSS case
-            ucF = (model.lvi.T@model.lvi)@(-1*model.hessian)
+            ucF = (model.overall_lvi.T@model.overall_lvi)@(-1*model.hessian)
 
         total_edf2 = 2*model.edf - (ucF@ucF).trace()
         if total_edf > total_edf2:

@@ -21,9 +21,9 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
                 method="Chol",
                 seed=None,
                 use_upper=True,
-                shrinkage_weight=0.75,
                 refine_Vp=False,
                 Vp_fidiff=True,
+                use_reml_weights=True,
                 **bfgs_options):
     
     """ Computes the AIC difference and (optionally) performs an approximate GLRT on twice the difference in unpenalized likelihood between models ``model1`` and ``model2`` (see Wood et al., 2016).
@@ -94,12 +94,12 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
     :type seed: int,optional
     :param use_upper: Whether to compute edf. from trace of covariance matrix (``use_upper=False``) or based on numeric integration weights. The latter is much more efficient for sparse models. Only makes sense when ``grid='JJJ2'``. Defaults to True
     :type use_upper: bool,optional
-    :param shrinkage_weight: ``1 - shrinkage_weight`` is the weighting used for the update to the covariance matrix correction proposed by Wood, Pya, & Säfken (2016) based on the numeric integration results when ``grid='JJJ2'``. Setting this to 0 (and ``use_upper=False``) recovers exactly the Greven & Scheipl (2016) correction, however with an adaptive grid. Defaults to False
-    :type shrinkage_weight: float,optional
     :param refine_Vp: Whether or not to refine the initial estimate of :math:`\mathbf{V}_{\\boldsymbol{p}}` (obtained from a finite difference or PQL approximation) for ``grid='JJJ2'`` based on the generated samples. Defaults to False
     :type refine_Vp: bool,optional
     :param Vp_fidiff: Whether to rely on a finite difference approximation to compute :math:`\mathbf{V}_{\\boldsymbol{p}}` for grid ``JJJ1`` and ``JJJ2`` or on a PQL approximation. The latter is exact for Gaussian and canonical GAMs and far cheaper if many penalties are to be estimated. Defaults to True (Finite difference approximation)
     :type Vp_fidiff: bool,optional
+    :param use_reml_weights: Whether to rely on REMl scores to compute the numerical integration when ``grid_type != 'JJJ1'`` or on the log-densities of :math:`\mathbf{V}_{\\boldsymbol{p}}` - the latter assumes that the unconditional posterior is normal. Defaults to True (REML scores are used)
+    :type use_reml_weights: bool,optional
     :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100. Defaults to None.
     :type bfgs_options: key=value,optional
     :raises ValueError: If both models are from different families.
@@ -118,13 +118,15 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
         raise ValueError("For the GLRT, model1 needs to be set to the more complex model (i.e., needs to have more coefficients than model2).")
     
     # Collect total DOF for uncertainty in \lambda using correction proposed by Greven & Scheipl (2016)
+    aic_DOF1 = None
+    aic_DOF2 = None
     if correct_V:
         if verbose:
             print("Correcting for uncertainty in lambda estimates...\n")
         
         #V,LV,Vp,Vpr,edf,total_edf,edf2,total_edf2,upper_edf
-        _,_,_,_,_,DOF1,_,DOF12,upper_edf1 = correct_VB(model1,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,V_shrinkage_weight=shrinkage_weight,only_expected_edf=(use_upper and (correct_t1==False)),refine_Vp=refine_Vp,Vp_fidiff=Vp_fidiff,seed=seed,**bfgs_options)
-        _,_,_,_,_,DOF2,_,DOF22,upper_edf2 = correct_VB(model2,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,V_shrinkage_weight=shrinkage_weight,only_expected_edf=(use_upper and (correct_t1==False)),refine_Vp=refine_Vp,Vp_fidiff=Vp_fidiff,seed=seed,**bfgs_options)
+        _,_,_,_,_,DOF1,_,DOF12,upper_edf1 = correct_VB(model1,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,V_shrinkage_weight=shrinkage_weight,only_expected_edf=(use_upper and (correct_t1==False)),refine_Vp=refine_Vp,Vp_fidiff=Vp_fidiff,alpha=alpha_edf,use_reml_weights=use_reml_weights,seed=seed,**bfgs_options)
+        _,_,_,_,_,DOF2,_,DOF22,upper_edf2 = correct_VB(model2,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,V_shrinkage_weight=shrinkage_weight,only_expected_edf=(use_upper and (correct_t1==False)),refine_Vp=refine_Vp,Vp_fidiff=Vp_fidiff,alpha=alpha_edf,use_reml_weights=use_reml_weights,seed=seed,**bfgs_options)
         
         if use_upper:
             DOF1 = upper_edf1
@@ -232,6 +234,8 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
               "chi^2":stat,
               "DOF1":DOF1,
               "DOF2":DOF2,
+              "DOF12":aic_DOF1,
+              "DOF22":aic_DOF2,
               "Res. DOF":DOF_diff,
               "aic1":aic1,
               "aic2":aic2,

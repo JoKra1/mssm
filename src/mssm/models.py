@@ -1322,7 +1322,7 @@ class GAMMLSS(GAMM):
         :type extend_lambda: bool,optional
         :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for whether or not they (approxiately) increase the Laplace approximate restricted maximum likelihood of the model. Setting this to 0 disables control. Setting it to 1 means the step will never be smaller than the original EFS update but extensions will be removed in case the objective was exceeded. Setting it to 2 means that steps will be halved. Set to 1 by default.
         :type control_lambda: int,optional
-        :param method: Which method to use to solve for the coefficients. The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR/Chol". In that case a QR decomposition is used - which is first pivoted to maximize sparsity in the resulting decomposition but also pivots for stability in order to get an estimate of rank defficiency. A Cholesky is than used using the combined pivoting strategy obtained from the QR. This takes substantially longer. In addition, when ``method=="QR/Chol"`` fitting will include a check to determine whether some coefficients are unidentifiable - in which case they are dropped and repalced with zeroes in the final coefficient vector. Defaults to "Chol".
+        :param method: Which method to use to solve for the coefficients. The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR/Chol". In that case the coefficients are still obtained via a Cholesky decomposition but a QR/LU decomposition is formed afterwards to check for rank deficiencies and to drop coefficients that cannot be estimated given the current smoothing parameter values. This takes substantially longer. Defaults to "Chol".
         :type method: str,optional
         :param check_cond: Whether to obtain an estimate of the condition number for the linear system that is solved. When ``check_cond=0``, no check will be performed. When ``check_cond=1``, an estimate of the condition number for the final system (at convergence) will be computed and warnings will be issued based on the outcome (see :func:`mssm.src.python.gamm_solvers.est_condition`). Defaults to 1.
         :type check_cond: int,optional
@@ -1385,11 +1385,12 @@ class GAMMLSS(GAMM):
             for coef_i in range(1,len(coef_split_idx)):
                 coef_split_idx[coef_i] += coef_split_idx[coef_i-1]
 
-        coef,etas,mus,wres,H,LV,total_edf,term_edfs,penalty,fit_info = solve_gammlss_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,
+        coef,etas,mus,wres,H,LV,total_edf,term_edfs,penalty,gamlss_pen,fit_info = solve_gammlss_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,
                                                                                             gamlss_pen,max_outer,max_inner,min_inner,conv_tol,
                                                                                             extend_lambda,extension_method_lam,control_lambda,
                                                                                             method,check_cond,piv_tol,should_keep_drop,progress_bar,n_cores)
         
+        self.overall_penalties = gamlss_pen
         self.overall_coef = coef
         self.overall_preds = etas
         self.overall_mus = mus
@@ -1779,7 +1780,7 @@ class GSMM(GAMMLSS):
         """
         return None
     
-    def fit(self,init_coef=None,max_outer=50,max_inner=200,min_inner=200,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=1,restart=False,optimizer="Newton",method="Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),progress_bar=True,n_cores=10,seed=0,drop_NA=True,init_lambda=None,form_VH=True,use_grad=False,build_mat=None,should_keep_drop=True,gamma=1,qEFSH='SR1',overwrite_coef=True,**bfgs_options):
+    def fit(self,init_coef=None,max_outer=50,max_inner=200,min_inner=200,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=1,restart=False,optimizer="Newton",method="Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),progress_bar=True,n_cores=10,seed=0,drop_NA=True,init_lambda=None,form_VH=True,use_grad=False,build_mat=None,should_keep_drop=True,gamma=1,qEFSH='SR1',overwrite_coef=True,max_restarts=0,qEFS_init_converge=True,**bfgs_options):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -1799,7 +1800,7 @@ class GSMM(GAMMLSS):
         :type restart: bool,optional
         :param optimizer: Deprecated. Defaults to "Newton"
         :type optimizer: str,optional
-        :param method: Which method to use to solve for the coefficients (and smoothing parameters). The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR/Chol". In that case a QR decomposition is used - which is first pivoted to maximize sparsity in the resulting decomposition but also pivots for stability in order to get an estimate of rank defficiency. A Cholesky is than used using the combined pivoting strategy obtained from the QR. This takes substantially longer. If this is set to ``'qEFS'``, then the coefficients are estimated via quasi netwon and the smoothing penalties are estimated from the quasi newton approximation to the hessian. This only requieres first derviative information. Defaults to "Chol".
+        :param method: Which method to use to solve for the coefficients (and smoothing parameters). The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR/Chol". In that case the coefficients are still obtained via a Cholesky decomposition but a QR/LU decomposition is formed afterwards to check for rank deficiencies and to drop coefficients that cannot be estimated given the current smoothing parameter values. This takes substantially longer. If this is set to ``'qEFS'``, then the coefficients are estimated via quasi netwon and the smoothing penalties are estimated from the quasi newton approximation to the hessian. This only requieres first derviative information. Defaults to "Chol".
         :type method: str,optional
         :param check_cond: Whether to obtain an estimate of the condition number for the linear system that is solved. When ``check_cond=0``, no check will be performed. When ``check_cond=1``, an estimate of the condition number for the final system (at convergence) will be computed and warnings will be issued based on the outcome (see :func:`mssm.src.python.gamm_solvers.est_condition`). Defaults to 1.
         :type check_cond: int,optional
@@ -1829,6 +1830,10 @@ class GSMM(GAMMLSS):
         :type qEFSH: str,optional
         :param overwrite_coef: Whether the initial coefficients passed to the optimization routine should be over-written by the solution obtained for the un-penalized version of the problem when ``method='qEFS'``. Setting this to False will be useful when passing coefficients from a simpler model to initialize a more complex one. Defaults to True.
         :type overwrite_coef: bool,optional
+        :param max_restarts: How often to shrink the coefficient estimate back to a random vector when convergence is reached and when ``method='qEFS'``. The optimizer might get stuck in local minima so it can be helpful to set this to 1-3. What happens is that if we converge, we shrink the coefficients back to a random vector and then continue optimizing once more. Defaults to 0.
+        :type max_restarts: int,optional
+        :param qEFS_init_converge: Whether to optimize the un-penalzied solution used to initialzie the qEFS optimizer to convergence or only for a maximum of 50 iterations. Defaults to True.
+        :type qEFS_init_converge: bool,optional
         :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If none are provided, the ``gtol`` argument will be initialized to ``conv_tol``. Note also, that in any case the ``maxiter`` argument is automatically set to ``max_inner``. Defaults to None.
         :type bfgs_options: key=value,optional
         :raises ValueError: Will throw an error when ``optimizer`` is not one of 'Newton', 'BFGS', 'L-BFGS-B'.
@@ -1838,7 +1843,8 @@ class GSMM(GAMMLSS):
             bfgs_options = {"gtol":conv_tol,
                             "ftol":1e-9,
                             "maxcor":30,
-                            "maxls":100}
+                            "maxls":100,
+                            "maxfun":1e7}
 
         if not optimizer in ["Newton", "BFGS", "L-BFGS-B"]:
             raise ValueError("'optimizer' needs to be set to one of 'Newton', 'BFGS', 'L-BFGS-B'.")
@@ -1901,11 +1907,12 @@ class GSMM(GAMMLSS):
                 coef_split_idx[coef_i] += coef_split_idx[coef_i-1]
         
         # Now fit model
-        coef,H,LV,total_edf,term_edfs,penalty,fit_info = solve_generalSmooth_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,smooth_pen,
+        coef,H,LV,total_edf,term_edfs,penalty,smooth_pen,fit_info = solve_generalSmooth_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,smooth_pen,
                                                                                     max_outer,max_inner,min_inner,conv_tol,extend_lambda,extension_method_lam,
                                                                                     control_lambda,optimizer,method,check_cond,piv_tol,should_keep_drop,form_VH,
-                                                                                    use_grad,gamma,qEFSH,overwrite_coef,progress_bar,n_cores,**bfgs_options)
+                                                                                    use_grad,gamma,qEFSH,overwrite_coef,max_restarts,qEFS_init_converge,progress_bar,n_cores,**bfgs_options)
         
+        self.overall_penalties = smooth_pen
         self.overall_coef = coef
         self.edf = total_edf
         self.overall_term_edf = term_edfs

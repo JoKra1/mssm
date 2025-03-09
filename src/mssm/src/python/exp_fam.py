@@ -1671,7 +1671,7 @@ class GAMMALS(GAMLSSFamily):
       
       mean_model = models[0]
       mean_model.family = Gamma(self.links[0])
-      mean_model.fit(progress_bar=False,restart=True)
+      mean_model.fit(progress_bar=False,restart=True,max_inner=1)
 
       m_coef,_ = mean_model.get_pars()
       coef = np.concatenate((m_coef.reshape(-1,1),np.ones((models[1].formula.n_coef)).reshape(-1,1)))
