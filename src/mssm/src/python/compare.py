@@ -125,8 +125,8 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
             print("Correcting for uncertainty in lambda estimates...\n")
         
         #V,LV,Vp,Vpr,edf,total_edf,edf2,total_edf2,upper_edf
-        _,_,_,_,_,DOF1,_,DOF12,upper_edf1 = correct_VB(model1,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,V_shrinkage_weight=shrinkage_weight,only_expected_edf=(use_upper and (correct_t1==False)),refine_Vp=refine_Vp,Vp_fidiff=Vp_fidiff,alpha=alpha_edf,use_reml_weights=use_reml_weights,seed=seed,**bfgs_options)
-        _,_,_,_,_,DOF2,_,DOF22,upper_edf2 = correct_VB(model2,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,V_shrinkage_weight=shrinkage_weight,only_expected_edf=(use_upper and (correct_t1==False)),refine_Vp=refine_Vp,Vp_fidiff=Vp_fidiff,alpha=alpha_edf,use_reml_weights=use_reml_weights,seed=seed,**bfgs_options)
+        _,_,_,_,_,DOF1,_,DOF12,upper_edf1 = correct_VB(model1,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,only_expected_edf=(use_upper and (correct_t1==False)),refine_Vp=refine_Vp,Vp_fidiff=Vp_fidiff,use_reml_weights=use_reml_weights,seed=seed,**bfgs_options)
+        _,_,_,_,_,DOF2,_,DOF22,upper_edf2 = correct_VB(model2,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,only_expected_edf=(use_upper and (correct_t1==False)),refine_Vp=refine_Vp,Vp_fidiff=Vp_fidiff,use_reml_weights=use_reml_weights,seed=seed,**bfgs_options)
         
         if use_upper:
             DOF1 = upper_edf1
