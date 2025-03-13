@@ -4091,13 +4091,22 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,smooth_p
       # Now approximate hessian of llk at penalized solution:
 
       # Initialize from previous solution
-      maxcor = opt_raw.n_corrs
-      sks = opt_raw.sk
-      yks = opt_raw.yk
-      rhos = opt_raw.rho
+      maxcor = opt_raw.bfgs_options["maxcor"]
+
+      if outer > 0 or opt_raw.init:
+         sks = opt_raw.sk
+         yks = opt_raw.yk
+         rhos = opt_raw.rho
+      else:
+         sks = np.array([])
+         yks = np.array([])
+         rhos = np.array([])
       
       # see Nocedal & Wright, 2004 for sacling factor
-      omega = np.dot(opt_raw.yk[-1],opt_raw.yk[-1])/np.dot(opt_raw.yk[-1],opt_raw.sk[-1])
+      if outer > 0 or opt_raw.init:
+         omega = np.dot(opt_raw.yk[-1],opt_raw.yk[-1])/np.dot(opt_raw.yk[-1],opt_raw.sk[-1])
+      else:
+         omega = 1
       omegas = [omega] # omega can fluctuate between updates.. keep track of smallest one within an update series and use that for scaling efs update later
       updates = 0
 
@@ -4105,10 +4114,11 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,smooth_p
       H0 = scp.sparse.identity(len(coef),format='csc')*omega
       V0 = scp.sparse.identity(len(coef),format='csc')*(1/omega)
 
-      if form == 'SR1':
-         t1_llk, t2_llk, t3_llk = computeVSR1(opt_raw.sk,opt_raw.yk,opt_raw.rho,V0,1/omega,make_psd=True,explicit=False)
-      else:
-         t1_llk, t2_llk, t3_llk = computeV(opt_raw.sk,opt_raw.yk,opt_raw.rho,V0,explicit=False)
+      if len(sks) > 0:
+         if form == 'SR1':
+            t1_llk, t2_llk, t3_llk = computeVSR1(opt_raw.sk,opt_raw.yk,opt_raw.rho,V0,1/omega,make_psd=True,explicit=False)
+         else:
+            t1_llk, t2_llk, t3_llk = computeV(opt_raw.sk,opt_raw.yk,opt_raw.rho,V0,explicit=False)
 
       # Also compute H0 and V0 for penalized problem.
       pH0 = scp.sparse.identity(len(coef),format='csc')*omega
@@ -4169,13 +4179,13 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,smooth_p
                sk = alpha*step
                rhok = 1/(yk.T@sk)
 
-               if form == 'SR1':
+               if form == 'SR1' and len(sks) > 0:
                   # Check if SR1 update is defined (see Nocedal & Wright, 2004)
                   Ht1, Ht2, Ht3 = computeHSR1(sks,yks,rhos,H0,omega=omega,make_psd=False,explicit=False)
                   Bs = H0@sk + Ht1@Ht2@Ht3@sk
                   ym = yk - Bs
                
-               if new_slope is not None and (form != 'SR1' or (np.abs(sk.T@ym) >= 1e-8*np.linalg.norm(sk)*np.linalg.norm(ym) and np.abs(yk.T@sk) > 0)):
+               if new_slope is not None and (form != 'SR1' or (len(sks) == 0 or (np.abs(sk.T@ym) >= 1e-8*np.linalg.norm(sk)*np.linalg.norm(ym) and np.abs(yk.T@sk) > 0))):
                   # Wolfe/Armijo met, can collect update vectors
 
                   if form != 'SR1':
@@ -4188,9 +4198,14 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,smooth_p
                         theta = (0.8*sBs)/(sBs - sk.T@yk)
                         yk = theta*yk + (1-theta)*Bs
                   
-                  sks = np.append(sks,sk.T,axis=0)
-                  yks = np.append(yks,yk.T,axis=0)
-                  rhos = np.append(rhos,rhok[0,0])
+                  if len(sks) == 0:
+                     sks = sk.T
+                     yks = yk.T
+                     rhos = np.array([rhok[0,0]])
+                  else:
+                     sks = np.append(sks,sk.T,axis=0)
+                     yks = np.append(yks,yk.T,axis=0)
+                     rhos = np.append(rhos,rhok[0,0])
 
                   # Discard oldest update vector
                   if sks.shape[0] > maxcor:
@@ -4572,29 +4587,38 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,coef,
          
          # Optimize un-penalized problem first to get a good starting estimate for hessian.
          if method == "qEFS" and outer == 0:
-            opt_raw = scp.optimize.minimize(__neg_pen_llk,
-                                           np.ndarray.flatten(coef),
-                                           args=(coef_split_idx,y,Xs,family,scp.sparse.csc_matrix((len(coef), len(coef)))),
-                                           method="L-BFGS-B",
-                                           jac = __neg_pen_grad if use_grad else None,
-                                           options={"maxiter":max_inner if qEFS_init_converge else min(max_inner,50),
-                                                    **bfgs_options})
-            #print(opt_raw)
-            # Set "initial" coefficients to solution found for un-penalized problem.
-            if overwrite_coef:
-               coef = opt_raw["x"].reshape(-1,1)
-               c_llk = family.llk(coef,coef_split_idx,y,Xs)
-            __old_opt = opt_raw.hess_inv
+            if qEFS_init_converge:
+               opt_raw = scp.optimize.minimize(__neg_pen_llk,
+                                             np.ndarray.flatten(coef),
+                                             args=(coef_split_idx,y,Xs,family,scp.sparse.csc_matrix((len(coef), len(coef)))),
+                                             method="L-BFGS-B",
+                                             jac = __neg_pen_grad if use_grad else None,
+                                             options={"maxiter":max_inner,
+                                                      **bfgs_options})
+               #print(opt_raw)
+               # Set "initial" coefficients to solution found for un-penalized problem.
+               if overwrite_coef:
+                  coef = opt_raw["x"].reshape(-1,1)
+                  c_llk = family.llk(coef,coef_split_idx,y,Xs)
+
+               __old_opt = opt_raw.hess_inv
+               __old_opt.init = True
+               __old_opt.nit = opt_raw["nit"]
+
+               H_y, H_s = opt_raw.hess_inv.yk, opt_raw.hess_inv.sk
+               
+               # Get scaling for hessian from Nocedal & Wright, 2004:
+               omega_Raw = np.dot(H_y[-1],H_y[-1])/np.dot(H_y[-1],H_s[-1])
+               __old_opt.omega = omega_Raw#np.min(H_ev)
+            else:
+               __old_opt = scp.optimize.LbfgsInvHessProduct(np.array([1]).reshape(1,1),np.array([1]).reshape(1,1))
+               __old_opt.init = False
+               __old_opt.omega = 1
+
             __old_opt.method = 'qEFS'
-            __old_opt.nit = opt_raw["nit"]
             __old_opt.form = qEFSH
             __old_opt.bfgs_options = bfgs_options
 
-            H_y, H_s = opt_raw.hess_inv.yk, opt_raw.hess_inv.sk
-               
-            # Get scaling for hessian from Nocedal & Wright, 2004:
-            omega_Raw = np.dot(H_y[-1],H_y[-1])/np.dot(H_y[-1],H_s[-1])
-            __old_opt.omega = omega_Raw#np.min(H_ev)
             
          next_coef,H,L,LV,next_llk,next_pen_llk,eps,keep,drop = update_coef_gen_smooth(family,y,Xs,coef,
                                                                                        coef_split_idx,S_emb,
@@ -4604,6 +4628,12 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,coef,
                                                                                        method,piv_tol,keep_drop,
                                                                                        __old_opt)
          
+         if method == "qEFS" and outer == 0 and __old_opt.init == False:
+            __old_opt = LV
+            __old_opt.bfgs_options = bfgs_options
+            __old_opt.init = True
+
+
          V = None
             
          if drop is not None:

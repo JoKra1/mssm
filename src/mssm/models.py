@@ -1828,11 +1828,11 @@ class GSMM(GAMMLSS):
         :type gamma: float,optional
         :param qEFSH: Should the hessian approximation use a symmetric rank 1 update (``qEFSH='SR1'``) that is forced to result in positive definiteness of the approximation or the standard bfgs update (``qEFSH='BFGS'``) . Defaults to 'SR1'.
         :type qEFSH: str,optional
-        :param overwrite_coef: Whether the initial coefficients passed to the optimization routine should be over-written by the solution obtained for the un-penalized version of the problem when ``method='qEFS'``. Setting this to False will be useful when passing coefficients from a simpler model to initialize a more complex one. Defaults to True.
+        :param overwrite_coef: Whether the initial coefficients passed to the optimization routine should be over-written by the solution obtained for the un-penalized version of the problem when ``method='qEFS'``. Setting this to False will be useful when passing coefficients from a simpler model to initialize a more complex one. Only has an effect when ``qEFS_init_converge=True``. Defaults to True.
         :type overwrite_coef: bool,optional
         :param max_restarts: How often to shrink the coefficient estimate back to a random vector when convergence is reached and when ``method='qEFS'``. The optimizer might get stuck in local minima so it can be helpful to set this to 1-3. What happens is that if we converge, we shrink the coefficients back to a random vector and then continue optimizing once more. Defaults to 0.
         :type max_restarts: int,optional
-        :param qEFS_init_converge: Whether to optimize the un-penalzied solution used to initialzie the qEFS optimizer to convergence or only for a maximum of 50 iterations. Defaults to True.
+        :param qEFS_init_converge: Whether to optimize the un-penalzied version of the model and to use the hessian (and optionally coefficients, if ``overwrite_coef=True``) to initialize the q-EFS solver. Ignored if ``method!='qEFS'``. Defaults to True.
         :type qEFS_init_converge: bool,optional
         :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If none are provided, the ``gtol`` argument will be initialized to ``conv_tol``. Note also, that in any case the ``maxiter`` argument is automatically set to ``max_inner``. Defaults to None.
         :type bfgs_options: key=value,optional
