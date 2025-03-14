@@ -1780,7 +1780,7 @@ class GSMM(GAMMLSS):
         """
         return None
     
-    def fit(self,init_coef=None,max_outer=50,max_inner=200,min_inner=200,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=1,restart=False,optimizer="Newton",method="Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),progress_bar=True,n_cores=10,seed=0,drop_NA=True,init_lambda=None,form_VH=True,use_grad=False,build_mat=None,should_keep_drop=True,gamma=1,qEFSH='SR1',overwrite_coef=True,max_restarts=0,qEFS_init_converge=True,**bfgs_options):
+    def fit(self,init_coef=None,max_outer=50,max_inner=200,min_inner=200,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=1,restart=False,optimizer="Newton",method="Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),progress_bar=True,n_cores=10,seed=0,drop_NA=True,init_lambda=None,form_VH=True,use_grad=False,build_mat=None,should_keep_drop=True,gamma=1,qEFSH='SR1',overwrite_coef=True,max_restarts=0,qEFS_init_converge=True,init_bfgs_options=None,**bfgs_options):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -1834,6 +1834,8 @@ class GSMM(GAMMLSS):
         :type max_restarts: int,optional
         :param qEFS_init_converge: Whether to optimize the un-penalzied version of the model and to use the hessian (and optionally coefficients, if ``overwrite_coef=True``) to initialize the q-EFS solver. Ignored if ``method!='qEFS'``. Defaults to True.
         :type qEFS_init_converge: bool,optional
+        :param init_bfgs_options: An optional dictionary holding the same key:value pairs that can be passed to ``bfgs_options`` but pased to the optimizer of the un-penalized problem. If this is None, it will be set to a copy of ``bfgs_options``. Defaults to None.
+        :type init_bfgs_options: dict,optional
         :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If none are provided, the ``gtol`` argument will be initialized to ``conv_tol``. Note also, that in any case the ``maxiter`` argument is automatically set to ``max_inner``. Defaults to None.
         :type bfgs_options: key=value,optional
         :raises ValueError: Will throw an error when ``optimizer`` is not one of 'Newton', 'BFGS', 'L-BFGS-B'.
@@ -1845,6 +1847,9 @@ class GSMM(GAMMLSS):
                             "maxcor":30,
                             "maxls":100,
                             "maxfun":1e7}
+        
+        if init_bfgs_options is None:
+            init_bfgs_options = copy.deepcopy(bfgs_options)
 
         if not optimizer in ["Newton", "BFGS", "L-BFGS-B"]:
             raise ValueError("'optimizer' needs to be set to one of 'Newton', 'BFGS', 'L-BFGS-B'.")
@@ -1910,7 +1915,8 @@ class GSMM(GAMMLSS):
         coef,H,LV,total_edf,term_edfs,penalty,smooth_pen,fit_info = solve_generalSmooth_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,smooth_pen,
                                                                                     max_outer,max_inner,min_inner,conv_tol,extend_lambda,extension_method_lam,
                                                                                     control_lambda,optimizer,method,check_cond,piv_tol,should_keep_drop,form_VH,
-                                                                                    use_grad,gamma,qEFSH,overwrite_coef,max_restarts,qEFS_init_converge,progress_bar,n_cores,**bfgs_options)
+                                                                                    use_grad,gamma,qEFSH,overwrite_coef,max_restarts,qEFS_init_converge,
+                                                                                    progress_bar,n_cores,init_bfgs_options,bfgs_options)
         
         self.overall_penalties = smooth_pen
         self.overall_coef = coef

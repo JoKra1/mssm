@@ -885,7 +885,7 @@ def computeVSR1(s,y,rho,V0,omega=1,make_psd=False,explicit=True):
    L = S.T@Y - R
    
    # Now compute term 2 in eq. 5.2
-   t2 = scp.linalg.inv(DK + L + L.T - YTY)
+   t2 = scp.linalg.inv(R + R.T - DK - YTY)
 
    # And terms 1 and 2
    t1 = S - V0@Y
@@ -3986,7 +3986,10 @@ def back_track_alpha(coef,step,llk_fun,grad_fun,*llk_args,alpha_max=1,c1=1e-4,ma
 
    for _ in range(max_iter):
       # Test Armijo condition
-      n_llk = llk_fun((coef + c_alpha*step).flatten(),*llk_args)
+      with warnings.catch_warnings():
+         warnings.simplefilter("ignore")
+         n_llk = llk_fun((coef + c_alpha*step).flatten(),*llk_args)
+
       armijo = n_llk <= c_llk + c_alpha*c1*c_grad.T@step
 
       if armijo and (np.isnan(n_llk[0,0]) == False and np.isinf(n_llk[0,0]) == False):
@@ -4034,6 +4037,110 @@ def check_drop_valid_gensmooth(y,coef,Xs,S_emb,keep,family):
       return False,None
    
    return True,c_pen_llk
+
+def restart_coef(coef,c_llk,c_pen_llk,n_coef,coef_split_idx,y,Xs,S_emb,family,outer,restart_counter):
+   """Shrink coef towards random vector to restart algorithm if it get's stuck.
+
+   :param coef: _description_
+   :type coef: _type_
+   :param n_coef: _description_
+   :type n_coef: _type_
+   :param coef_split_idx: _description_
+   :type coef_split_idx: _type_
+   :param y: _description_
+   :type y: _type_
+   :param Xs: _description_
+   :type Xs: _type_
+   :param S_emb: _description_
+   :type S_emb: _type_
+   :param family: _description_
+   :type family: _type_
+   :param outer: _description_
+   :type outer: _type_
+   :param restart_counter: _description_
+   :type restart_counter: _type_
+   :return: _description_
+   :rtype: _type_
+   """
+   res_checks = 0
+   res_scale = 0.5 if outer <= 10 else 1/(restart_counter+2)
+   #print("resetting conv.",res_scale)
+
+   while res_checks < 30:
+      res_coef = ((1-res_scale)*coef + res_scale*scp.stats.norm.rvs(size=n_coef,random_state=outer+res_checks).reshape(-1,1))
+
+      # Re-compute llk
+      with warnings.catch_warnings():
+         warnings.simplefilter("ignore")
+         res_llk = family.llk(res_coef,coef_split_idx,y,Xs)
+         res_pen_llk = res_llk - 0.5*res_coef.T@S_emb@res_coef
+
+      if (np.isinf(res_pen_llk[0,0]) or np.isnan(res_pen_llk[0,0])):
+         res_checks += 1
+         continue
+      
+      coef = res_coef
+      c_llk = res_llk
+      c_pen_llk = res_pen_llk
+      break
+   
+   return coef, c_llk, c_pen_llk
+
+def test_SR1(sk,yk,rho,sks,yks,rhos):
+   """Test whether SR1 update is well-defined for both V and H.
+
+   :param sk: _description_
+   :type sk: _type_
+   :param yk: _description_
+   :type yk: _type_
+   :param rho: _description_
+   :type rho: _type_
+   :param sks: _description_
+   :type sks: _type_
+   :param yks: _description_
+   :type yks: _type_
+   :param rhos: _description_
+   :type rhos: _type_
+   """
+   # Conditionally accept sk, yk, and rho
+   if len(sks) == 0:
+      sks = sk.T
+      yks = yk.T
+      rhos = np.array([rho[0,0]])
+   else:
+      sks = np.append(sks,sk.T,axis=0)
+      yks = np.append(yks,yk.T,axis=0)
+      rhos = np.append(rhos,rho[0,0])
+
+   # Compute new omega to better scale hessian (again see Nocedal & Wright, 2004)
+   if sks.shape[0] > 0 and yk.T@sk > 0:
+      omega = np.dot(yks[-1],yks[-1])/np.dot(yks[-1],sks[-1])
+      if omega < 0 or (sks.shape[0] == 1):
+         # Cannot use scaling for first update vector since inverse of hessian will result in
+         # zero t2 term due to cancellation
+         omega = 1
+   else:
+      omega = 1
+
+   # Update H0/V0 (rather H0(k)/V0(k))
+   H0 = scp.sparse.identity(sk.shape[0],format='csc')*omega
+   V0 = scp.sparse.identity(sk.shape[0],format='csc')*(1/omega)
+   
+   # Now try both SR1 updates
+   Fail = False
+   try:
+      _,_,_ = computeHSR1(sks,yks,rhos,H0,omega=omega,make_psd=False,explicit=False)
+      _,_,_ = computeVSR1(sks,yks,rhos,V0,omega=1/omega,make_psd=False,explicit=False)
+      #t12,t22,t32 = computeHSR1(yks,sks,rhos,V0,omega=1/omega,make_psd=False,explicit=False)
+      #print(np.max(np.abs((t11@t21@t31)-(t12@t22@t32))))
+   except:
+      Fail = True
+
+   # Undo conditional assignment
+   sks = np.delete(sks,0,axis=0)
+   yks = np.delete(yks,0,axis=0)
+   rhos = np.delete(rhos,0)
+   return Fail
 
     
 def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,smooth_pen,c_llk,outer,max_inner,min_inner,conv_tol,method,piv_tol,keep_drop,opt_raw):
@@ -4179,13 +4286,17 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,smooth_p
                sk = alpha*step
                rhok = 1/(yk.T@sk)
 
-               if form == 'SR1' and len(sks) > 0:
+               if form == 'SR1':
                   # Check if SR1 update is defined (see Nocedal & Wright, 2004)
-                  Ht1, Ht2, Ht3 = computeHSR1(sks,yks,rhos,H0,omega=omega,make_psd=False,explicit=False)
-                  Bs = H0@sk + Ht1@Ht2@Ht3@sk
-                  ym = yk - Bs
-               
-               if new_slope is not None and (form != 'SR1' or (len(sks) == 0 or (np.abs(sk.T@ym) >= 1e-8*np.linalg.norm(sk)*np.linalg.norm(ym) and np.abs(yk.T@sk) > 0))):
+                  skip = test_SR1(sk,yk,rhok,sks,yks,rhos)
+
+                  if outer == 0 and len(sks) == 0 and (skip or new_slope is None):
+                     # Potentially very bad start estimate, try find a better one
+                     coef, _, _ = restart_coef(coef,None,None,len(coef),coef_split_idx,y,Xs,S_emb,family,outer,0)
+                     c_llk = family.llk(coef,coef_split_idx,y,Xs)
+                     grad = family.gradient(coef,coef_split_idx,y,Xs)
+
+               if new_slope is not None and (form != 'SR1' or (skip == False)):
                   # Wolfe/Armijo met, can collect update vectors
 
                   if form != 'SR1':
@@ -4214,9 +4325,11 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,smooth_p
                      rhos = np.delete(rhos,0)
                
                # Update omega to better scale hessian (again see Nocedal & Wright, 2004)
-               if sks.shape[0] > 0:
+               if sks.shape[0] > 0 and yk.T@sk > 0:
                   omega = np.dot(yks[-1],yks[-1])/np.dot(yks[-1],sks[-1])
-                  if omega < 0: # SR1 update could become negative..
+                  if omega < 0 or (sks.shape[0] == 1 and form == 'SR1'):
+                     # Cannot use scaling for first update vector since inverse of hessian will result in
+                     # zero t2 term due to cancellation
                      omega = 1
                else:
                   omega = 1
@@ -4284,15 +4397,15 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,smooth_p
                   else:
                      # When using SR1 int2 is potentially singular, so we need a modified Woodbury inverse that accounts for that.
                      # This is given by eq. 23 in Henderson & Searle (1981):
-                     invt2 = np.identity(int2.shape[1]) + int2@nt3@V0@nt1
+                     invt2 = np.identity(int2.shape[1]) + int2@nt3@pV0@nt1
 
                      U,sv_invt2,VT = scp.linalg.svd(invt2,lapack_driver='gesvd')
 
                      # Nowe we can compute all parts for the modified Woodbury identy to obtain V
                      t2 = VT.T @ np.diag(1/sv_invt2)  @  U.T
 
-                     t1 = V0@nt1
-                     t3 = int2@nt3@V0
+                     t1 = pV0@nt1
+                     t3 = int2@nt3@pV0
                   # We now have: pV = pV0 - pV0@nt1@t2@nt3@pV0, but don't have to form that explcitly!
 
                # All we need at this point is to form the penalized gradient. # And then we can compute
@@ -4569,7 +4682,7 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,coef,
                                     max_inner,min_inner,conv_tol,gamma,method,qEFSH,overwrite_coef,qEFS_init_converge,optimizer,
                                     __old_opt,use_grad,__neg_pen_llk,__neg_pen_grad,piv_tol,keep_drop,extend_lambda,
                                     extension_method_lam,control_lambda,n_c,
-                                    bfgs_options):
+                                    init_bfgs_options,bfgs_options):
    # Fitting iteration and step size control for smoothing parameters of general smooth model.
    # Basically a more general copy of the function for gammlss. Again, step-size control is not obvious - because we have only approximate REMl
    # and approximate derivative, because we drop the last term involving the derivative of the negative penalized
@@ -4594,22 +4707,27 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,coef,
                                              method="L-BFGS-B",
                                              jac = __neg_pen_grad if use_grad else None,
                                              options={"maxiter":max_inner,
-                                                      **bfgs_options})
+                                                      **init_bfgs_options})
                #print(opt_raw)
-               # Set "initial" coefficients to solution found for un-penalized problem.
-               if overwrite_coef:
-                  coef = opt_raw["x"].reshape(-1,1)
-                  c_llk = family.llk(coef,coef_split_idx,y,Xs)
+               if opt_raw["nit"] > 1:
+                  # Set "initial" coefficients to solution found for un-penalized problem.
+                  if overwrite_coef:
+                     coef = opt_raw["x"].reshape(-1,1)
+                     c_llk = family.llk(coef,coef_split_idx,y,Xs)
 
-               __old_opt = opt_raw.hess_inv
-               __old_opt.init = True
-               __old_opt.nit = opt_raw["nit"]
+                  __old_opt = opt_raw.hess_inv
+                  __old_opt.init = True
+                  __old_opt.nit = opt_raw["nit"]
 
-               H_y, H_s = opt_raw.hess_inv.yk, opt_raw.hess_inv.sk
-               
-               # Get scaling for hessian from Nocedal & Wright, 2004:
-               omega_Raw = np.dot(H_y[-1],H_y[-1])/np.dot(H_y[-1],H_s[-1])
-               __old_opt.omega = omega_Raw#np.min(H_ev)
+                  H_y, H_s = opt_raw.hess_inv.yk, opt_raw.hess_inv.sk
+                  
+                  # Get scaling for hessian from Nocedal & Wright, 2004:
+                  omega_Raw = np.dot(H_y[-1],H_y[-1])/np.dot(H_y[-1],H_s[-1])
+                  __old_opt.omega = omega_Raw#np.min(H_ev)
+               else:
+                  __old_opt = scp.optimize.LbfgsInvHessProduct(np.array([1]).reshape(1,1),np.array([1]).reshape(1,1))
+                  __old_opt.init = False
+                  __old_opt.omega = 1
             else:
                __old_opt = scp.optimize.LbfgsInvHessProduct(np.array([1]).reshape(1,1),np.array([1]).reshape(1,1))
                __old_opt.init = False
@@ -4783,52 +4901,6 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,coef,
 
    return next_coef,H,L,LV,V,next_llk,next_pen_llk,__old_opt,keep,drop,S_emb,smooth_pen,total_edf,term_edfs,lam_delta
 
-def restart_coef(coef,c_llk,c_pen_llk,n_coef,coef_split_idx,y,Xs,S_emb,family,outer,restart_counter):
-   """Shrink coef towards random vector to restart algorithm if it get's stuck.
-
-   :param coef: _description_
-   :type coef: _type_
-   :param n_coef: _description_
-   :type n_coef: _type_
-   :param coef_split_idx: _description_
-   :type coef_split_idx: _type_
-   :param y: _description_
-   :type y: _type_
-   :param Xs: _description_
-   :type Xs: _type_
-   :param S_emb: _description_
-   :type S_emb: _type_
-   :param family: _description_
-   :type family: _type_
-   :param outer: _description_
-   :type outer: _type_
-   :param restart_counter: _description_
-   :type restart_counter: _type_
-   :return: _description_
-   :rtype: _type_
-   """
-   res_checks = 0
-   res_scale = 0.5 if outer <= 10 else 1/(restart_counter+2)
-   #print("resetting conv.",res_scale)
-
-   while res_checks < 30:
-      res_coef = ((1-res_scale)*coef + res_scale*scp.stats.norm.rvs(size=n_coef,random_state=outer+res_checks).reshape(-1,1))
-
-      # Re-compute llk
-      res_llk = family.llk(res_coef,coef_split_idx,y,Xs)
-      res_pen_llk = res_llk - 0.5*res_coef.T@S_emb@res_coef
-
-      if (np.isinf(res_pen_llk[0,0]) or np.isnan(res_pen_llk[0,0])):
-         res_checks += 1
-         continue
-      
-      coef = res_coef
-      c_llk = res_llk
-      c_pen_llk = res_pen_llk
-      break
-   
-   return coef, c_llk, c_pen_llk
-
 def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smooth_pen,
                               max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,
                               extend_lambda=True,extension_method_lam = "nesterov2",
@@ -4836,7 +4908,8 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                               check_cond=1,piv_tol=0.175,should_keep_drop=True,
                               form_VH=True,use_grad=False,gamma=1,qEFSH='SR1',
                               overwrite_coef=True,max_restarts=0,qEFS_init_converge=True,progress_bar=True,
-                              n_c=10,**bfgs_options):
+                              n_c=10,init_bfgs_options={"gtol":1e-9,"ftol":1e-9,"maxcor":30,"maxls":100,"maxfun":1e7},
+                              bfgs_options={"gtol":1e-9,"ftol":1e-9,"maxcor":30,"maxls":100,"maxfun":1e7}):
     """
     Fits a general smooth model, following steps outlined by Wood, Pya, & Säfken (2016). Essentially,
     an even more general version of :func:``solve_gammlss_sparse`` that requires only a function to compute
@@ -4852,7 +4925,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
       - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
       - Nocedal & Wright (2006). Numerical Optimization. Springer New York.
     """
-    
+
     # total number of coefficients
     n_coef = np.sum(form_n_coef)
 
@@ -4919,7 +4992,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                                                                            __old_opt,use_grad,__neg_pen_llk,__neg_pen_grad,
                                                                            piv_tol,keep_drop,extend_lambda,
                                                                            extension_method_lam,control_lambda,n_c,
-                                                                           bfgs_options)
+                                                                           init_bfgs_options,bfgs_options)
       
       # Monitor whether we keep changing lambda but not actually updating coefficients..
       if method == 'qEFS':
