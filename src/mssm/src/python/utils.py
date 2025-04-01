@@ -1434,120 +1434,15 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
             Vp = Vpr
 
     rGrid = []
-    if grid_type != "JJJ1":
-        # Make sure actual estimate is included once.
-        rGrid.append(np.array([pen2.lam for pen2 in rPen]))
-        rGrid = np.array(rGrid)
+    rGrid = np.array(rGrid)
     
     remls = []
     Vs = []
     coefs = []
     edfs = []
     llks = []
-
-    if isinstance(family,Gaussian) and X.shape[1] < 2000 and isinstance(family.link,Identity) and n_c > 1 and grid_type != "JJJ1": # Parallelize grid search
-        with managers.SharedMemoryManager() as manager, mp.Pool(processes=n_c) as pool:
-            # Create shared memory copies of data, indptr, and indices for X, XX, and y
-
-            # X
-            rows, cols, _, data, indptr, indices = map_csc_to_eigen(X)
-            shape_dat = data.shape
-            shape_ptr = indptr.shape
-            shape_y = y.shape
-
-            dat_mem = manager.SharedMemory(data.nbytes)
-            dat_shared = np.ndarray(shape_dat, dtype=np.double, buffer=dat_mem.buf)
-            dat_shared[:] = data[:]
-
-            ptr_mem = manager.SharedMemory(indptr.nbytes)
-            ptr_shared = np.ndarray(shape_ptr, dtype=np.int64, buffer=ptr_mem.buf)
-            ptr_shared[:] = indptr[:]
-
-            idx_mem = manager.SharedMemory(indices.nbytes)
-            idx_shared = np.ndarray(shape_dat, dtype=np.int64, buffer=idx_mem.buf)
-            idx_shared[:] = indices[:]
-
-            #XX
-            _, _, _, dataXX, indptrXX, indicesXX = map_csc_to_eigen((X.T@X).tocsc())
-            shape_datXX = dataXX.shape
-            shape_ptrXX = indptrXX.shape
-
-            dat_memXX = manager.SharedMemory(dataXX.nbytes)
-            dat_sharedXX = np.ndarray(shape_datXX, dtype=np.double, buffer=dat_memXX.buf)
-            dat_sharedXX[:] = dataXX[:]
-
-            ptr_memXX = manager.SharedMemory(indptrXX.nbytes)
-            ptr_sharedXX = np.ndarray(shape_ptrXX, dtype=np.int64, buffer=ptr_memXX.buf)
-            ptr_sharedXX[:] = indptrXX[:]
-
-            idx_memXX = manager.SharedMemory(indicesXX.nbytes)
-            idx_sharedXX = np.ndarray(shape_datXX, dtype=np.int64, buffer=idx_memXX.buf)
-            idx_sharedXX[:] = indicesXX[:]
-
-            # y
-            y_mem = manager.SharedMemory(y.nbytes)
-            y_shared = np.ndarray(shape_y, dtype=np.double, buffer=y_mem.buf)
-            y_shared[:] = y[:]
-
-            args = zip(repeat(family),repeat(y_mem.name),repeat(dat_mem.name),
-                       repeat(ptr_mem.name),repeat(idx_mem.name),repeat(dat_memXX.name),
-                       repeat(ptr_memXX.name),repeat(idx_memXX.name),repeat(shape_y),
-                       repeat(shape_dat),repeat(shape_ptr),repeat(shape_datXX),repeat(shape_ptrXX),
-                       repeat(rows),repeat(cols),repeat(rPen),repeat(model.offset),rGrid)
-            
-            Linvs, coefs, remls, scales, edfs, llks = zip(*pool.starmap(_compute_VB_corr_terms_MP,args))
-
-            if only_expected_edf == False:
-                Linvs = list(Linvs)
-            coefs = list(coefs)
-            remls = list(remls)
-            scales = list(scales)
-            edfs = list(edfs)
-            llks = list(llks)
-
-    elif grid_type != "JJJ1": # Better to parallelize inverse computation necessary to obtain Vb
-        enumerator = rGrid
-        
-        rGridx = 0
-        for r in enumerator:
-
-            # Prepare penalties with current lambda candidate r
-            for ridx,rc in enumerate(r):
-                rPen[ridx].lam = rc
-            
-            # Now compute REML - and all other terms needed for correction proposed by Greven & Scheipl (2017)
-            if isinstance(family,Family):
-                reml,LP,Pr,coef,scale,edf,llk = compute_reml_candidate_GAMM(family,y,X,rPen,n_c,model.offset,method=method)
-                coef = coef.reshape(-1,1)
-
-                # Form VB, first solve LP{^-1}
-                LPinv = compute_Linv(LP,n_c)
-                Linv = apply_eigen_perm(Pr,LPinv)
-
-                # Collect conditional posterior covariance matrix for this set of coef
-                Vb = Linv.T@Linv*scale
-                #Vb += coef@coef.T
-            else:
-                try:
-                    reml,V,coef,edf,llk = compute_REML_candidate_GSMM(family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=method,**bfgs_options)
-                    coef = coef.reshape(-1,1)
-                except:
-                    warnings.warn(f"Unable to compute REML score for sample {r}. Skipping.")
-                    rGrid = np.delete(rGrid,rGridx,0)
-                    continue
-
-                # Collect conditional posterior covariance matrix for this set of coef
-                Vb = V# + coef@coef.T
-
-            rGridx += 1 # Only if we actually reach this point..
-
-            # Now collect what we need for the remaining terms
-            coefs.append(coef)
-            remls.append(reml)
-            edfs.append(edf)
-            llks.append(llk)
-            if only_expected_edf == False:
-                Vs.append(Vb)
+    Linvs = []
+    scales = []
 
     if grid_type != "JJJ1":
         # Iteratively estimate/refine (JJJ3 vs JJJ2) Vp - covariance matrix of log(\lambda) to guide further REML grid sampling
@@ -1626,16 +1521,26 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
 
                         # Re-sample values we have encountered before.
                         minDiag = 0.1*min(np.sqrt(Vp.diagonal()))
+                        tmp_grid = copy.deepcopy(rGrid)
                         for lami in range(p_sample.shape[0]):
-                            while np.any(np.max(np.abs(rGrid - p_sample[lami]),axis=1) < minDiag) or np.any(p_sample[lami] < 1e-9) or np.any(p_sample[lami] > 1e12):
+                            while len(tmp_grid) > 0 and (np.any(np.max(np.abs(tmp_grid - p_sample[lami]),axis=1) < minDiag) or np.any(p_sample[lami] < 1e-9) or np.any(p_sample[lami] > 1e12)):
                                 if not seed is None:
                                     seed += 1
                                 p_sample[lami] = np.exp(scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=1,random_state=seed))
 
+                            if len(tmp_grid) == 0:
+                                tmp_grid = p_sample[lami].reshape(1,-1)
+                            else:
+                                tmp_grid = np.concatenate((tmp_grid,p_sample[lami].reshape(1,-1)),axis=0)
+
                         if not seed is None:
                             seed += 1
 
-                    
+                    # Make sure actual estimate is included once.
+                    if sp == 0 and np.any(np.max(np.abs(tmp_grid - np.array([pen2.lam for pen2 in rPen])),axis=1) < minDiag) == False:
+                        p_sample = np.concatenate((np.array([pen2.lam for pen2 in rPen]).reshape(1,-1),p_sample),axis=0)
+                    tmp_grid = None
+
                     # Now compute reml for new candidates in parallel
                     args = zip(repeat(family),repeat(y_mem.name),repeat(dat_mem.name),
                             repeat(ptr_mem.name),repeat(idx_mem.name),repeat(dat_memXX.name),
@@ -1652,8 +1557,11 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
                     remls.extend(list(sample_remls))
                     edfs.extend(list(sample_edfs))
                     llks.extend(list(sample_llks))
-
-                    rGrid = np.concatenate((rGrid,p_sample),axis=0)
+                    
+                    if len(rGrid) == 0:
+                        rGrid = p_sample
+                    else:
+                        rGrid = np.concatenate((rGrid,p_sample),axis=0)
 
                     # Update Vp - based on additional REML scores available now
                     Vp_next = updateVp(ep,remls,rGrid)
@@ -1684,15 +1592,25 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
                     
                     # Re-sample values we have encountered before.
                     minDiag = 0.1*min(np.sqrt(Vp.diagonal()))
+                    tmp_grid = copy.deepcopy(rGrid)
                     for lami in range(p_sample.shape[0]):
-                        
-                        while np.any(np.max(np.abs(rGrid - p_sample[lami]),axis=1) < minDiag) or np.any(p_sample[lami] < 1e-9) or np.any(p_sample[lami] > 1e12):
+                        while len(tmp_grid) > 0 and (np.any(np.max(np.abs(tmp_grid - p_sample[lami]),axis=1) < minDiag) or np.any(p_sample[lami] < 1e-9) or np.any(p_sample[lami] > 1e12)):
                             if not seed is None:
                                 seed += 1
                             p_sample[lami] = np.exp(scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=1,random_state=seed))
+                        
+                        if len(tmp_grid) == 0:
+                            tmp_grid = p_sample[lami].reshape(1,-1)
+                        else:
+                            tmp_grid = np.concatenate((tmp_grid,p_sample[lami].reshape(1,-1)),axis=0)
 
                     if not seed is None:
                         seed += 1
+
+                # Make sure actual estimate is included once.
+                if sp == 0 and np.any(np.max(np.abs(tmp_grid - np.array([pen2.lam for pen2 in rPen])),axis=1) < minDiag) == False:
+                    p_sample = np.concatenate((np.array([pen2.lam for pen2 in rPen]).reshape(1,-1),p_sample),axis=0)
+                tmp_grid = None
 
                 for ps in p_sample:
                     for ridx,rc in enumerate(ps):
@@ -1728,7 +1646,11 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
                     llks.append(llk)
                     if only_expected_edf == False:
                         Vs.append(Vb)
-                    rGrid = np.concatenate((rGrid,ps.reshape(1,-1)),axis=0)
+                    
+                    if len(rGrid) == 0:
+                        rGrid = ps.reshape(1,-1)
+                    else:
+                        rGrid = np.concatenate((rGrid,ps.reshape(1,-1)),axis=0)
 
                 # Update Vp - based on additional REML scores available now
                 Vp_next = updateVp(ep,remls,rGrid)
