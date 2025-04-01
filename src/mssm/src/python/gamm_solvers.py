@@ -3970,7 +3970,7 @@ def correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk
         next_pen_llk = next_llk - 0.5*next_coef.T@S_emb@next_coef
         
     # Update step-size for gradient
-    if n_checks > 0 and a > 1e-6:
+    if n_checks > 0 and a > 1e-9:
        a /= 2
     elif n_checks == 0 and a < 1:
        a *= 2
@@ -4292,7 +4292,7 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,smooth_p
 
                   if outer == 0 and len(sks) == 0 and (skip or new_slope is None):
                      # Potentially very bad start estimate, try find a better one
-                     coef, _, _ = restart_coef(coef,None,None,len(coef),coef_split_idx,y,Xs,S_emb,family,outer,0)
+                     coef, _, _ = restart_coef(coef,None,None,len(coef),coef_split_idx,y,Xs,S_emb,family,inner,0)
                      c_llk = family.llk(coef,coef_split_idx,y,Xs)
                      grad = family.gradient(coef,coef_split_idx,y,Xs)
 
@@ -4457,6 +4457,13 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,smooth_p
             # Perform step length control - will immediately pass if line search was succesful.
             coef,c_llk,c_pen_llk,a = correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb,a)
 
+            # Very poor start estimate, restart
+            if grad_only and outer == 0 and inner <= 20 and np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
+               coef, _, _ = restart_coef(coef,None,None,len(coef),coef_split_idx,y,Xs,S_emb,family,inner,0)
+               c_llk = family.llk(coef,coef_split_idx,y,Xs)
+               c_pen_llk = c_llk - 0.5*coef.T@S_emb@coef
+               a = 0.1
+
             # Check if this step would converge, if that is the case try gradient first
             if method == 'qEFS' and np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
 
@@ -4471,7 +4478,7 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,smooth_p
                      next_coef = prev_coef + alpha_pen_grad*pgrad
                      coef,c_llk,c_pen_llk,a = correct_coef_step_gen_smooth(family,y,Xs,prev_coef,next_coef,coef_split_idx,prev_llk,S_emb,a)
 
-            if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk) and (method != "qEFS" or opt["nit"] == 1 or (updates >= maxcor)):
+            if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk) and (method != "qEFS" or (opt["nit"] == 1 and outer > 0) or (updates >= maxcor)):
                converged = True
                break
 
@@ -4907,7 +4914,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
                               control_lambda=True,optimizer="Newton",method="Chol",
                               check_cond=1,piv_tol=0.175,should_keep_drop=True,
                               form_VH=True,use_grad=False,gamma=1,qEFSH='SR1',
-                              overwrite_coef=True,max_restarts=0,qEFS_init_converge=True,progress_bar=True,
+                              overwrite_coef=True,max_restarts=0,qEFS_init_converge=True,prefit_grad=False,progress_bar=True,
                               n_c=10,init_bfgs_options={"gtol":1e-9,"ftol":1e-9,"maxcor":30,"maxls":100,"maxfun":1e7},
                               bfgs_options={"gtol":1e-9,"ftol":1e-9,"maxcor":30,"maxls":100,"maxfun":1e7}):
     """
@@ -4965,7 +4972,17 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
          grad = family.gradient(coef,coef_split_idx,y,Xs)
          pgrad = np.array([grad[i] - (S_emb[[i],:]@coef)[0] for i in range(len(grad))])
          return -1*pgrad.flatten()
-    
+
+    # Try improving start estimate via Gradient only
+    if prefit_grad:
+      coef,_,_,_,c_llk,c_pen_llk,_,_,_ = update_coef_gen_smooth(family,y,Xs,coef,
+                                                                  coef_split_idx,S_emb,
+                                                                  S_norm,None,
+                                                                  c_llk,0,max_inner,
+                                                                  min_inner,conv_tol,
+                                                                  "Grad",piv_tol,None,
+                                                                  None)
+
     iterator = range(max_outer)
     if progress_bar:
         iterator = tqdm(iterator,desc="Fitting",leave=True)
