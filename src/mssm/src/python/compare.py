@@ -10,8 +10,7 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
                 correct_V:bool=True,
                 correct_t1:bool=False,
                 perform_GLRT:bool=False,
-                lR=100,
-                nR=10,
+                nR=250,
                 n_c=10,
                 alpha=0.05,
                 grid='JJJ2',
@@ -21,7 +20,6 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
                 method="Chol",
                 seed=None,
                 use_upper=True,
-                refine_Vp=False,
                 Vp_fidiff=True,
                 use_reml_weights=True,
                 **bfgs_options):
@@ -68,9 +66,7 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
     :type correct_t1: bool, optional
     :param perform_GLRT: Whether to perform both a GLRT and to compute the AIC or to only compute the AIC. Defaults to True.
     :type perform_GLRT: bool, optional
-    :param lR: Deprecated, don't change - for internal use only, defaults to 100
-    :type lR: int, optional
-    :param nR: In case ``grid="JJJ2"``, ``nR**2*len(model.formula.penalties)`` samples/reml scores are generated/computed to numerically evaluate the expectations necessary for the correction, defaults to 10
+    :param nR: In case ``grid!="JJJ1"``, ``nR`` samples/reml scores are generated/computed to numerically evaluate the expectations necessary for the uncertainty correction, defaults to 250
     :type nR: int, optional
     :param n_c: Number of cores to use to compute the smoothness uncertaincy correction, defaults to 10
     :type n_c: int, optional
@@ -94,8 +90,6 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
     :type seed: int,optional
     :param use_upper: Whether to compute edf. from trace of covariance matrix (``use_upper=False``) or based on numeric integration weights. The latter is much more efficient for sparse models. Only makes sense when ``grid='JJJ2'``. Defaults to True
     :type use_upper: bool,optional
-    :param refine_Vp: Whether or not to refine the initial estimate of :math:`\mathbf{V}_{\\boldsymbol{p}}` (obtained from a finite difference or PQL approximation) for ``grid='JJJ2'`` based on the generated samples. Defaults to False
-    :type refine_Vp: bool,optional
     :param Vp_fidiff: Whether to rely on a finite difference approximation to compute :math:`\mathbf{V}_{\\boldsymbol{p}}` for grid ``JJJ1`` and ``JJJ2`` or on a PQL approximation. The latter is exact for Gaussian and canonical GAMs and far cheaper if many penalties are to be estimated. Defaults to True (Finite difference approximation)
     :type Vp_fidiff: bool,optional
     :param use_reml_weights: Whether to rely on REMl scores to compute the numerical integration when ``grid_type != 'JJJ1'`` or on the log-densities of :math:`\mathbf{V}_{\\boldsymbol{p}}` - the latter assumes that the unconditional posterior is normal. Defaults to True (REML scores are used)
@@ -125,8 +119,8 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
             print("Correcting for uncertainty in lambda estimates...\n")
         
         #V,LV,Vp,Vpr,edf,total_edf,edf2,total_edf2,upper_edf
-        _,_,_,_,_,DOF1,_,DOF12,upper_edf1 = correct_VB(model1,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,only_expected_edf=(use_upper and (correct_t1==False)),refine_Vp=refine_Vp,Vp_fidiff=Vp_fidiff,use_reml_weights=use_reml_weights,seed=seed,**bfgs_options)
-        _,_,_,_,_,DOF2,_,DOF22,upper_edf2 = correct_VB(model2,nR=nR,lR=lR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,only_expected_edf=(use_upper and (correct_t1==False)),refine_Vp=refine_Vp,Vp_fidiff=Vp_fidiff,use_reml_weights=use_reml_weights,seed=seed,**bfgs_options)
+        _,_,_,_,_,DOF1,_,DOF12,upper_edf1 = correct_VB(model1,nR=nR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,only_expected_edf=(use_upper and (correct_t1==False)),Vp_fidiff=Vp_fidiff,use_reml_weights=use_reml_weights,seed=seed,**bfgs_options)
+        _,_,_,_,_,DOF2,_,DOF22,upper_edf2 = correct_VB(model2,nR=nR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,only_expected_edf=(use_upper and (correct_t1==False)),Vp_fidiff=Vp_fidiff,use_reml_weights=use_reml_weights,seed=seed,**bfgs_options)
         
         if use_upper:
             DOF1 = upper_edf1

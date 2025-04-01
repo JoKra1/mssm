@@ -335,7 +335,7 @@ def adjust_CI(model,n_ps,b,predi_mat,use_terms,alpha,seed):
 
         return b
 
-def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0,init_eta=None,method='Chol'):
+def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0,init_eta=None,method='Chol',compute_inv=False,origNH=None):
    """
    Allows to evaluate REML criterion (e.g., Wood, 2011; Wood, 2016) efficiently for
    a set of \lambda values.
@@ -441,9 +441,21 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0,init_eta=No
    # Now compute REML for candidate
    reml = REML(llk,nH/scale,coef,scale,penalties)
 
-   return reml,LP,Pr,coef,scale,edf,llk
+   Linv = None
+   if compute_inv or origNH is not None:
+        LPinv = compute_Linv(LP,n_c)
+        Linv = apply_eigen_perm(Pr,LPinv)
+    
+   if origNH is not None:
+       # Compute trace for tau2
+       if isinstance(family,Gaussian) and isinstance(family.link,Identity):
+           edf *= (scale/origNH)
+       else:
+           edf = (Linv@origNH@Linv.T).trace()*scale
 
-def compute_REML_candidate_GSMM(family,y,Xs,penalties,coef,n_coef,coef_split_idx,method="Chol",conv_tol=1e-7,n_c=10,**bfgs_options):
+   return reml,Linv,LP,Pr,coef.reshape(-1,1),scale,edf,llk
+
+def compute_REML_candidate_GSMM(family,y,Xs,penalties,coef,n_coef,coef_split_idx,method="Chol",conv_tol=1e-7,n_c=10,bfgs_options={},origNH=None):
     """
     Allows to evaluate REML criterion (e.g., Wood, 2011; Wood, 2016) efficiently for
     a set of \lambda values for a GSMM or GAMMLSS.
@@ -463,44 +475,13 @@ def compute_REML_candidate_GSMM(family,y,Xs,penalties,coef,n_coef,coef_split_idx
 
         __old_opt = None
         if method == "qEFS":
-            # Define wrapper for negative (penalized) likelihood function plus function to evaluate negative gradient of the former likelihood
-            # to compute line-search.
-            def __neg_llk(coef,coef_split_idx,y,Xs,family,S_emb):
-                coef = coef.reshape(-1,1)
-                neg_llk = -1 * family.llk(coef,coef_split_idx,y,Xs)
-                return neg_llk + 0.5*coef.T@S_emb@coef
-            
-            def __neg_grad(coef,coef_split_idx,y,Xs,family,S_emb):
-                # see Wood, Pya & Saefken (2016)
-                coef = coef.reshape(-1,1)
-                grad = family.gradient(coef,coef_split_idx,y,Xs)
-                pgrad = np.array([grad[i] - (S_emb[[i],:]@coef)[0] for i in range(len(grad))])
-                return -1*pgrad.flatten()
-            
-            # Optimize un-penalized problem first to get a good starting estimate for hessian.
-            opt_raw = scp.optimize.minimize(__neg_llk,
-                                           np.ndarray.flatten(coef),
-                                           args=(coef_split_idx,y,Xs,family,scp.sparse.csc_matrix((len(coef), len(coef)))),
-                                           method="L-BFGS-B",
-                                           jac = __neg_grad,
-                                           options={"maxiter":1000,
-                                                    **bfgs_options})
-
-            coef = opt_raw["x"].reshape(-1,1)
-            c_llk = family.llk(coef,coef_split_idx,y,Xs)
-            __old_opt = opt_raw.hess_inv
+            __old_opt = scp.optimize.LbfgsInvHessProduct(np.array([1]).reshape(1,1),np.array([1]).reshape(1,1))
+            __old_opt.init = False
+            __old_opt.omega = 1
             __old_opt.method = 'qEFS'
-            __old_opt.nit = opt_raw["nit"]
-            __old_opt.form = 'BFGS'
+            __old_opt.form = 'SR1'
             __old_opt.bfgs_options = bfgs_options
-
-            H_y, H_s = opt_raw.hess_inv.yk, opt_raw.hess_inv.sk
-               
-            # Get scaling for hessian from Nocedal & Wright, 2004:
-            omega_Raw = np.dot(H_y[-1],H_y[-1])/np.dot(H_y[-1],H_s[-1])
-            __old_opt.omega = omega_Raw#np.min(H_ev)
         
-
         coef,H,L,LV,c_llk,_,_,_,_ = update_coef_gen_smooth(family,y,Xs,coef,
                                                             coef_split_idx,S_emb,None,None,
                                                             c_llk,0,1000,
@@ -510,12 +491,12 @@ def compute_REML_candidate_GSMM(family,y,Xs,penalties,coef,n_coef,coef_split_idx
             
             # Get an approximation of the Hessian of the likelihood
             if LV.form == 'SR1':
-               H = computeHSR1(LV.sk,LV.yk,LV.rho,scp.sparse.identity(len(coef),format='csc')*LV.omega,omega=LV.omega,make_psd=True)
+               H = -1*computeHSR1(LV.sk,LV.yk,LV.rho,scp.sparse.identity(len(coef),format='csc')*LV.omega,omega=LV.omega,make_psd=True)
             else:
-               H = computeH(LV.sk,LV.yk,LV.rho,scp.sparse.identity(len(coef),format='csc')*LV.omega,omega=LV.omega,make_psd=True)
+               H = -1*computeH(LV.sk,LV.yk,LV.rho,scp.sparse.identity(len(coef),format='csc')*LV.omega,omega=LV.omega,make_psd=True)
 
             # Get Cholesky factor of approximate inverse of penalized hessian (needed for CIs)
-            pH = scp.sparse.csc_array(H + S_emb)
+            pH = scp.sparse.csc_array((-1*H) + S_emb)
             Lp, Pr, _ = cpp_cholP(pH)
             LVp0 = compute_Linv(Lp,10)
             LV = apply_eigen_perm(Pr,LVp0)
@@ -559,7 +540,11 @@ def compute_REML_candidate_GSMM(family,y,Xs,penalties,coef,n_coef,coef_split_idx
 
     total_edf,_, _ = calculate_edf(None,None,LV,penalties,lgdetDs,n_coef,n_c)
 
-    return reml,V,coef,total_edf,c_llk
+    if origNH is not None:
+        # Compute trace for tau2
+        total_edf = (LV@origNH@LV.T).trace()
+
+    return reml,V,LV,coef.reshape(-1,1),total_edf,c_llk
 
 
 def REML(llk,nH,coef,scale,penalties):
@@ -741,9 +726,9 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=
                 rPen[peni].lam = np.exp(rho[peni])
             
             if isinstance(family,Family):
-                reml,_,_,_,_,_,_ = compute_reml_candidate_GAMM(family,y,X,rPen,*reml_args,**reml_kwargs)
+                reml,_,_,_,_,_,_,_ = compute_reml_candidate_GAMM(family,y,X,rPen,*reml_args,**reml_kwargs)
             else:
-                reml,_,_,_,_ = compute_REML_candidate_GSMM(family,y,X,rPen,*reml_args,**reml_kwargs)
+                reml,_,_,_,_,_ = compute_REML_candidate_GSMM(family,y,X,rPen,*reml_args,**reml_kwargs)
             
             return -reml
         
@@ -751,7 +736,7 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=
             nHp = central_hessian(ep.flatten(),reml_wrapper,family,y,X,rPen,n_c,model.offset,model.pred,method)
             #nHp = Hessian(reml_wrapper)(ep.flatten(),family,y,X,rPen,n_c,model.offset,model.pred)
         else:
-            nHp = central_hessian(ep.flatten(),reml_wrapper,family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=method,**bfgs_options)
+            nHp = central_hessian(ep.flatten(),reml_wrapper,family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=method,bfgs_options=bfgs_options)
         
         # Vp is now simply [nHp]^{-1}
         # but we should rely on an eigen decomposition so that we can naturally produce a generalized inverse as discussed by
@@ -850,9 +835,9 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=
         
         # Now compute REML - and all other terms needed for correction proposed by Greven & Scheipl (2017)
         if isinstance(family,Family):
-            reml,_,_,_,_,_,_ = compute_reml_candidate_GAMM(family,y,X,rPen,n_c,model.offset,method=method)
+            reml,_,_,_,_,_,_,_ = compute_reml_candidate_GAMM(family,y,X,rPen,n_c,model.offset,method=method)
         else:
-            reml,_,_,_,_ = compute_REML_candidate_GSMM(family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=method,**bfgs_options)
+            reml,_,_,_,_,_ = compute_REML_candidate_GSMM(family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=method,bfgs_options=bfgs_options)
 
         # Now collect what we need for updating Vp
         remls.append(reml)
@@ -912,10 +897,10 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=
             
             if isinstance(family,Family):
                 #print([penx.lam for penx in rPen])
-                reml,_,_,_,_,_,_ = compute_reml_candidate_GAMM(family,y,X,rPen,n_c,model.offset,method=method)
+                reml,_,_,_,_,_,_,_ = compute_reml_candidate_GAMM(family,y,X,rPen,n_c,model.offset,method=method)
 
             else:
-                reml,_,_,_,_ = compute_REML_candidate_GSMM(family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=method,**bfgs_options)
+                reml,_,_,_,_,_ = compute_REML_candidate_GSMM(family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=method,bfgs_options=bfgs_options)
 
             # Collect new remls and update grid of log(lambdas)
             remls.append(reml)
@@ -1292,7 +1277,7 @@ def compute_Vb_corr_WPS(Vbr,Vpr,Vr,H,S_emb,penalties,coef,scale=1):
     return Vc, scale*Vcc
 
 
-def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_t=True,form_t1=False,verbose=False,drop_NA=True,method="Chol",only_expected_edf=False,refine_Vp=False,Vp_fidiff=True,use_reml_weights=True,seed=None,**bfgs_options):
+def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_t=True,form_t1=False,verbose=False,drop_NA=True,method="Chol",only_expected_edf=False,Vp_fidiff=True,use_reml_weights=True,seed=None,**bfgs_options):
     """Estimate :math:`\mathbf{V}`, the covariance matrix of the unconditional posterior :math:`\\boldsymbol{\\beta} | y \sim N(\hat{\\boldsymbol{\\beta}},\\mathbf{V})` to account for smoothness uncertainty.
     
     Wood et al. (2016) and Wood (2017) show that when basing conditional versions of model selection criteria or hypothesis
@@ -1324,10 +1309,8 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
 
     :param model: GAMM, GAMMLSS, or GSMM model (which has been fitted) for which to estimate :math:`\mathbf{V}`
     :type model: GAMM or GAMMLSS or GSMM
-    :param nR: In case ``grid="JJJ2"``, ``nR**2*len(model.formula.penalties)`` samples/reml scores are generated/computed to numerically evaluate the expectations necessary for the correction, defaults to 10
+    :param nR: In case ``grid!="JJJ1"``, ``nR`` samples/reml scores are generated/computed to numerically evaluate the expectations necessary for the uncertainty correction, defaults to 250
     :type nR: int, optional
-    :param lR: Deprecated, don't change - for internal use only, defaults to 100
-    :type lR: int, optional
     :param grid_type: How to compute the smoothness uncertainty correction - see above for details, defaults to 'JJJ3'
     :type grid_type: str, optional
     :param a: Minimum :math:`\lambda` value that is included when forming the initial grid. In addition, any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})`) which are smaller than this are set to this value as well, defaults to 1e-7 the minimum possible estimate
@@ -1348,10 +1331,8 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
     :type drop_NA: bool,optional
     :param method: Which method to use to solve for the coefficients (and smoothing parameters). The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR/Chol". In that case a QR decomposition is used - which is first pivoted to maximize sparsity in the resulting decomposition but also pivots for stability in order to get an estimate of rank defficiency. A Cholesky is than used using the combined pivoting strategy obtained from the QR. This takes substantially longer. If this is set to ``'qEFS'``, then the coefficients are estimated via quasi netwon and the smoothing penalties are estimated from the quasi newton approximation to the hessian. This only requieres first derviative information. Defaults to "Chol".
     :type method: str,optional
-    :param only_expected_edf: Whether to compute edf. from trace of covariance matrix (``use_upper=False``) or based on numeric integration weights. The latter is much more efficient for sparse models. Only makes sense when ``grid_type='JJJ2'``. Defaults to True
+    :param only_expected_edf: Whether to compute edf. from trace of covariance matrix (``only_expected_edf=False``) or based on numeric integration weights. The latter is much more efficient for sparse models. Only makes sense when ``grid_type!='JJJ1'``. Defaults to True
     :type only_expected_edf: bool,optional
-    :param refine_Vp: Whether or not to refine the initial estimate of :math:`\mathbf{V}_{\\boldsymbol{p}}` (obtained from a finite difference or PQL approximation) for ``grid_type='JJJ2'`` based on the generated samples. Defaults to False
-    :type refine_Vp: bool,optional
     :param Vp_fidiff: Whether to rely on a finite difference approximation to compute :math:`\mathbf{V}_{\\boldsymbol{p}}` for grid_type ``JJJ1`` and ``JJJ2`` or on a PQL approximation. The latter is exact for Gaussian and canonical GAMs and far cheaper if many penalties are to be estimated. Defaults to True (Finite difference approximation)
     :type Vp_fidiff: bool,optional
     :param use_reml_weights: Whether to rely on REMl scores to compute the numerical integration when ``grid_type != 'JJJ1'`` or on the log-densities of :math:`\mathbf{V}_{\\boldsymbol{p}}` - the latter assumes that the unconditional posterior is normal. Defaults to True (REML scores are used)
@@ -1399,6 +1380,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
         else:
             y = model.formulas[0].y_flat
         Xs = model.get_mmat(drop_NA=drop_NA)
+        X = Xs[0]
         orig_scale = 1
         init_coef = copy.deepcopy(model.overall_coef)
 
@@ -1429,13 +1411,11 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
             else:
                 V = Vc + Vcc + model.overall_lvi.T@model.overall_lvi
         
-        if grid_type == "JJJ2" or grid_type == "JJJ3": # Might want to refine Vpr estimate
+        if grid_type == "JJJ2" or grid_type == "JJJ3": # Sample from regularized version
             orig_Vp = copy.deepcopy(Vp)
             Vp = Vpr
 
-    rGrid = []
-    rGrid = np.array(rGrid)
-    
+    rGrid = np.array([])
     remls = []
     Vs = []
     coefs = []
@@ -1455,91 +1435,83 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
         # Now continuously update Vp and generate more REML samples in the process
         n_est = nR
         
-        if isinstance(family,Gaussian) and X.shape[1] < 2000 and isinstance(family.link,Identity) and n_c > 1: # Parallelize grid search
-            with managers.SharedMemoryManager() as manager, mp.Pool(processes=n_c) as pool:
-                # Create shared memory copies of data, indptr, and indices for X, XX, and y
+        if X.shape[0] < 1e5 and X.shape[1] < 2000 and n_c > 1: # Parallelize grid search
+            # Generate next \lambda values for which to compute REML, and Vb
+            p_sample = scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=n_est,random_state=seed)
+            p_sample = np.exp(p_sample)
 
-                # X
-                rows, cols, _, data, indptr, indices = map_csc_to_eigen(X)
-                shape_dat = data.shape
-                shape_ptr = indptr.shape
-                shape_y = y.shape
+            if len(np.ndarray.flatten(ep)) == 1: # Single lambda parameter in model
+            
+                if n_est == 1: # and single sample (n_est==1) - so p_sample needs to be shape (1,1)
+                    p_sample = np.array([p_sample])
 
-                dat_mem = manager.SharedMemory(data.nbytes)
-                dat_shared = np.ndarray(shape_dat, dtype=np.double, buffer=dat_mem.buf)
-                dat_shared[:] = data[:]
-
-                ptr_mem = manager.SharedMemory(indptr.nbytes)
-                ptr_shared = np.ndarray(shape_ptr, dtype=np.int64, buffer=ptr_mem.buf)
-                ptr_shared[:] = indptr[:]
-
-                idx_mem = manager.SharedMemory(indices.nbytes)
-                idx_shared = np.ndarray(shape_dat, dtype=np.int64, buffer=idx_mem.buf)
-                idx_shared[:] = indices[:]
-
-                #XX
-                _, _, _, dataXX, indptrXX, indicesXX = map_csc_to_eigen((X.T@X).tocsc())
-                shape_datXX = dataXX.shape
-                shape_ptrXX = indptrXX.shape
-
-                dat_memXX = manager.SharedMemory(dataXX.nbytes)
-                dat_sharedXX = np.ndarray(shape_datXX, dtype=np.double, buffer=dat_memXX.buf)
-                dat_sharedXX[:] = dataXX[:]
-
-                ptr_memXX = manager.SharedMemory(indptrXX.nbytes)
-                ptr_sharedXX = np.ndarray(shape_ptrXX, dtype=np.int64, buffer=ptr_memXX.buf)
-                ptr_sharedXX[:] = indptrXX[:]
-
-                idx_memXX = manager.SharedMemory(indicesXX.nbytes)
-                idx_sharedXX = np.ndarray(shape_datXX, dtype=np.int64, buffer=idx_memXX.buf)
-                idx_sharedXX[:] = indicesXX[:]
-
-                # y
-                y_mem = manager.SharedMemory(y.nbytes)
-                y_shared = np.ndarray(shape_y, dtype=np.double, buffer=y_mem.buf)
-                y_shared[:] = y[:]
+                p_sample = p_sample.reshape(n_est,1) # p_sample needs to be shape (n_est,1)
                 
-                enumerator = range(nR*len(ep))
-                if verbose:
-                    enumerator = tqdm(enumerator)
-                for sp in enumerator:
-                    # Generate next \lambda values for which to compute REML, and Vb
-                    p_sample = []
-                    while len(p_sample) == 0:
-                        p_sample = scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=n_est,random_state=seed)
-                        p_sample = np.exp(p_sample)
+            elif n_est == 1: # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
+                p_sample = np.array([p_sample]).reshape(1,-1)
 
-                        if len(np.ndarray.flatten(ep)) == 1: # Single lambda parameter in model
-                        
-                            if n_est == 1: # and single sample (n_est==1) - so p_sample needs to be shape (1,1)
-                                p_sample = np.array([p_sample])
+            # Re-sample values we have encountered before.
+            minDiag = 0.1*min(np.sqrt(Vp.diagonal()))
+            tmp_grid = copy.deepcopy(rGrid)
+            for lami in range(p_sample.shape[0]):
+                while len(tmp_grid) > 0 and (np.any(np.max(np.abs(tmp_grid - p_sample[lami]),axis=1) < minDiag) or np.any(p_sample[lami] < 1e-9) or np.any(p_sample[lami] > 1e12)):
+                    if not seed is None:
+                        seed += 1
+                    p_sample[lami] = np.exp(scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=1,random_state=seed))
 
-                            p_sample = p_sample.reshape(n_est,1) # p_sample needs to be shape (n_est,1)
-                            
-                        elif n_est == 1: # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
-                            p_sample = np.array([p_sample]).reshape(1,-1)
+                if len(tmp_grid) == 0:
+                    tmp_grid = p_sample[lami].reshape(1,-1)
+                else:
+                    tmp_grid = np.concatenate((tmp_grid,p_sample[lami].reshape(1,-1)),axis=0)
 
-                        # Re-sample values we have encountered before.
-                        minDiag = 0.1*min(np.sqrt(Vp.diagonal()))
-                        tmp_grid = copy.deepcopy(rGrid)
-                        for lami in range(p_sample.shape[0]):
-                            while len(tmp_grid) > 0 and (np.any(np.max(np.abs(tmp_grid - p_sample[lami]),axis=1) < minDiag) or np.any(p_sample[lami] < 1e-9) or np.any(p_sample[lami] > 1e12)):
-                                if not seed is None:
-                                    seed += 1
-                                p_sample[lami] = np.exp(scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=1,random_state=seed))
+            # Make sure actual estimate is included once.
+            if np.any(np.max(np.abs(tmp_grid - np.array([pen2.lam for pen2 in rPen])),axis=1) < minDiag) == False:
+                p_sample = np.concatenate((np.array([pen2.lam for pen2 in rPen]).reshape(1,-1),p_sample),axis=0)
+            tmp_grid = None
+            
+            if isinstance(family,Gaussian) and isinstance(family.link,Identity): # Strictly additive case
+                with managers.SharedMemoryManager() as manager, mp.Pool(processes=n_c) as pool:
+                    # Create shared memory copies of data, indptr, and indices for X, XX, and y
 
-                            if len(tmp_grid) == 0:
-                                tmp_grid = p_sample[lami].reshape(1,-1)
-                            else:
-                                tmp_grid = np.concatenate((tmp_grid,p_sample[lami].reshape(1,-1)),axis=0)
+                    # X
+                    rows, cols, _, data, indptr, indices = map_csc_to_eigen(X)
+                    shape_dat = data.shape
+                    shape_ptr = indptr.shape
+                    shape_y = y.shape
 
-                        if not seed is None:
-                            seed += 1
+                    dat_mem = manager.SharedMemory(data.nbytes)
+                    dat_shared = np.ndarray(shape_dat, dtype=np.double, buffer=dat_mem.buf)
+                    dat_shared[:] = data[:]
 
-                    # Make sure actual estimate is included once.
-                    if sp == 0 and np.any(np.max(np.abs(tmp_grid - np.array([pen2.lam for pen2 in rPen])),axis=1) < minDiag) == False:
-                        p_sample = np.concatenate((np.array([pen2.lam for pen2 in rPen]).reshape(1,-1),p_sample),axis=0)
-                    tmp_grid = None
+                    ptr_mem = manager.SharedMemory(indptr.nbytes)
+                    ptr_shared = np.ndarray(shape_ptr, dtype=np.int64, buffer=ptr_mem.buf)
+                    ptr_shared[:] = indptr[:]
+
+                    idx_mem = manager.SharedMemory(indices.nbytes)
+                    idx_shared = np.ndarray(shape_dat, dtype=np.int64, buffer=idx_mem.buf)
+                    idx_shared[:] = indices[:]
+
+                    #XX
+                    _, _, _, dataXX, indptrXX, indicesXX = map_csc_to_eigen((X.T@X).tocsc())
+                    shape_datXX = dataXX.shape
+                    shape_ptrXX = indptrXX.shape
+
+                    dat_memXX = manager.SharedMemory(dataXX.nbytes)
+                    dat_sharedXX = np.ndarray(shape_datXX, dtype=np.double, buffer=dat_memXX.buf)
+                    dat_sharedXX[:] = dataXX[:]
+
+                    ptr_memXX = manager.SharedMemory(indptrXX.nbytes)
+                    ptr_sharedXX = np.ndarray(shape_ptrXX, dtype=np.int64, buffer=ptr_memXX.buf)
+                    ptr_sharedXX[:] = indptrXX[:]
+
+                    idx_memXX = manager.SharedMemory(indicesXX.nbytes)
+                    idx_sharedXX = np.ndarray(shape_datXX, dtype=np.int64, buffer=idx_memXX.buf)
+                    idx_sharedXX[:] = indicesXX[:]
+
+                    # y
+                    y_mem = manager.SharedMemory(y.nbytes)
+                    y_shared = np.ndarray(shape_y, dtype=np.double, buffer=y_mem.buf)
+                    y_shared[:] = y[:]
 
                     # Now compute reml for new candidates in parallel
                     args = zip(repeat(family),repeat(y_mem.name),repeat(dat_mem.name),
@@ -1557,115 +1529,127 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
                     remls.extend(list(sample_remls))
                     edfs.extend(list(sample_edfs))
                     llks.extend(list(sample_llks))
-                    
-                    if len(rGrid) == 0:
-                        rGrid = p_sample
-                    else:
-                        rGrid = np.concatenate((rGrid,p_sample),axis=0)
+                    rGrid = p_sample
+            else: # all other models
 
-                    # Update Vp - based on additional REML scores available now
-                    Vp_next = updateVp(ep,remls,rGrid)
-                    if (grid_type == "JJJ2" or grid_type == "JJJ3") and refine_Vp:
-                        Vp = 0.99*Vp + 0.01*Vp_next
+                rPens = []
+                for ps in p_sample:
+                    rcPen = copy.deepcopy(rPen)
+                    for ridx,rc in enumerate(ps):
+                        rcPen[ridx].lam = rc
+                    rPens.append(rcPen)
+
+                if isinstance(family,Family):
+                    origNH = None
+                    if only_expected_edf:
+                        if isinstance(family,Gaussian) and isinstance(family.link,Identity):
+                            origNH = orig_scale
+                        else:
+                            origNH = -1*model.hessian
+                    args = zip(repeat(family),repeat(y),repeat(X),rPens,
+                               repeat(1),repeat(model.offset),repeat(None),
+                               repeat(method),repeat(True),repeat(origNH))
+                    with mp.Pool(processes=n_c) as pool:
+                        sample_remls, sample_Linvs, _, _,sample_coefs, sample_scales, sample_edfs, sample_llks = zip(*pool.starmap(compute_reml_candidate_GAMM,args))
+                else:
+                    origNH = None
+                    if only_expected_edf:
+                        origNH = -1*model.hessian
+                    args = zip(repeat(family),repeat(y),repeat(Xs),rPens,
+                               repeat(init_coef),repeat(len(init_coef)),
+                               repeat(model.coef_split_idx),repeat(method),
+                               repeat(1e-7),repeat(1),repeat(bfgs_options),
+                               repeat(origNH))
+                    with mp.Pool(processes=n_c) as pool:
+                        sample_remls, _, sample_Linvs, sample_coefs, sample_edfs, sample_llks = zip(*pool.starmap(compute_REML_candidate_GSMM,args))
+                    sample_scales = np.ones(p_sample.shape[0])
+
+                if only_expected_edf == False:
+                    Linvs.extend(list(sample_Linvs))
+                scales.extend(list(sample_scales))
+                coefs.extend(list(sample_coefs))
+                remls.extend(list(sample_remls))
+                edfs.extend(list(sample_edfs))
+                llks.extend(list(sample_llks))
+                rGrid = p_sample
+                rPens = None
             
         else:
-            enumerator = range(nR*len(ep))
-            if verbose:
-                enumerator = tqdm(enumerator)
-            for sp in enumerator:
+            # Generate next \lambda values for which to compute REML, and Vb
+            p_sample = scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=n_est,random_state=seed)
+            p_sample = np.exp(p_sample)
 
-                # Generate next \lambda values for which to compute REML, and Vb
-                p_sample = []
-                while len(p_sample) == 0:
-                    p_sample = scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=n_est,random_state=seed)
-                    p_sample = np.exp(p_sample)
+            if len(np.ndarray.flatten(ep)) == 1: # Single lambda parameter in model
+                
+                if n_est == 1: # and single sample (n_est==1) - so p_sample needs to be shape (1,1)
+                    p_sample = np.array([p_sample])
 
-                    if len(np.ndarray.flatten(ep)) == 1: # Single lambda parameter in model
-                        
-                        if n_est == 1: # and single sample (n_est==1) - so p_sample needs to be shape (1,1)
-                            p_sample = np.array([p_sample])
-
-                        p_sample = p_sample.reshape(n_est,1) # p_sample needs to be shape (n_est,1)
-                        
-                    elif n_est == 1: # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
-                        p_sample = np.array([p_sample]).reshape(1,-1)
-                    
-                    # Re-sample values we have encountered before.
-                    minDiag = 0.1*min(np.sqrt(Vp.diagonal()))
-                    tmp_grid = copy.deepcopy(rGrid)
-                    for lami in range(p_sample.shape[0]):
-                        while len(tmp_grid) > 0 and (np.any(np.max(np.abs(tmp_grid - p_sample[lami]),axis=1) < minDiag) or np.any(p_sample[lami] < 1e-9) or np.any(p_sample[lami] > 1e12)):
-                            if not seed is None:
-                                seed += 1
-                            p_sample[lami] = np.exp(scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=1,random_state=seed))
-                        
-                        if len(tmp_grid) == 0:
-                            tmp_grid = p_sample[lami].reshape(1,-1)
-                        else:
-                            tmp_grid = np.concatenate((tmp_grid,p_sample[lami].reshape(1,-1)),axis=0)
-
+                p_sample = p_sample.reshape(n_est,1) # p_sample needs to be shape (n_est,1)
+                
+            elif n_est == 1: # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
+                p_sample = np.array([p_sample]).reshape(1,-1)
+            
+            # Re-sample values we have encountered before.
+            minDiag = 0.1*min(np.sqrt(Vp.diagonal()))
+            tmp_grid = copy.deepcopy(rGrid)
+            for lami in range(p_sample.shape[0]):
+                while len(tmp_grid) > 0 and (np.any(np.max(np.abs(tmp_grid - p_sample[lami]),axis=1) < minDiag) or np.any(p_sample[lami] < 1e-9) or np.any(p_sample[lami] > 1e12)):
                     if not seed is None:
                         seed += 1
+                    p_sample[lami] = np.exp(scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=1,random_state=seed))
+                
+                if len(tmp_grid) == 0:
+                    tmp_grid = p_sample[lami].reshape(1,-1)
+                else:
+                    tmp_grid = np.concatenate((tmp_grid,p_sample[lami].reshape(1,-1)),axis=0)
 
-                # Make sure actual estimate is included once.
-                if sp == 0 and np.any(np.max(np.abs(tmp_grid - np.array([pen2.lam for pen2 in rPen])),axis=1) < minDiag) == False:
-                    p_sample = np.concatenate((np.array([pen2.lam for pen2 in rPen]).reshape(1,-1),p_sample),axis=0)
-                tmp_grid = None
+            # Make sure actual estimate is included once.
+            if np.any(np.max(np.abs(tmp_grid - np.array([pen2.lam for pen2 in rPen])),axis=1) < minDiag) == False:
+                p_sample = np.concatenate((np.array([pen2.lam for pen2 in rPen]).reshape(1,-1),p_sample),axis=0)
+            tmp_grid = None
 
-                for ps in p_sample:
-                    for ridx,rc in enumerate(ps):
-                        rPen[ridx].lam = rc
-                    
-                    if isinstance(family,Family):
-                        reml,LP,Pr,coef,scale,edf,llk = compute_reml_candidate_GAMM(family,y,X,rPen,n_c,model.offset,method=method)
-                        coef = coef.reshape(-1,1)
+            for ps in p_sample:
+                for ridx,rc in enumerate(ps):
+                    rPen[ridx].lam = rc
+                
+                if isinstance(family,Family):
+                    reml,Linv,LP,Pr,coef,scale,edf,llk = compute_reml_candidate_GAMM(family,y,X,rPen,n_c,model.offset,method=method,compute_inv=True)
+                    #coef = coef.reshape(-1,1)
 
-                        # Form VB, first solve LP{^-1}
-                        LPinv = compute_Linv(LP,n_c)
-                        Linv = apply_eigen_perm(Pr,LPinv)
+                    # Form VB, first solve LP{^-1}
+                    #LPinv = compute_Linv(LP,n_c)
+                    #Linv = apply_eigen_perm(Pr,LPinv)
 
-                        # Collect conditional posterior covariance matrix for this set of coef
-                        Vb = Linv.T@Linv*scale
-                        #Vb += coef@coef.T
-                    else:
-                        try:
-                            reml,V,coef,edf,llk = compute_REML_candidate_GSMM(family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=method,**bfgs_options)
-                        except:
-                            warnings.warn(f"Unable to compute REML score for sample {np.exp(ps)}. Skipping.")
-                            continue
+                    # Collect conditional posterior covariance matrix for this set of coef
+                    Vb = Linv.T@Linv*scale
+                    #Vb += coef@coef.T
+                else:
+                    try:
+                        reml,V,_,coef,edf,llk = compute_REML_candidate_GSMM(family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=method,bfgs_options=bfgs_options)
+                    except:
+                        warnings.warn(f"Unable to compute REML score for sample {np.exp(ps)}. Skipping.")
+                        continue
 
-                        coef = coef.reshape(-1,1)
+                    #coef = coef.reshape(-1,1)
 
-                        # Collect conditional posterior covariance matrix for this set of coef
-                        Vb = V #+ coef@coef.T
+                    # Collect conditional posterior covariance matrix for this set of coef
+                    Vb = V #+ coef@coef.T
 
-                    # Collect all necessary objects for G&S correction.
-                    coefs.append(coef)
-                    remls.append(reml)
-                    edfs.append(edf)
-                    llks.append(llk)
-                    if only_expected_edf == False:
-                        Vs.append(Vb)
-                    
-                    if len(rGrid) == 0:
-                        rGrid = ps.reshape(1,-1)
-                    else:
-                        rGrid = np.concatenate((rGrid,ps.reshape(1,-1)),axis=0)
-
-                # Update Vp - based on additional REML scores available now
-                Vp_next = updateVp(ep,remls,rGrid)
-                if (grid_type == "JJJ2" or grid_type == "JJJ3") and refine_Vp:
-                    Vp = 0.99*Vp + 0.01*Vp_next
+                # Collect all necessary objects for G&S correction.
+                coefs.append(coef)
+                remls.append(reml)
+                edfs.append(edf)
+                llks.append(llk)
+                if only_expected_edf == False:
+                    Vs.append(Vb)
+                
+                if len(rGrid) == 0:
+                    rGrid = ps.reshape(1,-1)
+                else:
+                    rGrid = np.concatenate((rGrid,ps.reshape(1,-1)),axis=0)
     
     if grid_type == "JJJ2" or grid_type == "JJJ3":
-        # Re-compute root of regularized VP (at this point Vp might actually hold refined Vpr)
-        if refine_Vp:
-            eig, U =scp.linalg.eigh(Vp)
-            ire = np.zeros_like(eig)
-            ire[eig > 0] = np.sqrt(eig[eig > 0])
-            Vrr = np.diag(ire)@U.T # Root of refined regularized Vp
-
-            # Make sure Vp is original
+            # Make sure Vp is original not regularized
             Vpr = copy.deepcopy(Vp)
             Vp = orig_Vp
     ###################################################### Compute tau ###################################################### 
@@ -1679,43 +1663,50 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
             ws2 = scp.stats.multivariate_normal.logpdf(np.log(rGrid),mean=np.ndarray.flatten(ep),cov=Vpr,allow_singular=True)
             ws = scp.special.softmax(ws2)
 
-        # Compute correction of edf directly..
-        upper_edf = max(model.edf,np.sum(ws*edfs))
-        #print(model.edf,np.sum(ws*edfs))
+        Vcr = Vr @ dBetadRhos.T
 
-        if grid_type == 'JJJ2':
-            # Can now add remaining correction term
-            Vcr= Vr @ dBetadRhos.T
-            
-            # Now have Vc = Vcr.T @ Vcr, so:
-            # tr(Vc@(-1*model.hessian)) = tr(Vcr.T @ Vcr@(-1*model.hessian)) = tr(Vcr@ (-1*model.hessian)@Vcr.T)
-            #upper_edf += (Vc@(-1*model.hessian)).trace()
-            upper_edf += (Vcr@ (-1*model.hessian)@Vcr.T).trace()
-
-        elif grid_type == 'JJJ3':
-            # Correct based on expectations instead
-            tr1 = ws[0]* (coefs[0].T@(-1*model.hessian)@coefs[0])[0,0]
-
-            # E_{p|y}[\boldsymbol{\beta}] in Greven & Scheipl (2017)
-            tr2 = ws[0]*coefs[0] 
-            
-            # Now sum over remaining r
-            for ri in range(1,len(rGrid)):
-                tr1 += ws[ri]* (coefs[ri].T@(-1*model.hessian)@coefs[ri])[0,0]
-                tr2 += ws[ri]*coefs[ri]
-            
-            upper_edf += tr1 - (tr2.T@(-1*model.hessian)@tr2)[0,0]
-        
         if only_expected_edf:
+            # Compute correction of edf directly..
+            upper_edf = max(model.edf,np.sum(ws*edfs))
+
+            if grid_type == 'JJJ2':
+                # Can now add remaining correction term
+                
+                # Now have Vc = Vcr.T @ Vcr, so:
+                # tr(Vc@(-1*model.hessian)) = tr(Vcr.T @ Vcr@(-1*model.hessian)) = tr(Vcr@ (-1*model.hessian)@Vcr.T)
+                #upper_edf += (Vc@(-1*model.hessian)).trace()
+                upper_edf += (Vcr@ (-1*model.hessian)@Vcr.T).trace()
+
+            elif grid_type == 'JJJ3':
+                # Correct based on G&S expectations instead
+                tr1 = ws[0]* (coefs[0].T@(-1*model.hessian)@coefs[0])[0,0]
+
+                # E_{p|y}[\boldsymbol{\beta}] in Greven & Scheipl (2017)
+                tr2 = ws[0]*coefs[0] 
+                
+                # Now sum over remaining r
+                for ri in range(1,len(rGrid)):
+                    tr1 += ws[ri]* (coefs[ri].T@(-1*model.hessian)@coefs[ri])[0,0]
+                    tr2 += ws[ri]*coefs[ri]
+                
+                # Enforce lower bound of JJJ2
+                if (Vcr@ (-1*model.hessian)@Vcr.T).trace() > (tr1 - (tr2.T@(-1*model.hessian)@tr2)[0,0]):
+                    upper_edf += (Vcr@ (-1*model.hessian)@Vcr.T).trace()
+                else:
+                    upper_edf += tr1 - (tr2.T@(-1*model.hessian)@tr2)[0,0]
+                    
             if verbose:
                 print(f"Correction was based on {rGrid.shape[0]} samples in total.")
 
             return None,None,None,None,None,None,None,None,upper_edf
+        else:
+            upper_edf = None
         
         ###################################################### Compute full covariance matrix ###################################################### 
 
         if grid_type == 'JJJ2':
-            if isinstance(family,Gaussian) and X.shape[1] < 2000 and isinstance(family.link,Identity) and n_c > 1:
+            
+            if X.shape[0] < 1e5 and X.shape[1] < 2000 and n_c > 1:
                 # E_{p|y}[V_\boldsymbol{\beta}(\lambda)] + E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] in Greven & Scheipl (2017)
                 Vr1 = ws[0]* (Linvs[0].T@Linvs[0]*scales[0])
 
@@ -1740,37 +1731,42 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
         elif grid_type == 'JJJ3':
 
             # Now compute \hat{cov(\boldsymbol{\beta}|y)}
-            if isinstance(family,Gaussian) and X.shape[1] < 2000 and isinstance(family.link,Identity) and n_c > 1:
+            if X.shape[0] < 1e5 and X.shape[1] < 2000 and n_c > 1:
                 # E_{p|y}[V_\boldsymbol{\beta}(\lambda)] + E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] in Greven & Scheipl (2017)
-                Vr1 = ws[0]* ((Linvs[0].T@Linvs[0]*scales[0]) + (coefs[0]@coefs[0].T))
-
+                Vr1 = ws[0]* (Linvs[0].T@Linvs[0]*scales[0]) 
+                Vr2 = ws[0]* (coefs[0]@coefs[0].T)
                 # E_{p|y}[\boldsymbol{\beta}] in Greven & Scheipl (2017)
-                Vr2 = ws[0]*coefs[0] 
+                Vr3 = ws[0]*coefs[0] 
                 
                 # Now sum over remaining r
                 for ri in range(1,len(rGrid)):
-                    Vr1 += ws[ri]*((Linvs[ri].T@Linvs[ri]*scales[ri]) + (coefs[ri]@coefs[ri].T))
-                    Vr2 += ws[ri]*coefs[ri]
+                    Vr1 += ws[ri]*(Linvs[ri].T@Linvs[ri]*scales[ri])
+                    Vr2 += ws[ri]* (coefs[ri]@coefs[ri].T)
+                    Vr3 += ws[ri]*coefs[ri]
 
             else:
-                Vr1 = ws[0]*(Vs[0] + (coefs[0]@coefs[0].T))
-                Vr2 = ws[0]*coefs[0] 
+                Vr1 = ws[0]*Vs[0]
+                Vr2 = ws[0]*(coefs[0]@coefs[0].T)
+                Vr3 = ws[0]*coefs[0] 
 
                 for ri in range(1,len(rGrid)):
-                    Vr1 += ws[ri]*(Vs[ri] + (coefs[ri]@coefs[ri].T))
-                    Vr2 += ws[ri]*coefs[ri]
+                    Vr1 += ws[ri]*Vs[ri]
+                    Vr2 += ws[ri]*(coefs[ri]@coefs[ri].T)
+                    Vr3 += ws[ri]*coefs[ri]
+            
+            if (Vr1@(-1*model.hessian)).trace() < model.edf:
+                if isinstance(family,Family):
+                    Vr1 = model.lvi.T@model.lvi*orig_scale
+                else:
+                    Vr1 = model.overall_lvi.T@model.overall_lvi
 
             # Now, Greven & Scheipl provide final estimate =
             # E_{p|y}[V_\boldsymbol{\beta}(\lambda)] + E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] - E_{p|y}[\boldsymbol{\beta}] E_{p|y}[\boldsymbol{\beta}]^T
-            V = Vr1 - (Vr2@Vr2.T)
-
-            #if grid_type == "JJJ2" and V_shrinkage_weight > 0:
-                # Have WPS correction terms, can compute V based on those and then refine this via V computed above
-                # weights are essentially chosen arbitrarily...
-            #    if isinstance(family,Family):
-            #        V = V_shrinkage_weight*(Vc + Vcc + ((model.lvi.T@model.lvi)*orig_scale)) + (1-V_shrinkage_weight)*V
-            #    else:
-            #        V = V_shrinkage_weight*(Vc + Vcc + model.overall_lvi.T@model.overall_lvi) + (1-V_shrinkage_weight)*V
+            # but we enforce lower bound of JJJ2 again
+            if (Vcr @ (-1*model.hessian) @ Vcr.T).trace() > ((Vr2 - (Vr3@Vr3.T)) @ (-1*model.hessian)).trace():
+                V = Vr1 + Vcr.T @ Vcr
+            else:
+                V = Vr1 + Vr2 - (Vr3@Vr3.T)
             
     else:
         upper_edf = None
@@ -1794,7 +1790,7 @@ def correct_VB(model,nR = 20,lR = 100,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=
 
         edf = F.diagonal()
         total_edf = F.trace()
-    
+
     # In mgcv, an upper limit is enforced on edf and total_edf when they are uncertainty corrected - based on t1 in section 6.1.2 of Wood (2017)
     # so the same is done here.
     if grid_type == "JJJ1" or grid_type == "JJJ2" or grid_type == "JJJ3":
