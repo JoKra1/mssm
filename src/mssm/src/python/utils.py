@@ -1277,7 +1277,7 @@ def compute_Vb_corr_WPS(Vbr,Vpr,Vr,H,S_emb,penalties,coef,scale=1):
     return Vc, scale*Vcc
 
 
-def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_t=True,form_t1=False,verbose=False,drop_NA=True,method="Chol",only_expected_edf=False,Vp_fidiff=True,use_reml_weights=True,seed=None,**bfgs_options):
+def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_t=True,form_t1=False,verbose=False,drop_NA=True,method="Chol",only_expected_edf=False,Vp_fidiff=True,use_reml_weights=True,prior=None,seed=None,**bfgs_options):
     """Estimate :math:`\mathbf{V}`, the covariance matrix of the unconditional posterior :math:`\\boldsymbol{\\beta} | y \sim N(\hat{\\boldsymbol{\\beta}},\\mathbf{V})` to account for smoothness uncertainty.
     
     Wood et al. (2016) and Wood (2017) show that when basing conditional versions of model selection criteria or hypothesis
@@ -1450,24 +1450,10 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_
             elif n_est == 1: # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
                 p_sample = np.array([p_sample]).reshape(1,-1)
 
-            # Re-sample values we have encountered before.
             minDiag = 0.1*min(np.sqrt(Vp.diagonal()))
-            tmp_grid = copy.deepcopy(rGrid)
-            for lami in range(p_sample.shape[0]):
-                while len(tmp_grid) > 0 and (np.any(np.max(np.abs(tmp_grid - p_sample[lami]),axis=1) < minDiag) or np.any(p_sample[lami] < 1e-9) or np.any(p_sample[lami] > 1e12)):
-                    if not seed is None:
-                        seed += 1
-                    p_sample[lami] = np.exp(scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=1,random_state=seed))
-
-                if len(tmp_grid) == 0:
-                    tmp_grid = p_sample[lami].reshape(1,-1)
-                else:
-                    tmp_grid = np.concatenate((tmp_grid,p_sample[lami].reshape(1,-1)),axis=0)
-
             # Make sure actual estimate is included once.
-            if np.any(np.max(np.abs(tmp_grid - np.array([pen2.lam for pen2 in rPen])),axis=1) < minDiag) == False:
+            if np.any(np.max(np.abs(p_sample - np.array([pen2.lam for pen2 in rPen])),axis=1) < minDiag) == False:
                 p_sample = np.concatenate((np.array([pen2.lam for pen2 in rPen]).reshape(1,-1),p_sample),axis=0)
-            tmp_grid = None
             
             if isinstance(family,Gaussian) and isinstance(family.link,Identity): # Strictly additive case
                 with managers.SharedMemoryManager() as manager, mp.Pool(processes=n_c) as pool:
@@ -1589,24 +1575,10 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_
             elif n_est == 1: # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
                 p_sample = np.array([p_sample]).reshape(1,-1)
             
-            # Re-sample values we have encountered before.
-            minDiag = 0.1*min(np.sqrt(Vp.diagonal()))
-            tmp_grid = copy.deepcopy(rGrid)
-            for lami in range(p_sample.shape[0]):
-                while len(tmp_grid) > 0 and (np.any(np.max(np.abs(tmp_grid - p_sample[lami]),axis=1) < minDiag) or np.any(p_sample[lami] < 1e-9) or np.any(p_sample[lami] > 1e12)):
-                    if not seed is None:
-                        seed += 1
-                    p_sample[lami] = np.exp(scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=1,random_state=seed))
-                
-                if len(tmp_grid) == 0:
-                    tmp_grid = p_sample[lami].reshape(1,-1)
-                else:
-                    tmp_grid = np.concatenate((tmp_grid,p_sample[lami].reshape(1,-1)),axis=0)
-
             # Make sure actual estimate is included once.
-            if np.any(np.max(np.abs(tmp_grid - np.array([pen2.lam for pen2 in rPen])),axis=1) < minDiag) == False:
+            minDiag = 0.1*min(np.sqrt(Vp.diagonal()))
+            if np.any(np.max(np.abs(p_sample - np.array([pen2.lam for pen2 in rPen])),axis=1) < minDiag) == False:
                 p_sample = np.concatenate((np.array([pen2.lam for pen2 in rPen]).reshape(1,-1),p_sample),axis=0)
-            tmp_grid = None
 
             for ps in p_sample:
                 for ridx,rc in enumerate(ps):
@@ -1655,13 +1627,19 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_
     ###################################################### Compute tau ###################################################### 
 
     if grid_type != "JJJ1":
-        # Compute weights proposed by Greven & Scheipl (2017)
-        if use_reml_weights:
+        # Compute weights proposed by Greven & Scheipl (2017) - still work under importance sampling case instead of grid case if we assume Vp
+        # is prior for \rho|\mathbf{y}.
+        if use_reml_weights and prior is None:
             ws = scp.special.softmax(remls)
+
+        elif use_reml_weights and prior is not None: # Standard importance weights (e.g., Branchini & Elvira, 2024)
+            logp = prior.logpdf(np.log(rGrid))
+            logq = scp.stats.multivariate_t.logpdf(np.log(rGrid),loc=np.ndarray.flatten(ep),shape=Vpr,df=df,allow_singular=True)
+            ws = scp.special.softmax(remls + logp - logq)
+
         else:
-            # Use the estimated normal to compute weights instead.
-            ws2 = scp.stats.multivariate_normal.logpdf(np.log(rGrid),mean=np.ndarray.flatten(ep),cov=Vpr,allow_singular=True)
-            ws = scp.special.softmax(ws2)
+            # Normal weights result in cancellation, i.e., just average
+            ws = scp.special.softmax(np.ones_like(remls))
 
         Vcr = Vr @ dBetadRhos.T
 

@@ -105,8 +105,18 @@ def est_condition(L,Linv,seed=0,verbose=True):
 
    # Now get estimates of largest and smallest singular values of A
    # from norms of L and Linv (Cline et al. 1979)
-   min_sing = scp.sparse.linalg.svds(Linv,k=1,return_singular_vectors=False,random_state=seed)[0]
-   max_sing = scp.sparse.linalg.svds(L,k=1,return_singular_vectors=False,random_state=seed)[0]
+   try:
+      min_sing = scp.sparse.linalg.svds(Linv,k=1,return_singular_vectors=False,random_state=seed)[0]
+      max_sing = scp.sparse.linalg.svds(L,k=1,return_singular_vectors=False,random_state=seed)[0]
+   except:
+      try:
+         min_sing = scp.sparse.linalg.svds(Linv,k=1,return_singular_vectors=False,random_state=seed,solver='lobpcg')[0]
+         max_sing = scp.sparse.linalg.svds(L,k=1,return_singular_vectors=False,random_state=seed,solver='lobpcg')[0]
+      except:
+         # Solver failed.. get out
+         warnings.warn("Estimating the condition number of matrix A, where A.T@A=L.T@L failed. This can happen but might indicate that something is wrong. Consider estimates carefully!")
+         return np.inf,np.inf,-np.inf,1
+          
    K = max_sing*min_sing
    code = 0
    
