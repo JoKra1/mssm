@@ -30,7 +30,8 @@ class GAMM:
     :ivar [float] term_edf: The estimated degrees of freedom per smooth term. Initialized with ``None``.
     :ivar scipy.sparse.csc_array lvi: The inverse of the Cholesky factor of the conditional model coefficient covariance matrix. Initialized with ``None``.
     :ivar float penalty: The total penalty applied to the model deviance after fitting as a float. Initialized with ``None``.
-    :ivar scipy.sparse.csc_array hessian: Estimated hessian of the log-likelihood. Initialized with ``None``.
+    :ivar scipy.sparse.csc_array hessian: Estimated hessian of the log-likelihood used during fitting - will be the expected hessian for non-canonical models. Initialized with ``None``.
+    :ivar scipy.sparse.csc_array hessian_obs: Observed hessian of the log-likelihood at final coefficient estimate. Not updated for strictly additive models (i.e., Gaussian with identity link). Initialized with ``None``.
     :ivar Fit_info info: A :class:`Fit_info` instance, with information about convergence (speed) of the model.
     """
 
@@ -51,9 +52,11 @@ class GAMM:
         self.edf = None
         self.term_edf = None
         self.Wr = None
+        self.WN = None
         self.lvi = None
         self.penalty = 0
         self.hessian = None
+        self.hessian_obs = None
 
     ##################################### Getters #####################################
 
@@ -711,7 +714,7 @@ class GAMM:
             init_mu_flat = self.family.init_mu(y_flat)
 
             # Now we have to estimate the model
-            coef,eta,wres,Wr,scale,LVI,edf,term_edf,penalty,fit_info = solve_gamm_sparse(init_mu_flat,y_flat,
+            coef,eta,wres,Wr,WN,scale,LVI,edf,term_edf,penalty,fit_info = solve_gamm_sparse(init_mu_flat,y_flat,
                                                                                       model_mat,penalties,self.formula.n_coef,
                                                                                       self.family,max_outer,max_inner,"svd",
                                                                                       conv_tol,extend_lambda,control_lambda,
@@ -721,10 +724,13 @@ class GAMM:
                                                                                       self.offset)
             
             self.Wr = Wr
+            self.WN = WN
 
-            # Compute Hessian of llk (Wood, 2011)
+            # Compute (expected) Hessian of llk (Wood, 2011)
             if not isinstance(self.family,Gaussian) or isinstance(self.family.link,Identity) == False:
                 self.hessian = -1 * ((model_mat.T@(Wr@Wr)@model_mat).tocsc()/scale)
+                # Compute observed Hessian of llk
+                self.hessian_obs = -1 * ((model_mat.T@(WN)@model_mat).tocsc()/scale)
             else:
                 self.hessian = -1 * ((model_mat.T@model_mat).tocsc()/scale)
 
