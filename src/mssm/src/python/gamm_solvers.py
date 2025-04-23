@@ -352,6 +352,31 @@ def PIRLS_pdat_weights(y,mu,eta,family:Family):
 
    return z, w, invalid_idx.flatten()
 
+def PIRLS_newton_weights(y,mu,eta,family:Family):
+   # Compute newton pseudo-data and weights for Penalized Reweighted Least Squares iteration (Wood, 2017, 6.1.1 and 3.1.2)
+   with warnings.catch_warnings(): # Catch divide by 0 in w and errors in dy1 computation
+      warnings.simplefilter("ignore")
+      dy1 = family.link.dy1(mu)
+      dy2 = family.link.dy2(mu)
+      V = family.V(mu)
+      dVy1 = family.dVy1(mu)
+
+      # Compute a(\mu) as shown in section 3.1.2 of Wood (2017)
+      a = 1 + (y - mu) * (dVy1/V + dy2/dy1)
+
+      z = (dy1 * (y - mu)/a) + eta
+      w = a / (np.power(dy1,2) * V)
+
+   # Prepare to take steps, if any of the weights or pseudo-data become nan or inf
+   invalid_idx = np.isnan(w) | np.isnan(z) | np.isinf(w) | np.isinf(z)
+
+   if np.sum(invalid_idx) == len(y):
+      raise ValueError("Not a single observation provided information for Fisher weights.")
+
+   z[invalid_idx] = np.nan # Make sure this is consistent, for scale computation
+
+   return z, w, invalid_idx.flatten()
+
 def update_PIRLS(y,yb,mu,eta,X,Xb,family):
    # Update the PIRLS weights and data (if the model is not Gaussian)
    # and update the fitting matrices yb & Xb
@@ -2389,6 +2414,11 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
 
          # Re-compute weight matrix
          Wr = scp.sparse.spdiags([np.sqrt(np.ndarray.flatten(w))],[0])
+   
+   # Compute Newton weights once to enable computation of observed hessian
+   _, wN, inval = PIRLS_newton_weights(y,mu,eta-offset,family)
+   wN[inval] = 0
+   WN = scp.sparse.spdiags([np.ndarray.flatten(wN)],[0])
 
    if InvCholXXS is None:
       Lp, Pr, _ = cpp_cholP((Xb.T @ Xb + S_emb).tocsc())
@@ -2409,7 +2439,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
 
    fit_info.K2 = K2
 
-   return coef,eta,wres,Wr,scale,InvCholXXS,total_edf,term_edfs,penalty,fit_info
+   return coef,eta,wres,Wr,WN,scale,InvCholXXS,total_edf,term_edfs,penalty,fit_info
 
 ################################################ Iterative GAMM building code ################################################
 
@@ -4309,7 +4339,7 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,smooth_p
                if new_slope is not None and (form != 'SR1' or (skip == False)):
                   # Wolfe/Armijo met, can collect update vectors
 
-                  if form != 'SR1':
+                  if form != 'SR1' and len(sks) > 0:
                      # But first dampen for BFGS update - see Nocedal & Wright (2004):
                      Ht1, Ht2, Ht3 = computeH(sks,yks,rhos,H0,make_psd=False,omega=omega,explicit=False)
                      Bs = H0@sk + Ht1@Ht2@Ht3@sk

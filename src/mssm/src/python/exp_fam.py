@@ -425,6 +425,19 @@ class Family:
       :type mu: [float]
       """
       pass
+
+   def dVy1(self,mu,**kwargs):
+      """
+      The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with respect ot the mean.
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      """
+      pass
    
    def llk(self,y,mu,**kwargs):
       """
@@ -558,6 +571,19 @@ class Binomial(Family):
       # Faraway (2016):
       return mu * (1 - mu)/self.n
    
+   def dVy1(self,mu):
+      """
+      The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with respect ot the mean.
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      """
+      return (1 - 2*mu)/self.n
+   
    def lp(self,y,mu):
       """
       Log-probability of observing every proportion in :math:`\mathbf{y}` under their respective binomial with mean = :math:`\\boldsymbol{\mu}`.
@@ -674,7 +700,20 @@ class Gaussian(Family):
       :rtype: [float]
       """
       # Faraway (2016)
-      return np.ones(len(mu))
+      return np.ones_like(mu)
+   
+   def dVy1(self,mu):
+      """
+      The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with respect ot the mean.
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      """
+      return np.zeros_like(mu)
    
    def lp(self,y,mu,sigma=1):
       """Log-probability of observing every proportion in :math:`\mathbf{y}` under their respective Normal with mean = :math:`\\boldsymbol{\mu}`.
@@ -785,6 +824,19 @@ class Gamma(Family):
       """
       # Faraway (2016)
       return np.power(mu,2)
+   
+   def dVy1(self,mu):
+      """
+      The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with respect ot the mean.
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      """
+      return 2*mu
    
    def lp(self,y,mu,scale=1):
       """Log-probability of observing every proportion in :math:`\mathbf{y}` under their respective Gamma with mean = :math:`\\boldsymbol{\mu}`.
@@ -911,6 +963,19 @@ class InvGauss(Family):
       # Faraway (2016)
       return np.power(mu,3)
    
+   def dVy1(self,mu):
+      """
+      The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with respect ot the mean.
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      """
+      return 3*np.power(mu,2)
+   
    def lp(self,y,mu,scale=1):
       """Log-probability of observing every value in :math:`\mathbf{y}` under their respective inverse Gaussian with mean = :math:`\\boldsymbol{\mu}`.
 
@@ -1027,6 +1092,19 @@ class Poisson(Family):
       """
       # Wood (2017)
       return mu
+   
+   def dVy1(self,mu):
+      """
+      The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with respect ot the mean.
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param mu: The vector containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: [float]
+      """
+      return np.ones_like(mu)
    
    def lp(self,y,mu):
       """Log-probability of observing every value in :math:`\mathbf{y}` under their respective Poisson with mean = :math:`\\boldsymbol{\mu}`.
