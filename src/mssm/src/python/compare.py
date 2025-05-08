@@ -22,6 +22,8 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
                 use_upper=True,
                 Vp_fidiff=True,
                 use_reml_weights=True,
+                prior=None,
+                recompute_H=False,
                 **bfgs_options):
     
     """ Computes the AIC difference and (optionally) performs an approximate GLRT on twice the difference in unpenalized likelihood between models ``model1`` and ``model2`` (see Wood et al., 2016).
@@ -119,8 +121,8 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
             print("Correcting for uncertainty in lambda estimates...\n")
         
         #V,LV,Vp,Vpr,edf,total_edf,edf2,total_edf2,upper_edf
-        _,_,_,_,_,DOF1,_,DOF12,upper_edf1 = correct_VB(model1,nR=nR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,only_expected_edf=(use_upper and (correct_t1==False)),Vp_fidiff=Vp_fidiff,use_reml_weights=use_reml_weights,seed=seed,**bfgs_options)
-        _,_,_,_,_,DOF2,_,DOF22,upper_edf2 = correct_VB(model2,nR=nR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,only_expected_edf=(use_upper and (correct_t1==False)),Vp_fidiff=Vp_fidiff,use_reml_weights=use_reml_weights,seed=seed,**bfgs_options)
+        _,_,_,_,_,DOF1,_,DOF12,upper_edf1 = correct_VB(model1,nR=nR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,only_expected_edf=(use_upper and (correct_t1==False)),Vp_fidiff=Vp_fidiff,use_reml_weights=use_reml_weights,prior=prior,recompute_H=recompute_H,seed=seed,**bfgs_options)
+        _,_,_,_,_,DOF2,_,DOF22,upper_edf2 = correct_VB(model2,nR=nR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,only_expected_edf=(use_upper and (correct_t1==False)),Vp_fidiff=Vp_fidiff,use_reml_weights=use_reml_weights,prior=prior,recompute_H=recompute_H,seed=seed,**bfgs_options)
         
         if use_upper:
             DOF1 = upper_edf1

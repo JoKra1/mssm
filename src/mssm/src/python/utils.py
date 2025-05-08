@@ -4,7 +4,7 @@ import math
 import warnings
 from itertools import permutations,product,repeat
 import copy
-from ..python.gamm_solvers import cpp_backsolve_tr,compute_S_emb_pinv_det,cpp_chol,cpp_solve_coef,update_scale_edf,compute_Linv,apply_eigen_perm,tqdm,managers,shared_memory,cpp_solve_coefXX,update_PIRLS,PIRLS_pdat_weights,correct_coef_step,update_coef_gen_smooth,cpp_cholP,update_coef_gammlss,compute_lgdetD_bsb,calculate_edf,compute_eigen_perm,cpp_dChol,computeHSR1,computeH,update_coef
+from ..python.gamm_solvers import cpp_backsolve_tr,compute_S_emb_pinv_det,cpp_chol,cpp_solve_coef,update_scale_edf,compute_Linv,apply_eigen_perm,tqdm,managers,shared_memory,cpp_solve_coefXX,update_PIRLS,PIRLS_pdat_weights,correct_coef_step,update_coef_gen_smooth,cpp_cholP,update_coef_gammlss,compute_lgdetD_bsb,calculate_edf,compute_eigen_perm,cpp_dChol,computeHSR1,computeH,update_coef,deriv_transform_mu_eta,deriv_transform_eta_beta
 from ..python.formula import reparam,map_csc_to_eigen,mp
 from ..python.exp_fam import Family,Gaussian, Identity,GAMLSSFamily,GENSMOOTHFamily
 
@@ -336,124 +336,128 @@ def adjust_CI(model,n_ps,b,predi_mat,use_terms,alpha,seed):
         return b
 
 def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0,init_eta=None,method='Chol',compute_inv=False,origNH=None):
-   """
-   Allows to evaluate REML criterion (e.g., Wood, 2011; Wood, 2016) efficiently for
-   a set of \lambda values.
+    """
+    Allows to evaluate REML criterion (e.g., Wood, 2011; Wood, 2016) efficiently for
+    a set of \lambda values.
 
-   Internal function used for computing the correction applied to the edf for the GLRT - based on Wood (2017) and Wood et al., (2016).
+    Internal function used for computing the correction applied to the edf for the GLRT - based on Wood (2017) and Wood et al., (2016).
 
-   See :func:`REML` function for more details.
-   """
+    See :func:`REML` function for more details.
+    """
 
-   S_emb,_,S_root,_ = compute_S_emb_pinv_det(X.shape[1],penalties,"svd",method != 'Chol')
+    S_emb,_,S_root,_ = compute_S_emb_pinv_det(X.shape[1],penalties,"svd",method != 'Chol')
 
-   # Need pseudo-data only in case of GAM
-   z = None
-   Wr = None
-   mu_inval = None
-
-   if isinstance(family,Gaussian) and isinstance(family.link,Identity):
-        # AMM - directly solve for coef
-        eta,mu,coef,Pr,_,LP = update_coef(y-offset,X,X,family,S_emb,S_root,n_c,None,0)
-        nH = (X.T@X).tocsc()
-   else:
-       # GAMM - have to repeat Newton step
-       yb = y
-       Xb = X
-       
-       if init_eta is None:
-            mu = family.init_mu(y)
-            eta = family.link.f(mu)
-       else:
-           eta = init_eta
-           mu = family.link.fi(eta)
-
-       # First pseudo-dat iteration
-       yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family)
-
-       # Solve coef
-       eta,mu,coef,Pr,_,LP = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,None,offset)
-
-       # Now repeat until convergence
-       inval = np.isnan(mu).flatten()
-       dev = family.deviance(y[inval == False],mu[inval == False])
-       pen_dev = dev + coef.T @ S_emb @ coef
-
-       for newt_iter in range(500):
+    # Need pseudo-data only in case of GAM
+    z = None
+    Wr = None
+    mu_inval = None
+   
+    try:
+        if isinstance(family,Gaussian) and isinstance(family.link,Identity):
+            # AMM - directly solve for coef
+            eta,mu,coef,Pr,_,LP = update_coef(y-offset,X,X,family,S_emb,S_root,n_c,None,0)
+            nH = (X.T@X).tocsc()
+        else:
+            # GAMM - have to repeat Newton step
+            yb = y
+            Xb = X
             
-            # Perform step-length control for the coefficients (repeat step 3 in Wood, 2017)
-            if newt_iter > 0:
-                dev,pen_dev,mu,eta,coef = correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,len(penalties),S_emb,None,n_c,offset)
+            if init_eta is None:
+                mu = family.init_mu(y)
+                eta = family.link.f(mu)
+            else:
+                eta = init_eta
+                mu = family.link.fi(eta)
 
-            # Update PIRLS weights
+            # First pseudo-dat iteration
             yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family)
 
-            # Convergence check for inner loop
-            if newt_iter > 0:
-                dev_diff_inner = abs(pen_dev - c_dev_prev)
-                if dev_diff_inner < 1e-9*pen_dev or newt_iter == 499:
-                    break
+            # Solve coef
+            eta,mu,coef,Pr,_,LP = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,None,offset)
 
-            c_dev_prev = pen_dev
-
-            # Now propose next set of coefficients
-            eta,mu,n_coef,Pr,_,LP = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,None,offset)
-
-            # Update deviance & penalized deviance
+            # Now repeat until convergence
             inval = np.isnan(mu).flatten()
             dev = family.deviance(y[inval == False],mu[inval == False])
-            pen_dev = dev + n_coef.T @ S_emb @ n_coef
-      
-       # At this point, Wr/z might not match the dimensions of y and X, because observations might be
-       # excluded at convergence. eta and mu are of correct dimension, so we need to re-compute Wr - this
-       # time with a weight of zero for any dropped obs.
-       inval_check =  np.any(np.isnan(z))
+            pen_dev = dev + coef.T @ S_emb @ coef
 
-       if inval_check:
-            _, w, inval = PIRLS_pdat_weights(y,mu,eta-offset,family)
-            w[inval] = 0
+            for newt_iter in range(500):
+                    
+                # Perform step-length control for the coefficients (repeat step 3 in Wood, 2017)
+                if newt_iter > 0:
+                    dev,pen_dev,mu,eta,coef = correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,len(penalties),S_emb,None,n_c,offset)
 
-            # Re-compute weight matrix
-            Wr_fix = scp.sparse.spdiags([np.sqrt(np.ndarray.flatten(w))],[0])
-       else:
-           Wr_fix = Wr
-           
-       W = Wr_fix@Wr_fix
-       nH = (X.T@W@X).tocsc() 
+                # Update PIRLS weights
+                yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family)
 
-   # Get edf and optionally estimate scale (scale will be kept at fixed (e.g., 1) for Generalized case)
-   #InvCholXXSP = compute_Linv(LP,n_c)
-   _,_,edf,_,_,scale = update_scale_edf(y,z,eta,Wr,X.shape[0],X.shape[1],LP,None,Pr,None,family,penalties,n_c)
-   #print(edf-(InvCholXXS.T@InvCholXXS@nH).trace())
-   #edf = (InvCholXXS.T@InvCholXXS@nH).trace()
+                # Convergence check for inner loop
+                if newt_iter > 0:
+                    dev_diff_inner = abs(pen_dev - c_dev_prev)
+                    if dev_diff_inner < 1e-9*pen_dev or newt_iter == 499:
+                        break
 
-   if family.twopar:
-        if mu_inval is None:
-            llk = family.llk(y,mu,scale)
+                c_dev_prev = pen_dev
+
+                # Now propose next set of coefficients
+                eta,mu,n_coef,Pr,_,LP = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,None,offset)
+
+                # Update deviance & penalized deviance
+                inval = np.isnan(mu).flatten()
+                dev = family.deviance(y[inval == False],mu[inval == False])
+                pen_dev = dev + n_coef.T @ S_emb @ n_coef
+            
+            # At this point, Wr/z might not match the dimensions of y and X, because observations might be
+            # excluded at convergence. eta and mu are of correct dimension, so we need to re-compute Wr - this
+            # time with a weight of zero for any dropped obs.
+            inval_check =  np.any(np.isnan(z))
+
+            if inval_check:
+                _, w, inval = PIRLS_pdat_weights(y,mu,eta-offset,family)
+                w[inval] = 0
+
+                # Re-compute weight matrix
+                Wr_fix = scp.sparse.spdiags([np.sqrt(np.ndarray.flatten(w))],[0])
+            else:
+                Wr_fix = Wr
+                
+            W = Wr_fix@Wr_fix
+            nH = (X.T@W@X).tocsc() 
+
+        # Get edf and optionally estimate scale (scale will be kept at fixed (e.g., 1) for Generalized case)
+        #InvCholXXSP = compute_Linv(LP,n_c)
+        _,_,edf,_,_,scale = update_scale_edf(y,z,eta,Wr,X.shape[0],X.shape[1],LP,None,Pr,None,family,penalties,n_c)
+        #print(edf-(InvCholXXS.T@InvCholXXS@nH).trace())
+        #edf = (InvCholXXS.T@InvCholXXS@nH).trace()
+
+        if family.twopar:
+            if mu_inval is None:
+                llk = family.llk(y,mu,scale)
+            else:
+                llk = family.llk(y[mu_inval == False],mu[mu_inval == False],scale)
         else:
-            llk = family.llk(y[mu_inval == False],mu[mu_inval == False],scale)
-   else:
-        if mu_inval is None:
-            llk = family.llk(y,mu)
-        else:
-            llk = family.llk(y[mu_inval == False],mu[mu_inval == False])
+            if mu_inval is None:
+                llk = family.llk(y,mu)
+            else:
+                llk = family.llk(y[mu_inval == False],mu[mu_inval == False])
 
-   # Now compute REML for candidate
-   reml = REML(llk,nH/scale,coef,scale,penalties)
+        # Now compute REML for candidate
+        reml = REML(llk,nH/scale,coef,scale,penalties)
 
-   Linv = None
-   if compute_inv or origNH is not None:
-        LPinv = compute_Linv(LP,n_c)
-        Linv = apply_eigen_perm(Pr,LPinv)
-    
-   if origNH is not None:
-       # Compute trace for tau2
-       if isinstance(family,Gaussian) and isinstance(family.link,Identity):
-           edf *= (scale/origNH)
-       else:
-           edf = (Linv@origNH@Linv.T).trace()*scale
+        Linv = None
+        if compute_inv or origNH is not None:
+            LPinv = compute_Linv(LP,n_c)
+            Linv = apply_eigen_perm(Pr,LPinv)
+            
+        if origNH is not None:
+            # Compute trace for tau2
+            if isinstance(family,Gaussian) and isinstance(family.link,Identity):
+                edf *= (scale/origNH)
+            else:
+                edf = (Linv@origNH@Linv.T).trace()*scale
+   
+    except:
+        return -np.inf,scp.sparse.csc_matrix((len(coef), len(coef))),scp.sparse.csc_matrix((len(coef), len(coef))),list(range(len(coef))),coef.reshape(-1,1),scale,edf,-np.inf
 
-   return reml,Linv,LP,Pr,coef.reshape(-1,1),scale,edf,llk
+    return reml,Linv,LP,Pr,coef.reshape(-1,1),scale,edf,llk
 
 def compute_REML_candidate_GSMM(family,y,Xs,penalties,coef,n_coef,coef_split_idx,method="Chol",conv_tol=1e-7,n_c=10,bfgs_options={},origNH=None):
     """
@@ -468,81 +472,85 @@ def compute_REML_candidate_GSMM(family,y,Xs,penalties,coef,n_coef,coef_split_idx
     # Build current penalties
     S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,penalties,"svd")
 
-    if isinstance(family,GENSMOOTHFamily): # GSMM
-        
-        # Compute likelihood for current estimate
-        c_llk = family.llk(coef,coef_split_idx,y,Xs)
-
-        __old_opt = None
-        if method == "qEFS":
-            __old_opt = scp.optimize.LbfgsInvHessProduct(np.array([1]).reshape(1,1),np.array([1]).reshape(1,1))
-            __old_opt.init = False
-            __old_opt.omega = 1
-            __old_opt.method = 'qEFS'
-            __old_opt.form = 'SR1'
-            __old_opt.bfgs_options = bfgs_options
-        
-        coef,H,L,LV,c_llk,_,_,_,_ = update_coef_gen_smooth(family,y,Xs,coef,
-                                                            coef_split_idx,S_emb,None,None,
-                                                            c_llk,0,1000,
-                                                            1000,conv_tol,method,None,None,__old_opt)
-        
-        if method == 'qEFS':
+    try:
+        if isinstance(family,GENSMOOTHFamily): # GSMM
             
-            # Get an approximation of the Hessian of the likelihood
-            if LV.form == 'SR1':
-               H = -1*computeHSR1(LV.sk,LV.yk,LV.rho,scp.sparse.identity(len(coef),format='csc')*LV.omega,omega=LV.omega,make_psd=True)
-            else:
-               H = -1*computeH(LV.sk,LV.yk,LV.rho,scp.sparse.identity(len(coef),format='csc')*LV.omega,omega=LV.omega,make_psd=True)
+            # Compute likelihood for current estimate
+            c_llk = family.llk(coef,coef_split_idx,y,Xs)
 
-            # Get Cholesky factor of approximate inverse of penalized hessian (needed for CIs)
-            pH = scp.sparse.csc_array((-1*H) + S_emb)
-            Lp, Pr, _ = cpp_cholP(pH)
-            LVp0 = compute_Linv(Lp,10)
-            LV = apply_eigen_perm(Pr,LVp0)
+            __old_opt = None
+            if method == "qEFS":
+                __old_opt = scp.optimize.LbfgsInvHessProduct(np.array([1]).reshape(1,1),np.array([1]).reshape(1,1))
+                __old_opt.init = False
+                __old_opt.omega = 1
+                __old_opt.method = 'qEFS'
+                __old_opt.form = 'SR1'
+                __old_opt.bfgs_options = bfgs_options
+            
+            coef,H,L,LV,c_llk,_,_,_,_ = update_coef_gen_smooth(family,y,Xs,coef,
+                                                                coef_split_idx,S_emb,None,None,
+                                                                c_llk,0,1000,
+                                                                1000,conv_tol,method,None,None,__old_opt)
+            
+            if method == 'qEFS':
+                
+                # Get an approximation of the Hessian of the likelihood
+                if LV.form == 'SR1':
+                    H = -1*computeHSR1(LV.sk,LV.yk,LV.rho,scp.sparse.identity(len(coef),format='csc')*LV.omega,omega=LV.omega,make_psd=True)
+                else:
+                    H = -1*computeH(LV.sk,LV.yk,LV.rho,scp.sparse.identity(len(coef),format='csc')*LV.omega,omega=LV.omega,make_psd=True)
+
+                # Get Cholesky factor of approximate inverse of penalized hessian (needed for CIs)
+                pH = scp.sparse.csc_array((-1*H) + S_emb)
+                Lp, Pr, _ = cpp_cholP(pH)
+                LVp0 = compute_Linv(Lp,10)
+                LV = apply_eigen_perm(Pr,LVp0)
+            
+            V = LV.T @ LV # inverse of hessian of penalized likelihood
+            nH = -1*H # negative hessian of likelihood
+
+        else: # GAMMLSS
+            split_coef = np.split(coef,coef_split_idx)
+
+            # Initialize etas and mus
+            etas = [Xs[i]@split_coef[i] for i in range(family.n_par)]
+            mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
+
+            c_llk = family.llk(y,*mus)
+
+            # Estimate coefficients
+            coef,split_coef,mus,etas,H,L,LV,c_llk,_,_,_,_ = update_coef_gammlss(family,mus,y,Xs,coef,
+                                                                                coef_split_idx,S_emb,None,None,
+                                                                                c_llk,0,100,
+                                                                                100,conv_tol,"Chol",None,None)
+            
+            V = LV.T@LV
+            nH = -1*H
+
+        # Remaining computations are shared for GAMMLSS and GSMM
         
-        V = LV.T @ LV # inverse of hessian of penalized likelihood
-        nH = -1*H # negative hessian of likelihood
+        # Compute reml
+        reml = REML(c_llk,nH,coef,1,penalties)[0,0]
 
-    else: # GAMMLSS
-        split_coef = np.split(coef,coef_split_idx)
+        # Compute edf
+        lgdetDs = []
+        for lti,lTerm in enumerate(penalties):
 
-        # Initialize etas and mus
-        etas = [Xs[i]@split_coef[i] for i in range(family.n_par)]
-        mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
+            lt_rank = None
+            if FS_use_rank[lti]:
+                lt_rank = lTerm.rank
 
-        c_llk = family.llk(y,*mus)
+            lgdetD,_ = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
+            lgdetDs.append(lgdetD)
 
-        # Estimate coefficients
-        coef,split_coef,mus,etas,H,L,LV,c_llk,_,_,_,_ = update_coef_gammlss(family,mus,y,Xs,coef,
-                                                                            coef_split_idx,S_emb,None,None,
-                                                                            c_llk,0,100,
-                                                                            100,conv_tol,"Chol",None,None)
-        
-        V = LV.T@LV
-        nH = -1*H
+        total_edf,_, _ = calculate_edf(None,None,LV,penalties,lgdetDs,n_coef,n_c)
 
-    # Remaining computations are shared for GAMMLSS and GSMM
+        if origNH is not None:
+            # Compute trace for tau2
+            total_edf = (LV@origNH@LV.T).trace()
     
-    # Compute reml
-    reml = REML(c_llk,nH,coef,1,penalties)[0,0]
-
-    # Compute edf
-    lgdetDs = []
-    for lti,lTerm in enumerate(penalties):
-
-        lt_rank = None
-        if FS_use_rank[lti]:
-            lt_rank = lTerm.rank
-
-        lgdetD,_ = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
-        lgdetDs.append(lgdetD)
-
-    total_edf,_, _ = calculate_edf(None,None,LV,penalties,lgdetDs,n_coef,n_c)
-
-    if origNH is not None:
-        # Compute trace for tau2
-        total_edf = (LV@origNH@LV.T).trace()
+    except:
+        return -np.inf,scp.sparse.csc_matrix((len(coef), len(coef))),scp.sparse.csc_matrix((len(coef), len(coef))),coef.reshape(-1,1),total_edf,-np.inf
 
     return reml,V,LV,coef.reshape(-1,1),total_edf,c_llk
 
@@ -633,7 +641,7 @@ def REML(llk,nH,coef,scale,penalties):
    Pr = compute_eigen_perm(Pr)
 
    if code != 0:
-       raise ValueError("Failed to compute REML.")
+       raise ValueError(f"Failed to compute REML for lambda: {[pen.lam for pen in penalties]}.")
   
    #print(((P@Pr.T@L) @ (P@Pr.T@L).T - H_pen).max())
    # Can ignore Pr for det computation, because det(Pr)*det(Pr.T)=1
@@ -1277,7 +1285,7 @@ def compute_Vb_corr_WPS(Vbr,Vpr,Vr,H,S_emb,penalties,coef,scale=1):
     return Vc, scale*Vcc
 
 
-def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_t=True,form_t1=False,verbose=False,drop_NA=True,method="Chol",only_expected_edf=False,Vp_fidiff=True,use_reml_weights=True,prior=None,seed=None,**bfgs_options):
+def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_t=True,form_t1=False,verbose=False,drop_NA=True,method="Chol",only_expected_edf=False,Vp_fidiff=True,use_reml_weights=True,prior=None,recompute_H=False,seed=None,**bfgs_options):
     """Estimate :math:`\mathbf{V}`, the covariance matrix of the unconditional posterior :math:`\\boldsymbol{\\beta} | y \sim N(\hat{\\boldsymbol{\\beta}},\\mathbf{V})` to account for smoothness uncertainty.
     
     Wood et al. (2016) and Wood (2017) show that when basing conditional versions of model selection criteria or hypothesis
@@ -1624,7 +1632,7 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_
             # Make sure Vp is original not regularized
             Vpr = copy.deepcopy(Vp)
             Vp = orig_Vp
-    ###################################################### Compute tau ###################################################### 
+    ###################################################### Prepare computation of tau ###################################################### 
 
     if grid_type != "JJJ1":
         # Compute weights proposed by Greven & Scheipl (2017) - still work under importance sampling case instead of grid case if we assume Vp
@@ -1643,6 +1651,81 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_
 
         Vcr = Vr @ dBetadRhos.T
 
+        # Optionally re-compute negative Hessian at posterior mean for coef.
+        if recompute_H and (only_expected_edf == False):
+
+            # Estimate mean of posterior beta|y
+            mean_coef = ws[0]*coefs[0]
+            for ri in range(1,len(rGrid)):
+                mean_coef += ws[ri]*coefs[ri]
+            
+            # Recompute Hessian at mean
+            if isinstance(family,Family):
+                yb = y
+                Xb = X
+
+                S_emb,_,S_root,_ = compute_S_emb_pinv_det(X.shape[1],model.formula.penalties,"svd",method != 'Chol')
+
+                if isinstance(family,Gaussian) and isinstance(family.link,Identity): # strictly additive case
+                    nH = (-1*model.hessian)*orig_scale
+
+                else: # Generalized case
+                    eta = (X @ mean_coef).reshape(-1,1) + model.offset
+                    mu = family.link.fi(eta)
+                    
+                    # Compute pseudo-dat and weights for mean coef
+                    yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-model.offset,X,Xb,family)
+
+                    inval_check =  np.any(np.isnan(z))
+
+                    if inval_check:
+                        _, w, inval = PIRLS_pdat_weights(y,mu,eta-model.offset,family)
+                        w[inval] = 0
+
+                        # Re-compute weight matrix
+                        Wr_fix = scp.sparse.spdiags([np.sqrt(np.ndarray.flatten(w))],[0])
+                    else:
+                        Wr_fix = Wr
+                        
+                    W = Wr_fix@Wr_fix
+                    nH = (X.T@W@X).tocsc() 
+
+                # Solve for coef to get Cholesky needed to re-compute scale
+                _,_,_,Pr,_,LP = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,None,model.offset)
+
+                # Re-compute scale
+                _,_,_,_,_,scale = update_scale_edf(y,z,eta,Wr,X.shape[0],X.shape[1],LP,None,Pr,None,family,model.formula.penalties,n_c)
+                
+                # And negative hessian
+                nH /= scale
+
+            else: # GSMM/GAMLSS case
+                if isinstance(Family,GAMLSSFamily): #GAMLSS case
+                    split_coef = np.split(mean_coef,model.coef_split_idx)
+
+                    # Update etas and mus
+                    etas = [Xs[i]@split_coef[i] for i in range(family.n_par)]
+                    mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
+
+                    # Get derivatives with respect to eta
+                    d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,mus,family)
+
+                    # Get derivatives with respect to coef
+                    _,H = deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs,only_grad=False)
+
+                else: # GSMM
+                    H = family.hessian(coef,model.coef_split_idx,y,Xs)
+
+                nH = -1 * H
+
+            if verbose:
+                print(f"Recomputed negative Hessian. 2 Norm of coef. difference: {np.linalg.norm(mean_coef-model.coef.reshape(-1,1))}. F. Norm of n. Hessian difference: {scp.sparse.linalg.norm(nH + model.hessian)}")
+
+        else:
+            nH = -1*model.hessian
+
+        ###################################################### Compute tau ###################################################### 
+
         if only_expected_edf:
             # Compute correction of edf directly..
             upper_edf = max(model.edf,np.sum(ws*edfs))
@@ -1653,25 +1736,25 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_
                 # Now have Vc = Vcr.T @ Vcr, so:
                 # tr(Vc@(-1*model.hessian)) = tr(Vcr.T @ Vcr@(-1*model.hessian)) = tr(Vcr@ (-1*model.hessian)@Vcr.T)
                 #upper_edf += (Vc@(-1*model.hessian)).trace()
-                upper_edf += (Vcr@ (-1*model.hessian)@Vcr.T).trace()
+                upper_edf += (Vcr@ (nH)@Vcr.T).trace()
 
             elif grid_type == 'JJJ3':
                 # Correct based on G&S expectations instead
-                tr1 = ws[0]* (coefs[0].T@(-1*model.hessian)@coefs[0])[0,0]
+                tr1 = ws[0]* (coefs[0].T@(nH)@coefs[0])[0,0]
 
                 # E_{p|y}[\boldsymbol{\beta}] in Greven & Scheipl (2017)
                 tr2 = ws[0]*coefs[0] 
                 
                 # Now sum over remaining r
                 for ri in range(1,len(rGrid)):
-                    tr1 += ws[ri]* (coefs[ri].T@(-1*model.hessian)@coefs[ri])[0,0]
+                    tr1 += ws[ri]* (coefs[ri].T@(nH)@coefs[ri])[0,0]
                     tr2 += ws[ri]*coefs[ri]
                 
                 # Enforce lower bound of JJJ2
-                if (Vcr@ (-1*model.hessian)@Vcr.T).trace() > (tr1 - (tr2.T@(-1*model.hessian)@tr2)[0,0]):
-                    upper_edf += (Vcr@ (-1*model.hessian)@Vcr.T).trace()
+                if (Vcr@ (nH)@Vcr.T).trace() > (tr1 - (tr2.T@(nH)@tr2)[0,0]):
+                    upper_edf += (Vcr@ (nH)@Vcr.T).trace()
                 else:
-                    upper_edf += tr1 - (tr2.T@(-1*model.hessian)@tr2)[0,0]
+                    upper_edf += tr1 - (tr2.T@(nH)@tr2)[0,0]
                     
             if verbose:
                 print(f"Correction was based on {rGrid.shape[0]} samples in total.")
@@ -1698,7 +1781,9 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_
                 for ri in range(1,len(rGrid)):
                     Vr1 += ws[ri]*Vs[ri]
             
-            if (Vr1@(-1*model.hessian)).trace() < model.edf:
+            if (Vr1@(nH)).trace() < model.edf:
+                nH = -1 * model.hessian # Reset nH
+                
                 if isinstance(family,Family):
                     Vr1 = model.lvi.T@model.lvi*orig_scale
                 else:
@@ -1732,7 +1817,9 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_
                     Vr2 += ws[ri]*(coefs[ri]@coefs[ri].T)
                     Vr3 += ws[ri]*coefs[ri]
             
-            if (Vr1@(-1*model.hessian)).trace() < model.edf:
+            if (Vr1@(nH)).trace() < model.edf:
+                nH = -1 * model.hessian # Reset nH
+
                 if isinstance(family,Family):
                     Vr1 = model.lvi.T@model.lvi*orig_scale
                 else:
@@ -1741,13 +1828,14 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_
             # Now, Greven & Scheipl provide final estimate =
             # E_{p|y}[V_\boldsymbol{\beta}(\lambda)] + E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] - E_{p|y}[\boldsymbol{\beta}] E_{p|y}[\boldsymbol{\beta}]^T
             # but we enforce lower bound of JJJ2 again
-            if (Vcr @ (-1*model.hessian) @ Vcr.T).trace() > ((Vr2 - (Vr3@Vr3.T)) @ (-1*model.hessian)).trace():
+            if (Vcr @ (nH) @ Vcr.T).trace() > ((Vr2 - (Vr3@Vr3.T)) @ (nH)).trace():
                 V = Vr1 + Vcr.T @ Vcr
             else:
                 V = Vr1 + Vr2 - (Vr3@Vr3.T)
             
     else:
         upper_edf = None
+        nH = -1 * model.hessian
 
     # Check V is full rank - can use LV for sampling as well..
     LV,code = cpp_chol(scp.sparse.csc_array(V))
@@ -1757,14 +1845,7 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_
     # Compute corrected edf (e.g., for AIC; Wood, Pya, & Saefken, 2016)
     total_edf = None
     if form_t or form_t1:
-        if isinstance(family,Family):
-            if isinstance(family,Gaussian) and isinstance(family.link,Identity): # Strictly additive case
-                F = V@((X.T@X)/orig_scale)
-            else: # Generalized case
-                W = model.Wr@model.Wr
-                F = V@((X.T@W@X)/orig_scale)
-        else: # GSMM/GAMLSS case
-            F = V@(-1*model.hessian)
+        F = V@(nH)
 
         edf = F.diagonal()
         total_edf = F.trace()
