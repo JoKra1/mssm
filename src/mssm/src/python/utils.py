@@ -650,40 +650,44 @@ def REML(llk,nH,coef,scale,penalties):
    # Done
    return reml + lgdetS/2 - lgdetXXS/2 + (Mp*np.log(2*np.pi))/2
 
-def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=True,method="Chol",seed=None,conv_tol=1e-7,df=40,strategy="JJJ3",**bfgs_options):
-    """Estimate covariance matrix :math:`\mathbf{V}_{\\boldsymbol{p}}` of posterior for :math:`\mathbf{p} = log(\\boldsymbol{\lambda})`. Either (see ``strategy`` parameter) based on finite difference approximation or
-    on using REML scores to approximate the expectation for the covariance matrix, similar to what was suggested by Greven & Scheipl (2016).
+def estimateVp(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,drop_NA=True,method="Chol",Vp_fidiff=False,use_importance_weights=True,prior=None,seed=None,**bfgs_options):
+    """Estimate covariance matrix :math:`\mathbf{V}^{\\boldsymbol{\\rho}}` of posterior for :math:`\mathbf{p} = log(\\boldsymbol{\lambda})`.
+    
+    Either :math:`\mathbf{V}^{\\boldsymbol{\\rho}}` is based on finite difference approximation or on a PQL approximation (see ``grid_type`` parameter), or it is estimated via numerical
+    integration similar to what is done in the :func:`correct_VB` function (this is done when ``grid_type=='JJJ2'``; see the aforementioned function for details).
 
     References:
      - https://en.wikipedia.org/wiki/Estimation_of_covariance_matrices
      - Greven, S., & Scheipl, F. (2016). Comment on: Smoothing Parameter and Model Selection for General Smooth Models
 
-    :param model: GAMM,GAMLSS, or GSMM model (which has been fitted) for which to estimate :math:`\mathbf{V}`
-    :type model: GAMM or GAMLSS or GSMM
-    :param nR: Initial :math:`\lambda`  Grid is based on `nR` equally-spaced samples from :math:`\lambda/lr` to :math:`\lambda*lr`. In addition, ``nR*len(model.formula.penalties)`` updates to :math:`\mathbf{V}_{\\boldsymbol{p}}` are performed during each of which additional `nR` :math:`\lambda` samples/reml scores are generated/computed, defaults to 20
+    :param model: GAMM, GAMMLSS, or GSMM model (which has been fitted) for which to estimate :math:`\mathbf{V}`
+    :type model: GAMM or GAMMLSS or GSMM
+    :param nR: In case ``grid!="JJJ1"``, ``nR`` samples/reml scores are generated/computed to numerically evaluate the expectations necessary for the uncertainty correction, defaults to 250
     :type nR: int, optional
-    :param lR: Initial :math:`\lambda`  Grid is based on `nR` equally-spaced samples from :math:`\lambda/lr` to :math:`\lambda*lr`, defaults to 100
-    :type lR: int, optional
-    :param n_c: Number of cores to use to compute the estimate, defaults to 10
-    :type n_c: int, optional
-    :param a: Minimum :math:`\lambda` value that is included when forming the initial grid. In addition, any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})`) which are smaller than this are set to this value as well, defaults to 1e-7 the minimum possible estimate
+    :param grid_type: How to compute the smoothness uncertainty correction. Setting ``grid_type='JJJ1'`` means a PQL or finite difference approximation is obtained. Setting ``grid_type='JJJ2'``means numerical integration is performed - see :func:`correct_VB` for details , defaults to 'JJJ1'
+    :type grid_type: str, optional
+    :param a: Any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{\\rho}|y \sim N(log(\hat{\\boldsymbol{\\rho}}),\mathbf{V}^{\\boldsymbol{\\rho}})` used to sample ``nR`` candidates) which are smaller than this are set to this value as well, defaults to 1e-7 the minimum possible estimate
     :type a: float, optional
-    :param b: Maximum :math:`\lambda` value that is included when forming the initial grid. In addition, any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})`) which are larger than this are set to this value as well, defaults to 1e7 the maximum possible estimate
+    :param b: Any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{\\rho}|y \sim N(log(\hat{\\boldsymbol{\\rho}}),\mathbf{V}^{\\boldsymbol{\\rho}})` used to sample ``nR`` candidates) which are larger than this are set to this value as well, defaults to 1e7 the maximum possible estimate
     :type b: float, optional
-    :param verbose: Whether to print progress information or not, defaults to False
-    :type verbose: bool, optional
+    :param df: Degrees of freedom used for the multivariate t distribution used to sample the next set of candidates. Setting this to ``np.inf`` means a multivariate normal is used for sampling, defaults to 40
+    :type df: int, optional
+    :param n_c: Number of cores to use during parallel parts of the correction, defaults to 10
+    :type n_c: int, optional
     :param drop_NA: Whether to drop rows in the **model matrices** corresponding to NAs in the dependent variable vector. Defaults to True.
     :type drop_NA: bool,optional
     :param method: Which method to use to solve for the coefficients (and smoothing parameters). The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR/Chol". In that case a QR decomposition is used - which is first pivoted to maximize sparsity in the resulting decomposition but also pivots for stability in order to get an estimate of rank defficiency. A Cholesky is than used using the combined pivoting strategy obtained from the QR. This takes substantially longer. If this is set to ``'qEFS'``, then the coefficients are estimated via quasi netwon and the smoothing penalties are estimated from the quasi newton approximation to the hessian. This only requieres first derviative information. Defaults to "Chol".
     :type method: str,optional
-    :param seed: Seed to use for random parts of the estimate. Defaults to None
+    :param Vp_fidiff: Whether to rely on a finite difference approximation to compute :math:`\mathbf{V}^{\\boldsymbol{\\rho}}` or on a PQL approximation. The latter is exact for Gaussian and canonical GAMs and far cheaper if many penalties are to be estimated. Defaults to False (PQL approximation)
+    :type Vp_fidiff: bool,optional
+    :param use_importance_weights: Whether to rely importance weights to compute the numerical integration when ``grid_type != 'JJJ1'`` or on the log-densities of :math:`\mathbf{V}^{\\boldsymbol{\\rho}}` - the latter assumes that the unconditional posterior is normal. Defaults to True (Importance weights are used)
+    :type use_importance_weights: bool,optional
+    :param prior: An (optional) instance of an arbitrary class that has a ``.logpdf()`` method to compute the prior log density of a sampled candidate. If this is set to ``None``, the prior is assumed to coincide with the proposal distribution, simplifying the importance weight computation. Ignored when ``use_importance_weights=False``. Defaults to None
+    :type prior: any, optional
+    :param recompute_H: Whether or not to re-compute the Hessian of the log-likelihood at an estimate of the mean of the Bayesian posterior :math:`\\boldsymbol{\\beta}|y` before computing the (uncertainty/bias corrected) edf. Defaults to False
+    :type recompute_H: bool, optional
+    :param seed: Seed to use for random parts of the correction. Defaults to None
     :type seed: int,optional
-    :param conv_tol: Deprecated, defaults to 1e-7
-    :type conv_tol: float, optional
-    :param df: Degrees of freedom used for the multivariate t distribution used to sample the next set of candidates. Setting this to ``np.inf`` means a multivariate normal is used for sampling, defaults to 40
-    :type df: int, optional
-    :param strategy: By default (``strategy='JJJ3'``), the expectation for the covariance matrix is approximated via numeric integration. When ``strategy='JJJ1'`` a finite difference approximation is obtained instead. When ``strategy='JJJ2'``, the finite difference approximation is updated through numeric integration iteratively. Defaults to 'JJJ3'
-    :type strategy: str, optional
     :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100. Defaults to None.
     :type bfgs_options: key=value,optional
     :return: An estimate of the covariance matrix of the posterior for :math:`\mathbf{p} = log(\\boldsymbol{\lambda})`
@@ -693,33 +697,44 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=
 
     family = model.family
 
+    if not grid_type in ["JJJ1","JJJ2"]:
+        raise ValueError("'grid_type' has to be set to one of 'JJJ1', 'JJJ2'.")
+
     if isinstance(family,GENSMOOTHFamily):
         if not bfgs_options:
-            bfgs_options = {"gtol":conv_tol,
-                            "ftol":1e-9,
+            bfgs_options = {"ftol":1e-9,
                             "maxcor":30,
                             "maxls":100}
 
-
     if isinstance(family,Family):
+        nPen = len(model.formula.penalties)
         rPen = copy.deepcopy(model.formula.penalties)
-    else: # GAMMLSS and GSMM case
-        rPen = copy.deepcopy(model.overall_penalties)
+        S_emb,_,_,_ = compute_S_emb_pinv_det(model.hessian.shape[1],model.formula.penalties,"svd")
 
+    else: # GAMMLSS and GSMM case
+        nPen = len(model.overall_penalties)
+        rPen = copy.deepcopy(model.overall_penalties)
+        S_emb,_,_,_ = compute_S_emb_pinv_det(model.hessian.shape[1],model.overall_penalties,"svd")
+    
     if isinstance(family,Family):
         y = model.formula.y_flat[model.formula.NOT_NA_flat]
         X = model.get_mmat()
 
+        orig_scale = family.scale
+        if family.twopar:
+            _,orig_scale = model.get_pars()
     else:
         if drop_NA:
             y = model.formulas[0].y_flat[model.formulas[0].NOT_NA_flat]
         else:
             y = model.formulas[0].y_flat
         Xs = model.get_mmat(drop_NA=drop_NA)
+        X = Xs[0]
+        orig_scale = 1
         init_coef = copy.deepcopy(model.overall_coef)
     
-    if strategy == "JJJ1" or strategy=="JJJ2":
-        # Approximate Vp via finite differencing of negative REML.
+    if grid_type == "JJJ1"  or grid_type == "JJJ2":
+        # Approximate Vp via finite differencing or PQL approximation of negative REML.
 
         # Set up mean log-smoothing penalty vector - ignoring any a and b limits provided.
         if isinstance(family,Family):
@@ -728,218 +743,268 @@ def estimateVp(model,nR = 20,lR = 100,n_c=10,a=1e-7,b=1e7,verbose=False,drop_NA=
             ep = np.log(np.array([pen.lam for pen in model.overall_penalties]).reshape(-1,1))
 
         #from numdifftools import Hessian
-        def reml_wrapper(rho,family,y,X,rPen,*reml_args,**reml_kwargs):
-            
-            for peni in range(len(rho)):
-                rPen[peni].lam = np.exp(rho[peni])
+        if Vp_fidiff:
+            def reml_wrapper(rho,family,y,X,rPen,*reml_args,**reml_kwargs):
+                
+                for peni in range(len(rho)):
+                    rPen[peni].lam = np.exp(rho[peni])
+                
+                if isinstance(family,Family):
+                    reml,_,_,_,_,_,_,_ = compute_reml_candidate_GAMM(family,y,X,rPen,*reml_args,**reml_kwargs)
+                else:
+                    reml,_,_,_,_,_ = compute_REML_candidate_GSMM(family,y,X,rPen,*reml_args,**reml_kwargs)
+                
+                return -reml
             
             if isinstance(family,Family):
-                reml,_,_,_,_,_,_,_ = compute_reml_candidate_GAMM(family,y,X,rPen,*reml_args,**reml_kwargs)
+                nHp = central_hessian(ep.flatten(),reml_wrapper,family,y,X,rPen,n_c,model.offset,model.pred,method)
+                #nHp = Hessian(reml_wrapper)(ep.flatten(),family,y,X,rPen,n_c,model.offset,model.pred)
             else:
-                reml,_,_,_,_,_ = compute_REML_candidate_GSMM(family,y,X,rPen,*reml_args,**reml_kwargs)
+                nHp = central_hessian(ep.flatten(),reml_wrapper,family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=method,bfgs_options=bfgs_options)
             
-            return -reml
-        
-        if isinstance(family,Family):
-            nHp = central_hessian(ep.flatten(),reml_wrapper,family,y,X,rPen,n_c,model.offset,model.pred,method)
-            #nHp = Hessian(reml_wrapper)(ep.flatten(),family,y,X,rPen,n_c,model.offset,model.pred)
+            # Vp is now simply [nHp]^{-1}
+            # but we should rely on an eigen decomposition so that we can naturally produce a generalized inverse as discussed by
+            # WPS (2016).
+
+            eig, U =scp.linalg.eigh(nHp)
+            ire = np.zeros_like(eig)
+            ire[eig > 0] = 1/np.sqrt(eig[eig > 0]) # Only compute inverse for eig values larger than zero, setting rem. ones to zero yields generalized invserse. 
+            Ri = np.diag(ire)@U.T # Root of Vp
+
+            Vp = Ri.T@Ri
+
+            # Now, in mgcv a regularized version is computed as well, which essentially sets all positive eigenvalues
+            # to a positive minimum. This regularized version is utilized in the smoothness uncertainty correction, so we compute it
+            # as well.
+            # See: https://github.com/cran/mgcv/blob/aff4560d187dfd7d98c7bd367f5a0076faf129b7/R/gam.fit3.r#L1010
+            ire2 = np.zeros_like(eig)
+            ire2[eig > 0] = 1/np.sqrt(eig[eig > 0] + 0.1)
+            Rir = np.diag(ire2)@U.T # Root of regularized Vp
+
+            Vpr = Rir.T@Rir
+            #print(eig,1/eig)
         else:
-            nHp = central_hessian(ep.flatten(),reml_wrapper,family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=method,bfgs_options=bfgs_options)
+            # Take PQL approximation instead
+            Vp, Vpr, Ri, Rir, _, _ = compute_Vp_WPS(model.lvi if isinstance(family,Family) else model.overall_lvi,
+                                                 model.hessian,
+                                                 S_emb,
+                                                 model.formula.penalties if isinstance(family,Family) else model.overall_penalties,
+                                                 model.coef.reshape(-1,1) if isinstance(family,Family) else model.overall_coef.reshape(-1,1),
+                                                 scale=orig_scale if isinstance(family,Family) else 1)
         
-        # Vp is now simply [nHp]^{-1}
-        # but we should rely on an eigen decomposition so that we can naturally produce a generalized inverse as discussed by
-        # WPS (2016).
-
-        eig, U =scp.linalg.eigh(nHp)
-        ire = np.zeros_like(eig)
-        ire[eig > 0] = 1/np.sqrt(eig[eig > 0]) # Only compute inverse for eig values larger than zero, setting rem. ones to zero yields generalized invserse. 
-        Ri = np.diag(ire)@U.T # Root of Vp
-
-        Vp = Ri.T@Ri
-
-        # Now, in mgcv a regularized version is computed as well, which essentially sets all positive eigenvalues
-        # to a positive minimum. This regularized version is utilized in the smoothness uncertainty correction, so we compute it
-        # as well.
-        # See: https://github.com/cran/mgcv/blob/aff4560d187dfd7d98c7bd367f5a0076faf129b7/R/gam.fit3.r#L1010
-        ire2 = np.zeros_like(eig)
-        ire2[eig > 0] = 1/np.sqrt(eig[eig > 0] + 0.1)
-        Rir = np.diag(ire2)@U.T # Root of regularized Vp
-
-        Vpr = Rir.T@Rir
-        #print(eig,1/eig)
-        if strategy == "JJJ1":
-            return Vp,Vpr,Ri,Rir
+        if grid_type == "JJJ1":
+            return Vp,Vpr,Ri,Rir,ep
             
-    if strategy == "JJJ2":
-        orig_Vp = copy.deepcopy(Vp)
-        Vp = Vpr
-
-    # Set up grid of nR equidistant values based on marginal grids that cover range from \lambda/lr to \lambda*lr
-    # conditional on all estimated penalty values except the current one.
-    rGrid = []
-    if strategy == "JJJ3":
-        for pi,pen in enumerate(rPen):
-            
-            # Set up marginal grid from \lambda/lr to \lambda*lr
-            mGrid = np.exp(np.linspace(np.log(max([a,pen.lam/lR])),np.log(min([b,pen.lam*lR])),nR))
-            
-            # Now create penalty candidates conditional on estimates for all other penalties except current one
-            for val in mGrid:
-                if abs(val - pen.lam) <= 1e-7:
-                    continue
-                
-                rGrid.append(np.array([val if pii == pi else np_gen.choice(np.exp(np.linspace(np.log(max([a,pen2.lam/lR])),np.log(min([b,pen2.lam*lR])),nR)),size=None) for pii,pen2 in enumerate(rPen)]))
-        
-    # Make sure actual estimate is included once.
-    rGrid.append(np.array([pen2.lam for pen2 in rPen]))
-    rGrid = np.array(rGrid)
-
-
-    if isinstance(family,Family):
-        y = model.formula.y_flat[model.formula.NOT_NA_flat]
-        X = model.get_mmat()
-
-        orig_scale = family.scale
-        if family.twopar:
-            _,orig_scale = model.get_pars()
-
-    else:
-        if drop_NA:
-            y = model.formulas[0].y_flat[model.formulas[0].NOT_NA_flat]
-        else:
-            y = model.formulas[0].y_flat
-        Xs = model.get_mmat(drop_NA=drop_NA)
-        orig_scale = 1
-        init_coef = copy.deepcopy(model.overall_coef)
-    
-    
-    if isinstance(family,Family):
-        y = model.formula.y_flat[model.formula.NOT_NA_flat]
-        X = model.get_mmat()
-
-        orig_scale = family.scale
-        if family.twopar:
-            _,orig_scale = model.get_pars()
-
-    else:
-        if drop_NA:
-            y = model.formulas[0].y_flat[model.formulas[0].NOT_NA_flat]
-        else:
-            y = model.formulas[0].y_flat
-        Xs = model.get_mmat(drop_NA=drop_NA)
-        orig_scale = 1
-        init_coef = copy.deepcopy(model.overall_coef)
-    
+    # Strategies JJJ2
+    rGrid = np.array([])
     remls = []
+    # Generate \lambda values from Vpr for which to compute REML, and Vb
 
-    enumerator = rGrid
-    if verbose and strategy == "JJJ3":
-        enumerator = tqdm(rGrid)
-    for r in enumerator:
-
-        # Prepare penalties with current lambda candidate r
-        for ridx,rc in enumerate(r):
-            rPen[ridx].lam = rc
-        
-        # Now compute REML - and all other terms needed for correction proposed by Greven & Scheipl (2017)
-        if isinstance(family,Family):
-            reml,_,_,_,_,_,_,_ = compute_reml_candidate_GAMM(family,y,X,rPen,n_c,model.offset,method=method)
-        else:
-            reml,_,_,_,_,_ = compute_REML_candidate_GSMM(family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=method,bfgs_options=bfgs_options)
-
-        # Now collect what we need for updating Vp
-        remls.append(reml)
-    
-    # Iteratively estimate Vp - covariance matrix of log(\lambda) to guide further REML grid sampling
-
-    # (Re-)create mean of log-smoothing parameter vector, this time adhering to limits.
+    # First recompute mean, this time accepting limits imposed by a and b
     if isinstance(family,Family):
         ep = np.log(np.array([min(b,max(a,pen.lam)) for pen in model.formula.penalties]).reshape(-1,1))
     else:
         ep = np.log(np.array([min(b,max(a,pen.lam)) for pen in model.overall_penalties]).reshape(-1,1))
+    #print(ep)
 
-    # Get first estimate for Vp based on samples collected so far
-    if strategy == "JJJ3":
-        Vp = updateVp(ep,remls,rGrid)
-
-    # Now continuously update Vp and generate more REML samples in the process
     n_est = nR
-    enumerator = range(nR*len(ep))
-    if verbose and strategy == "JJJ3":
-        enumerator = tqdm(enumerator,desc="Estimating Vp",leave=True)
-    elif verbose:
-        enumerator = tqdm(enumerator,desc="Refining Vp",leave=True)
-
-    for sp in enumerator:
-
+    
+    if X.shape[0] < 1e5 and X.shape[1] < 2000 and n_c > 1: # Parallelize grid search
         # Generate next \lambda values for which to compute REML, and Vb
-        p_sample = []
-        while len(p_sample) == 0:
-            p_sample = scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=n_est,random_state=seed)
-            p_sample = np.exp(p_sample)
+        p_sample = scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vpr,df=df,size=n_est,random_state=seed)
+        p_sample = np.exp(p_sample)
 
-            if len(np.ndarray.flatten(ep)) == 1: # Single lambda parameter in model
-                
-                if n_est == 1: # and single sample (n_est==1) - so p_sample needs to be shape (1,1)
-                    p_sample = np.array([p_sample])
+        if len(np.ndarray.flatten(ep)) == 1: # Single lambda parameter in model
+        
+            if n_est == 1: # and single sample (n_est==1) - so p_sample needs to be shape (1,1)
+                p_sample = np.array([p_sample])
 
-                p_sample = p_sample.reshape(n_est,1) # p_sample needs to be shape (n_est,1)
-                
-            elif n_est == 1: # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
-                p_sample = np.array([p_sample]).reshape(1,-1)
+            p_sample = p_sample.reshape(n_est,1) # p_sample needs to be shape (n_est,1)
             
-            # Re-sample values we have encountered before.
-            minDiag = 0.1*min(np.sqrt(Vp.diagonal()))
-            for lami in range(p_sample.shape[0]):
-                while np.any(np.max(np.abs(rGrid - p_sample[lami]),axis=1) < minDiag) or np.any(p_sample[lami] < 1e-9) or np.any(p_sample[lami] > 1e12):
-                    if not seed is None:
-                        seed += 1
-                    p_sample[lami] = np.exp(scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=1,random_state=seed))
+        elif n_est == 1: # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
+            p_sample = np.array([p_sample]).reshape(1,-1)
 
-            if not seed is None:
-                seed += 1
+        minDiag = 0.1*min(np.sqrt(Vpr.diagonal()))
+        # Make sure actual estimate is included once.
+        if np.any(np.max(np.abs(p_sample - np.array([pen2.lam for pen2 in rPen])),axis=1) < minDiag) == False:
+            p_sample = np.concatenate((np.array([pen2.lam for pen2 in rPen]).reshape(1,-1),p_sample),axis=0)
+        
+        if isinstance(family,Gaussian) and isinstance(family.link,Identity): # Strictly additive case
+            with managers.SharedMemoryManager() as manager, mp.Pool(processes=n_c) as pool:
+                # Create shared memory copies of data, indptr, and indices for X, XX, and y
+
+                # X
+                rows, cols, _, data, indptr, indices = map_csc_to_eigen(X)
+                shape_dat = data.shape
+                shape_ptr = indptr.shape
+                shape_y = y.shape
+
+                dat_mem = manager.SharedMemory(data.nbytes)
+                dat_shared = np.ndarray(shape_dat, dtype=np.double, buffer=dat_mem.buf)
+                dat_shared[:] = data[:]
+
+                ptr_mem = manager.SharedMemory(indptr.nbytes)
+                ptr_shared = np.ndarray(shape_ptr, dtype=np.int64, buffer=ptr_mem.buf)
+                ptr_shared[:] = indptr[:]
+
+                idx_mem = manager.SharedMemory(indices.nbytes)
+                idx_shared = np.ndarray(shape_dat, dtype=np.int64, buffer=idx_mem.buf)
+                idx_shared[:] = indices[:]
+
+                #XX
+                _, _, _, dataXX, indptrXX, indicesXX = map_csc_to_eigen((X.T@X).tocsc())
+                shape_datXX = dataXX.shape
+                shape_ptrXX = indptrXX.shape
+
+                dat_memXX = manager.SharedMemory(dataXX.nbytes)
+                dat_sharedXX = np.ndarray(shape_datXX, dtype=np.double, buffer=dat_memXX.buf)
+                dat_sharedXX[:] = dataXX[:]
+
+                ptr_memXX = manager.SharedMemory(indptrXX.nbytes)
+                ptr_sharedXX = np.ndarray(shape_ptrXX, dtype=np.int64, buffer=ptr_memXX.buf)
+                ptr_sharedXX[:] = indptrXX[:]
+
+                idx_memXX = manager.SharedMemory(indicesXX.nbytes)
+                idx_sharedXX = np.ndarray(shape_datXX, dtype=np.int64, buffer=idx_memXX.buf)
+                idx_sharedXX[:] = indicesXX[:]
+
+                # y
+                y_mem = manager.SharedMemory(y.nbytes)
+                y_shared = np.ndarray(shape_y, dtype=np.double, buffer=y_mem.buf)
+                y_shared[:] = y[:]
+
+                # Now compute reml for new candidates in parallel
+                args = zip(repeat(family),repeat(y_mem.name),repeat(dat_mem.name),
+                        repeat(ptr_mem.name),repeat(idx_mem.name),repeat(dat_memXX.name),
+                        repeat(ptr_memXX.name),repeat(idx_memXX.name),repeat(shape_y),
+                        repeat(shape_dat),repeat(shape_ptr),repeat(shape_datXX),repeat(shape_ptrXX),
+                        repeat(rows),repeat(cols),repeat(rPen),repeat(model.offset),p_sample)
+                
+                sample_Linvs, sample_coefs, sample_remls, sample_scales, sample_edfs, sample_llks = zip(*pool.starmap(_compute_VB_corr_terms_MP,args))
+                
+                remls.extend(list(sample_remls))
+                rGrid = p_sample
+        else: # all other models
+
+            rPens = []
+            for ps in p_sample:
+                rcPen = copy.deepcopy(rPen)
+                for ridx,rc in enumerate(ps):
+                    rcPen[ridx].lam = rc
+                rPens.append(rcPen)
+
+            if isinstance(family,Family):
+                origNH = None
+                args = zip(repeat(family),repeat(y),repeat(X),rPens,
+                            repeat(1),repeat(model.offset),repeat(None),
+                            repeat(method),repeat(True),repeat(origNH))
+                with mp.Pool(processes=n_c) as pool:
+                    sample_remls, sample_Linvs, _, _,sample_coefs, sample_scales, sample_edfs, sample_llks = zip(*pool.starmap(compute_reml_candidate_GAMM,args))
+            else:
+                origNH = None
+                args = zip(repeat(family),repeat(y),repeat(Xs),rPens,
+                            repeat(init_coef),repeat(len(init_coef)),
+                            repeat(model.coef_split_idx),repeat(method),
+                            repeat(1e-7),repeat(1),repeat(bfgs_options),
+                            repeat(origNH))
+                with mp.Pool(processes=n_c) as pool:
+                    sample_remls, _, sample_Linvs, sample_coefs, sample_edfs, sample_llks = zip(*pool.starmap(compute_REML_candidate_GSMM,args))
+                sample_scales = np.ones(p_sample.shape[0])
+
+
+            remls.extend(list(sample_remls))
+            rGrid = p_sample
+            rPens = None
+        
+    else:
+        # Generate \lambda values for which to compute REML, and Vb
+        p_sample = scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vpr,df=df,size=n_est,random_state=seed)
+        p_sample = np.exp(p_sample)
+
+        if len(np.ndarray.flatten(ep)) == 1: # Single lambda parameter in model
+            
+            if n_est == 1: # and single sample (n_est==1) - so p_sample needs to be shape (1,1)
+                p_sample = np.array([p_sample])
+
+            p_sample = p_sample.reshape(n_est,1) # p_sample needs to be shape (n_est,1)
+            
+        elif n_est == 1: # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
+            p_sample = np.array([p_sample]).reshape(1,-1)
+        
+        # Make sure actual estimate is included once.
+        minDiag = 0.1*min(np.sqrt(Vpr.diagonal()))
+        if np.any(np.max(np.abs(p_sample - np.array([pen2.lam for pen2 in rPen])),axis=1) < minDiag) == False:
+            p_sample = np.concatenate((np.array([pen2.lam for pen2 in rPen]).reshape(1,-1),p_sample),axis=0)
 
         for ps in p_sample:
             for ridx,rc in enumerate(ps):
                 rPen[ridx].lam = rc
             
             if isinstance(family,Family):
-                #print([penx.lam for penx in rPen])
-                reml,_,_,_,_,_,_,_ = compute_reml_candidate_GAMM(family,y,X,rPen,n_c,model.offset,method=method)
+                reml,Linv,LP,Pr,coef,scale,edf,llk = compute_reml_candidate_GAMM(family,y,X,rPen,n_c,model.offset,method=method,compute_inv=True)
 
             else:
-                reml,_,_,_,_,_ = compute_REML_candidate_GSMM(family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=method,bfgs_options=bfgs_options)
+                try:
+                    reml,V,_,coef,edf,llk = compute_REML_candidate_GSMM(family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=method,bfgs_options=bfgs_options)
+                except:
+                    warnings.warn(f"Unable to compute REML score for sample {np.exp(ps)}. Skipping.")
+                    continue
 
-            # Collect new remls and update grid of log(lambdas)
             remls.append(reml)
-            rGrid = np.concatenate((rGrid,ps.reshape(1,-1)),axis=0)
+            
+            if len(rGrid) == 0:
+                rGrid = ps.reshape(1,-1)
+            else:
+                rGrid = np.concatenate((rGrid,ps.reshape(1,-1)),axis=0)
 
-        Vp_next = updateVp(ep,remls,rGrid)
+    # Compute weights
+    # Compute weights proposed by Greven & Scheipl (2017) - still work under importance sampling case instead of grid case if we assume Vp
+    # is prior for \rho|\mathbf{y}.
+    if use_importance_weights and prior is None:
+        ws = scp.special.softmax(remls)
 
-        # Update
-        if strategy == "JJJ3":
-            Vp = Vp_next
-        else:
-            Vp = 0.99*Vp + 0.01*Vp_next
-        
-    #print(len(np.unique(rGrid,axis=0)),rGrid.shape)
-    if strategy == "JJJ3":
-        return Vp
-    
+    elif use_importance_weights and prior is not None: # Standard importance weights (e.g., Branchini & Elvira, 2024)
+        logp = prior.logpdf(np.log(rGrid))
+        q = scp.stats.multivariate_t(loc=np.ndarray.flatten(ep),shape=Vpr,df=df,allow_singular=True)
+        logq = q.logpdf(np.log(rGrid))
+
+        ws = scp.special.softmax(remls + logp - logq)
+
     else:
-        # Re-compute root of regularized VP (at this point Vp actually holds refined Vpr)
-        eig, U =scp.linalg.eigh(Vp)
-        ire = np.zeros_like(eig)
-        ire[eig > 0] = np.sqrt(eig[eig > 0])
-        Rir = np.diag(ire)@U.T # Root of refined regularized Vp
+        # Normal weights result in cancellation, i.e., just average
+        ws = scp.special.softmax(np.ones_like(remls))
 
-        # Make sure Vp is original
-        Vpr = copy.deepcopy(Vp)
-        Vp = orig_Vp
+    # Now estimare Vp from weights
 
-        return Vp, Vpr, Ri, Rir
+    # First update mean
+    ep = ws[0]* np.log(rGrid[0]).reshape(-1,1)
+    for ridx in range(1,rGrid.shape[0]):
+        ep += ws[ridx]* np.log(rGrid[ridx]).reshape(-1,1)
 
-def updateVp(ep,remls,rGrid):
+    # Now Vp
+    Vp = updateVp(ep,ws,rGrid)
+
+    # Compute root of VP
+    eig, U =scp.linalg.eigh(Vp)
+    ire = np.zeros_like(eig)
+    ire[eig > 0] = np.sqrt(eig[eig > 0])
+    Ri = np.diag(ire)@U.T # Root of Vp
+
+    Vp = Ri.T@Ri # Make sure Vp is PSD
+
+    # Now, in mgcv a regularized version is computed as well, which essentially sets all positive eigenvalues
+    # to a positive minimum. This regularized version is utilized in the smoothness uncertainty correction, so we compute it
+    # as well.
+    # See: https://github.com/cran/mgcv/blob/aff4560d187dfd7d98c7bd367f5a0076faf129b7/R/gam.fit3.r#L1010
+    ire2 = np.zeros_like(eig)
+    ire2[eig > 0] = 1/((1/np.sqrt(eig[eig > 0])) + 0.1)
+    Rir = np.diag(ire2)@U.T # Root of regularized Vp
+
+    Vpr = Rir.T@Rir
+
+    return Vp, Vpr, Ri, Rir,ep
+
+def updateVp(ep,ws,rGrid):
     """Update covariance matrix of posterior for :math:`\mathbf{p} = log(\\boldsymbol{\lambda})`. REML scores are used to
     approximate expectation, similar to what was suggested by Greven & Scheipl (2016).
 
@@ -949,19 +1014,19 @@ def updateVp(ep,remls,rGrid):
 
     :param ep: Model estimate log(\lambda), i.e., the expectation over rGrid
     :type ep: [float]
-    :param remls: REML score associated with each \lambda candidate in rGrid
-    :type remls: [float]
+    :param ws: weight associated with each log(\lambda) value used for numerical integration
+    :type ws: [float]
     :param rGrid: A 2d array, holding all \lambda samples considered so far. Each row is one sample
     :type rGrid: [float]
     :return: An estimate of the covariance matrix of log(\lambda) - 2d array of shape len(mp)*len(mp).
     :rtype: [float]
     """
-    ws = scp.special.softmax(remls)
+
     wp = (np.log(rGrid[0]).reshape(-1,1) - ep)
     # Vp = E[(wp-ep)(wp-ep)^T] - see Wikipedia
     Vp = ws[0]*(wp @ wp.T)
-    for ridx,r in enumerate(rGrid):
-        wp = (np.log(r).reshape(-1,1) - ep)
+    for ridx in range(1,rGrid.shape[0]):
+        wp = (np.log(rGrid[ridx]).reshape(-1,1) - ep)
         Vp += ws[ridx]*(wp @ wp.T)
     
     return Vp
@@ -1429,7 +1494,7 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
     if grid_type == "JJJ1" or grid_type == "JJJ2" or grid_type == "JJJ3":
         # Approximate Vp via finitie differencing
         if Vp_fidiff:
-            Vp, Vpr, Vr, Vrr = estimateVp(model,n_c=n_c,strategy="JJJ1")
+            Vp, Vpr, Vr, Vrr = estimateVp(model,n_c=n_c,grid_type="JJJ1",Vp_fidiff=True)
         else:
             # Take PQL approximation instead
             Vp, Vpr, Vr, Vrr, _, dBetadRhos = compute_Vp_WPS(model.lvi if isinstance(family,Family) else model.overall_lvi,
@@ -1455,10 +1520,6 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
                 # Can enforce lower bound of JJJ1 here
                 Vlb = copy.deepcopy(V)
 
-        if grid_type == "JJJ2" or grid_type == "JJJ3": # Sample from regularized version
-            orig_Vp = copy.deepcopy(Vp)
-            Vp = Vpr
-
     rGrid = np.array([])
     remls = []
     Vs = []
@@ -1469,19 +1530,18 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
     scales = []
 
     if grid_type != "JJJ1":
-        # Iteratively estimate/refine (JJJ3 vs JJJ2) Vp - covariance matrix of log(\lambda) to guide further REML grid sampling
+        # Generate \lambda values from Vpr for which to compute REML, and Vb
         if isinstance(family,Family):
             ep = np.log(np.array([min(b,max(a,pen.lam)) for pen in model.formula.penalties]).reshape(-1,1))
         else:
             ep = np.log(np.array([min(b,max(a,pen.lam)) for pen in model.overall_penalties]).reshape(-1,1))
         #print(ep)
 
-        # Now continuously update Vp and generate more REML samples in the process
         n_est = nR
         
         if X.shape[0] < 1e5 and X.shape[1] < 2000 and n_c > 1: # Parallelize grid search
             # Generate next \lambda values for which to compute REML, and Vb
-            p_sample = scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=n_est,random_state=seed)
+            p_sample = scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vpr,df=df,size=n_est,random_state=seed)
             p_sample = np.exp(p_sample)
 
             if len(np.ndarray.flatten(ep)) == 1: # Single lambda parameter in model
@@ -1494,7 +1554,7 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
             elif n_est == 1: # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
                 p_sample = np.array([p_sample]).reshape(1,-1)
 
-            minDiag = 0.1*min(np.sqrt(Vp.diagonal()))
+            minDiag = 0.1*min(np.sqrt(Vpr.diagonal()))
             # Make sure actual estimate is included once.
             if np.any(np.max(np.abs(p_sample - np.array([pen2.lam for pen2 in rPen])),axis=1) < minDiag) == False:
                 p_sample = np.concatenate((np.array([pen2.lam for pen2 in rPen]).reshape(1,-1),p_sample),axis=0)
@@ -1605,8 +1665,8 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
                 rPens = None
             
         else:
-            # Generate next \lambda values for which to compute REML, and Vb
-            p_sample = scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vp,df=df,size=n_est,random_state=seed)
+            # Generate \lambda values for which to compute REML, and Vb
+            p_sample = scp.stats.multivariate_t.rvs(loc=np.ndarray.flatten(ep),shape=Vpr,df=df,size=n_est,random_state=seed)
             p_sample = np.exp(p_sample)
 
             if len(np.ndarray.flatten(ep)) == 1: # Single lambda parameter in model
@@ -1620,7 +1680,7 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
                 p_sample = np.array([p_sample]).reshape(1,-1)
             
             # Make sure actual estimate is included once.
-            minDiag = 0.1*min(np.sqrt(Vp.diagonal()))
+            minDiag = 0.1*min(np.sqrt(Vpr.diagonal()))
             if np.any(np.max(np.abs(p_sample - np.array([pen2.lam for pen2 in rPen])),axis=1) < minDiag) == False:
                 p_sample = np.concatenate((np.array([pen2.lam for pen2 in rPen]).reshape(1,-1),p_sample),axis=0)
 
@@ -1664,10 +1724,6 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
                 else:
                     rGrid = np.concatenate((rGrid,ps.reshape(1,-1)),axis=0)
     
-    if grid_type == "JJJ2" or grid_type == "JJJ3":
-            # Make sure Vp is original not regularized
-            Vpr = copy.deepcopy(Vp)
-            Vp = orig_Vp
     ###################################################### Prepare computation of tau ###################################################### 
 
     if grid_type != "JJJ1":
