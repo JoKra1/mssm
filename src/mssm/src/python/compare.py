@@ -13,15 +13,15 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
                 nR=250,
                 n_c=10,
                 alpha=0.05,
-                grid='JJJ2',
+                grid='JJJ1',
                 a=1e-7,b=1e7,df=40,
                 verbose=False,
                 drop_NA=True,
                 method="Chol",
                 seed=None,
-                use_upper=True,
+                only_expected_edf=True,
                 Vp_fidiff=True,
-                use_reml_weights=True,
+                use_importance_weights=True,
                 prior=None,
                 recompute_H=False,
                 **bfgs_options):
@@ -35,11 +35,11 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
     To get the AIC for each model, 2*edf is added to twice the negative (conditional) likelihood (see Wood et al., 2016).
     
     By default (``correct_V=True``), ``mssm`` will attempt to correct the edf for uncertainty in the estimated :math:`\lambda` parameters. Which correction is computed depends on the
-    choice for the ``grid`` argument. **Approximately** the analytic solution for the correction proposed by Wood, Pya, & Säfken (2016) is computed  when ``grid='JJJ1'`` - which is exact for
+    choice for the ``grid`` argument. **Approximately** the analytic solution for the correction proposed by Wood, Pya, & Säfken (2016) is computed  when ``grid='JJJ1'`` (the default) - which is exact for
     strictly Gaussian and canonical Generalized additive models. This is not efficient for sparse models and will thus become too expensive for large sparse multi-level models.
-    When setting ``grid='JJJ2'`` (default), the analytic solution proposed by Wood, Pya, & Säfken (2016) is used as a basis for the correction and subsequently refined via numeric integration. This requires a costly sampling step
-    (see Greven & Scheipl, 2016 and the ``correct_VB`` function in the utils module) which will take quite some time for reasonably large models with more than 3-4 smoothing parameters, but remains
-    efficient for sparse multi-level models (assuming ``use_upper`` is set to True and ``correct_t1`` is set to False).
+    When setting ``grid='JJJ2'``, the analytic solution proposed by Wood, Pya, & Säfken (2016) is used as a basis for the correction and subsequently refined via numeric integration. This requires a costly sampling step
+    (see Greven & Scheipl, 2016 and the ``correct_VB`` function in the utils module) which will take quite some time for reasonably large models with more than 5-10 smoothing parameters, but remains
+    efficient for sparse multi-level models (assuming ``only_expected_edf`` is set to True and ``correct_t1`` is set to False).
 
     In case either form of correction is too expensive, it might be better to rely on hypothesis tests for individual smooths, confidence intervals, and penalty-based selection approaches instead (see Marra & Wood, 2011 for details on the latter).
 
@@ -47,8 +47,8 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
     for the GLRT (based on recomendation given in section 6.12.4 in Wood, 2017). The AIC (Wood, 2017) of both models will **still be based on the regular (smoothness uncertainty corrected) edf**.
 
     The computation here is different to the one performed by the ``compareML`` function in the R-package ``itsadug`` - which rather performs a version of the marginal GLRT
-    (also discussed in Wood, 2017: 6.12.4) - and more similar to the ``anova.gam`` implementation provided by ``mgcv`` (if ``grid='JJJ1'). The returned p-value is approximate - very **very**
-    much so if ``correct_V=False``. Also, the GLRT should **no**t be used to compare models differing in their random effect structures - the AIC is more appropriate for this (see Wood, 2017: 6.12.4).
+    (also discussed in Wood, 2017: 6.12.4) - and more similar to the ``anova.gam`` implementation provided by ``mgcv`` (particularly if ``grid='JJJ1'). The returned p-value is approximate - very **very**
+    much so if ``correct_V=False`` (this should really never be done). Also, the GLRT should **not** be used to compare models differing in their random effect structures - the AIC is more appropriate for this (see Wood, 2017: 6.12.4).
 
     References:
      - Marra, G., & Wood, S. N. (2011) Practical variable selection for generalized additive models.
@@ -70,15 +70,15 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
     :type perform_GLRT: bool, optional
     :param nR: In case ``grid!="JJJ1"``, ``nR`` samples/reml scores are generated/computed to numerically evaluate the expectations necessary for the uncertainty correction, defaults to 250
     :type nR: int, optional
-    :param n_c: Number of cores to use to compute the smoothness uncertaincy correction, defaults to 10
+    :param n_c: Number of cores to use during parallel parts of the correction, defaults to 10
     :type n_c: int, optional
     :param alpha: alpha level of the GLRT. Defaults to 0.05
     :type alpha: float, optional
-    :param grid: How to compute the smoothness uncertainty correction, defaults to 'JJJ2'
+    :param grid: How to compute the smoothness uncertainty correction, defaults to 'JJJ1'
     :type grid: str, optional
-    :param a: Minimum :math:`\lambda` value that is included when correcting for uncertainty and ``grid!='JJJ1'``. In addition, any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})`) which are smaller than this are set to this value as well, defaults to 1e-7 the minimum possible estimate
+    :param a: Any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})` used to sample ``nR`` candidates) which are smaller than this are set to this value as well, defaults to 1e-7 the minimum possible estimate
     :type a: float, optional
-    :param b: Maximum :math:`\lambda` value that is included when correcting for uncertainty and ``grid!='JJJ1'``. In addition, any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})`) which are larger than this are set to this value as well, defaults to 1e7 the maximum possible estimate
+    :param b: Any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})` used to sample ``nR`` candidates) which are larger than this are set to this value as well, defaults to 1e7 the maximum possible estimate
     :type b: float, optional
     :param df: Degrees of freedom used for the multivariate t distribution used to sample the next set of candidates. Setting this to ``np.inf`` means a multivariate normal is used for sampling, defaults to 40
     :type df: int, optional
@@ -90,12 +90,16 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
     :type method: str,optional
     :param seed: Seed to use for random parts of the correction. Defaults to None
     :type seed: int,optional
-    :param use_upper: Whether to compute edf. from trace of covariance matrix (``use_upper=False``) or based on numeric integration weights. The latter is much more efficient for sparse models. Only makes sense when ``grid='JJJ2'``. Defaults to True
-    :type use_upper: bool,optional
-    :param Vp_fidiff: Whether to rely on a finite difference approximation to compute :math:`\mathbf{V}_{\\boldsymbol{p}}` for grid ``JJJ1`` and ``JJJ2`` or on a PQL approximation. The latter is exact for Gaussian and canonical GAMs and far cheaper if many penalties are to be estimated. Defaults to True (Finite difference approximation)
+    :param only_expected_edf: Whether to compute edf. by explicitly forming covariance matrix (``only_expected_edf=False``) or not. The latter is much more efficient for sparse models at the cost of access to the covariance matrix and the ability to compute an upper bound on the smoothness uncertainty corrected edf. Only makes sense when ``grid_type!='JJJ1'``. Defaults to False
+    :type only_expected_edf: bool,optional
+    :param Vp_fidiff: Whether to rely on a finite difference approximation to compute :math:`\mathbf{V}_{\\boldsymbol{p}}` or on a PQL approximation. The latter is exact for Gaussian and canonical GAMs and far cheaper if many penalties are to be estimated. Defaults to False (PQL approximation)
     :type Vp_fidiff: bool,optional
-    :param use_reml_weights: Whether to rely on REMl scores to compute the numerical integration when ``grid_type != 'JJJ1'`` or on the log-densities of :math:`\mathbf{V}_{\\boldsymbol{p}}` - the latter assumes that the unconditional posterior is normal. Defaults to True (REML scores are used)
-    :type use_reml_weights: bool,optional
+    :param use_importance_weights: Whether to rely importance weights to compute the numerical integration when ``grid_type != 'JJJ1'`` or on the log-densities of :math:`\mathbf{V}_{\\boldsymbol{p}}` - the latter assumes that the unconditional posterior is normal. Defaults to True (Importance weights are used)
+    :type use_importance_weights: bool,optional
+    :param prior: An (optional) instance of an arbitrary class that has a ``.logpdf()`` method to compute the prior log density of a sampled candidate. If this is set to ``None``, the prior is assumed to coincide with the proposal distribution, simplifying the importance weight computation. Ignored when ``use_importance_weights=False``. Defaults to None
+    :type prior: any, optional
+    :param recompute_H: Whether or not to re-compute the Hessian of the log-likelihood at an estimate of the mean of the Bayesian posterior :math:`\\boldsymbol{\\beta}|y` before computing the (uncertainty/bias corrected) edf. Defaults to False
+    :type recompute_H: bool, optional
     :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100. Defaults to None.
     :type bfgs_options: key=value,optional
     :raises ValueError: If both models are from different families.
@@ -121,12 +125,12 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
             print("Correcting for uncertainty in lambda estimates...\n")
         
         #V,LV,Vp,Vpr,edf,total_edf,edf2,total_edf2,upper_edf
-        _,_,_,_,_,DOF1,_,DOF12,upper_edf1 = correct_VB(model1,nR=nR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,only_expected_edf=(use_upper and (correct_t1==False)),Vp_fidiff=Vp_fidiff,use_reml_weights=use_reml_weights,prior=prior,recompute_H=recompute_H,seed=seed,**bfgs_options)
-        _,_,_,_,_,DOF2,_,DOF22,upper_edf2 = correct_VB(model2,nR=nR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,only_expected_edf=(use_upper and (correct_t1==False)),Vp_fidiff=Vp_fidiff,use_reml_weights=use_reml_weights,prior=prior,recompute_H=recompute_H,seed=seed,**bfgs_options)
+        _,_,_,_,_,DOF1,_,DOF12,expected_edf1,_ = correct_VB(model1,nR=nR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,only_expected_edf=(only_expected_edf and (correct_t1==False)),Vp_fidiff=Vp_fidiff,use_importance_weights=use_importance_weights,prior=prior,recompute_H=recompute_H,seed=seed,**bfgs_options)
+        _,_,_,_,_,DOF2,_,DOF22,expected_edf2,_ = correct_VB(model2,nR=nR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,only_expected_edf=(only_expected_edf and (correct_t1==False)),Vp_fidiff=Vp_fidiff,use_importance_weights=use_importance_weights,prior=prior,recompute_H=recompute_H,seed=seed,**bfgs_options)
         
-        if use_upper:
-            DOF1 = upper_edf1
-            DOF2 = upper_edf2
+        if only_expected_edf:
+            DOF1 = expected_edf1
+            DOF2 = expected_edf2
         
         if correct_t1:
             # Section 6.12.4 suggests replacing t (edf) with t1 (2*t - (F@F).trace()) with F=(X.T@X+S_\llambda)^{-1}@X.T@X for GLRT - with the latter also being corrected for

@@ -1284,30 +1284,58 @@ def compute_Vb_corr_WPS(Vbr,Vpr,Vr,H,S_emb,penalties,coef,scale=1):
     # Done, don't forget to scale Vcc since nH was unscaled!
     return Vc, scale*Vcc
 
+class RhoPrior:
+    """
+    Base class to demonstrate the functionlaity that any prior passed to the correct_VB function has to implement.
+    """
 
-def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_t=True,form_t1=False,verbose=False,drop_NA=True,method="Chol",only_expected_edf=False,Vp_fidiff=True,use_reml_weights=True,prior=None,recompute_H=False,seed=None,**bfgs_options):
-    """Estimate :math:`\mathbf{V}`, the covariance matrix of the unconditional posterior :math:`\\boldsymbol{\\beta} | y \sim N(\hat{\\boldsymbol{\\beta}},\\mathbf{V})` to account for smoothness uncertainty.
+    def __init__(self,*args,**kwargs):
+        self.args = args
+        self.kwargs = kwargs
+    
+    def logpdf(self, rho:np.ndarray):
+        """Compute log density for log smoothing penalty parameters included in rho under this prior.
+
+        :param rho: Numpy array of shape (nR,nrho) containing nR proposed candidate vectors for the nrho log-smoothing parameters.
+        :type rho: np.ndarray
+        """
+        pass
+
+
+class DummyRhoPrior(RhoPrior):
+    """
+    Simple uniform prior for rho - the log-smoothing penalty parameters
+    """
+
+    def __init__(self, a=np.log(1e-7),b=np.log(1e7)):
+        super().__init__(a=a,b=b)
+    
+    def logpdf(self, rho):
+        a = self.kwargs["a"]
+        b = self.kwargs["b"]
+        
+        ld = np.zeros(rho.shape[0])
+        ld[(np.min(rho,axis=1) < a) | (np.max(rho,axis=1) > b)] = -np.inf
+        return ld
+
+
+def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_t=True,form_t1=False,verbose=False,drop_NA=True,method="Chol",only_expected_edf=False,Vp_fidiff=False,use_importance_weights=True,prior=None,recompute_H=False,seed=None,**bfgs_options):
+    """Estimate :math:`\\tilde{\mathbf{V}}`, the covariance matrix of the marginal posterior :math:`\\boldsymbol{\\beta} | y` to account for smoothness uncertainty.
     
     Wood et al. (2016) and Wood (2017) show that when basing conditional versions of model selection criteria or hypothesis
-    tests on :math:`\mathbf{V}_{\\boldsymbol{\\beta}}`, which is the co-variance matrix for the conditional posterior of :math:`\\boldsymbol{\\beta}` so that
-    :math:`\\boldsymbol{\\beta} | y, \\boldsymbol{\lambda} \sim N(\hat{\\boldsymbol{\\beta}},\mathbf{V}_{\\boldsymbol{\\beta}})`, the tests are severely biased. To correct for this they
-    show that uncertainty in :math:`\\boldsymbol{\lambda}` needs to be accounted for. Hence they suggest to base these tests on :math:`\mathbf{V}`, the covariance matrix
-    of the **unconditional posterior** :math:`\\boldsymbol{\\beta} | y \sim N(\hat{\\boldsymbol{\\beta}},\\mathbf{V})`. They show how to obtain an estimate of :math:`\mathbf{V}`,
-    but this requires :math:`\mathbf{V}_{\\boldsymbol{p}}` - an estimate of the covariance matrix of :math:`\\boldsymbol{p}=log(\\boldsymbol{\lambda})`. :math:`\mathbf{V}_{\\boldsymbol{p}}` requires derivatives that are not available
+    tests on :math:`\mathbf{V}`, which is the co-variance matrix for the normal approximation to the conditional posterior of :math:`\\boldsymbol{\\beta}` so that
+    :math:`\\boldsymbol{\\beta} | y, \\boldsymbol{\lambda} \sim N(\hat{\\boldsymbol{\\beta}},\mathbf{V})`, the tests are severely biased. To correct for this they
+    show that uncertainty in :math:`\\boldsymbol{\lambda}` needs to be accounted for. Hence they suggest to base these tests on :math:`\\tilde{\mathbf{V}}`, the covariance matrix
+    of the normal approximation to the **marginal posterior** :math:`\\boldsymbol{\\beta} | y`. They show how to obtain an estimate of :math:`\\tilde{\mathbf{V}}`,
+    but this requires :math:`\mathbf{V}^{\\boldsymbol{\\rho}}` - an estimate of the covariance matrix of the normal approximation to the posterior of :math:`\\boldsymbol{\\rho}=log(\\boldsymbol{\lambda})`. Computing :math:`\mathbf{V}^{\\boldsymbol{\\rho}}` requires derivatives that are not available
     when using the efs update.
 
-    Greven & Scheipl (2016) in their comment to the paper by Wood et al. (2016) show another option to estimate :math:`\mathbf{V}` that does not require :math:`\mathbf{V}_{\\boldsymbol{p}}`,
-    based either on the total variance property and numeric integration. The latter is implemented below, based on the
-    equations for the expectations outlined in their response.
-
-    This function implements multiple strategies to correct for smoothing parameter uncertainty, based on the Wood et al. (2016) and Greven & Scheipl (2016) proposals. The most straightforward strategy
-    (``grid_type = 'JJJ1'``) is to obtain a finite difference approximation for :math:`\mathbf{V}_{\\boldsymbol{p}}` and to then complete approximately the Wood et al. (2016) correction (exactly done here only
-    for Gaussian additive or canonical Generalized models). This is too costly for large sparse multi-level models. In those cases, the Greven & Scheipl (2016) proposal is attractive. When ``grid_type = 'JJJ2'``, the
-    approximation to :math:`\mathbf{V}_{\\boldsymbol{p}}` is used to adaptively sample the grid to numerically evaluate the expectations required in their proposal. From this grid, :math:`\mathbf{V}` could then be
-    evaluated as shown by Greven & Scheipl (2016). However, by default :math:`\mathbf{V}` is here obtained by first computing it according to the Wood et al. (2016) correction and then taking a weighted sum of
-    the former (weighted by ``V_shrinkage_weight``) and the :math:`\mathbf{V}` (weighted by ``1-V_shrinkage_weight``) obtained as suggested by Greven & Scheipl (2016). Setting ``V_shrinkage_weight=0`` to 0
-    (and ``only_expected_edf=False``) thus recovers exactly the Greven & Scheipl (2016) correction, albeit based on an adaptive grid. This is not efficient for large sparse models either. However, when setting
-    ``only_expected_edf=True``, :math:`\mathbf{V}` is never actually computed and the uncertainty corrected model edf are instead approximated directly. This remains efficient for large sparse multi-level models.
+    This function implements multiple strategies to correct for smoothing parameter uncertainty, based on the proposals by  Wood et al. (2016) and Greven & Scheipl (2016). The most straightforward strategy
+    (``grid_type = 'JJJ1'``) is to obtain a PQL or finite difference approximation for :math:`\mathbf{V}^{\\boldsymbol{\\rho}}` and to then complete approximately the Wood et al. (2016) correction (this will be exact
+    for Gaussian additive or canonical Generalized models). This is too costly for large sparse multi-level models and not exact for more generic models. The MC based alternative available via ``grid_type = 'JJJ2'`` addresses the first problem (**Important**, set: ``use_importance_weights=False`` and ``only_expected_edf=True``.). The second MC based alternative
+    available via ``grid_type = 'JJJ3'`` is most appropriate for more generic models (The ``prior`` argument can be used to specify any prior to be placed on :math:`\\boldsymbol{\\rho}` also you will need to set: ``use_importance_weights=True`` and ``only_expected_edf=True``).
+    Both strategies use a PQL or finite difference approximation to :math:`\mathbf{V}^{\\boldsymbol{\\rho}}` to obtain ``nR`` samples from the (normal approximation) to the posterior of :math:`\\boldsymbol{\\rho}`.
+    From these samples mssm then estimates :math:`\\tilde{\mathbf{V}}` as described in more detail by Krause et al. (in preparation).
 
     References:
      - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
@@ -1319,15 +1347,15 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_
     :type model: GAMM or GAMMLSS or GSMM
     :param nR: In case ``grid!="JJJ1"``, ``nR`` samples/reml scores are generated/computed to numerically evaluate the expectations necessary for the uncertainty correction, defaults to 250
     :type nR: int, optional
-    :param grid_type: How to compute the smoothness uncertainty correction - see above for details, defaults to 'JJJ3'
+    :param grid_type: How to compute the smoothness uncertainty correction - see above for details, defaults to 'JJJ1'
     :type grid_type: str, optional
-    :param a: Minimum :math:`\lambda` value that is included when forming the initial grid. In addition, any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})`) which are smaller than this are set to this value as well, defaults to 1e-7 the minimum possible estimate
+    :param a: Any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{\\rho}|y \sim N(log(\hat{\\boldsymbol{\\rho}}),\mathbf{V}^{\\boldsymbol{\\rho}})` used to sample ``nR`` candidates) which are smaller than this are set to this value as well, defaults to 1e-7 the minimum possible estimate
     :type a: float, optional
-    :param b: Maximum :math:`\lambda` value that is included when forming the initial grid. In addition, any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})`) which are larger than this are set to this value as well, defaults to 1e7 the maximum possible estimate
+    :param b: Any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{\\rho}|y \sim N(log(\hat{\\boldsymbol{\\rho}}),\mathbf{V}^{\\boldsymbol{\\rho}})` used to sample ``nR`` candidates) which are larger than this are set to this value as well, defaults to 1e7 the maximum possible estimate
     :type b: float, optional
     :param df: Degrees of freedom used for the multivariate t distribution used to sample the next set of candidates. Setting this to ``np.inf`` means a multivariate normal is used for sampling, defaults to 40
     :type df: int, optional
-    :param n_c: Number of cores to use to compute the correction, defaults to 10
+    :param n_c: Number of cores to use during parallel parts of the correction, defaults to 10
     :type n_c: int, optional
     :param form_t: Whether or not the smoothness uncertainty corrected edf should be computed, defaults to True
     :type form_t: bool, optional
@@ -1339,17 +1367,21 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_
     :type drop_NA: bool,optional
     :param method: Which method to use to solve for the coefficients (and smoothing parameters). The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR/Chol". In that case a QR decomposition is used - which is first pivoted to maximize sparsity in the resulting decomposition but also pivots for stability in order to get an estimate of rank defficiency. A Cholesky is than used using the combined pivoting strategy obtained from the QR. This takes substantially longer. If this is set to ``'qEFS'``, then the coefficients are estimated via quasi netwon and the smoothing penalties are estimated from the quasi newton approximation to the hessian. This only requieres first derviative information. Defaults to "Chol".
     :type method: str,optional
-    :param only_expected_edf: Whether to compute edf. from trace of covariance matrix (``only_expected_edf=False``) or based on numeric integration weights. The latter is much more efficient for sparse models. Only makes sense when ``grid_type!='JJJ1'``. Defaults to True
+    :param only_expected_edf: Whether to compute edf. by explicitly forming covariance matrix (``only_expected_edf=False``) or not. The latter is much more efficient for sparse models at the cost of access to the covariance matrix and the ability to compute an upper bound on the smoothness uncertainty corrected edf. Only makes sense when ``grid_type!='JJJ1'``. Defaults to False
     :type only_expected_edf: bool,optional
-    :param Vp_fidiff: Whether to rely on a finite difference approximation to compute :math:`\mathbf{V}_{\\boldsymbol{p}}` for grid_type ``JJJ1`` and ``JJJ2`` or on a PQL approximation. The latter is exact for Gaussian and canonical GAMs and far cheaper if many penalties are to be estimated. Defaults to True (Finite difference approximation)
+    :param Vp_fidiff: Whether to rely on a finite difference approximation to compute :math:`\mathbf{V}^{\\boldsymbol{\\rho}}` or on a PQL approximation. The latter is exact for Gaussian and canonical GAMs and far cheaper if many penalties are to be estimated. Defaults to False (PQL approximation)
     :type Vp_fidiff: bool,optional
-    :param use_reml_weights: Whether to rely on REMl scores to compute the numerical integration when ``grid_type != 'JJJ1'`` or on the log-densities of :math:`\mathbf{V}_{\\boldsymbol{p}}` - the latter assumes that the unconditional posterior is normal. Defaults to True (REML scores are used)
-    :type use_reml_weights: bool,optional
+    :param use_importance_weights: Whether to rely importance weights to compute the numerical integration when ``grid_type != 'JJJ1'`` or on the log-densities of :math:`\mathbf{V}^{\\boldsymbol{\\rho}}` - the latter assumes that the unconditional posterior is normal. Defaults to True (Importance weights are used)
+    :type use_importance_weights: bool,optional
+    :param prior: An (optional) instance of an arbitrary class that has a ``.logpdf()`` method to compute the prior log density of a sampled candidate. If this is set to ``None``, the prior is assumed to coincide with the proposal distribution, simplifying the importance weight computation. Ignored when ``use_importance_weights=False``. Defaults to None
+    :type prior: any, optional
+    :param recompute_H: Whether or not to re-compute the Hessian of the log-likelihood at an estimate of the mean of the Bayesian posterior :math:`\\boldsymbol{\\beta}|y` before computing the (uncertainty/bias corrected) edf. Defaults to False
+    :type recompute_H: bool, optional
     :param seed: Seed to use for random parts of the correction. Defaults to None
     :type seed: int,optional
     :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100. Defaults to None.
     :type bfgs_options: key=value,optional
-    :return: A tuple containing: V - an estimate of the unconditional covariance matrix, LV - the Cholesky of the former, Vp - an estimate of the covariance matrix for :math:`\\boldsymbol{\\rho}`, Vpr - a root of the former, edf - smoothness uncertainty corrected coefficient-wise edf, total_edf - smoothness uncertainty corrected edf, edf2 - smoothness uncertainty + smoothness bias corrected coefficient-wise edf, total_edf2 - smoothness uncertainty + smoothness bias corrected edf, upper_edf - a heuristic upper bound on the uncertainty corrected edf
+    :return: A tuple containing: V - an estimate of the unconditional covariance matrix, LV - the Cholesky of the former, Vp - an estimate of the covariance matrix for :math:`\\boldsymbol{\\rho}`, Vpr - a root of the former, edf - smoothness uncertainty corrected coefficient-wise edf, total_edf - smoothness uncertainty corrected edf, edf2 - smoothness uncertainty + smoothness bias corrected coefficient-wise edf, total_edf2 - smoothness uncertainty + smoothness bias corrected edf, expected_edf - a heuristic upper bound on the uncertainty corrected edf
     :rtype: (scipy.sparse.csc_array,scipy.sparse.csc_array,numpyp.array,numpy.array,numpy.array,float,numpy.array,float,float) 
     """
     np_gen = np.random.default_rng(seed)
@@ -1408,7 +1440,7 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_
                                                  scale=orig_scale if isinstance(family,Family) else 1)
 
         # Compute approximate WPS (2016) correction
-        if grid_type == "JJJ1":
+        if grid_type == "JJJ1" or (grid_type == "JJJ3" and only_expected_edf == False):
             if isinstance(family,Family):
                 Vc,Vcc = compute_Vb_corr_WPS(model.lvi,Vpr,Vr,model.hessian,S_emb,model.formula.penalties,model.coef.reshape(-1,1),scale=orig_scale)
             else:
@@ -1418,7 +1450,11 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_
                 V = Vc + Vcc + ((model.lvi.T@model.lvi)*orig_scale)
             else:
                 V = Vc + Vcc + model.overall_lvi.T@model.overall_lvi
-        
+            
+            if grid_type == "JJJ3":
+                # Can enforce lower bound of JJJ1 here
+                Vlb = copy.deepcopy(V)
+
         if grid_type == "JJJ2" or grid_type == "JJJ3": # Sample from regularized version
             orig_Vp = copy.deepcopy(Vp)
             Vp = Vpr
@@ -1637,12 +1673,14 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_
     if grid_type != "JJJ1":
         # Compute weights proposed by Greven & Scheipl (2017) - still work under importance sampling case instead of grid case if we assume Vp
         # is prior for \rho|\mathbf{y}.
-        if use_reml_weights and prior is None:
+        if use_importance_weights and prior is None:
             ws = scp.special.softmax(remls)
 
-        elif use_reml_weights and prior is not None: # Standard importance weights (e.g., Branchini & Elvira, 2024)
+        elif use_importance_weights and prior is not None: # Standard importance weights (e.g., Branchini & Elvira, 2024)
             logp = prior.logpdf(np.log(rGrid))
-            logq = scp.stats.multivariate_t.logpdf(np.log(rGrid),loc=np.ndarray.flatten(ep),shape=Vpr,df=df,allow_singular=True)
+            q = scp.stats.multivariate_t(loc=np.ndarray.flatten(ep),shape=Vpr,df=df,allow_singular=True)
+            logq = q.logpdf(np.log(rGrid))
+
             ws = scp.special.softmax(remls + logp - logq)
 
         else:
@@ -1722,21 +1760,22 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_
                 print(f"Recomputed negative Hessian. 2 Norm of coef. difference: {np.linalg.norm(mean_coef-model.coef.reshape(-1,1))}. F. Norm of n. Hessian difference: {scp.sparse.linalg.norm(nH + model.hessian)}")
 
         else:
+            mean_coef = None
             nH = -1*model.hessian
 
         ###################################################### Compute tau ###################################################### 
 
         if only_expected_edf:
             # Compute correction of edf directly..
-            upper_edf = max(model.edf,np.sum(ws*edfs))
+            expected_edf = max(model.edf,np.sum(ws*edfs))
 
             if grid_type == 'JJJ2':
                 # Can now add remaining correction term
                 
                 # Now have Vc = Vcr.T @ Vcr, so:
                 # tr(Vc@(-1*model.hessian)) = tr(Vcr.T @ Vcr@(-1*model.hessian)) = tr(Vcr@ (-1*model.hessian)@Vcr.T)
-                #upper_edf += (Vc@(-1*model.hessian)).trace()
-                upper_edf += (Vcr@ (nH)@Vcr.T).trace()
+                #expected_edf += (Vc@(-1*model.hessian)).trace()
+                expected_edf += (Vcr@ (nH)@Vcr.T).trace()
 
             elif grid_type == 'JJJ3':
                 # Correct based on G&S expectations instead
@@ -1752,18 +1791,18 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_
                 
                 # Enforce lower bound of JJJ2
                 if (Vcr@ (nH)@Vcr.T).trace() > (tr1 - (tr2.T@(nH)@tr2)[0,0]):
-                    upper_edf += (Vcr@ (nH)@Vcr.T).trace()
+                    expected_edf += (Vcr@ (nH)@Vcr.T).trace()
                 else:
-                    upper_edf += tr1 - (tr2.T@(nH)@tr2)[0,0]
+                    expected_edf += tr1 - (tr2.T@(nH)@tr2)[0,0]
                     
             if verbose:
                 print(f"Correction was based on {rGrid.shape[0]} samples in total.")
 
-            return None,None,None,None,None,None,None,None,upper_edf
+            return None,None,None,None,None,None,None,None,expected_edf,mean_coef
         else:
-            upper_edf = None
+            expected_edf = None
         
-        ###################################################### Compute full covariance matrix ###################################################### 
+        ###################################################### Compute tau and full covariance matrix ###################################################### 
 
         if grid_type == 'JJJ2':
             
@@ -1817,24 +1856,30 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_
                     Vr2 += ws[ri]*(coefs[ri]@coefs[ri].T)
                     Vr3 += ws[ri]*coefs[ri]
             
-            if (Vr1@(nH)).trace() < model.edf:
-                nH = -1 * model.hessian # Reset nH
-
-                if isinstance(family,Family):
-                    Vr1 = model.lvi.T@model.lvi*orig_scale
-                else:
-                    Vr1 = model.overall_lvi.T@model.overall_lvi
+            #if (Vr1@(nH)).trace() < model.edf:
+            #    nH = -1 * model.hessian # Reset nH
+            #
+            #    if isinstance(family,Family):
+            #        Vr1 = model.lvi.T@model.lvi*orig_scale
+            #    else:
+            #        Vr1 = model.overall_lvi.T@model.overall_lvi
 
             # Now, Greven & Scheipl provide final estimate =
             # E_{p|y}[V_\boldsymbol{\beta}(\lambda)] + E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] - E_{p|y}[\boldsymbol{\beta}] E_{p|y}[\boldsymbol{\beta}]^T
-            # but we enforce lower bound of JJJ2 again
-            if (Vcr @ (nH) @ Vcr.T).trace() > ((Vr2 - (Vr3@Vr3.T)) @ (nH)).trace():
-                V = Vr1 + Vcr.T @ Vcr
-            else:
-                V = Vr1 + Vr2 - (Vr3@Vr3.T)
+            # Enforce lower bound of JJJ2 again
+            #if (Vcr @ (nH) @ Vcr.T).trace() > ((Vr2 - (Vr3@Vr3.T)) @ (nH)).trace():
+            #    V = Vr1 + Vcr.T @ Vcr
+            #else:
+            V = Vr1 + Vr2 - (Vr3@Vr3.T)
+            
+            # Enforce lower bound of JJJ1
+            if (Vlb@(-1 * model.hessian)).trace() > (V@nH).trace():
+                nH = -1 * model.hessian
+                V = Vlb
             
     else:
-        upper_edf = None
+        mean_coef = None
+        expected_edf = None
         nH = -1 * model.hessian
 
     # Check V is full rank - can use LV for sampling as well..
@@ -1878,4 +1923,4 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ3',a=1e-7,b=1e7,df=40,n_c=10,form_
     if verbose and grid_type != "JJJ1":
         print(f"Correction was based on {rGrid.shape[0]} samples in total.")    
 
-    return V,LV,Vp,Vpr,edf,total_edf,edf2,total_edf2,upper_edf
+    return V,LV,Vp,Vpr,edf,total_edf,edf2,total_edf2,expected_edf,mean_coef
