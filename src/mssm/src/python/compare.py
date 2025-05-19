@@ -19,8 +19,8 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
                 drop_NA=True,
                 method="Chol",
                 seed=None,
-                only_expected_edf=True,
-                Vp_fidiff=True,
+                only_expected_edf=False,
+                Vp_fidiff=False,
                 use_importance_weights=True,
                 prior=None,
                 recompute_H=False,
@@ -36,12 +36,11 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
     
     By default (``correct_V=True``), ``mssm`` will attempt to correct the edf for uncertainty in the estimated :math:`\lambda` parameters. Which correction is computed depends on the
     choice for the ``grid`` argument. **Approximately** the analytic solution for the correction proposed by Wood, Pya, & Säfken (2016) is computed  when ``grid='JJJ1'`` (the default) - which is exact for
-    strictly Gaussian and canonical Generalized additive models. This is not efficient for sparse models and will thus become too expensive for large sparse multi-level models.
-    When setting ``grid='JJJ2'``, the analytic solution proposed by Wood, Pya, & Säfken (2016) is used as a basis for the correction and subsequently refined via numeric integration. This requires a costly sampling step
-    (see Greven & Scheipl, 2016 and the ``correct_VB`` function in the utils module) which will take quite some time for reasonably large models with more than 5-10 smoothing parameters, but remains
-    efficient for sparse multi-level models (assuming ``only_expected_edf`` is set to True and ``correct_t1`` is set to False).
+    strictly Gaussian and some canonical Generalized additive models. This is too costly for very large sparse multi-level models and not exact for more generic models. The MC based alternative available via ``grid = 'JJJ2'`` addresses the first problem (**Important**, set: ``use_importance_weights=False`` and ``only_expected_edf=True``.). The second MC based alternative
+    available via ``grid_type = 'JJJ3'`` is most appropriate for more generic models (The ``prior`` argument can be used to specify any prior to be placed on :math:`\\boldsymbol{\\rho}` also you will need to set: ``use_importance_weights=True`` and ``only_expected_edf=False``).
+    For more details consult the :func:`mssm.src.python.utils.correct_VB` function and Krause et al. (in preparation).
 
-    In case either form of correction is too expensive, it might be better to rely on hypothesis tests for individual smooths, confidence intervals, and penalty-based selection approaches instead (see Marra & Wood, 2011 for details on the latter).
+    In case any of those correction strategies is too expensive, it might be better to rely on hypothesis tests for individual smooths, confidence intervals, and penalty-based selection approaches instead (see Marra & Wood, 2011 for details on the latter).
 
     In case ``correct_t1=True`` the EDF will be set to the (smoothness uncertainty corrected in case ``correct_V=True``) smoothness bias corrected exprected degrees of freedom (t1 in section 6.1.2 of Wood, 2017),
     for the GLRT (based on recomendation given in section 6.12.4 in Wood, 2017). The AIC (Wood, 2017) of both models will **still be based on the regular (smoothness uncertainty corrected) edf**.
@@ -49,6 +48,78 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
     The computation here is different to the one performed by the ``compareML`` function in the R-package ``itsadug`` - which rather performs a version of the marginal GLRT
     (also discussed in Wood, 2017: 6.12.4) - and more similar to the ``anova.gam`` implementation provided by ``mgcv`` (particularly if ``grid='JJJ1'). The returned p-value is approximate - very **very**
     much so if ``correct_V=False`` (this should really never be done). Also, the GLRT should **not** be used to compare models differing in their random effect structures - the AIC is more appropriate for this (see Wood, 2017: 6.12.4).
+
+    Examples::
+
+        ### Model comparison and smoothness uncertainty correction for strictly additive model
+
+        # Simulate some data
+        sim_fit_dat = sim3(n=500,scale=2,c=0.1,family=Gaussian(),seed=21)
+
+        # Now fit nested models
+        sim_fit_formula = Formula(lhs("y"),
+                                    [i(),f(["x0"],nk=20,rp=1),f(["x1"],nk=20,rp=1),f(["x2"],nk=20,rp=1),f(["x3"],nk=20,rp=1)],
+                                    data=sim_fit_dat,
+                                    print_warn=False)
+
+        sim_fit_model = GAMM(sim_fit_formula,Gaussian())
+        sim_fit_model.fit(exclude_lambda=False,progress_bar=False,max_outer=100)
+
+        sim_fit_formula2 = Formula(lhs("y"),
+                                    [i(),f(["x1"],nk=20,rp=1),f(["x2"],nk=20,rp=1),f(["x3"],nk=20,rp=1)],
+                                    data=sim_fit_dat,
+                                    print_warn=False)
+
+        sim_fit_model2 = GAMM(sim_fit_formula2,Gaussian())
+        sim_fit_model2.fit(exclude_lambda=False,progress_bar=False,max_outer=100)
+
+
+        # And perform a smoothness uncertainty corrected comparisons
+        cor_result1 = compare_CDL(sim_fit_model,sim_fit_model2,grid='JJJ1',seed=22)
+
+        # To perform a GLRT and correct the edf for smoothness bias as well (e.g., Wood, 2017) run:
+        cor_result2 = compare_CDL(sim_fit_model,sim_fit_model2,grid='JJJ1',seed=22,perform_GLRT=True,correct_t1=True)
+
+        ### Model comparison and smoothness uncertainty correction for very large strictly additive model
+
+        # If the models are quite large (many coefficients) the following can be much faster:
+        nR = 250 # Number of samples to use for the numeric integration
+        cor_result3 = compare_CDL(sim_fit_model,sim_fit_model2,nR=nR,n_c=10,correct_t1=False,grid='JJJ2',seed=22,only_expected_edf=True,use_importance_weights=False)
+
+        ### Model comparison and smoothness uncertainty correction for more generic smooth model (GAMM, GAMMLSS, etc.)
+
+        # Simulate some data
+        sim_fit_dat = sim3(n=500,scale=2,c=0.1,family=Gamma(),seed=21)
+
+        # Now fit nested models
+        sim_fit_formula = Formula(lhs("y"),
+                                    [i(),f(["x0"],nk=20,rp=1),f(["x1"],nk=20,rp=1),f(["x2"],nk=20,rp=1),f(["x3"],nk=20,rp=1)],
+                                    data=sim_fit_dat,
+                                    print_warn=False)
+
+        sim_fit_formula_sd = Formula(lhs("y"),
+                                    [i()],
+                                    data=sim_fit_dat,
+                                    print_warn=False)
+
+        sim_fit_model = GAMMLSS([sim_fit_formula,copy.deepcopy(sim_fit_formula_sd)],family = GAMMALS([LOG(),LOGb(-0.01)]))
+        sim_fit_model.fit(progress_bar=False,max_outer=200,extend_lambda=False,control_lambda=2,max_inner=500)
+
+        sim_fit_formula2 = Formula(lhs("y"),
+                                    [i(),f(["x1"],nk=20,rp=1),f(["x2"],nk=20,rp=1),f(["x3"],nk=20,rp=1)],
+                                    data=sim_fit_dat,
+                                    print_warn=False)
+
+        sim_fit_model2 = GAMMLSS([sim_fit_formula2,copy.deepcopy(sim_fit_formula_sd)],family = GAMMALS([LOG(),LOGb(-0.01)]))
+        sim_fit_model2.fit(progress_bar=False,max_outer=200,extend_lambda=False,control_lambda=2,max_inner=500)
+
+        # Set up a uniform prior from log(1e-7) to log(1e12) for each regularization parameter
+        prior = DummyRhoPrior(b=np.log(1e12))
+        
+        # Now correct for uncertainty in regularization parameters:
+        cor_result_gs_1 = compare_CDL(sim_fit_model,sim_fit_model2,n_c=10,grid='JJJ3',seed=22,only_expected_edf=False,use_importance_weights=True,prior=prior)
+
+        # You can also set prior to ``None`` in which case the proposal distribution (by default a T-distribution with 40 df of freedom) is used as prior.
 
     References:
      - Marra, G., & Wood, S. N. (2011) Practical variable selection for generalized additive models.
@@ -80,7 +151,7 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
     :type a: float, optional
     :param b: Any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{p}|y \sim N(log(\hat{\\boldsymbol{p}}),\mathbf{V}_{\\boldsymbol{p}})` used to sample ``nR`` candidates) which are larger than this are set to this value as well, defaults to 1e7 the maximum possible estimate
     :type b: float, optional
-    :param df: Degrees of freedom used for the multivariate t distribution used to sample the next set of candidates. Setting this to ``np.inf`` means a multivariate normal is used for sampling, defaults to 40
+    :param df: Degrees of freedom used for the multivariate t distribution used to sample/propose the next set of candidates. Setting this to ``np.inf`` means a multivariate normal is used for sampling, defaults to 40
     :type df: int, optional
     :param verbose: Whether to print progress information or not, defaults to False
     :type verbose: bool, optional

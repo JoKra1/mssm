@@ -1484,7 +1484,6 @@ class GAMMLSS(GAMM):
             sd_upper_CI = model.family.links[1].fi(eta_sd + b_sd)
             sd_lower_CI = model.family.links[1].fi(eta_sd - b_sd)
 
-        Standard errors cannot currently be computed for Multinomial GAMMLSS models - attempting to set ``ci=True`` for such a model will result in an error.
 
         References:
 
@@ -1511,8 +1510,6 @@ class GAMMLSS(GAMM):
         :return: A tuple with 3 entries. The first entry is the prediction ``pred`` based on the new data ``n_dat``. The second entry is the model matrix built for ``n_dat`` that was post-multiplied with the model coefficients to obtain ``pred``. The third entry is ``None`` if ``ci``==``False`` else the standard error ``se`` in the prediction.
         :rtype: (np.array,scp.sparse.csc_array,np.array or None)
         """
-        if isinstance(self.family,MULNOMLSS) and ci == True:
-            raise ValueError("Standard error computation for Multinomial model is not currently supported.")
         
         # Prepare so that we can just call gamm.predict()    
         self.formula = self.formulas[par]
@@ -1574,8 +1571,6 @@ class GAMMLSS(GAMM):
         :return: A tuple with 2 entries. The first entry is the predicted difference (between the two data sets ``dat1`` & ``dat2``) ``diff``. The second entry is the standard error ``se`` of the predicted difference. The difference CI is then [``diff`` - ``se``, ``diff`` + ``se``]
         :rtype: (np.array,np.array)
         """
-        if isinstance(self.family,MULNOMLSS):
-            raise ValueError("Standard error computation for Multinomial model is not currently supported.")
         
         _,pmat1,_ = self.predict(par,use_terms,dat1)
         _,pmat2,_ = self.predict(par,use_terms,dat2)

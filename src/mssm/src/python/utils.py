@@ -656,6 +656,34 @@ def estimateVp(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,drop_
     Either :math:`\mathbf{V}^{\\boldsymbol{\\rho}}` is based on finite difference approximation or on a PQL approximation (see ``grid_type`` parameter), or it is estimated via numerical
     integration similar to what is done in the :func:`correct_VB` function (this is done when ``grid_type=='JJJ2'``; see the aforementioned function for details).
 
+    Example::
+
+        # Simulate some data for a Gaussian model
+        sim_fit_dat = sim3(n=500,scale=2,c=1,family=Gaussian(),seed=21)
+
+        # Now fit nested models
+        sim_fit_formula = Formula(lhs("y"),
+                                    [i(),f(["x0"],nk=20,rp=0),f(["x1"],nk=20,rp=0),f(["x2"],nk=20,rp=0),f(["x3"],nk=20,rp=0)],
+                                    data=sim_fit_dat,
+                                    print_warn=False)
+
+        model = GAMM(sim_fit_formula,Gaussian())
+        model.fit(exclude_lambda=False,progress_bar=False,max_outer=100)
+
+        # Compute correction from Wood et al. (2016) - will be approximate for more generic models
+        # Vp is approximate covariance matrix of log regularization parameters
+        # Vpr is regularized version of the former
+        # Ri is a root of covariance matrix of log regularization parameters
+        # Rir is a root of regularized version of covariance matrix of log regularization parameters
+        # ep will be an estimate of the mean of the marginal posterior of log regularization parameters (for ``grid_type="JJJ1"`` this will simply be the log of the estimated regularization parameters)
+        Vp, Vpr, Ri, Rir, ep = estimateVp(model,grid_type="JJJ1",verbose=True,seed=20)
+
+
+        # Compute MC estimate for generic model and given prior
+        prior = DummyRhoPrior(b=np.log(1e12)) # Set up uniform prior
+        Vp_MC, Vpr_MC, Ri_MC, Rir_MC, ep_MC = estimateVp(model,strategy="JJJ2",verbose=True,seed=20,use_importance_weights=True,prior=prior)
+
+
     References:
      - https://en.wikipedia.org/wiki/Estimation_of_covariance_matrices
      - Greven, S., & Scheipl, F. (2016). Comment on: Smoothing Parameter and Model Selection for General Smooth Models
@@ -664,7 +692,7 @@ def estimateVp(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,drop_
     :type model: GAMM or GAMMLSS or GSMM
     :param nR: In case ``grid!="JJJ1"``, ``nR`` samples/reml scores are generated/computed to numerically evaluate the expectations necessary for the uncertainty correction, defaults to 250
     :type nR: int, optional
-    :param grid_type: How to compute the smoothness uncertainty correction. Setting ``grid_type='JJJ1'`` means a PQL or finite difference approximation is obtained. Setting ``grid_type='JJJ2'``means numerical integration is performed - see :func:`correct_VB` for details , defaults to 'JJJ1'
+    :param grid_type: How to compute the smoothness uncertainty correction. Setting ``grid_type="JJJ1"`` means a PQL or finite difference approximation is obtained. Setting ``grid_type="JJJ2"`` means numerical integration is performed - see :func:`correct_VB` for details , defaults to 'JJJ1'
     :type grid_type: str, optional
     :param a: Any of the :math:`\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{\\rho}|y \sim N(log(\hat{\\boldsymbol{\\rho}}),\mathbf{V}^{\\boldsymbol{\\rho}})` used to sample ``nR`` candidates) which are smaller than this are set to this value as well, defaults to 1e-7 the minimum possible estimate
     :type a: float, optional
@@ -688,10 +716,10 @@ def estimateVp(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,drop_
     :type recompute_H: bool, optional
     :param seed: Seed to use for random parts of the correction. Defaults to None
     :type seed: int,optional
-    :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100. Defaults to None.
+    :param bfgs_options: Any additional keyword arguments that should be passed on to the call of ``scipy.optimize.minimize``. If none are provided, the ``gtol`` argument will be initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100. Defaults to None.
     :type bfgs_options: key=value,optional
-    :return: An estimate of the covariance matrix of the posterior for :math:`\mathbf{p} = log(\\boldsymbol{\lambda})`
-    :rtype: numpy.array
+    :return: A tuple with 4 elements: an estimate of the covariance matrix of the posterior for :math:`\mathbf{p} = log(\\boldsymbol{\lambda})`, a regularized version of the former, a root of the covariance matrix, a root of the regularized covariance matrix, and an estimate of the mean of the posterior
+    :rtype: (numpy.array, numpy.array, numpy.array, numpy.array)
     """
     np_gen = np.random.default_rng(seed)
 
@@ -1102,7 +1130,7 @@ def compute_Vp_WPS(Vbr,H,S_emb,penalties,coef,scale=1):
     :type H: scipy.sparse.csc_array
     :param S_emb: The weighted penalty matrix.
     :type S_emb: scipy.sparse.csc_array
-    :param penalties: A list holding the :class:`Lambdaterm`s estimated for the model.
+    :param penalties: A list holding the Lambdaterms estimated for the model.
     :type penalties: [LambdaTerm]
     :param coef: An array holding the estimated regression coefficients. Has to be of shape (-1,1)
     :type coef: numpy.array
@@ -1227,7 +1255,7 @@ def compute_Vb_corr_WPS(Vbr,Vpr,Vr,H,S_emb,penalties,coef,scale=1):
     :type H: scipy.sparse.csc_array
     :param S_emb: The weighted penalty matrix.
     :type S_emb: scipy.sparse.csc_array
-    :param penalties: A list holding the :class:`Lambdaterm`s estimated for the model.
+    :param penalties: A list holding the Lambdaterms estimated for the model.
     :type penalties: [LambdaTerm]
     :param coef: An array holding the estimated regression coefficients. Has to be of shape (-1,1)
     :type coef: numpy.array
@@ -1395,12 +1423,45 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
     but this requires :math:`\mathbf{V}^{\\boldsymbol{\\rho}}` - an estimate of the covariance matrix of the normal approximation to the posterior of :math:`\\boldsymbol{\\rho}=log(\\boldsymbol{\lambda})`. Computing :math:`\mathbf{V}^{\\boldsymbol{\\rho}}` requires derivatives that are not available
     when using the efs update.
 
-    This function implements multiple strategies to correct for smoothing parameter uncertainty, based on the proposals by  Wood et al. (2016) and Greven & Scheipl (2016). The most straightforward strategy
-    (``grid_type = 'JJJ1'``) is to obtain a PQL or finite difference approximation for :math:`\mathbf{V}^{\\boldsymbol{\\rho}}` and to then complete approximately the Wood et al. (2016) correction (this will be exact
+    This function implements multiple strategies to approximately correct for smoothing parameter uncertainty, based on the proposals by  Wood et al. (2016) and Greven & Scheipl (2017). The most straightforward strategy
+    (``grid_type = 'JJJ1'``) is to obtain a PQL or finite difference approximation for :math:`\mathbf{V}^{\\boldsymbol{\\rho}}` and to then compute approximately the Wood et al. (2016) correction assuming that higher-order derivatives of the llk are zero (this will be exact
     for Gaussian additive or canonical Generalized models). This is too costly for large sparse multi-level models and not exact for more generic models. The MC based alternative available via ``grid_type = 'JJJ2'`` addresses the first problem (**Important**, set: ``use_importance_weights=False`` and ``only_expected_edf=True``.). The second MC based alternative
-    available via ``grid_type = 'JJJ3'`` is most appropriate for more generic models (The ``prior`` argument can be used to specify any prior to be placed on :math:`\\boldsymbol{\\rho}` also you will need to set: ``use_importance_weights=True`` and ``only_expected_edf=True``).
+    available via ``grid_type = 'JJJ3'`` is most appropriate for more generic models (The ``prior`` argument can be used to specify any prior to be placed on :math:`\\boldsymbol{\\rho}` also you will need to set: ``use_importance_weights=True`` and ``only_expected_edf=False``).
     Both strategies use a PQL or finite difference approximation to :math:`\mathbf{V}^{\\boldsymbol{\\rho}}` to obtain ``nR`` samples from the (normal approximation) to the posterior of :math:`\\boldsymbol{\\rho}`.
     From these samples mssm then estimates :math:`\\tilde{\mathbf{V}}` as described in more detail by Krause et al. (in preparation).
+
+    Example::
+
+        # Simulate some data for a Gaussian model
+        sim_fit_dat = sim3(n=500,scale=2,c=1,family=Gaussian(),seed=21)
+
+        # Now fit nested models
+        sim_fit_formula = Formula(lhs("y"),
+                                    [i(),f(["x0"],nk=20,rp=0),f(["x1"],nk=20,rp=0),f(["x2"],nk=20,rp=0),f(["x3"],nk=20,rp=0)],
+                                    data=sim_fit_dat,
+                                    print_warn=False)
+
+        model = GAMM(sim_fit_formula,Gaussian())
+        model.fit(exclude_lambda=False,progress_bar=False,max_outer=100)
+
+
+        # Compute correction from Wood et al. (2016) - will be approximate for more generic models
+        # V will be approximate covariance matrix of marginal posterior of coefficients
+        # LV is Cholesky of the former
+        # Vp is approximate covariance matrix of log regularization parameters
+        # Vpr is regularized version of the former
+        # edf is vector of estimated degrees of freedom (uncertainty corrected) per coefficient
+        # total_edf is sum of former (but subjected to upper bounds so this might not be exactly the same as sum(edf))
+        # ed2 is optionally smoothness bias corrected version of edf
+        # total_edf2 is optionally bias corrected version of total_edf (again subjected to upper bounds)
+        # expected_edf is None here but for MC strategies (i.e., ``grid!=1``) will be an estimate of total_edf (**without being subjected to upper bounds**) that does not require forming V (only computed when ``only_expected_edf=True``). 
+        # mean_coef is None here but for MC strategies will be an estimate of the mean of the marginal posterior of coefficients, only computed when setting ``recompute_H=True``
+        V,LV,Vp,Vpr,edf,total_edf,edf2,total_edf2,expected_edf,mean_coef = correct_VB(model,grid_type="JJJ1",verbose=True,seed=20)
+
+
+        # Compute MC estimate for generic model and given prior
+        prior = DummyRhoPrior(b=np.log(1e12)) # Set up uniform prior
+        V_MC,LV_MC,Vp_MC,Vpr_MC,edf_MC,total_edf_MC,edf2_MC,total_edf2_MC,expected_edf_MC,mean_coef_MC = correct_VB(model2,grid_type="JJJ3",verbose=True,seed=20,df=10,prior=prior,recompute_H=True)
 
     References:
      - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
@@ -1446,8 +1507,8 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
     :type seed: int,optional
     :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100. Defaults to None.
     :type bfgs_options: key=value,optional
-    :return: A tuple containing: V - an estimate of the unconditional covariance matrix, LV - the Cholesky of the former, Vp - an estimate of the covariance matrix for :math:`\\boldsymbol{\\rho}`, Vpr - a root of the former, edf - smoothness uncertainty corrected coefficient-wise edf, total_edf - smoothness uncertainty corrected edf, edf2 - smoothness uncertainty + smoothness bias corrected coefficient-wise edf, total_edf2 - smoothness uncertainty + smoothness bias corrected edf, expected_edf - a heuristic upper bound on the uncertainty corrected edf
-    :rtype: (scipy.sparse.csc_array,scipy.sparse.csc_array,numpyp.array,numpy.array,numpy.array,float,numpy.array,float,float) 
+    :return: A tuple containing: V - an estimate of the unconditional covariance matrix, LV - the Cholesky of the former, Vp - an estimate of the covariance matrix for :math:`\\boldsymbol{\\rho}`, Vpr - a regularized version of the former, edf - smoothness uncertainty corrected coefficient-wise edf, total_edf - smoothness uncertainty corrected total (i.e., model) edf, edf2 - smoothness uncertainty + smoothness bias corrected coefficient-wise edf, total_edf2 - smoothness uncertainty + smoothness bias corrected total (i.e., model) edf, expected_edf - an optional estimate of total_edf that does not require forming V, mean_coef - an optional estimate of the mean of the posterior of the coefficients
+    :rtype: (scipy.sparse.csc_array,scipy.sparse.csc_array,numpyp.array,numpy.array,numpy.array,float,numpy.array,float,float,numpy.array) 
     """
     np_gen = np.random.default_rng(seed)
 
@@ -1494,7 +1555,7 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
     if grid_type == "JJJ1" or grid_type == "JJJ2" or grid_type == "JJJ3":
         # Approximate Vp via finitie differencing
         if Vp_fidiff:
-            Vp, Vpr, Vr, Vrr = estimateVp(model,n_c=n_c,grid_type="JJJ1",Vp_fidiff=True)
+            Vp, Vpr, Vr, Vrr, _ = estimateVp(model,n_c=n_c,grid_type="JJJ1",Vp_fidiff=True)
         else:
             # Take PQL approximation instead
             Vp, Vpr, Vr, Vrr, _, dBetadRhos = compute_Vp_WPS(model.lvi if isinstance(family,Family) else model.overall_lvi,
@@ -1802,7 +1863,12 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
                     mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
 
                     # Get derivatives with respect to eta
-                    d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,mus,family)
+                    if family.d_eta == False:
+                        d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,mus,family)
+                    else:
+                        d1eta = [fd1(y,*mus) for fd1 in family.d1]
+                        d2eta = [fd2(y,*mus) for fd2 in family.d2]
+                        d2meta = [fd2m(y,*mus) for fd2m in family.d2m]
 
                     # Get derivatives with respect to coef
                     _,H = deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs,only_grad=False)
@@ -1953,6 +2019,7 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
 
     # In mgcv, an upper limit is enforced on edf and total_edf when they are uncertainty corrected - based on t1 in section 6.1.2 of Wood (2017)
     # so the same is done here.
+    total_edf2 = None
     if grid_type == "JJJ1" or grid_type == "JJJ2" or grid_type == "JJJ3":
         if isinstance(family,Family):
             if isinstance(family,Gaussian) and isinstance(family.link,Identity): # Strictly additive case
@@ -1967,14 +2034,14 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
         if total_edf > total_edf2:
             #print(edf)
             total_edf = total_edf2
-            edf = None
+            #edf = None
 
     # Compute uncertainty corrected smoothness bias corrected edf (t1 in section 6.1.2 of Wood, 2017)
     edf2 = None
-    total_edf2 = None
     if form_t1:
         edf2 = 2*edf - (F@F).diagonal()
-        total_edf2 = 2*total_edf - (F@F).trace()
+        if total_edf2 is None: # Otherwise respect upper bound.
+            total_edf2 = 2*total_edf - (F@F).trace()
 
     if verbose and grid_type != "JJJ1":
         print(f"Correction was based on {rGrid.shape[0]} samples in total.")    

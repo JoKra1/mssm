@@ -1211,7 +1211,8 @@ class GAMLSSFamily:
    """Base-class to be implemented by families of Generalized Additive Mixed Models of Location, Scale, and Shape (GAMMLSS; Rigby & Stasinopoulos, 2005).
 
    Apart from the required methods, three mandatory attributes need to be defined by the :func:`__init__` constructor of implementations of this class. These are required
-   to evaluate the first and second (pure & mixed) derivative of the log-likelihood with respect to any of the log-likelihood's parameters. See the variables below.
+   to evaluate the first and second (pure & mixed) derivative of the log-likelihood with respect to any of the log-likelihood's parameters (alternatively the linear predictors
+   of the parameters - see the description of the ``d_eta`` instance variable.). See the variables below.
 
    Optionally, a ``mean_init_fam`` attribute can be defined - specfiying a :class:`Family` member that is fitted to the data to get an initial estimate of the mean parameter of the assumed distribution.
 
@@ -1224,6 +1225,7 @@ class GAMLSSFamily:
    :type pars: int
    :param links: Link functions for each of the parameters of the distribution.
    :type links: [Link]
+   :ivar bool d_eta: A boolean indicating whether partial derivatives of llk are provided with respect to the linear predictor instead of parameters (i.e., the mean), defaults to False (derivatives are provided with respect to parameters)
    :ivar [Callable] d1: A list holding ``n_par`` functions to evaluate the first partial derivatives of llk with respect to each parameter of the llk. Needs to be initialized when calling :func:`__init__`.
    :ivar [Callable] d2: A list holding ``n_par`` functions to evaluate the second (pure) partial derivatives of llk with respect to each parameter of the llk. Needs to be initialized when calling :func:`__init__`.
    :ivar [Callable] d2m: A list holding ``n_par*(n_par-1)/2`` functions to evaluate the second mixed partial derivatives of llk with respect to each parameter of the llk in **order**: ``d2m[0]`` = :math:`\partial l/\partial \mu_1 \partial \mu_2`, ``d2m[1]`` = :math:`\partial l/\partial \mu_1 \partial \mu_3`, ..., ``d2m[n_par-1]`` = :math:`\partial l/\partial \mu_1 \partial \mu_{n_{par}}`, ``d2m[n_par]`` = :math:`\partial l/\partial \mu_2 \partial \mu_3`, ``d2m[n_par+1]`` = :math:`\partial l/\partial \mu_2 \partial \mu_4`, ... . Needs to be initialized when calling :func:`__init__`.
@@ -1231,6 +1233,7 @@ class GAMLSSFamily:
    def __init__(self,pars:int,links:[Link]) -> None:
       self.n_par = pars
       self.links = links
+      self.d_eta = False # Whether partial derivatives of llk are provided with respect to the linear predictor instead of parameters (i.e., the mean), defaults to False (derivatives are provided with respect to parameters)
       self.d1 = [] # list with functions to evaluate derivative of llk with respect to corresponding mean
       self.d2 = [] # list with function to evaluate pure second derivative of llk with respect to corresponding mean
       self.d2m = [] # list with functions to evaluate mixed second derivative of llk. Order is 12,13,1k,23,24,...
@@ -1560,25 +1563,37 @@ class MULNOMLSS(GAMLSSFamily):
    :type pars: int
    """
    def __init__(self, pars: int) -> None:
-      super().__init__(pars, [LOGb(-1e-9) for _ in range(pars)])
+      super().__init__(pars, [LOG() for _ in range(pars)])
 
-      # All derivatives taken from gamlss.dist: https://github.com/gamlss-dev/gamlss.dist but made general for all number of pars.
+      # All derivatives taken from gamlss.r in mgcv: https://github.com/cran/mgcv/blob/master/R/gamlss.r#L1224 and have been adapted to work in Python code
       # see also: Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
+      self.d_eta = True # Derivatives below are implemented with respect to linear predictor.
+
       self.d1 = []
       for ii in range(self.n_par):
-         def d1(y,*mus,i=ii): dy1 = -(1/(np.sum(mus,axis=0)+1)); dy1[y == i] += 1/(mus[i][y == i]); return dy1
+         def d1(y,*mus,i=ii):
+            dy1 = -(mus[i]/(np.sum(mus,axis=0)+1))
+            dy1[y == (i+1)] += 1
+            return dy1
          self.d1.append(d1)
 
       self.d2 = []
       for ii in range(self.n_par):
-         def d2(y,*mus,i=ii): dy2 = (-1*(np.sum([mus[iii] for iii in range(self.n_par) if i != iii],axis=0)+1)) / (mus[i]*np.power(np.sum(mus,axis=0)+1,2)); return dy2
+         def d2(y,*mus,i=ii):
+            norm = np.sum(mus,axis=0)+1
+            dy1 = -(mus[i]/norm)
+            dy2 = dy1 + np.power(mus[i],2)/np.power(norm,2)
+            return dy2
          self.d2.append(d2)
 
       self.d2m = []
-      for ii in range(int(self.n_par*(self.n_par-1)/2)):
-         def d2m(y,*mus,i=ii): dy2m = 1/np.power(np.sum(mus,axis=0)+1,2); return dy2m
-         self.d2m.append(d2m)
-   
+      for ii in range(self.n_par):
+         for jj in range(ii+1,self.n_par):
+            def d2m(y,*mus,i=ii,j=jj):
+               norm = np.sum(mus,axis=0)+1
+               dy2m = (mus[i]*mus[j])/np.power(norm,2)
+               return dy2m
+            self.d2m.append(d2m)
 
    def lp(self, y, *mus):
       """Log-probability of observing class k under current model.
@@ -1614,7 +1629,7 @@ class MULNOMLSS(GAMLSSFamily):
       lp = -np.log(np.sum(mus,axis=0)+1)
 
       for pi in range(self.n_par):
-         lp[y == pi] += np.log(mus[pi])[y == pi]
+         lp[y == (pi+1)] += np.log(mus[pi])[y == (pi+1)]
 
       return lp
 
@@ -2038,7 +2053,7 @@ class PropHaz(GENSMOOTHFamily):
     :type coef: numpy.array
     :param delta: Dependent variable passed to :func:`mssm.src.python.formula.Formula`, holds (for each row in ``Xs[0``]) a value in ``{0,1}``, indicating whether for that observation the event was observed or not.
     :type delta: numpy.array
-    :param Xs The list model matrices (here holding a single model matrix) obtained from :func:`mssm.models.GSMM.get_mmat()``.
+    :param Xs The list model matrices (here holding a single model matrix) obtained from :func:`mssm.models.GAMMLSS.get_mmat`.
     :type Xs: [scipy.sparse.csc_array]
     """
     # Extract and define all variables defined by WPS (2016)
@@ -2117,7 +2132,7 @@ class PropHaz(GENSMOOTHFamily):
 
     :param coef: Coefficient vector as ``numpy.array`` of shape (-1,1).
     :type coef: numpy.array
-    :param Xs The list model matrices (here holding a single model matrix) obtained from :func:`mssm.models.GSMM.get_mmat()``.
+    :param Xs: The list model matrices (here holding a single model matrix) obtained from :func:`mssm.models.GAMMLSS.get_mmat`.
     :type Xs: [scipy.sparse.csc_array]
     :param delta: Dependent variable passed to :func:`mssm.src.python.formula.Formula`, holds (for each row in ``Xs[0``]) a value in ``{0,1}``, indicating whether for that observation the event was observed or not.
     :type delta: numpy.array
@@ -2139,7 +2154,7 @@ class PropHaz(GENSMOOTHFamily):
 
     :param coef: Coefficient vector as ``numpy.array`` of shape (-1,1).
     :type coef: numpy.array
-    :param Xs The list model matrices (here holding a single model matrix) obtained from :func:`mssm.models.GSMM.get_mmat()``.
+    :param Xs: The list model matrices (here holding a single model matrix) obtained from :func:`mssm.models.GAMMLSS.get_mmat`.
     :type Xs: [scipy.sparse.csc_array]
     :param delta: Dependent variable passed to :func:`mssm.src.python.formula.Formula`, holds (for each row in ``Xs[0``]) a value in ``{0,1}``, indicating whether for that observation the event was observed or not.
     :type delta: numpy.array
@@ -2183,7 +2198,7 @@ class PropHaz(GENSMOOTHFamily):
    def init_coef(self,models):
       """Function to initialize the coefficients of the model.
 
-      :param models: A list of :class:`mssm.models.GAMM`'s, - each based on one of the formulas provided to a model.
+      :param models: A list of GAMMs, - each based on one of the formulas provided to a model.
       :type models: [mssm.models.GAMM]
       :return: A ``numpy.array`` of shape (-1,1), holding initial values for all model coefficients.
       :rtype: numpy array

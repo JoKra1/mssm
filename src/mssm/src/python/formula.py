@@ -875,7 +875,7 @@ class Formula():
 
     :param lhs: The lhs object defining the dependent variable.
     :type variable: lhs
-    :param terms: A list of the terms which should be added to the model. See ``mssm.src.python.terms`` for info on which terms can be added.
+    :param terms: A list of the terms which should be added to the model. See :py:mod:`mssm.src.python.terms` for info on which terms can be added.
     :type terms: [GammTerm]
     :param data: A pandas dataframe (with header!) of the data which should be used to estimate the model. The variable specified for ``lhs`` as well as all variables included for a ``term`` in ``terms`` need to be present in the data, otherwise the call to Formula will throw an error.
     :type data: pd.DataFrame or None

@@ -2939,9 +2939,7 @@ def deriv_transform_mu_eta(y,means,family:GAMLSSFamily):
     d2meta = []
     mixed_idx = 0
     for mui in range(len(means)):
-        for muj in range(len(means)):
-            if muj <= mui:
-                continue
+        for muj in range(mui+1,len(means)):
             
             with warnings.catch_warnings(): # Divide by 0
                warnings.simplefilter("ignore")
@@ -3015,7 +3013,7 @@ def deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs,only_grad=False):
             for coefi in range(Xs[etai].shape[1]):
                 # More efficient computation now, no longer an additional nested loop over coefj..
                 #d2beta = (d2[val_idx]*Xs[etai][:,[coefi]][val_idx]).T @ Xs[etaj][val_idx,coefi:Xs[etaj].shape[1]]
-                d2beta = (d2*Xs[etai][:,[coefi]]).T @ Xs[etaj][:,coefi:Xs[etaj].shape[1]]
+                d2beta = (d2*Xs[etai][:,[coefi]]).T @ Xs[etaj][:,(coefi if etai == etaj else 0):Xs[etaj].shape[1]]
                 
                 if d2beta.nnz > 0:
                   
@@ -3024,7 +3022,7 @@ def deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs,only_grad=False):
                      d2beta.sort_indices()
                   
                   # Get non-zero column entries for current row
-                  cols = d2beta.indices[d2beta.indptr[0]:d2beta.indptr[1]] + coefi
+                  cols = d2beta.indices[d2beta.indptr[0]:d2beta.indptr[1]] + (coefi if etai == etaj else 0)
                   
                   # Get non-zero values for current row in sorted order
                   vals = d2beta.data[d2beta.indptr[0]:d2beta.indptr[1]]
@@ -3034,11 +3032,11 @@ def deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs,only_grad=False):
                   h_vals.extend(vals)
 
                   # Symmetric 2nd deriv..
-                  if (cols[0] + hc_idx) == (coefi + hr_idx):
+                  if etai == etaj and ((cols[0] + hc_idx) == (coefi + hr_idx)): # For diagonal block need to skip diagonal element if present (i.e., non-zero)
                      h_rows.extend(cols[1:] + hc_idx)
                      h_cols.extend(np.tile(coefi,d2beta.nnz-1) + hr_idx)
                      h_vals.extend(vals[1:])
-                  else:
+                  else: # For off-diagonal block can assign everything
                      h_rows.extend(cols + hc_idx)
                      h_cols.extend(np.tile(coefi,d2beta.nnz) + hr_idx)
                      h_vals.extend(vals)
@@ -3455,7 +3453,12 @@ def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,S_norm,gammlss
       for inner in range(max_inner):
          
          # Get derivatives with respect to eta
-         d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,mus,family)
+         if family.d_eta == False:
+            d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,mus,family)
+         else:
+            d1eta = [fd1(y,*mus) for fd1 in family.d1]
+            d2eta = [fd2(y,*mus) for fd2 in family.d2]
+            d2meta = [fd2m(y,*mus) for fd2m in family.d2m]
 
          # Get derivatives with respect to coef
          grad,H = deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs,only_grad=False)
@@ -3589,7 +3592,12 @@ def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,S_norm,gammlss
          for inner in range(max_inner):
       
             # Get derivatives with respect to eta
-            d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,mus,family)
+            if family.d_eta == False:
+               d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,mus,family)
+            else:
+               d1eta = [fd1(y,*mus) for fd1 in family.d1]
+               d2eta = [fd2(y,*mus) for fd2 in family.d2]
+               d2meta = [fd2m(y,*mus) for fd2m in family.d2m]
 
             # Get derivatives with respect to coef
             grad,H = deriv_transform_eta_beta(d1eta,d2eta,d2meta,rXs,only_grad=False)
