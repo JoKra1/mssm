@@ -416,13 +416,17 @@ def compute_block_B_shared_cluster(address_dat,address_ptr,address_idx,shape_dat
    BBps = BB.power(2).sum()
    return np.sum(cluster_weights*BBps),len(cluster_weights)*BBps
    
-def compute_B(L,P,lTerm,n_c=10):
+def compute_B(L,P,lTerm,n_c=10,drop=None):
    # Solves L @ B = P @ D for B, parallelizing over column
    # blocks of D if int(D.shape[1]/2000) > 1
 
    # Also allows for approximate B computation for very big factor smooths.
    D_start = lTerm.start_index
-
+   idx = np.arange(lTerm.S_J_emb.shape[1])
+   if drop is None:
+      drop = []
+   keep = idx[np.isin(idx,drop)==False]
+   
    if lTerm.clust_series is None:
       
       col_sums = lTerm.S_J.sum(axis=0)
@@ -431,16 +435,22 @@ def compute_B(L,P,lTerm,n_c=10):
          # so we only need to solve one linear system per level of the factor smooth.
          NULL_idx = np.argmax(col_sums)
 
-         D_NULL_idx = np.arange(lTerm.start_index+NULL_idx,
+         D_idx = np.arange(lTerm.start_index+NULL_idx,
                                 lTerm.S_J.shape[1]*(lTerm.rep_sj+1),
                                 lTerm.S_J.shape[1])
 
-         D_len = len(D_NULL_idx)
-         PD = P @ lTerm.D_J_emb[:,D_NULL_idx]
+         D_len = len(D_idx)
+         PD = P @ lTerm.D_J_emb[:,D_idx][keep,:]
       else:
+         # First get columns associated to penalty
          D_len = lTerm.rep_sj * lTerm.S_J.shape[1]
          D_end = lTerm.start_index + D_len
-         PD = P @ lTerm.D_J_emb[:,D_start:D_end]
+         D_idx = idx[D_start:D_end]
+
+         # Now check if dropped column is included, if so remove and update length.
+         D_idx = D_idx[np.isin(D_idx,drop)==False]
+         D_len = len(D_idx)
+         PD = P @ lTerm.D_J_emb[:,D_idx][keep,:]
 
       D_r = int(D_len/2000)
 
@@ -450,7 +460,7 @@ def compute_B(L,P,lTerm,n_c=10):
          # since L itself is super sparse.
          n_c = min(D_r,n_c)
          split = np.array_split(range(D_len),n_c)
-         PD = P @ lTerm.D_J_emb
+         PD = P @ lTerm.D_J_emb[:,D_idx][keep,:]
          PDs = [PD[:,split[i]] for i in range(n_c)]
 
          with managers.SharedMemoryManager() as manager, mp.Pool(processes=n_c) as pool:
@@ -484,6 +494,8 @@ def compute_B(L,P,lTerm,n_c=10):
    # Approximate the derivative based just on the columns in D_J that belong to the
    # maximum series identified for each cluster. Use the size of the cluster and the weights to
    # correct for the fact that all series in the cluster are slightly different after all.
+   if len(drop) > 0:
+      raise ValueError("Approximate derivative computation cannot currently handle unidentifiable terms.")
 
    n_coef = lTerm.S_J.shape[0]
    rank = int(lTerm.rank/lTerm.rep_sj)
@@ -1578,7 +1590,7 @@ def computetrVS(V,lTerm):
    return tr
    
 
-def calculate_edf(LP,Pr,InvCholXXS,penalties,lgdetDs,colsX,n_c):
+def calculate_edf(LP,Pr,InvCholXXS,penalties,lgdetDs,colsX,n_c,drop):
    # Follows steps outlined by Wood & Fasiolo (2017) to compute total degrees of freedom by the model.
    # Generates the B matrix also required for the derivative of the log-determinant of X.T@X+S_\lambda. This
    # is either done exactly - as described by Wood & Fasiolo (2017) - or approximately. The latter is much faster
@@ -1677,7 +1689,7 @@ def calculate_edf(LP,Pr,InvCholXXS,penalties,lgdetDs,colsX,n_c):
             B = InvCholXXS @ lTerm.D_J_emb 
             Bps = B.power(2).sum()
       else:
-         Bps = compute_B(LP,compute_eigen_perm(Pr),lTerm,n_c)
+         Bps = compute_B(LP,compute_eigen_perm(Pr),lTerm,n_c,drop)
 
          if not lTerm.clust_series is None:
             if Bps[1] < lgdetDs[lti]:
@@ -1736,7 +1748,7 @@ def calculate_term_edf(penalties,param_penalized):
    
    return term_edf
 
-def update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,penalties,n_c):
+def update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,penalties,keep,drop,n_c):
    # Updates the scale of the model. For this the edf
    # are computed as well - they are returned because they are needed for the
    # lambda step proposal anyway.
@@ -1756,9 +1768,18 @@ def update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,pen
    if not InvCholXXSP is None:
       InvCholXXS = apply_eigen_perm(Pr,InvCholXXSP)
 
-   # If there are penalized terms we need to adjust the total_edf
+      # Dropped some terms, need to insert zero columns and rows for dropped coefficients
+      if InvCholXXS.shape[1] < colsX:
+         Linvdat,Linvrow,Linvcol = translate_sparse(InvCholXXS)
+      
+         Linvrow = keep[Linvrow]
+         Linvcol = keep[Linvcol]
+
+         InvCholXXS = scp.sparse.csc_array((Linvdat,(Linvrow,Linvcol)),shape=(colsX,colsX))
+
+   # If there are penalized terms we need to adjust the total_edf - make sure to subtract dropped coef from colsX
    if len(penalties) > 0:
-      total_edf, term_edfs, Bs = calculate_edf(LP,Pr,InvCholXXS,penalties,lgdetDs,colsX,n_c)
+      total_edf, term_edfs, Bs = calculate_edf(LP,Pr,InvCholXXS,penalties,lgdetDs,colsX-(len(drop) if drop is not None else 0),n_c,drop)
    else:
       total_edf = colsX
       term_edfs = None
@@ -1774,6 +1795,8 @@ def update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,pen
 
 def update_coef(yb,X,Xb,family,S_emb,S_root,n_c,formula,offset):
    # Solves the coefficients of an additive model, given weights and penalty.
+   keep = None
+   drop = None
    if formula is None:
       if S_root is None:
          LP, Pr, coef, code = cpp_solve_coef(yb,Xb,S_emb)
@@ -1787,18 +1810,32 @@ def update_coef(yb,X,Xb,family,S_emb,S_root,n_c,formula,offset):
          P2 = compute_eigen_perm(Pr2)
          P = P2.T@P1.T
 
+         # Need to insert zeroes in case of rank deficiency - first insert nans to that we
+         # can then easily find dropped coefs.
+         if rank < S_emb.shape[1]:
+            coef = np.concatenate((coef,[np.nan for _ in range(S_emb.shape[1]-rank)]))
+   
          # Can now unpivot coef
          coef = coef @ P
 
-         # Now convert so that rest of code can just continue as with Chol
-         LP = RP.T.tocsc()
-         _,Pr,_ = translate_sparse(P.tocsc())
+         # And identify which coef was dropped
+         idx = np.arange(len(coef))
+         drop = idx[np.isnan(coef)]
+         keep = idx[np.isnan(coef)==False]
 
-         if rank < S_emb.shape[1]:
-            # Rank defficiency detected during numerical factorization.
-            # Set code > 0
-            warnings.warn(f"Rank deficiency detected. Most likely a result of coefficients {Pr[rank:]} being unidentifiable. Check 'model.formula.coef_names' at the corresponding indices to identify the problematic terms and consider dropping (or penalizing) them.")
-            code = 1
+         # Now actually set dropped ones to zero
+         coef[drop] = 0
+
+         # Convert R so that rest of code can just continue as with Chol (i.e., L)
+         LP = RP.T.tocsc()
+
+         # Keep only columns of Pr/P that belong to identifiable params. So P.T@LP is Cholesky of negative penalized Hessian
+         # of model without unidentifiable coef. Important: LP and Pr/P no longer match dimensions of embedded penalties
+         # after this! So we need to keep track of that in the appropriate functions (i.e., `calculate_edf` which calls
+         # `compute_B` when called with only LP and not Linv).
+         P = P[:,keep]
+         _,Pr,_ = translate_sparse(P.tocsc())
+         P = compute_eigen_perm(Pr)
 
    else:
       #yb is X.T@y and Xb is X.T@X
@@ -1825,11 +1862,11 @@ def update_coef(yb,X,Xb,family,S_emb,S_root,n_c,formula,offset):
          warnings.simplefilter("ignore")
          mu = family.link.fi(eta)
    
-   return eta,mu,coef,Pr,P,LP
+   return eta,mu,coef,Pr,P,LP,keep,drop
 
 def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,S_root,S_pinv,FS_use_rank,penalties,n_c,formula,form_Linv,offset):
    # Solves the additive model for a given set of weights and penalty
-   eta,mu,coef,Pr,P,LP = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,formula,offset)
+   eta,mu,coef,Pr,P,LP,keep,drop = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,formula,offset)
    
    # Given new coefficients compute lgdetDs and bsbs - needed for REML gradient and EFS step
    lgdetDs = None
@@ -1852,9 +1889,23 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,S_root,S_pinv,
    if form_Linv:
       InvCholXXSP = compute_Linv(LP,n_c)
 
-   # Update scale parameter
-   wres,InvCholXXS,total_edf,term_edfs,Bs,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,penalties,n_c)
-   return eta,mu,coef,P.T@LP,InvCholXXS,lgdetDs,bsbs,total_edf,term_edfs,Bs,scale,wres
+   # Un-pivot L
+   L = P.T@LP
+
+   # Makes sense to insert zero rows and columns here in case of unidentifiable params since L is not used for any solves.
+   # InvCholXXSP might also be of reduced size but is not un-pivoted here so we don't need to worry about padding here.
+   if LP.shape[1] < S_emb.shape[1]:
+      
+      Ldat,Lrow,Lcol = translate_sparse(L.tocsc()) # L@L.T = H_pen
+      
+      Lrow = keep[Lrow]
+      Lcol = keep[Lcol]
+
+      L = scp.sparse.csc_array((Ldat,(Lrow,Lcol)),shape=(S_emb.shape[1],S_emb.shape[1]))
+
+   # Update scale parameter - and un-pivot + optionally pad InvCholXXSP
+   wres,InvCholXXS,total_edf,term_edfs,Bs,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,penalties,keep,drop,n_c)
+   return eta,mu,coef,L,InvCholXXS,lgdetDs,bsbs,total_edf,term_edfs,Bs,scale,wres,keep,drop
 
 def init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
                   family,col_S,penalties,
@@ -1887,7 +1938,8 @@ def init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
    bsbs,\
    total_edf,\
    term_edfs,\
-   Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
+   Bs,scale,wres,\
+   keep, drop = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
                                          X,Xb,family,S_emb,S_root,S_pinv,
                                          FS_use_rank,penalties,n_c,
                                          formula,form_Linv,offset)
@@ -2079,7 +2131,8 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,coef,
       bsbs,\
       total_edf,\
       term_edfs,\
-      Bs,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
+      Bs,scale,wres,\
+      keep, drop = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
                                             X,Xb,family,S_emb,S_root,S_pinv,
                                             FS_use_rank,penalties,n_c,
                                             formula,form_Linv,offset)
@@ -2115,7 +2168,7 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,coef,
             c_dev_prev = pen_dev
 
             # Now propose next set of coefficients
-            eta,mu,n_coef2,Pr,P,LP = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,None,offset)
+            eta,mu,n_coef2,Pr,P,LP,keep,drop = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,None,offset)
 
             # Update deviance & penalized deviance
             inval = np.isnan(mu).flatten()
@@ -2145,8 +2198,19 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,coef,
          if form_Linv:
             InvCholXXSP = compute_Linv(LP,n_c)
          
-         wres,InvCholXXS,total_edf,term_edfs,_,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,penalties,n_c)
+         wres,InvCholXXS,total_edf,term_edfs,_,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,penalties,keep,drop,n_c)
+
+         # Unpivot Cholesky of negative penalized hessian - InvCholXXS has already been un-pivoted (and padded) by `update_scale_edf`!
          CholXXS = P.T@LP
+
+         # Again need to make sure here to insert zero rows and columns after un-pivoting for parameters that were dropped.
+         if LP.shape[1] < S_emb.shape[1]:
+            CholXXSdat,CholXXSrow,CholXXScol = translate_sparse(CholXXS.tocsc())
+      
+            CholXXSrow = keep[CholXXSrow]
+            CholXXScol = keep[CholXXScol]
+
+            CholXXS = scp.sparse.csc_array((CholXXSdat,(CholXXSrow,CholXXScol)),shape=(colsX,colsX))
       
       # Compute gradient of REML with respect to lambda
       # to check if step size needs to be reduced (part of step 6 in Wood, 2017).
@@ -2218,6 +2282,7 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,coef,
             if (not ((lTerm.lam > 1e5) and (((lGrad[0]**2)/lTerm.lam) < 1e-8))) or exclude_lambda == False:
 
                dLam = step_fellner_schall_sparse(lgdetDs[lti],Bs[lti],bsbs[lti],lTerm.lam,scale)
+               #print("Theorem 1:",lgdetDs[lti]-Bs[lti],bsbs[lti])
 
                if extend_lambda:
                   dLam,extend_by,was_extended = extend_lambda_step(lti,lTerm.lam,dLam,extend_by,was_extended,extension_method_lam)
@@ -2232,7 +2297,7 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,coef,
 
       lam_checks += 1
 
-   return yb,Xb,z,Wr,eta,mu,n_coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb,lam_checks
+   return yb,Xb,z,Wr,eta,mu,n_coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb,lam_checks,keep,drop
 
 ################################################ Main solver ################################################
 
@@ -2350,7 +2415,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
             #print(lTerm.lam,lam_delta[lti][0])
 
          # Now check step length and compute lambda + coef update. (steps 6-7 in Wood, 2017)
-         yb,Xb,z,Wr,eta,mu,n_coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb,lam_checks = correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,coef,
+         yb,Xb,z,Wr,eta,mu,n_coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb,lam_checks,keep,drop = correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,coef,
                                                                                                                                                                      family,col_S,S_emb,penalties,
                                                                                                                                                                      was_extended,pinv,lam_delta,
                                                                                                                                                                      extend_by,o_iter,dev,n_c,
@@ -2370,9 +2435,12 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
          _,\
          total_edf,\
          term_edfs,\
-         _,scale,wres = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
-                                              X,Xb,family,S_emb,None,None,None,
-                                              penalties,n_c,None,form_Linv,offset)
+         _,scale,wres,\
+         keep, drop = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
+                                            X,Xb,family,S_emb,None,None,None,
+                                            penalties,n_c,None,form_Linv,offset)
+         
+      fit_info.dropped = drop
 
       # Check condition number of current system. 
       if check_cond == 2:
@@ -2405,6 +2473,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    # At this point, Wr/z might not match the dimensions of y and X, because observations might be
    # excluded at convergence. eta and mu are of correct dimension, so we need to re-compute Wr - this
    # time with a weight of zero for any dropped obs.
+   WN = None
    if Wr is not None:
       inval_check =  np.any(np.isnan(z))
 
@@ -2415,12 +2484,14 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
          # Re-compute weight matrix
          Wr = scp.sparse.spdiags([np.sqrt(np.ndarray.flatten(w))],[0])
    
-   # Compute Newton weights once to enable computation of observed hessian
-   _, wN, inval = PIRLS_newton_weights(y,mu,eta-offset,family)
-   wN[inval] = 0
-   WN = scp.sparse.spdiags([np.ndarray.flatten(wN)],[0])
+      # Compute Newton weights once to enable computation of observed hessian
+      _, wN, inval = PIRLS_newton_weights(y,mu,eta-offset,family)
+      wN[inval] = 0
+      WN = scp.sparse.spdiags([np.ndarray.flatten(wN)],[0])
 
    if InvCholXXS is None:
+      if method != "Chol":
+         warnings.warn("Final re-computation of inverse of Cholesky of penalized Hessian might not account for dropped coefficients. Check `model.info` and inspect returned inverse carefully.")
       Lp, Pr, _ = cpp_cholP((Xb.T @ Xb + S_emb).tocsc())
       InvCholXXSP = compute_Linv(Lp,n_c)
       InvCholXXS = apply_eigen_perm(Pr,InvCholXXSP)
@@ -2828,7 +2899,7 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
             #print(lTerm.lam,lam_delta[lti][0])
 
          # Now check step length and compute lambda + coef update.
-         _,_,_,_,eta,mu,n_coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb,lam_checks = correct_lambda_step(y,Xy,None,None,rowsX,colsX,None,XX,coef,
+         _,_,_,_,eta,mu,n_coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb,lam_checks,_,_ = correct_lambda_step(y,Xy,None,None,rowsX,colsX,None,XX,coef,
                                                                                                                                                                         family,col_S,S_emb,penalties,
                                                                                                                                                                         was_extended,pinv,lam_delta,
                                                                                                                                                                         extend_by,o_iter,dev,
@@ -2846,9 +2917,10 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
          _,\
          total_edf,\
          term_edfs,\
-         _,scale,wres = update_coef_and_scale(y,Xy,None,None,rowsX,colsX,
-                                              None,XX,family,S_emb,None,None,None,
-                                              penalties,n_c,formula,form_Linv,0)
+         _,scale,wres,\
+         _, _ = update_coef_and_scale(y,Xy,None,None,rowsX,colsX,
+                                            None,XX,family,S_emb,None,None,None,
+                                            penalties,n_c,formula,form_Linv,0)
 
       fit_info.iter += 1
 
@@ -3501,7 +3573,7 @@ def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,S_norm,gammlss
                lgdetD,_ = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
                lgdetDs.append(lgdetD)
 
-         _,_, ldetHSs = calculate_edf(None,None,LV,gammlss_penalties,lgdetDs,len(coef),10)
+         _,_, ldetHSs = calculate_edf(None,None,LV,gammlss_penalties,lgdetDs,len(coef),10,None)
 
          # And check whether Theorem 1 now holds
          checkH = np.any([lgdetDs[lti] - ldetHSs[lti] < 0 for lti in range(len(gammlss_penalties))])
@@ -3646,7 +3718,7 @@ def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,S_norm,gammlss
                   lgdetD,_ = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,full_coef)
                   lgdetDs.append(lgdetD)
 
-            _,_, ldetHSs = calculate_edf(None,None,LV,drop_pen,lgdetDs,len(full_coef),10)
+            _,_, ldetHSs = calculate_edf(None,None,LV,drop_pen,lgdetDs,len(full_coef),10,None)
 
             checkH = np.any([lgdetDs[lti] - ldetHSs[lti] < 0 for lti in range(len(drop_pen))])
 
@@ -3737,7 +3809,7 @@ def correct_lambda_step_gamlss(family,mus,y,Xs,S_norm,n_coef,coef,
             lgdetDs.append(lgdetD)
             bsbs.append(bsb)
 
-      total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,gamlss_pen,lgdetDs,n_coef,n_c)
+      total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,gamlss_pen,lgdetDs,n_coef,n_c,None)
       #print([l1-l2 for l1,l2 in zip(lgdetDs,ldetHSs)])
       #print(total_edf)
       fit_info.lambda_updates += 1
@@ -3953,17 +4025,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,gamlss_pen,
       #print("lambda after step:",[lterm.lam for lterm in gamlss_pen])
     
     if check_cond == 1:
-
-      if drop is not None:
-         # Make sure cond. estimate happens in reduced space.
-         L_drop_K2 = L[keep,:]
-         L_drop_K2 = L_drop_K2[:,keep]
-
-         LV_drop_K2 = LV[keep,:]
-         LV_drop_K2 = LV_drop_K2[:,keep]
-         K2,_,_,Kcode = est_condition(L_drop_K2,LV_drop_K2,verbose=False)
-      else:
-         K2,_,_,Kcode = est_condition(L,LV,verbose=False)
+      K2,_,_,Kcode = est_condition(L,LV,verbose=False)
 
       fit_info.K2 = K2
 
@@ -4570,7 +4632,7 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,smooth_p
                   lgdetD,_ = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
                   lgdetDs.append(lgdetD)
 
-            _,_, ldetHSs = calculate_edf(None,None,LV,smooth_pen,lgdetDs,len(coef),10)
+            _,_, ldetHSs = calculate_edf(None,None,LV,smooth_pen,lgdetDs,len(coef),10,None)
 
             # And check whether Theorem 1 now holds
             checkH = np.any([lgdetDs[lti] - ldetHSs[lti] < 0 for lti in range(len(smooth_pen))])
@@ -4692,7 +4754,7 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,smooth_p
                   lgdetD,_ = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,full_coef)
                   lgdetDs.append(lgdetD)
 
-            _,_, ldetHSs = calculate_edf(None,None,LV,drop_pen,lgdetDs,len(full_coef),10)
+            _,_, ldetHSs = calculate_edf(None,None,LV,drop_pen,lgdetDs,len(full_coef),10,None)
 
             checkH = np.any([lgdetDs[lti] - ldetHSs[lti] < 0 for lti in range(len(drop_pen))])
 
@@ -4833,7 +4895,7 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,coef,
             lgdetDs.append(lgdetD)
             bsbs.append(bsb*gamma)
 
-      total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,smooth_pen,lgdetDs,n_coef,n_c)
+      total_edf,term_edfs, ldetHSs = calculate_edf(None,None,LV,smooth_pen,lgdetDs,n_coef,n_c,None)
       fit_info.lambda_updates += 1
 
       if drop is not None:
@@ -4889,7 +4951,7 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,coef,
    # For qEFS we check whether new approximation results in worse balance of efs update - then we fall back to previous approximation
    if method == "qEFS":
       #if outer > 0:
-      total_edf2,term_edfs2, ldetHSs2 = calculate_edf(None,None,__old_opt,smooth_pen,lgdetDs,n_coef,n_c)
+      total_edf2,term_edfs2, ldetHSs2 = calculate_edf(None,None,__old_opt,smooth_pen,lgdetDs,n_coef,n_c,None)
       diff1 = [np.abs((lgdetDs[lti] - ldetHSs[lti]) - bsbs[lti]) for lti in range(len(smooth_pen))]
       diff2 = [np.abs((lgdetDs[lti] - ldetHSs2[lti]) - bsbs[lti]) for lti in range(len(smooth_pen))]
       #print([(lgdetDs[lti] - ldetHSs[lti]) - bsbs[lti] for lti in range(len(smooth_pen))])
@@ -5162,17 +5224,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,coef,coef_split_idx,smoot
             H = None # Do not approximate H.
        
     if check_cond == 1 and (method != "qEFS" or form_VH):
-
-      if drop is not None:
-         # Make sure cond. estimate happens in reduced space.
-         L_drop_K2 = L[keep,:]
-         L_drop_K2 = L_drop_K2[:,keep]
-
-         LV_drop_K2 = LV[keep,:]
-         LV_drop_K2 = LV_drop_K2[:,keep]
-         K2,_,_,Kcode = est_condition(L_drop_K2,LV_drop_K2,verbose=False)
-      else:
-         K2,_,_,Kcode = est_condition(L,LV,verbose=False)
+      K2,_,_,Kcode = est_condition(L,LV,verbose=False)
 
       fit_info.K2 = K2
 

@@ -632,6 +632,9 @@ class GAMM:
         if penalties is None and restart:
             raise ValueError("Penalties were not initialized. Restart must be set to False.")
         
+        if len(self.formula.discretize) != 0 and method != "Chol":
+            raise ValueError("When discretizing derivative code, the method argument must be set to 'Chol'.")
+        
         self.offset = 0
 
         if len(self.formula.file_paths) == 0:
@@ -725,6 +728,11 @@ class GAMM:
             
             self.Wr = Wr
             self.WN = WN
+
+            if fit_info.dropped is not None: # Make sure hessian has zero columns/rows for unidentifiable coef.
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    model_mat[:,fit_info.dropped] = 0
 
             # Compute (expected) Hessian of llk (Wood, 2011)
             if not isinstance(self.family,Gaussian) or isinstance(self.family.link,Identity) == False:

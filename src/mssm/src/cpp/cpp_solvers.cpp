@@ -860,10 +860,10 @@ std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,VectorXi64,Eig
     yE.setZero(Xrows+Xcols);
     yE.head(Xrows) = y;
     Qy = solver2.matrixQ().adjoint() * yE;
-    coef = Qy.head(Xcols);
+    coef = Qy.head(solver2.rank());
 
     // Extract root of X.T@X + S
-    Eigen::SparseMatrix<double,0,long long int> R2 = solver2.matrixR().topRows(Xcols);
+    Eigen::SparseMatrix<double,0,long long int> R2 = solver2.matrixR().topLeftCorner(solver2.rank(),solver2.rank());
 
     // Now do the actual solve
     R2.triangularView<Eigen::Upper>().solveInPlace(coef);

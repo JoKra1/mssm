@@ -5,7 +5,7 @@ import warnings
 from itertools import permutations,product,repeat
 import copy
 from ..python.gamm_solvers import cpp_backsolve_tr,compute_S_emb_pinv_det,cpp_chol,cpp_solve_coef,update_scale_edf,compute_Linv,apply_eigen_perm,tqdm,managers,shared_memory,cpp_solve_coefXX,update_PIRLS,PIRLS_pdat_weights,correct_coef_step,update_coef_gen_smooth,cpp_cholP,update_coef_gammlss,compute_lgdetD_bsb,calculate_edf,compute_eigen_perm,cpp_dChol,computeHSR1,computeH,update_coef,deriv_transform_mu_eta,deriv_transform_eta_beta
-from ..python.formula import reparam,map_csc_to_eigen,mp
+from ..python.formula import reparam,map_csc_to_eigen,mp,translate_sparse
 from ..python.exp_fam import Family,Gaussian, Identity,GAMLSSFamily,GENSMOOTHFamily
 
 def sample_MVN(n,mu,scale,P,L,LI=None,use=None,seed=None):
@@ -355,7 +355,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0,init_eta=No
     try:
         if isinstance(family,Gaussian) and isinstance(family.link,Identity):
             # AMM - directly solve for coef
-            eta,mu,coef,Pr,_,LP = update_coef(y-offset,X,X,family,S_emb,S_root,n_c,None,0)
+            eta,mu,coef,Pr,_,LP,keep,drop = update_coef(y-offset,X,X,family,S_emb,S_root,n_c,None,0)
             nH = (X.T@X).tocsc()
         else:
             # GAMM - have to repeat Newton step
@@ -373,7 +373,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0,init_eta=No
             yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family)
 
             # Solve coef
-            eta,mu,coef,Pr,_,LP = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,None,offset)
+            eta,mu,coef,Pr,_,LP,keep,drop = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,None,offset)
 
             # Now repeat until convergence
             inval = np.isnan(mu).flatten()
@@ -398,7 +398,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0,init_eta=No
                 c_dev_prev = pen_dev
 
                 # Now propose next set of coefficients
-                eta,mu,n_coef,Pr,_,LP = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,None,offset)
+                eta,mu,n_coef,Pr,_,LP,keep,drop = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,None,offset)
 
                 # Update deviance & penalized deviance
                 inval = np.isnan(mu).flatten()
@@ -421,10 +421,17 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0,init_eta=No
                 
             W = Wr_fix@Wr_fix
             nH = (X.T@W@X).tocsc() 
+        
+        # Dropped some coef, needs to be reflected in nH
+        if drop is not None:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                nH[:,drop] = 0
+                nH[drop,:] = 0
 
         # Get edf and optionally estimate scale (scale will be kept at fixed (e.g., 1) for Generalized case)
         #InvCholXXSP = compute_Linv(LP,n_c)
-        _,_,edf,_,_,scale = update_scale_edf(y,z,eta,Wr,X.shape[0],X.shape[1],LP,None,Pr,None,family,penalties,n_c)
+        _,_,edf,_,_,scale = update_scale_edf(y,z,eta,Wr,X.shape[0],X.shape[1],LP,None,Pr,None,family,penalties,keep,drop,n_c)
         #print(edf-(InvCholXXS.T@InvCholXXS@nH).trace())
         #edf = (InvCholXXS.T@InvCholXXS@nH).trace()
 
@@ -446,6 +453,15 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0,init_eta=No
         if compute_inv or origNH is not None:
             LPinv = compute_Linv(LP,n_c)
             Linv = apply_eigen_perm(Pr,LPinv)
+
+            # Dropped some terms, need to insert zero columns and rows for dropped coefficients
+            if Linv.shape[1] < X.shape[1]:
+                Linvdat,Linvrow,Linvcol = translate_sparse(Linv)
+            
+                Linvrow = keep[Linvrow]
+                Linvcol = keep[Linvcol]
+
+                Linv = scp.sparse.csc_array((Linvdat,(Linvrow,Linvcol)),shape=(X.shape[1],X.shape[1]))
             
         if origNH is not None:
             # Compute trace for tau2
@@ -543,7 +559,7 @@ def compute_REML_candidate_GSMM(family,y,Xs,penalties,coef,n_coef,coef_split_idx
             lgdetD,_ = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
             lgdetDs.append(lgdetD)
 
-        total_edf,_, _ = calculate_edf(None,None,LV,penalties,lgdetDs,n_coef,n_c)
+        total_edf,_, _ = calculate_edf(None,None,LV,penalties,lgdetDs,n_coef,n_c,None)
 
         if origNH is not None:
             # Compute trace for tau2
@@ -1096,7 +1112,7 @@ def _compute_VB_corr_terms_MP(family,address_y,address_dat,address_ptr,address_i
    eta = (X @ coef).reshape(-1,1) + offset
    
    # Compute scale
-   _,_,edf,_,_,scale = update_scale_edf(y,None,eta,None,X.shape[0],X.shape[1],LP,None,Pr,None,family,rPen,10)
+   _,_,edf,_,_,scale = update_scale_edf(y,None,eta,None,X.shape[0],X.shape[1],LP,None,Pr,None,family,rPen,None,None,10)
 
    llk = family.llk(y,eta,scale)
 
@@ -1620,7 +1636,7 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
             if np.any(np.max(np.abs(p_sample - np.array([pen2.lam for pen2 in rPen])),axis=1) < minDiag) == False:
                 p_sample = np.concatenate((np.array([pen2.lam for pen2 in rPen]).reshape(1,-1),p_sample),axis=0)
             
-            if isinstance(family,Gaussian) and isinstance(family.link,Identity): # Strictly additive case
+            if isinstance(family,Gaussian) and isinstance(family.link,Identity) and method == "Chol": # Fast Strictly additive case
                 with managers.SharedMemoryManager() as manager, mp.Pool(processes=n_c) as pool:
                     # Create shared memory copies of data, indptr, and indices for X, XX, and y
 
@@ -1846,13 +1862,19 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
                     nH = (X.T@W@X).tocsc() 
 
                 # Solve for coef to get Cholesky needed to re-compute scale
-                _,_,_,Pr,_,LP = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,None,model.offset)
+                _,_,_,Pr,_,LP,keep,drop = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,None,model.offset)
 
                 # Re-compute scale
-                _,_,_,_,_,scale = update_scale_edf(y,z,eta,Wr,X.shape[0],X.shape[1],LP,None,Pr,None,family,model.formula.penalties,n_c)
+                _,_,_,_,_,scale = update_scale_edf(y,z,eta,Wr,X.shape[0],X.shape[1],LP,None,Pr,None,family,model.formula.penalties,keep,drop,n_c)
                 
                 # And negative hessian
                 nH /= scale
+
+                if drop is not None:
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        nH[:,drop] = 0
+                        nH[drop,:] = 0
 
             else: # GSMM/GAMLSS case
                 if isinstance(Family,GAMLSSFamily): #GAMLSS case
