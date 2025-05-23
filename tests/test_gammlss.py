@@ -184,7 +184,7 @@ class Test_mulnom_hard:
 
     # Fit the model
     model = GAMMLSS(formulas,family)
-    model.fit(method="Chol/QR",control_lambda=0,extend_lambda=False,max_outer=200,max_inner=500,should_keep_drop=False)
+    model.fit(method="Chol",control_lambda=0,extend_lambda=False,max_outer=200,max_inner=500,should_keep_drop=False)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 15.114
@@ -207,6 +207,48 @@ class Test_mulnom_hard:
     def test_GAMreml(self):
         reml = self.model.get_reml()
         assert round(reml,ndigits=3) == -1002.689
+    
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        assert round(llk,ndigits=3) == -980.676
+
+
+class Test_mulnom_hard_repara:
+    # Test multinomial model
+
+    # We need to specify K-1 formulas - see the `MULNOMLSS` docstring for details.
+    formulas = [Formula(lhs("y"),
+                        [i(),f(["x0"])],
+                        data=sim5(1000,seed=91)) for k in range(4)]
+
+    # Create family - again specifying K-1 pars - here 4!
+    family = MULNOMLSS(4)
+
+    # Fit the model
+    model = GAMMLSS(formulas,family)
+    model.fit(method="Chol",control_lambda=0,extend_lambda=False,max_outer=200,max_inner=500,should_keep_drop=False,repara=True)
+
+    def test_GAMedf(self):
+        assert round(self.model.edf,ndigits=3) == 15.114
+
+    def test_GAMcoef(self):
+        coef = self.model.overall_coef.flatten()
+        assert np.allclose(coef,np.array([ 1.32831232, -0.70411299,  0.26038397,  0.85856489,  1.31636532,
+                                            1.46064575,  1.15467552,  0.34090563, -0.96911006, -2.2518714 ,
+                                            0.66532703, -0.76857181, -0.20872371,  0.11240685,  0.42769554,
+                                            0.70741373,  1.07469267,  1.32593173,  1.37436662,  1.48506958,
+                                            2.06156634, -1.63789936,  7.86561269,  9.15961218,  4.10367108,
+                                            1.21906229,  1.6889608 ,  1.01054087, -0.31833491, -0.5975857 ,
+                                            0.4881652 , -0.46708693, -0.12681357,  0.06836815,  0.25998144,
+                                            0.42995532,  0.65313117,  0.80576918,  0.83513642,  0.90234416])) 
+
+    def test_GAMlam(self):
+        lam = np.array([p.lam for p in self.model.overall_penalties])
+        assert np.allclose(lam,np.array([3.37059261e+00, 7.24170552e+04, 5.02852109e-02, 1.00000000e+07]))
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        assert round(reml,ndigits=3) == -1000.749
     
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
