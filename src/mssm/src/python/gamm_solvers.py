@@ -3710,6 +3710,56 @@ def check_drop_valid_gammlss(y,coef,coef_split_idx,Xs,S_emb,keep,family):
    
    return True,c_pen_llk
 
+def handle_drop_gammlss(family, y, coef, keep, Xs, S_emb):
+   """Drop coefficients and make sure this is reflected in the model matrices, total penalty, llk, and penalized llk.
+
+   :param family: Model family
+   :type family: Family
+   :param y: Vector of observations
+   :type y: numpy.array
+   :param coef: Vector of coefficients
+   :type coef: numpy.array
+   :param keep: List of parameter indices to keep.
+   :type keep: [int]
+   :param Xs: List of model matrices
+   :type Xs: [scipy.sparse.csc_array]
+   :param S_emb: Total penalty matrix.
+   :type S_emb: scipy.sparse.csc_array
+   :return: A tuple holding: reduced coef vector, split version of the reduced coef vector, a new list of indices determining where to split the reduced coef vector, list with reduced model matrices, reduced total penalty matrix, updated etas, mus, llk, and penalzied llk
+   :rtype: (numpy.array,[numpy.array],[int],[scipy.sparse.csc_array],scipy.sparse.csc_array,float,[[float]])
+   """
+   # Drop from coef
+   coef = coef[keep]
+
+   # ... from Xs...
+   rXs,rcoef_split_idx = drop_terms_X(Xs,keep)
+   #print(rXs)
+
+   # ... and from S_emb
+   rS_emb = S_emb[keep,:]
+   rS_emb = rS_emb[:,keep]
+
+   # Now re-compute split coef, etas, and mus
+   rsplit_coef = np.split(coef,rcoef_split_idx)
+   etas = [rXs[i]@rsplit_coef[i] for i in range(family.n_par)]
+
+   with warnings.catch_warnings(): # Catch warnings associated with mean transformation
+      warnings.simplefilter("ignore")
+      mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
+
+   # Find and exclude invalid indices before evaluating llk
+   inval = np.isnan(mus[0])
+
+   if len(rcoef_split_idx) != 0:
+      for mi in range(1,len(mus)):
+         inval = inval |  np.isnan(mus[mi])
+   inval = inval.flatten()
+
+   # Re-compute llk
+   c_llk = family.llk(y[inval == False],*[mu[inval == False] for mu in mus])
+   c_pen_llk = c_llk - 0.5*coef.T@rS_emb@coef
+
+   return coef, rsplit_coef, rcoef_split_idx, rXs, rS_emb, etas, mus, c_llk, c_pen_llk
     
 def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,FS_use_rank,gammlss_penalties,c_llk,outer,max_inner,min_inner,conv_tol,method,piv_tol,keep_drop):
    """
@@ -3719,241 +3769,167 @@ def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,
    References:
      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
    """
+
+   full_coef = None
    # Update coefficients:
    if keep_drop is None:
-      converged = False
-      for inner in range(max_inner):
-         
-         # Get derivatives with respect to eta
-         if family.d_eta == False:
-            d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,mus,family)
-         else:
-            d1eta = [fd1(y,*mus) for fd1 in family.d1]
-            d2eta = [fd2(y,*mus) for fd2 in family.d2]
-            d2meta = [fd2m(y,*mus) for fd2m in family.d2m]
+      keep = None
+      drop = None
+   else:
+      keep = keep_drop[0]
+      drop = keep_drop[1]
 
-         # Get derivatives with respect to coef
-         grad,H = deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs,only_grad=False)
+      # Handle previous drop
+      full_coef = np.zeros_like(coef) # Prepare zeroed full coef vector
+      full_coef_split_idx = copy.deepcopy(coef_split_idx) # Original split index
+      coef, split_coef, coef_split_idx, Xs, S_emb, etas, mus, c_llk, c_pen_llk = handle_drop_gammlss(family, y, coef, keep, Xs, S_emb) # Drop
 
-         # Update coef and perform step size control
-         next_coef,L,LV,eps = newton_coef_smooth(coef,grad,H,S_emb)
+   converged = False
+   checked_identifiable = False
+   inner = 0
+   while converged == False:
 
-         # Prepare to check convergence
-         prev_llk_cur_pen = c_llk - 0.5*coef.T@S_emb@coef
-
-         # Perform step length control
-         coef,split_coef,mus,etas,c_llk,c_pen_llk = correct_coef_step_gammlss(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb)
-
-         if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
-            converged = True
-            #if eps <= 0 or np.linalg.norm(coef-next_coef) < conv_tol*np.linalg.norm(coef):
-            break
-
-         if eps <= 0 and outer > 0 and inner >= (min_inner-1):
-            break # end inner loop and immediately optimize lambda again.
-
-      #print(converged,eps)
-   
-      # Make sure at convergence negative Hessian of llk is at least positive semi-definite as well
-      checkH = True
-      checkHc = 0
+      if inner >= max_inner:
+         break
       
-      while checkH and (gammlss_penalties is not None):
-         #_,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(len(coef),gammlss_penalties,"svd")
-
-         # Re-compute lgdetDs, ldetHS
-         lgdetDs = []
-
-         for lti,lTerm in enumerate(gammlss_penalties):
-
-               lt_rank = None
-               if FS_use_rank[lti]:
-                  lt_rank = lTerm.rank
-
-               lgdetD,_ = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
-               lgdetDs.append(lgdetD)
-
-         _,_, ldetHSs = calculate_edf(None,None,LV,gammlss_penalties,lgdetDs,len(coef),10,None)
-
-         # And check whether Theorem 1 now holds
-         checkH = np.any([lgdetDs[lti] - ldetHSs[lti] < 0 for lti in range(len(gammlss_penalties))])
-
-         if checkH:
-            if eps == 0:
-               eps += 1e-14
-            else:
-               eps *= 2
-            _,L,LV,_ = newton_coef_smooth(coef,grad,H - eps*scp.sparse.identity(H.shape[1],format='csc'),S_emb)
-
-         if checkHc > 30:
-            break
-
-         checkHc += 1
-      
-   
-   # In case we coverged check for unidentifiable parameters, as reccomended by Wood. et al (2016)
-   keep = None
-   drop = None
-   if keep_drop is not None or (method == "QR/Chol" and converged):
-      
-      if keep_drop is not None:
-         keep = keep_drop[0]
-         drop = keep_drop[1]
+      # Get derivatives with respect to eta
+      if family.d_eta == False:
+         d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,mus,family)
       else:
+         d1eta = [fd1(y,*mus) for fd1 in family.d1]
+         d2eta = [fd2(y,*mus) for fd2 in family.d2]
+         d2meta = [fd2m(y,*mus) for fd2m in family.d2m]
+
+      # Get derivatives with respect to coef
+      grad,H = deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs,only_grad=False)
+
+      # Update coef and perform step size control
+      next_coef,L,LV,eps = newton_coef_smooth(coef,grad,H,S_emb)
+
+      # Prepare to check convergence
+      prev_llk_cur_pen = c_llk - 0.5*coef.T@S_emb@coef
+
+      # Perform step length control
+      coef,split_coef,mus,etas,c_llk,c_pen_llk = correct_coef_step_gammlss(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb)
+
+      inner += 1
+
+      if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
+         converged = True
+         
          # Check for drop
-         keep,drop = identify_drop(H,S_norm)
+         if (keep_drop is None) and (checked_identifiable == False) and (method == "QR/Chol"):
+            keep,drop = identify_drop(H,S_norm)
 
-      if len(drop) == 0:
-         keep = None
-         drop = None
-      elif keep_drop is None:
-         # Found drop, but need to check whether it is safe
-         drop_valid,drop_pen_llk = check_drop_valid_gammlss(y,coef,coef_split_idx,Xs,S_emb,keep,family)
-
-         # Skip if likelihood becomes invalid
-         if drop_valid == False:
-            keep = None
-            drop = None
-         # If we identify all or all but one coefficients to drop also skip
-         elif drop_valid and len(drop) >= len(coef) - 1:
-            keep = None
-            drop = None
-      
-      #print(drop)
-      # Now we need to continue iterating in smaller problem until convergence
-      if drop is not None:
-         # Prepare zeroed full coef vector
-         full_coef = np.zeros_like(coef)
-
-         # Drop from coef
-         coef = coef[keep]
-
-         # ... from Xs...
-         rXs,rcoef_split_idx = drop_terms_X(Xs,keep)
-         #print(rXs)
-
-         # ... and from S_emb
-         rS_emb = S_emb[keep,:]
-         rS_emb = rS_emb[:,keep]
-
-         # Now re-compute split coef, etas, and mus
-         rsplit_coef = np.split(coef,rcoef_split_idx)
-         etas = [rXs[i]@rsplit_coef[i] for i in range(family.n_par)]
-
-         with warnings.catch_warnings(): # Catch warnings associated with mean transformation
-            warnings.simplefilter("ignore")
-            mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
-
-         # Find and exclude invalid indices before evaluating llk
-         inval = np.isnan(mus[0])
-
-         if len(coef_split_idx) != 0:
-            for mi in range(1,len(mus)):
-               inval = inval |  np.isnan(mus[mi])
-         inval = inval.flatten()
-
-         # Re-compute llk
-         c_llk = family.llk(y[inval == False],*[mu[inval == False] for mu in mus])
-         c_pen_llk = c_llk - 0.5*coef.T@rS_emb@coef
-         
-         # and now repeat Newton iteration
-         for inner in range(max_inner):
-      
-            # Get derivatives with respect to eta
-            if family.d_eta == False:
-               d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,mus,family)
+            # No drop necessary -> converged
+            if len(drop) == 0:
+               keep = None
+               drop = None
+               break
             else:
-               d1eta = [fd1(y,*mus) for fd1 in family.d1]
-               d2eta = [fd2(y,*mus) for fd2 in family.d2]
-               d2meta = [fd2m(y,*mus) for fd2m in family.d2m]
+               # Found drop, but need to check whether it is safe
+               drop_valid,drop_pen_llk = check_drop_valid_gammlss(y,coef,coef_split_idx,Xs,S_emb,keep,family)
 
-            # Get derivatives with respect to coef
-            grad,H = deriv_transform_eta_beta(d1eta,d2eta,d2meta,rXs,only_grad=False)
+               # Skip if likelihood becomes invalid
+               if drop_valid == False:
+                  keep = None
+                  drop = None
+                  break
+               # If we identify all or all but one coefficients to drop also skip
+               elif drop_valid and len(drop) >= len(coef) - 1:
+                  keep = None
+                  drop = None
+                  break
 
-            # Update Coefficients
-            next_coef,L,LV,eps = newton_coef_smooth(coef,grad,H,rS_emb)
-
-            # Prepare to check convergence
-            prev_llk_cur_pen = c_llk - 0.5*coef.T@rS_emb@coef
-
-            # Perform step length control
-            coef,rsplit_coef,mus,etas,c_llk,c_pen_llk = correct_coef_step_gammlss(family,y,rXs,coef,next_coef,rcoef_split_idx,c_llk,rS_emb)
-
-            if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
-               break
-
-         #print("eps",eps)
-         # converged on smaller problem now adjust return objects for dropped coef
-
-         # start with coef
-         full_coef[keep] = coef
-
-         # Again make sure negative Hessian of llk is at least positive semi-definite as well
-         checkH = True
-         if gammlss_penalties is not None:
-            drop_pen = copy.deepcopy(gammlss_penalties)
-         LVdat,LVrow,LVcol = translate_sparse(LV) # LV.T@LV = V
-         LVrow = keep[LVrow]
-         LVcol = keep[LVcol]
-         LV = scp.sparse.csc_array((LVdat,(LVrow,LVcol)),shape=(len(full_coef),len(full_coef)))
-
-         checkHc = 0
+               # At this point: found & accepted drop -> adjust parameters
+               full_coef = np.zeros_like(coef) # Prepare zeroed full coef vector
+               full_coef_split_idx = copy.deepcopy(coef_split_idx)
+               coef,split_coef, coef_split_idx, Xs, S_emb, etas, mus, c_llk, c_pen_llk = handle_drop_gammlss(family, y, coef, keep, Xs, S_emb) # Drop
+               converged = False # Re-iterate until convergence
+               inner = 0 # Reset fitting iterations
+               checked_identifiable = True
          
-         while checkH and (gammlss_penalties is not None):
-            #_,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(len(full_coef),drop_pen,"svd")
+         # Simply converge
+         else:
+            break
 
-            # Now re-compute lgdetDs, ldetHS
-            lgdetDs = []
+      if eps <= 0 and outer > 0 and inner >= (min_inner-1):
+         break # end inner loop and immediately optimize lambda again.
 
-            for lti,lTerm in enumerate(drop_pen):
+   # Need to fill full_coef at this point and pad LV if we dropped
+   if drop is not None:
+      full_coef[keep] = coef
+      
+      LVdat,LVrow,LVcol = translate_sparse(LV) # LV.T@LV = V
+      LVrow = keep[LVrow]
+      LVcol = keep[LVcol]
+      LV = scp.sparse.csc_array((LVdat,(LVrow,LVcol)),shape=(len(full_coef),len(full_coef)))
+   else:
+      # Full coef is simply coef
+      full_coef = coef
+      full_coef_split_idx = coef_split_idx
 
-                  lt_rank = None
-                  if FS_use_rank[lti]:
-                     lt_rank = lTerm.rank
+   # Make sure at convergence negative Hessian of llk is at least positive semi-definite as well
+   checkH = True
+   checkHc = 0
 
-                  lgdetD,_ = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,full_coef)
-                  lgdetDs.append(lgdetD)
+   # Compute lgdetDs once
+   if gammlss_penalties is not None:
+      lgdetDs = []
 
-            _,_, ldetHSs = calculate_edf(None,None,LV,drop_pen,lgdetDs,len(full_coef),10,None)
+      for lti,lTerm in enumerate(gammlss_penalties):
+         lt_rank = None
+         if FS_use_rank[lti]:
+            lt_rank = lTerm.rank
 
-            checkH = np.any([lgdetDs[lti] - ldetHSs[lti] < 0 for lti in range(len(drop_pen))])
+         lgdetD,_ = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,full_coef)
+         lgdetDs.append(lgdetD)
 
-            if checkH:
-               if eps == 0:
-                  eps += 1e-14
-               else:
-                  eps *= 2
-               _,L,LV,_ = newton_coef_smooth(coef,grad,H - eps*scp.sparse.identity(H.shape[1],format='csc'),rS_emb)
-               LVdat,LVrow,LVcol = translate_sparse(LV) # LV.T@LV = V
-               LVrow = keep[LVrow]
-               LVcol = keep[LVcol]
-               LV = scp.sparse.csc_array((LVdat,(LVrow,LVcol)),shape=(len(full_coef),len(full_coef)))
-            
-            if checkHc > 30:
-               break
+   while checkH and (gammlss_penalties is not None):
 
-            checkHc += 1
-         
+      # Re-compute ldetHS
+      _,_, ldetHSs = calculate_edf(None,None,LV,gammlss_penalties,lgdetDs,len(full_coef),10,None)
 
-         coef = full_coef
-         #print(coef)
-         split_coef = np.split(coef,coef_split_idx)
+      # And check whether Theorem 1 now holds
+      checkH = np.any([lgdetDs[lti] - ldetHSs[lti] < 0 for lti in range(len(gammlss_penalties))])
 
-         # Now H, L
-         Hdat,Hrow,Hcol = translate_sparse(H)
-         Ldat,Lrow,Lcol = translate_sparse(L.tocsc()) # L@L.T = H_pen
-         
-         Hrow = keep[Hrow]
-         Hcol = keep[Hcol]
-         Lrow = keep[Lrow]
-         Lcol = keep[Lcol]
+      if checkH:
+         if eps == 0:
+            eps += 1e-14
+         else:
+            eps *= 2
+         _,L,LV,_ = newton_coef_smooth(coef,grad,H - eps*scp.sparse.identity(H.shape[1],format='csc'),S_emb)
 
-         H = scp.sparse.csc_array((Hdat,(Hrow,Hcol)),shape=(len(full_coef),len(full_coef)))
-         L = scp.sparse.csc_array((Ldat,(Lrow,Lcol)),shape=(len(full_coef),len(full_coef)))
-         #print((LV.T@LV - V).max(),(LV.T@LV - V).min())
-         #print((L@L.T - nH).max(),(L@L.T - nH).min())
+         # Pad new LV in case of drop again:
+         if drop is not None:
+            LVdat,LVrow,LVcol = translate_sparse(LV) # LV.T@LV = V
+            LVrow = keep[LVrow]
+            LVcol = keep[LVcol]
+            LV = scp.sparse.csc_array((LVdat,(LVrow,LVcol)),shape=(len(full_coef),len(full_coef)))
 
-   return coef,split_coef,mus,etas,H,L,LV,c_llk,c_pen_llk,eps,keep,drop
+      if checkHc > 30:
+         break
+
+      checkHc += 1
+
+   # Done except when we have a drop -> still need to pad H and L
+   if drop is not None:
+      #print(coef)
+      split_coef = np.split(full_coef,full_coef_split_idx)
+
+      # Now H, L
+      Hdat,Hrow,Hcol = translate_sparse(H)
+      Ldat,Lrow,Lcol = translate_sparse(L.tocsc()) # L@L.T = H_pen
+      
+      Hrow = keep[Hrow]
+      Hcol = keep[Hcol]
+      Lrow = keep[Lrow]
+      Lcol = keep[Lcol]
+
+      H = scp.sparse.csc_array((Hdat,(Hrow,Hcol)),shape=(len(full_coef),len(full_coef)))
+      L = scp.sparse.csc_array((Ldat,(Lrow,Lcol)),shape=(len(full_coef),len(full_coef)))
+      
+   return full_coef,split_coef,mus,etas,H,L,LV,c_llk,c_pen_llk,eps,keep,drop
 
 def correct_lambda_step_gamlss(family,mus,y,Xs,S_norm,n_coef,form_n_coef,form_up_coef,coef,
                                coef_split_idx,gamlss_pen,lam_delta,
