@@ -504,7 +504,7 @@ def compute_REML_candidate_GSMM(family,y,Xs,penalties,coef,n_coef,coef_split_idx
                 __old_opt.bfgs_options = bfgs_options
             
             coef,H,L,LV,c_llk,_,_,_,_ = update_coef_gen_smooth(family,y,Xs,coef,
-                                                                coef_split_idx,S_emb,None,None,
+                                                                coef_split_idx,S_emb,None,None,None,None,
                                                                 c_llk,0,1000,
                                                                 1000,conv_tol,method,None,None,__old_opt)
             
@@ -559,7 +559,7 @@ def compute_REML_candidate_GSMM(family,y,Xs,penalties,coef,n_coef,coef_split_idx
             lgdetD,_ = compute_lgdetD_bsb(lt_rank,lTerm.lam,S_pinv,lTerm.S_J_emb,coef)
             lgdetDs.append(lgdetD)
 
-        total_edf,_, _ = calculate_edf(None,None,LV,penalties,lgdetDs,n_coef,n_c,None)
+        total_edf,_, _ = calculate_edf(None,None,LV,penalties,lgdetDs,n_coef,n_c,None,S_emb)
 
         if origNH is not None:
             # Compute trace for tau2
