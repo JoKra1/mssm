@@ -3,6 +3,7 @@
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 #include<Eigen/Sparse>
+#include <Eigen/Dense>
 #include <iostream>
 #include <vector>
 #include <memory>
@@ -308,6 +309,14 @@ std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,int,int> pqrr(
 
     return std::make_tuple(std::move(R),P.indices(),solver.rank(),0);
     
+}
+
+std::tuple<Eigen::VectorXi,int> dpqrr(const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &A){
+    // Rank revealing QR decomposition of **dense** matrix A. Only pivot and rank is returned
+    Eigen::ColPivHouseholderQR<Eigen::MatrixXd> solver;
+    solver.compute(A);
+
+    return std::make_tuple(solver.colsPermutation().indices(),solver.rank());
 }
 
 std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64, VectorXi64, int,int> spqr(long long int Arows, long long int Acols, long long int Annz,
@@ -916,6 +925,7 @@ PYBIND11_MODULE(cpp_solvers, m) {
     m.def("cholP", &cholP, "Compute cholesky factor L of A after applying a sparsity enhancing permutation to A");
     m.def("pqr", &pqr, "Perform column pivoted QR decomposition of A");
     m.def("pqrr", &pqrr, "Perform column pivoted QR decomposition of A, but only return R.");
+    m.def("dpqrr", &dpqrr, py::arg("A").noconvert(), "Perform column pivoted QR decomposition of dense matrix A, but only return pivot and estimated rank.");
     m.def("spqr", &spqr, "Perform column pivoted QR decomposition of symmetric matrix A, so that L - where A=L@L.T - is sparse.");
     m.def("solve_pqr", &solve_pqr, "Perform column pivoted QR decomposition of A, then solve for inverse of A");
     m.def("solve_am", &solve_am, "Solve additive model, return coefficient vector and inverse");

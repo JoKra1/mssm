@@ -161,6 +161,9 @@ class LambdaTerm:
   term:int or None = None
   clust_series:[int] or None = None
   clust_weights:[[float]] or None = None
+  dist_param: int or None = None
+  rp_idx: int or None = None
+  S_J_lam:scp.sparse.csc_array or None=None
 
 @dataclass
 class Reparameterization:

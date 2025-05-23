@@ -536,7 +536,7 @@ def compute_REML_candidate_GSMM(family,y,Xs,penalties,coef,n_coef,coef_split_idx
 
             # Estimate coefficients
             coef,split_coef,mus,etas,H,L,LV,c_llk,_,_,_,_ = update_coef_gammlss(family,mus,y,Xs,coef,
-                                                                                coef_split_idx,S_emb,None,None,
+                                                                                coef_split_idx,S_emb,None,None,None,None,
                                                                                 c_llk,0,100,
                                                                                 100,conv_tol,"Chol",None,None)
             

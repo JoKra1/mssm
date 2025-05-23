@@ -67,7 +67,7 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
    """
    Options 1 - 3 are natural reparameterization discussed in Wood (2017; 5.4.2)
    with different strategies for the QR computation of :math:`\mathbf{X}`. Option 4 helps with stabilizing the REML computation
-   and is from Wood (2011) and section 6.2.7 in Wood (2017):
+   and is from Appendix B of Wood (2011) and section 6.2.7 in Wood (2017):
 
       1. Form complete matrix :math:`\mathbf{X}` based on entire covariate.
       2. Form matrix :math:`\mathbf{X}` only based on unique covariate values.
@@ -77,9 +77,12 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
          computed and each ratio is rounded to the nearest integer. Then ``ratio`` samples
          are obtained from each bin. That way, imbalance in the covariate is approximately preserved when
          forming the QR.
-      4. Transform term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` based on section Wood (2011) and section 6.2.7 in Wood (2017)
+      4. Transform term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` based on Appendix B of Wood (2011) and section 6.2.7 in Wood (2017)
          so that they are full-rank and their log-determinant can be computed safely. In that case, only ``S`` needs
-         to be provided and has to be a list holding the penalties to be transformed
+         to be provided and has to be a list holding the penalties to be transformed. If the transformation is to be applied to
+         model matrices, coefficients, hessian, and covariance matrices X should be set to something other than ``None`` (does not matter what, can
+         for example be the first model matrix.) The :func:`mssm.src.python.gamm_solvers.reparam_model` function can be used to apply the transformation and also
+         returns the required transformation matrices to reverse it.
    
    For Options 1-3:
 
@@ -116,12 +119,14 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
       term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` has been formed that is full rank. And :math:`log(|\mathbf{S}_{\\boldsymbol{\lambda}}|)` - no longer just a generalized determinant - can be
       computed without running into numerical problems.
 
-      The strategy by Wood (2011) is more general and could be applied to form an overall - not just term-specific - :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` with these properties.
+      The strategy by Wood (2011) could be applied to form an overall - not just term-specific - :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` with these properties. However, this
+      does not work for general smooth models as defined by Wood et al. (2016). Hence, mssm opts for the blockwise strategy.
       However, in ``mssm`` penalties currently cannot overlap, so this is not necessary at the moment.
 
    References:
       - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
       - Wood, S. N., Scheipl, F., & Faraway, J. J. (2013). Straightforward intermediate rank tensor product smoothing in mixed models.
+      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
       - mgcv source code (accessed 2024). smooth.R file, nat.param function.
    """
@@ -232,7 +237,7 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
       return C, Srp, Drp, IRrp, rms1, rms2, rank
    
    elif option == 4:
-      # Reparameterize S_\lambda for safe REML evaluation - based on section 6.2.7 in Wood (2017)
+      # Reparameterize S_\lambda for safe REML evaluation - based on section 6.2.7 in Wood (2017) and Appendix B of Wood (2011).
       # S needs to be list holding penalties.
 
       # We first sort S into term-specific groups of penalties
@@ -278,13 +283,15 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
       Q_reps = []
       QT_reps = []
       for pen in S:
-         Sj_reps.append(LambdaTerm(S_J=copy.deepcopy(pen.S_J),rep_sj=pen.rep_sj,lam=pen.lam,type=pen.type,rank=pen.rank,term=pen.term,start_index=pen.start_index))
+         Sj_reps.append(LambdaTerm(S_J=copy.deepcopy(pen.S_J),rep_sj=pen.rep_sj,lam=pen.lam,type=pen.type,rank=pen.rank,term=pen.term,start_index=pen.start_index,dist_param=pen.dist_param))
 
       S_reps = [] # Term specific S_\lambda
       eps = sys.float_info.epsilon**0.7
       Mp = Sj_reps[0].start_index # Number of un-penalized dimensions (Kernel space dimension of total S_\lambda; Wood, 2011)
       for grp_idx,SJgroup,LJgroup in zip(SJ_term_idx,SJs,ljs):
 
+         for rpidx in range(len(SJgroup)):
+            Sj_reps[grp_idx[rpidx]].rp_idx = len(S_reps)
 
          normed_SJ = [SJ_mat/scp.sparse.linalg.norm(SJ_mat,ord='fro') for SJ_mat in SJgroup]
          normed_S = normed_SJ[0]
@@ -306,7 +313,7 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
             SJbar = [Ur.T@SJ_mat@Ur for SJ_mat in SJgroup]
 
             if not X is None:
-               Q_rep0 = copy.deepcopy(Ur) # Need to account for this when computing Q matrix.
+               Q_rep0 = copy.deepcopy(U) # Need to account for this when computing Q matrix.
          else:
             SJbar = copy.deepcopy(SJgroup)
             Q_rep0 = None
@@ -399,7 +406,13 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
                   Tg = U.toarray()
                   
                   if not X is None:
-                     Q_rep = U.toarray()
+                     if Q_rep0 is None:
+                        Q_rep = U.toarray()
+                     else:
+                        init_drop = Q_rep0.shape[1] - U.shape[1]
+                        
+                        Q_rep = np.concatenate((np.concatenate((U.toarray(),np.zeros((U.shape[0],init_drop))),axis=1),
+                                                np.concatenate((np.zeros((init_drop,U.shape[1])),np.identity(init_drop)),axis=1)),axis=0)
             else:
                   A = S_rep[:K,:K] # From partitioning step 6 in Wood, 2011
                   B = S_rep[:K,K:] # From partitioning step 6 in Wood, 2011
@@ -414,7 +427,12 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
                                        np.concatenate((np.zeros((U.shape[0],K)),U.toarray()),axis=1)),axis=0)
                   
                   if not X is None:
-                     Q_rep = Tg @ Q_rep
+                     if Q_rep0 is None:
+                        Q_rep = Q_rep @ Tg
+                     else:
+                        init_drop = Q_rep0.shape[1] - Tg.shape[1]
+                        Q_rep = Q_rep @ np.concatenate((np.concatenate((Tg,np.zeros((Tg.shape[0],init_drop))),axis=1),
+                                                        np.concatenate((np.zeros((init_drop,Tg.shape[1])),np.identity(init_drop)),axis=1)),axis=0)
 
             #print(Ta.shape,Tg.shape)
             # Transform remaining terms that made up Sjk
@@ -2226,6 +2244,11 @@ def embed_shared_penalties(formulas):
     """
 
     shared_penalties = [copy.deepcopy(form.penalties) for form in formulas]
+
+    # Assign original formula index to each penalty
+    for fi in range(len(shared_penalties)):
+       for lterm in shared_penalties[fi]:
+          lterm.dist_param = fi
 
     for fi,form in enumerate(formulas):
         for ofi,other_form in enumerate(formulas):

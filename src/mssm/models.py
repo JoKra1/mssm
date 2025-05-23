@@ -1320,7 +1320,7 @@ class GAMMLSS(GAMM):
         return self.family.get_resid(self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat],*self.overall_mus)
         
 
-    def fit(self,max_outer=50,max_inner=200,min_inner=200,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=1,method="Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),should_keep_drop=True,progress_bar=True,n_cores=10,seed=0,init_lambda=None):
+    def fit(self,max_outer=50,max_inner=200,min_inner=200,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=1,method="Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),should_keep_drop=True,repara=False,progress_bar=True,n_cores=10,seed=0,init_lambda=None):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -1344,6 +1344,8 @@ class GAMMLSS(GAMM):
         :type piv_tol: float,optional
         :param should_keep_drop: Only used when ``method='QR/Chol'``. If set to True, any coefficients that are dropped during fitting - are permanently excluded from all subsequent iterations. If set to False, this is determined anew at every iteration - **costly**! Defaults to True.
         :type should_keep_drop: bool,optional
+        :param repara: Whether to re-parameterize the model (for every proposed update to the regularization parameters) via the steps outlined in Appendix B of Wood (2011) and suggested by Wood et al., (2016). This greatly increases the stability of the fitting iteration. Defaults to False.
+        :type repara: bool,optional
         :param progress_bar: Whether progress should be displayed (convergence info and time estimate). Defaults to True.
         :type progress_bar: bool,optional
         :param n_cores: Number of cores to use during parts of the estimation that can be done in parallel. Defaults to 10.
@@ -1391,6 +1393,8 @@ class GAMMLSS(GAMM):
         form_n_coef = [form.n_coef for form in self.formulas]
         if coef is None:
             coef = scp.stats.norm.rvs(size=sum(form_n_coef),random_state=seed).reshape(-1,1)
+
+        form_up_coef = [form.unpenalized_coef for form in self.formulas]
         
         # Now get split index
         coef_split_idx = form_n_coef[:-1]
@@ -1399,10 +1403,10 @@ class GAMMLSS(GAMM):
             for coef_i in range(1,len(coef_split_idx)):
                 coef_split_idx[coef_i] += coef_split_idx[coef_i-1]
 
-        coef,etas,mus,wres,H,LV,total_edf,term_edfs,penalty,gamlss_pen,fit_info = solve_gammlss_sparse(self.family,y,Xs,form_n_coef,coef,coef_split_idx,
+        coef,etas,mus,wres,H,LV,total_edf,term_edfs,penalty,gamlss_pen,fit_info = solve_gammlss_sparse(self.family,y,Xs,form_n_coef,form_up_coef,coef,coef_split_idx,
                                                                                             gamlss_pen,max_outer,max_inner,min_inner,conv_tol,
                                                                                             extend_lambda,extension_method_lam,control_lambda,
-                                                                                            method,check_cond,piv_tol,should_keep_drop,progress_bar,n_cores)
+                                                                                            method,check_cond,piv_tol,repara,should_keep_drop,progress_bar,n_cores)
         
         self.overall_penalties = gamlss_pen
         self.overall_coef = coef
