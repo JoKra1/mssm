@@ -175,7 +175,7 @@ class Test_GAUMLSSGEN:
         assert round(llk,ndigits=3) == -1039.741
 
 
-class Test_GAUMLSSGEN2:
+class Test_PropHaz:
     sim_dat = sim3(500,2,c=1,seed=0,family=PropHaz([0],[0]),binom_offset = 0.1,correlate=False)
         
     # Prep everything for prophaz model
@@ -244,3 +244,74 @@ class Test_GAUMLSSGEN2:
     def test_GAMllk(self):
 
         assert round(self.gsmm_newton.get_llk(True) - self.gsmm_qefs.get_llk(True),ndigits=3) == np.float64(-0.498)
+
+
+class Test_PropHaz_repara:
+    sim_dat = sim3(500,2,c=1,seed=0,family=PropHaz([0],[0]),binom_offset = 0.1,correlate=False)
+        
+    # Prep everything for prophaz model
+    sim_dat = sim_dat.sort_values(['y'],ascending=[False])
+    sim_dat = sim_dat.reset_index(drop=True)
+    #print(sim_dat.head(),np.mean(sim_dat["delta"]))
+
+    u,inv = np.unique(sim_dat["y"],return_inverse=True)
+    ut = np.flip(u)
+    r = np.abs(inv - max(inv))
+
+    # We only need to model the mean: \mu_i
+    sim_formula_m = Formula(lhs("delta"),
+                        [f(["x0"]),f(["x1"]),f(["x2"]),f(["x3"])],
+                        data=sim_dat)
+
+    # Fit with Newton
+    gsmm_newton_fam = PropHaz(ut,r)
+    gsmm_newton = GSMM([copy.deepcopy(sim_formula_m)],gsmm_newton_fam)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        gsmm_newton.fit(init_coef=None,method="QR/Chol",extend_lambda=False,
+                        control_lambda=False,max_outer=200,seed=0,max_inner=500,
+                        min_inner=500,progress_bar=True,repara=True)
+        
+
+    gsmm_qefs_fam = PropHaz(ut,r)
+    gsmm_qefs = GSMM([copy.deepcopy(sim_formula_m)],gsmm_qefs_fam)
+
+    # Fit with qEFS update without initialization
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        bfgs_opt={"gtol":1e-9,
+                    "ftol":1e-9,
+                    "maxcor":30,
+                    "maxls":200,
+                    "maxfun":1e7}
+        
+        gsmm_qefs.fit(init_coef=None,method='qEFS',extend_lambda=False,
+                        control_lambda=False,max_outer=200,max_inner=500,min_inner=500,
+                        seed=0,qEFSH='SR1',max_restarts=0,overwrite_coef=False,qEFS_init_converge=False,prefit_grad=True,
+                        progress_bar=True,repara=True,**bfgs_opt)
+
+    def test_GAMcoef(self):
+
+        assert np.allclose((self.gsmm_newton.overall_coef - self.gsmm_qefs.overall_coef).flatten(),
+                           np.array([ 0.00130659, -0.00146633, -0.00482344, -0.00219018,  0.00408372,
+                                    -0.00254493, -0.00538949,  0.00269739,  0.01220294, -0.00574834,
+                                    -0.00341937,  0.00293582,  0.00723694,  0.0041163 ,  0.00185322,
+                                    0.00810604, -0.0177597 , -0.05120267, -0.0156164 , -0.01146629,
+                                    -0.03849618, -0.00090847, -0.02320778, -0.0266449 , -0.01706707,
+                                    0.00320521, -0.00176434,  0.00787907, -0.03024446, -0.04263593,
+                                    -0.01658554,  0.01727422,  0.0315337 , -0.0050121 , -0.08136764,
+                                    -0.15992784])) 
+
+    def test_GAMlam(self):
+
+        assert np.allclose(np.round(np.array([p1.lam - p2.lam for p1,p2 in zip(self.gsmm_newton.overall_penalties,self.gsmm_qefs.overall_penalties)]),decimals=3),
+                           np.array([ 0.671,  0.853, -0.   , 63.778])) 
+
+    def test_GAMreml(self):
+
+        assert round(self.gsmm_newton.get_reml() - self.gsmm_qefs.get_reml(),ndigits=3) == -0.865
+
+    def test_GAMllk(self):
+
+        assert round(self.gsmm_newton.get_llk(True) - self.gsmm_qefs.get_llk(True),ndigits=3) == -0.758
