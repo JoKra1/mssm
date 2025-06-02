@@ -19,7 +19,7 @@ class Fit_info:
    :ivar int code: Convergence status. Anything above 0 indicates that the model did not converge and estimates should be considered carefully. Initialized with 1.
    :ivar float eps: The fraction added to the last estimate of the negative Hessian of the penalized likelihood during GAMMLSS or GSMM estimation. If this is not 0 - the model should not be considered as converged, irrespective of what ``code`` indicates. This most likely implies that the model is not identifiable. Initialized with ``None`` and ignored for GAMM estimation.
    :ivar float K2: An estimate for the condition number of matrix ``A``, where ``A.T@A=H`` and ``H`` is the final estimate of the negative Hessian of the penalized likelihood. Only available if ``check_cond>0`` when ``model.fit()`` is called for any model (i.e., GAMM, GAMMLSS, GSMM). Initialized with ``None``.
-   :ivar [int] dropped: The final set of coefficients dropped during GAMMLSS/GSMM estimation when using ``method="QR/Chol"`` or ``None`` in which case no coefficients were dropped. Initialized with 0.
+   :ivar [int] dropped: The final set of coefficients dropped during GAMMLSS/GSMM estimation when using ``method in ["QR/Chol","LU/Chol","Direct/Chol"]`` or ``None`` in which case no coefficients were dropped. Initialized with 0.
    """
    lambda_updates:int=0
    iter:int=0
@@ -3010,12 +3010,13 @@ def reparam_model(dist_coef, dist_up_coef, coef, split_coef_idx, Xs, penalties, 
             #c_idx += dist_up_coef[dist_idx]
 
         # Compute inverse of S_rep
-        if form_inverse or form_root:
+        if (form_inverse and len(SJ_term_idx[Si]) > 1) or form_root:
             L,code = cpp_chol(S_rep.tocsc())
             if code != 0:
                 raise ValueError("Inverse of transformed penalty could not be computed.")
         
-        if form_inverse:
+        # Form inverse - only if this is not a single penalty term
+        if form_inverse and len(SJ_term_idx[Si]) > 1:
             Linv = compute_Linv(L,n_c)
             S_inv = Linv.T@Linv
 
@@ -3041,7 +3042,7 @@ def reparam_model(dist_coef, dist_up_coef, coef, split_coef_idx, Xs, penalties, 
             Q_emb,_ = embed_in_S_sparse(*translate_sparse(Q_reps[Si]),Q_emb,len(coef),S_coef,c_idx)
 
             # Inverse of total weighted penalty
-            if form_inverse:
+            if form_inverse and len(SJ_term_idx[Si]) > 1:
                 S_inv_rp,_ = embed_in_S_sparse(*translate_sparse(S_inv),S_inv_rp,len(coef),S_coef,c_idx)
             
             # Root of total weighted penalty
@@ -3422,10 +3423,10 @@ def identify_drop(H,S_scaled,method='QR'):
     
     If ``method=="QR"``, a rank revealing QR decomposition is performed for the scaled penalized Hessian. The latter has to be transformed to a dense matrix for this.
     This is essentially the approach by Wood et al. (2016) and is the most accurate. Alternatively, we can rely on a variant of Foster's method.
-    This is done when ``method=="LU"`` or ``method=="direct"``. ``method=="LU"`` requires ``p`` LU decompositions - where ``p`` is approximately the Kernel size of the matrix.
+    This is done when ``method=="LU"`` or ``method=="Direct"``. ``method=="LU"`` requires ``p`` LU decompositions - where ``p`` is approximately the Kernel size of the matrix.
     Essentially continues to find vectors forming a basis of the Kernel of the balanced penalzied Hessian from the upper matrix of the LU decomposition and successively drops columns
     corresponding to the maximum absolute value of the Kernel vectors (see Foster, 1986). This is repeated until we can form a cholesky of the scaled penalized hessian which as an acceptable condition number.
-    If ``method=="direct"``, the same procedure is completed, but Kernel vectors are found directly based on the balanced penalized Hessian, which can be less precise. 
+    If ``method=="Direct"``, the same procedure is completed, but Kernel vectors are found directly based on the balanced penalized Hessian, which can be less precise. 
 
     References:
      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
@@ -3817,8 +3818,8 @@ def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,
          converged = True
          
          # Check for drop
-         if (keep_drop is None) and (checked_identifiable == False) and (method == "QR/Chol"):
-            keep,drop = identify_drop(H,S_norm)
+         if (keep_drop is None) and (checked_identifiable == False) and (method in ["QR/Chol","LU/Chol","Direct/Chol"]):
+            keep,drop = identify_drop(H,S_norm,method.split("/")[0])
 
             # No drop necessary -> converged
             if len(drop) == 0:
@@ -4838,8 +4839,8 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,F
          converged = True
 
          # Check for drop
-         if (keep_drop is None) and (checked_identifiable == False) and (method == "QR/Chol"):
-            keep,drop = identify_drop(H,S_norm)
+         if (keep_drop is None) and (checked_identifiable == False) and (method in ["QR/Chol","LU/Chol","Direct/Chol"]):
+            keep,drop = identify_drop(H,S_norm,method.split("/")[0])
 
             # No drop necessary -> converged
             if len(drop) == 0:
