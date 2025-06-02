@@ -3334,6 +3334,9 @@ def newton_coef_smooth(coef,grad,H,S_emb):
     # Update coef
     n_coef = coef + (V@pgrad)
 
+    if ill_def and eps == 0: # Initial fix was enough
+       eps = mD + mAcc
+
     return n_coef,DI@P.T@Lp,LV,eps
 
 def gd_coef_smooth(coef,grad,S_emb,a):
@@ -3818,7 +3821,7 @@ def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,
          converged = True
          
          # Check for drop
-         if (keep_drop is None) and (checked_identifiable == False) and (method in ["QR/Chol","LU/Chol","Direct/Chol"]):
+         if (keep_drop is None) and (checked_identifiable == False) and (method in ["QR/Chol","LU/Chol","Direct/Chol"]) and (eps > 0):
             keep,drop = identify_drop(H,S_norm,method.split("/")[0])
 
             # No drop necessary -> converged
@@ -4839,7 +4842,7 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,F
          converged = True
 
          # Check for drop
-         if (keep_drop is None) and (checked_identifiable == False) and (method in ["QR/Chol","LU/Chol","Direct/Chol"]):
+         if (keep_drop is None) and (checked_identifiable == False) and (method in ["QR/Chol","LU/Chol","Direct/Chol"]) and (eps > 0):
             keep,drop = identify_drop(H,S_norm,method.split("/")[0])
 
             # No drop necessary -> converged
