@@ -3821,7 +3821,7 @@ def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,
          converged = True
          
          # Check for drop
-         if (keep_drop is None) and (checked_identifiable == False) and (method in ["QR/Chol","LU/Chol","Direct/Chol"]) and (eps > 0):
+         if (keep_drop is None) and (checked_identifiable == False) and (method in ["QR/Chol","LU/Chol","Direct/Chol"]):
             keep,drop = identify_drop(H,S_norm,method.split("/")[0])
 
             # No drop necessary -> converged
@@ -4842,7 +4842,7 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,F
          converged = True
 
          # Check for drop
-         if (keep_drop is None) and (checked_identifiable == False) and (method in ["QR/Chol","LU/Chol","Direct/Chol"]) and (eps > 0):
+         if (keep_drop is None) and (checked_identifiable == False) and (method in ["QR/Chol","LU/Chol","Direct/Chol"]):
             keep,drop = identify_drop(H,S_norm,method.split("/")[0])
 
             # No drop necessary -> converged
