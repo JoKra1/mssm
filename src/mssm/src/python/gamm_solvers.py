@@ -3764,6 +3764,78 @@ def handle_drop_gammlss(family, y, coef, keep, Xs, S_emb):
    c_pen_llk = c_llk - 0.5*coef.T@rS_emb@coef
 
    return coef, rsplit_coef, rcoef_split_idx, rXs, rS_emb, etas, mus, c_llk, c_pen_llk
+
+def restart_coef_gammlss(coef,split_coef,c_llk,c_pen_llk,etas,mus,n_coef,coef_split_idx,y,Xs,S_emb,family,outer,restart_counter):
+   """Shrink coef towards random vector to restart algorithm if it get's stuck.
+
+   :param coef: _description_
+   :type coef: _type_
+   :param n_coef: _description_
+   :type n_coef: _type_
+   :param coef_split_idx: _description_
+   :type coef_split_idx: _type_
+   :param y: _description_
+   :type y: _type_
+   :param Xs: _description_
+   :type Xs: _type_
+   :param S_emb: _description_
+   :type S_emb: _type_
+   :param family: _description_
+   :type family: _type_
+   :param outer: _description_
+   :type outer: _type_
+   :param restart_counter: _description_
+   :type restart_counter: _type_
+   :return: _description_
+   :rtype: _type_
+   """
+   res_checks = 0
+   res_scale = 0.5 if outer <= 10 else 1/(restart_counter+2)
+   #print("resetting conv.",res_scale)
+
+   while res_checks < 30:
+      res_coef = ((1-res_scale)*coef + res_scale*scp.stats.norm.rvs(size=n_coef,random_state=outer+res_checks).reshape(-1,1))
+
+      # Re-compute llk
+      with warnings.catch_warnings():
+         warnings.simplefilter("ignore")
+
+         # Update etas and mus
+         res_split_coef = np.split(res_coef,coef_split_idx)
+         res_etas = [Xs[i]@res_split_coef[i] for i in range(family.n_par)]
+
+         with warnings.catch_warnings(): # Catch warnings associated with mean transformation
+               warnings.simplefilter("ignore")
+               res_mus = [family.links[i].fi(res_etas[i]) for i in range(family.n_par)]
+
+         # Find and exclude invalid indices before evaluating llk
+         inval = np.isnan(res_mus[0])
+
+         if len(coef_split_idx) != 0:
+            for mi in range(1,len(res_mus)):
+               inval = inval |  np.isnan(res_mus[mi])
+         inval = inval.flatten()
+         
+         # Step size control for newton step.
+         res_llk = family.llk(y[inval == False],*[nmu[inval == False] for nmu in res_mus])
+         
+         # Evaluate improvement of penalized llk under new and old coef - but in both
+         # cases for current lambda (see Wood, Li, Shaddick, & Augustin; 2017)
+         res_pen_llk = res_llk - 0.5*res_coef.T@S_emb@res_coef
+
+      if (np.isinf(res_pen_llk[0,0]) or np.isnan(res_pen_llk[0,0])):
+         res_checks += 1
+         continue
+      
+      coef = res_coef
+      split_coef = res_split_coef
+      c_llk = res_llk
+      c_pen_llk = res_pen_llk
+      etas = res_etas
+      mus= res_mus
+      break
+   
+   return coef, split_coef, c_llk, c_pen_llk, etas, mus
     
 def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,FS_use_rank,gammlss_penalties,c_llk,outer,max_inner,min_inner,conv_tol,method,piv_tol,keep_drop):
    """
@@ -3773,6 +3845,14 @@ def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,
    References:
      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
    """
+   grad_only = method == "Grad"
+   a = 0.1 # Step-size for gradient only
+
+   if grad_only:
+      H = None
+      L = None
+      LV = None
+      eps = 0
 
    full_coef = None
    # Update coefficients:
@@ -3808,7 +3888,10 @@ def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,
       grad,H = deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs,only_grad=False)
 
       # Update coef and perform step size control
-      next_coef,L,LV,eps = newton_coef_smooth(coef,grad,H,S_emb)
+      if grad_only:
+         next_coef = gd_coef_smooth(coef,grad,S_emb,a)
+      else:
+         next_coef,L,LV,eps = newton_coef_smooth(coef,grad,H,S_emb)
 
       # Prepare to check convergence
       prev_llk_cur_pen = c_llk - 0.5*coef.T@S_emb@coef
@@ -3816,6 +3899,10 @@ def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,
       # Perform step length control
       coef,split_coef,mus,etas,c_llk,c_pen_llk = correct_coef_step_gammlss(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb)
 
+      # Very poor start estimate, restart
+      if grad_only and outer == 0 and inner <= 20 and np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
+         coef, split_coef, c_llk, c_pen_llk, etas, mus = restart_coef_gammlss(coef,split_coef,c_llk, c_pen_llk,etas, mus,len(coef),coef_split_idx,y,Xs,S_emb,family,inner,0)
+         a = 0.1
 
       if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
          converged = True
@@ -4116,7 +4203,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,form_up_coef,coef,coef_split_id
                          max_outer=50,max_inner=30,min_inner=1,conv_tol=1e-7,
                          extend_lambda=True,extension_method_lam = "nesterov2",
                          control_lambda=True,method="Chol",check_cond=1,piv_tol=0.175,
-                         repara=True,should_keep_drop=True,progress_bar=True,n_c=10):
+                         repara=True,should_keep_drop=True,prefit_grad=False,progress_bar=True,n_c=10):
     """
     Fits a GAMLSS model, following steps outlined by Wood, Pya, & Säfken (2016).
 
@@ -4158,6 +4245,34 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,form_up_coef,coef,coef_split_id
        S_norm += gamlss_pen[peni].S_J_emb/scp.sparse.linalg.norm(gamlss_pen[peni].S_J_emb,ord=None)
     
     S_norm /= scp.sparse.linalg.norm(S_norm,ord=None)
+
+    # Try improving start estimate via Gradient only
+    if prefit_grad:
+      # Re-parameterize
+      if repara:
+         coef_rp,Xs_rp,_,S_emb_rp,S_norm_rp,_,_,_,Qs = reparam_model(form_n_coef, form_up_coef, coef, coef_split_idx, Xs,
+                                                                     gamlss_pen, form_inverse=False,
+                                                                     form_root=False, form_balanced=False, n_c=n_c)
+      else:
+         coef_rp = coef
+         Xs_rp = Xs
+         S_emb_rp = S_emb
+         S_norm_rp = S_norm
+
+      coef,split_coef,mus,etas,_,_,_,c_llk,c_pen_llk,_,_,_ = update_coef_gammlss(family,mus,y,Xs_rp,coef_rp,
+                                                                        coef_split_idx,S_emb_rp,
+                                                                        S_norm_rp,None,None,None,
+                                                                        c_llk,0,max_inner,
+                                                                        min_inner,conv_tol,
+                                                                        "Grad",piv_tol,None)
+      
+      if repara:
+         split_coef = np.split(coef,coef_split_idx)
+
+         # Transform coef
+         for qi,Q in enumerate(Qs):
+            split_coef[qi] = Q@split_coef[qi]
+         coef = np.concatenate(split_coef).reshape(-1,1)
 
     iterator = range(max_outer)
     if progress_bar:

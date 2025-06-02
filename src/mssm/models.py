@@ -1320,7 +1320,7 @@ class GAMMLSS(GAMM):
         return self.family.get_resid(self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat],*self.overall_mus)
         
 
-    def fit(self,max_outer=50,max_inner=200,min_inner=200,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=1,method="Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),should_keep_drop=True,repara=False,progress_bar=True,n_cores=10,seed=0,init_lambda=None):
+    def fit(self,max_outer=50,max_inner=200,min_inner=200,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=1,method="Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),should_keep_drop=True,prefit_grad=False,repara=False,progress_bar=True,n_cores=10,seed=0,init_lambda=None):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -1344,6 +1344,8 @@ class GAMMLSS(GAMM):
         :type piv_tol: float,optional
         :param should_keep_drop: Only used when ``method in ["QR/Chol","LU/Chol","Direct/Chol"]``. If set to True, any coefficients that are dropped during fitting - are permanently excluded from all subsequent iterations. If set to False, this is determined anew at every iteration - **costly**! Defaults to True.
         :type should_keep_drop: bool,optional
+        :param prefit_grad: Whether to rely on Gradient Descent to improve the initial starting estimate for coefficients. Defaults to False.
+        :type prefit_grad: bool,optional
         :param repara: Whether to re-parameterize the model (for every proposed update to the regularization parameters) via the steps outlined in Appendix B of Wood (2011) and suggested by Wood et al., (2016). This greatly increases the stability of the fitting iteration. Defaults to False.
         :type repara: bool,optional
         :param progress_bar: Whether progress should be displayed (convergence info and time estimate). Defaults to True.
@@ -1406,7 +1408,7 @@ class GAMMLSS(GAMM):
         coef,etas,mus,wres,H,LV,total_edf,term_edfs,penalty,gamlss_pen,fit_info = solve_gammlss_sparse(self.family,y,Xs,form_n_coef,form_up_coef,coef,coef_split_idx,
                                                                                             gamlss_pen,max_outer,max_inner,min_inner,conv_tol,
                                                                                             extend_lambda,extension_method_lam,control_lambda,
-                                                                                            method,check_cond,piv_tol,repara,should_keep_drop,progress_bar,n_cores)
+                                                                                            method,check_cond,piv_tol,repara,should_keep_drop,prefit_grad,progress_bar,n_cores)
         
         self.overall_penalties = gamlss_pen
         self.overall_coef = coef
