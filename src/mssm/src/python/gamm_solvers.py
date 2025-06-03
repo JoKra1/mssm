@@ -3284,8 +3284,11 @@ def newton_coef_smooth(coef,grad,H,S_emb):
     pgrad = np.array([grad[i] - (S_emb[[i],:]@coef)[0] for i in range(len(grad))])
     nH = -1*H + S_emb
 
-    # Diagonal pre-conditioning as suggested by WPS (2016) and implemented in mgcv's gam.fit5 function,
-    # see: https://github.com/cran/mgcv/blob/master/R/gam.fit4.r#L1028
+    # Below tries diagonal pre-conditioning as implemented in mgcv's gam.fit5 function,
+    # see: https://github.com/cran/mgcv/blob/master/R/gam.fit4.r#L1028. However, this does not work well for me, so I must be
+    # doing something wrong.. The diagonal pre-conditioning as suggested by WPS (2016) does work. So for
+    # now this is what happens below the comment.
+    """
     nHdgr = nH.diagonal()
     mD = np.min(nHdgr)
     ill_def = False
@@ -3297,12 +3300,19 @@ def newton_coef_smooth(coef,grad,H,S_emb):
           ill_def = True
     
     if ill_def:
-       nH += mD*scp.sparse.identity(nH.shape[1],format='csc') + mAcc*scp.sparse.identity(nH.shape[1],format='csc')
+       nH += np.abs(mD)*scp.sparse.identity(nH.shape[1],format='csc') + np.abs(mAcc)*scp.sparse.identity(nH.shape[1],format='csc')
        D = scp.sparse.diags(np.ones_like(nHdgr))
        DI = D
     else:
       D = scp.sparse.diags(np.power(nHdgr,-0.5))
       DI = scp.sparse.diags(1/np.power(nHdgr,-0.5)) # For cholesky
+    """
+    
+    # Diagonal pre-conditioning as suggested by WPS (2016)
+    nHdgr = nH.diagonal()
+    nHdgr = np.power(np.abs(nHdgr),-0.5)
+    D = scp.sparse.diags(nHdgr)
+    DI = scp.sparse.diags(1/nHdgr)
 
     nH2 = (D@nH@D).tocsc()
     #print(max(np.abs(nH.diagonal())),max(np.abs(nH2.diagonal())))
@@ -3334,9 +3344,10 @@ def newton_coef_smooth(coef,grad,H,S_emb):
     # Update coef
     n_coef = coef + (V@pgrad)
 
+    """
     if ill_def and eps == 0: # Initial fix was enough
-       eps = mD + mAcc
-
+       eps = np.abs(mD) + np.abs(mAcc)
+    """
     return n_coef,DI@P.T@Lp,LV,eps
 
 def gd_coef_smooth(coef,grad,S_emb,a):
@@ -3359,7 +3370,7 @@ def gd_coef_smooth(coef,grad,S_emb,a):
     
     return n_coef
 
-def correct_coef_step_gammlss(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb):
+def correct_coef_step_gammlss(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb,a):
     """
     Apply step size correction to Newton update for GAMLSS models, as discussed by WPS (2016).
 
@@ -3417,8 +3428,14 @@ def correct_coef_step_gammlss(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_
         next_llk = family.llk(y[inval == False],*[nmu[inval == False] for nmu in next_mus])
         next_pen_llk = next_llk - 0.5*next_coef.T@S_emb@next_coef
         n_checks += 1
+   
+    # Update step-size for gradient
+    if n_checks > 0 and a > 1e-9:
+       a /= 2
+    elif n_checks == 0 and a < 1:
+       a *= 2
     
-    return next_coef,next_split_coef,next_mus,next_etas,next_llk,next_pen_llk
+    return next_coef,next_split_coef,next_mus,next_etas,next_llk,next_pen_llk,a
 
 def identify_drop(H,S_scaled,method='QR'):
     """
@@ -3885,7 +3902,7 @@ def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,
          d2meta = [fd2m(y,*mus) for fd2m in family.d2m]
 
       # Get derivatives with respect to coef
-      grad,H = deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs,only_grad=False)
+      grad,H = deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs,only_grad=grad_only)
 
       # Update coef and perform step size control
       if grad_only:
@@ -3897,7 +3914,7 @@ def update_coef_gammlss(family,mus,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,
       prev_llk_cur_pen = c_llk - 0.5*coef.T@S_emb@coef
 
       # Perform step length control
-      coef,split_coef,mus,etas,c_llk,c_pen_llk = correct_coef_step_gammlss(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb)
+      coef,split_coef,mus,etas,c_llk,c_pen_llk,a = correct_coef_step_gammlss(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb,a)
 
       # Very poor start estimate, restart
       if grad_only and outer == 0 and inner <= 20 and np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
@@ -4141,7 +4158,7 @@ def correct_lambda_step_gamlss(family,mus,y,Xs,S_norm,n_coef,form_n_coef,form_up
       
       #print(lgdetD-ldetHS)
       dLam = step_fellner_schall_sparse(lgdetD,ldetHS,bsb[0,0],lTerm.lam,1)
-      #print("Theorem 1:",lgdetD-ldetHS,bsb)
+      #print("Theorem 1:",lgdetD-ldetHS,bsb,lTerm.lam)
 
       # For poorly scaled/ill-identifiable problems we cannot rely on the theorems by Wood
       # & Fasiolo (2017) - so the condition below will be met, in which case we just want to

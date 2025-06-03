@@ -1896,7 +1896,7 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
                     _,H = deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs,only_grad=False)
 
                 else: # GSMM
-                    H = family.hessian(coef,model.coef_split_idx,y,Xs)
+                    H = family.hessian(mean_coef,model.coef_split_idx,y,Xs)
 
                 nH = -1 * H
 
