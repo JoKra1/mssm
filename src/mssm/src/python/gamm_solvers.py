@@ -4116,7 +4116,7 @@ def correct_lambda_step_gamlss(family,mus,y,Xs,S_norm,n_coef,form_n_coef,form_up
       # our criterion is approximate, so we can be more lenient (see Wood et al., 2017).
       lam_changes = 0 
       if check[0] < 1e-7*-abs(next_pen_llk):
-         for lti,lTerm in enumerate(gamlss_pen_rp):
+         for lti,lTerm in enumerate(gamlss_pen): # Make sure to work with original penalty object here, so that step-length control is reflected in lambda values
 
             # For extended terms undo extension
             if extend_lambda and was_extended[lti]:
@@ -4150,7 +4150,7 @@ def correct_lambda_step_gamlss(family,mus,y,Xs,S_norm,n_coef,form_n_coef,form_up
 
    step_norm = np.linalg.norm(lam_delta)
    lam_delta = []
-   for lti,lTerm in enumerate(gamlss_pen_rp):
+   for lti,lTerm in enumerate(gamlss_pen):
 
       lgdetD = lgdetDs[lti]
       ldetHS = ldetHSs[lti]
@@ -4196,9 +4196,6 @@ def correct_lambda_step_gamlss(family,mus,y,Xs,S_norm,n_coef,form_n_coef,form_up
    
    # And un-do the latest re-parameterization
    if repara:
-
-      for lti,lTerm in enumerate(gamlss_pen_rp): # Re-write accepted lambda to original penalties
-         gamlss_pen[lti].lam = lTerm.lam
          
       # Transform S_emb (which is currently S_emb_rp)
       S_emb = Q_emb @ S_emb @ Q_emb.T
@@ -5229,7 +5226,7 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,form_n_coef,form_up
       # our criterion is approximate, so we can be more lenient (see Wood et al., 2017).
       lam_changes = 0 
       if check[0] < 1e-7*-abs(next_pen_llk):
-         for lti,lTerm in enumerate(smooth_pen_rp):
+         for lti,lTerm in enumerate(smooth_pen):
 
             # For extended terms undo extension
             if extend_lambda and was_extended[lti]:
@@ -5286,7 +5283,7 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,form_n_coef,form_up
 
    step_norm = np.linalg.norm(lam_delta)
    lam_delta = []
-   for lti,lTerm in enumerate(smooth_pen_rp):
+   for lti,lTerm in enumerate(smooth_pen):
 
       lgdetD = lgdetDs[lti]
       ldetHS = ldetHSs[lti]
@@ -5331,9 +5328,6 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,form_n_coef,form_up
 
    # And un-do the latest re-parameterization
    if repara:
-
-      for lti,lTerm in enumerate(smooth_pen_rp): # Re-write accepted lambda to original penalties
-         smooth_pen[lti].lam = lTerm.lam
          
       # Transform S_emb (which is currently S_emb_rp)
       S_emb = Q_emb @ S_emb @ Q_emb.T
