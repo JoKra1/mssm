@@ -356,7 +356,7 @@ class Test_diff_whole_func_cor:
             self.sim_fit_model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
-        comp = "\nDistribution parameter: 1\n\nf(['x0']); edf: 7.079 chi^2: 457.007 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x0'],by=cond): a; edf: 1.0 chi^2: 0.056 P(Chi^2 > chi^2) = 0.81318\nf(['x0'],by=cond): b; edf: 2.789 chi^2: 14.381 P(Chi^2 > chi^2) = 0.00194 **\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        comp = "\nDistribution parameter: 1\n\nf(['x0']); edf: 7.079 chi^2: 457.328 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x0'],by=cond): a; edf: 1.0 chi^2: 0.056 P(Chi^2 > chi^2) = 0.81318\nf(['x0'],by=cond): b; edf: 2.789 chi^2: 14.381 P(Chi^2 > chi^2) = 0.00194 **\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         assert comp == capture
 
     def test_diff(self):
