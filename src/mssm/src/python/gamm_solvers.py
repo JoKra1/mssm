@@ -3400,8 +3400,12 @@ def correct_coef_step_gammlss(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_
     # cases for current lambda (see Wood, Li, Shaddick, & Augustin; 2017)
     next_pen_llk = next_llk - 0.5*next_coef.T@S_emb@next_coef
     prev_llk_cur_pen = c_llk - 0.5*coef.T@S_emb@coef
-    n_checks = 0
-    while next_pen_llk < prev_llk_cur_pen or (np.isinf(next_pen_llk[0,0]) or np.isnan(next_pen_llk[0,0])):
+    
+    for n_checks in range(32):
+        
+        if next_pen_llk >= prev_llk_cur_pen and (np.isinf(next_pen_llk[0,0]) == False and np.isnan(next_pen_llk[0,0]) == False):
+           break
+        
         if n_checks > 30:
             next_coef = coef
             
