@@ -552,8 +552,12 @@ class GAMM:
 
         # Compute negative Hessian of llk (Wood, 2011)
         nH = -1 * self.hessian
+
+        keep = None
+        if self.info.dropped is not None:
+            keep = [cidx for cidx in range(self.hessian.shape[1]) if cidx not in self.info.dropped]
             
-        reml = REML(llk,nH,self.coef,scale,self.formula.penalties)
+        reml = REML(llk,nH,self.coef,scale,self.formula.penalties,keep)
         
         return reml
     
@@ -1007,7 +1011,7 @@ class GAMMLSS(GAMM):
     :ivar float penalty: The total penalty applied to the model deviance after fitting as a float. Initialized with ``None``.
     :ivar [int] overall_coef:  Contains all coefficients estimated for the model. Initialized with ``None``.
     :ivar [int] coef_split_idx: The index at which to split the overall coefficient vector into separate lists - one per parameter of ``family``. Initialized after fitting!
-    :ivar scp.sparse.csc_array hessian:  Estimated hessian of the log-likelihood. Initialized with ``None``.
+    :ivar scp.sparse.csc_array hessian:  Estimated hessian of the log-likelihood (will correspond to ``hessian - diag*eps`` if ``self.info.eps > 0`` after fitting). Initialized with ``None``.
     :ivar [LambdaTerm] overall_penalties:  Contains all penalties estimated for the model. Initialized with ``None``.
     :ivar Fit_info info: A :class:`Fit_info` instance, with information about convergence (speed) of the model.
     """
@@ -1288,8 +1292,12 @@ class GAMMLSS(GAMM):
             raise ValueError("Model needs to be estimated before evaluating the REML score. Call model.fit()")
         
         llk = self.get_llk(False)
+
+        keep = None
+        if self.info.dropped is not None:
+            keep = [cidx for cidx in range(self.hessian.shape[1]) if cidx not in self.info.dropped]
         
-        reml = REML(llk,-1*self.hessian,self.overall_coef,1,self.overall_penalties)[0,0]
+        reml = REML(llk,-1*self.hessian,self.overall_coef,1,self.overall_penalties,keep)[0,0]
         return reml
     
     def get_resid(self):
@@ -1422,6 +1430,9 @@ class GAMMLSS(GAMM):
         self.coef_split_idx = coef_split_idx
         self.overall_lvi = LV
         self.hessian = H
+        if fit_info.eps > 0: # Make sure -H + S_emb is invertible
+            warnings.warn(f"model.info.eps > 0 ({np.round(fit_info.eps,decimals=2)}). Perturbing Hessian of log-likelihood to ensure that negative Hessian of penalized log-likelihood is invertible.")
+            self.hessian -= fit_info.eps*scp.sparse.identity(H.shape[1],format='csc')
         self.info = fit_info
     
     def sample_post(self, n_ps, use_post=None, deviations=False, seed=None, par=0):
@@ -1723,7 +1734,7 @@ class GSMM(GAMMLSS):
     :ivar float penalty: The total penalty applied to the model deviance after fitting as a float. Initialized with ``None``.
     :ivar [int] overall_coef:  Contains all coefficients estimated for the model. Initialized with ``None``.
     :ivar [int] coef_split_idx: The index at which to split the overall coefficient vector into separate lists - one per parameter of ``family``. Initialized after fitting!
-    :ivar scp.sparse.csc_array hessian:  Estimated hessian of the log-likelihood. Initialized with ``None``.
+    :ivar scp.sparse.csc_array hessian:  Estimated hessian of the log-likelihood (will correspond to ``hessian - diag*eps`` if ``self.info.eps > 0`` after fitting). Initialized with ``None``.
     :ivar [LambdaTerm] overall_penalties:  Contains all penalties estimated for the model. Initialized with ``None``.
     :ivar Fit_info info: A :class:`Fit_info` instance, with information about convergence (speed) of the model.
     """
@@ -1781,8 +1792,12 @@ class GSMM(GAMMLSS):
             raise ValueError("Model needs to be estimated before evaluating the REML score. Call model.fit()")
         
         llk = self.get_llk(False,drop_NA=drop_NA)
+
+        keep = None
+        if self.info.dropped is not None:
+            keep = [cidx for cidx in range(self.hessian.shape[1]) if cidx not in self.info.dropped]
         
-        reml = REML(llk,-1*self.hessian,self.overall_coef,1,self.overall_penalties)[0,0]
+        reml = REML(llk,-1*self.hessian,self.overall_coef,1,self.overall_penalties,keep)[0,0]
         return reml
     
     def get_resid(self):
@@ -1941,4 +1956,7 @@ class GSMM(GAMMLSS):
         self.coef_split_idx = coef_split_idx
         self.overall_lvi = LV
         self.hessian = H
+        if fit_info.eps > 0: # Make sure -H + S_emb is invertible
+            warnings.warn(f"model.info.eps > 0 ({np.round(fit_info.eps,decimals=2)}). Perturbing Hessian of log-likelihood to ensure that negative Hessian of penalized log-likelihood is invertible.")
+            self.hessian -= fit_info.eps*scp.sparse.identity(H.shape[1],format='csc')
         self.info = fit_info

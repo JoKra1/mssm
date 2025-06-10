@@ -572,7 +572,7 @@ def compute_REML_candidate_GSMM(family,y,Xs,penalties,coef,n_coef,coef_split_idx
     return reml,V,LV,coef.reshape(-1,1),total_edf,c_llk
 
 
-def REML(llk,nH,coef,scale,penalties):
+def REML(llk,nH,coef,scale,penalties,keep=None):
    """
    Based on Wood (2011). Exact REML for Gaussian GAM, Laplace approximate (Wood, 2016) for everything else.
    Evaluated after applying stabilizing reparameterization discussed by Wood (2011).
@@ -591,6 +591,8 @@ def REML(llk,nH,coef,scale,penalties):
    :type scale: float
    :param penalties: List of penalties that were part of the model.
    :type penalties: [LambdaTerm]
+   :param keep: Optional List of indices corresponding to identifiable coefficients. Coefficients not in this list (not identifiable) are dropped from the negative hessian of the penalized log-likelihood. Can also be set to ``None`` (default) in which case all coefficients are treated as identifiable.
+   :type keep: [int], optional
    :return: (Approximate) REML score
    :rtype: float
    """ 
@@ -650,6 +652,11 @@ def REML(llk,nH,coef,scale,penalties):
    # Hence, we simply rely on the pivoted cholesky (again pre-conditioned) used for fitting (based on S_\lambda before
    # re-parameterization).
    H_pen = nH + S_emb/scale
+
+   # Drop unidentifiable parameters
+   if keep is not None:
+       H_pen = H_pen[:,keep]
+       H_pen = H_pen[keep,:]
 
    Sdiag = np.power(np.abs(H_pen.diagonal()),0.5)
    PI = scp.sparse.diags(1/Sdiag,format='csc')
