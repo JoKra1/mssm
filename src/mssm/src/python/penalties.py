@@ -1,40 +1,84 @@
 import warnings
 import numpy as np
 import scipy as scp
-from dataclasses import dataclass
-from enum import Enum
-from .constraints import Constraint,ConstType
-
-class PenType(Enum):
-    IDENTITY = 1
-    DIFFERENCE = 2
-    DISTANCE = 3
-    REPARAM = 4
-    NULL = 5
+from .custom_types import ConstType
+from .matrix_solvers import translate_sparse
+import copy
 
 ##################################### Penalty functions #####################################
 
-def translate_sparse(mat):
-  # Translate canonical sparse csc matrix representation into data, row, col representation
-  # See: https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csc_array.html#scipy.sparse.csc_array
-  elements = mat.data
-  idx = mat.indices
-  iptr = mat.indptr
+def embed_in_S_sparse(pen_data,pen_rows,pen_cols,S_emb,S_col,SJ_col,cIndex):
+   """Embed a term-specific penalty matrix (provided as elements, row and col indices) into the across-term penalty matrix (see Wood, 2017) """
 
-  data = []
-  rows = []
-  cols = []
+   embedding = np.array(pen_data)
+   r_embedding = np.array(pen_rows) + cIndex
+   c_embedding = np.array(pen_cols) + cIndex
 
-  for ci in range(mat.shape[1]):
-     
-     c_data = elements[iptr[ci]:iptr[ci+1]]
-     c_rows = idx[iptr[ci]:iptr[ci+1]]
+   if S_emb is None:
+      S_emb = scp.sparse.csc_array((embedding,(r_embedding,c_embedding)),shape=(S_col,S_col))
+   else:
+      S_emb += scp.sparse.csc_array((embedding,(r_embedding,c_embedding)),shape=(S_col,S_col))
 
-     data.extend(c_data)
-     rows.extend(c_rows)
-     cols.extend([ci for _ in range(len(c_rows))])
+   return S_emb,cIndex+SJ_col
 
-  return data, rows, cols
+def embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,Sj,SJ_col):
+   """Parameterize a term-specific penalty matrix (provided as elements, row and col indices)"""
+   embedding = np.array(pen_data)
+
+   if Sj is None:
+      Sj = scp.sparse.csc_array((embedding,(pen_rows,pen_cols)),shape=(SJ_col,SJ_col))
+   else:
+      Sj += scp.sparse.csc_array((embedding,(pen_rows,pen_cols)),shape=(SJ_col,SJ_col))
+      
+   return Sj
+
+def embed_shared_penalties(formulas):
+   """
+   Embed penalties from individual model into overall penalties for GAMLSS models.
+   """
+
+   shared_penalties = [copy.deepcopy(form.penalties) for form in formulas]
+
+   # Assign original formula index to each penalty
+   for fi in range(len(shared_penalties)):
+      for lterm in shared_penalties[fi]:
+         lterm.dist_param = fi
+
+   for fi,form in enumerate(formulas):
+      for ofi,other_form in enumerate(formulas):
+         if fi == ofi:
+               continue
+
+         if ofi < fi:
+               for lterm in shared_penalties[fi]:
+                  lterm.S_J_emb = scp.sparse.vstack([scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1])),
+                                                   lterm.S_J_emb]).tocsc()
+                  lterm.D_J_emb = scp.sparse.vstack([scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1])),
+                                                   lterm.D_J_emb]).tocsc()
+                  
+                  lterm.S_J_emb = scp.sparse.hstack([scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef)),
+                                                   lterm.S_J_emb]).tocsc()
+                  
+                  lterm.D_J_emb = scp.sparse.hstack([scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef)),
+                                                   lterm.D_J_emb]).tocsc()
+                  
+                  lterm.start_index += other_form.n_coef
+         
+         elif ofi > fi:
+               for lterm in shared_penalties[fi]:
+                  lterm.S_J_emb = scp.sparse.vstack([lterm.S_J_emb,
+                                                   scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1]))]).tocsc()
+                  
+                  lterm.D_J_emb = scp.sparse.vstack([lterm.D_J_emb,
+                                                   scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1]))]).tocsc()
+                  
+                  lterm.S_J_emb = scp.sparse.hstack([lterm.S_J_emb,
+                                                   scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef))]).tocsc()
+                  
+                  lterm.D_J_emb = scp.sparse.hstack([lterm.D_J_emb,
+                                                   scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef))]).tocsc()
+               
+   return shared_penalties
 
 def diff_pen(n,constraint,m=2):
   # Creates difference (order=m) n*n penalty matrix
@@ -130,49 +174,3 @@ def TP_pen(S_j,D_j,j,ks,constraint):
    pen_data,pen_rows,pen_cols = translate_sparse(S_TP)
    chol_data,chol_rows,chol_cols = translate_sparse(D_TP)
    return pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols
-
-@dataclass
-class LambdaTerm:
-  """:math:`\lambda` storage term.
-
-  :ivar scipy.sparse.csc_array S_J: The penalty matrix associated with this lambda term. Note, in case multiple penalty matrices share the same lambda value, the ``rep_sj`` argument determines how many diagonal blocks we need to fill with this penalty matrix to get ``S_J_emb``. Initialized with ``None``.
-  :ivar scipy.sparse.csc_array S_J_emb: A zero-embedded version of the penalty matrix associated with this lambda term. Note, this matrix contains ``rep_sj`` diagonal sub-blocks each filled with ``S_J``. Initialized with ``None``.
-  :ivar scipy.sparse.csc_array D_J_emb: Root of ``S_J_emb``, so that ``D_J_emb@D_J_emb.T=S_J_emb``. Initialized with ``None``.
-  :ivar int rep_sj: How many sequential sub-blocks of ``S_J_emb`` need to be filled with ``S_J``. Useful if all levels of a categorical variable for which a separate smooth is to be estimated are assumed to share the same lambda value. Initialized with 1.
-  :ivar float lam: The current estimate for :math:`\lambda`. Initialized with 1.1.
-  :ivar int start_index: The first row and column in the overall penalty matrix taken up by ``S_J``. Initialized with ``None``.
-  :ivar PenType type: The type of this penalty term. Initialized with ``None``.
-  :ivar int rank: The rank of ``S_J``. Initialized with ``None``.
-  :ivar int term: The index of the term in a :class:`mssm.src.python.formula.Formula` with which this penalty is associated. Initialized with ``None``.
-  """
-  # Lambda term storage. Can hold multiple penalties associated with a single lambda
-  # value!
-  # start_index can be useful in case we want to have multiple penalties on some
-  # coefficients (see Wood, 2017; Wood & Fasiolo, 2017).
-  S_J:scp.sparse.csc_array=None
-  S_J_emb:scp.sparse.csc_array=None
-  D_J_emb:scp.sparse.csc_array=None
-  rep_sj:int=1
-  lam:float = 1.1
-  start_index:int = None
-  frozen:bool = False
-  type:PenType = None
-  rank:int or None = None
-  term:int or None = None
-  clust_series:[int] or None = None
-  clust_weights:[[float]] or None = None
-  dist_param: int or None = None
-  rp_idx: int or None = None
-  S_J_lam:scp.sparse.csc_array or None=None
-
-@dataclass
-class Reparameterization:
-   # Holds all information necessary to transform model matrix & penalty via various re-parameterization strategies as discussed in Wood (2017).
-   X:scp.sparse.csc_array = None
-   cov:np.ndarray = None
-   C:scp.sparse.csc_array= None
-   scale:float = None
-   IRrp:scp.sparse.csc_array = None
-   rms1:float = None
-   rms2:float = None
-   rank:int = None

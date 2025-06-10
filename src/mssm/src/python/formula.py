@@ -4,469 +4,15 @@ from collections.abc import Callable
 import numpy as np
 import scipy as scp
 import pandas as pd
-from enum import Enum
-import math
 from tqdm import tqdm
 from .smooths import TP_basis_calc
 from .terms import GammTerm,i,l,f,irf,ri,rs,fs
-from .penalties import PenType,id_dist_pen,diff_pen,TP_pen,LambdaTerm,translate_sparse,ConstType,Constraint,Reparameterization
-from .file_loading import read_cov, read_cor_cov_single, read_cov_no_cor ,read_unique,read_dtype,setup_cache,clear_cache,mp,repeat,os
-import cpp_solvers
+from .penalties import embed_in_S_sparse,embed_in_Sj_sparse
+from .file_loading import read_cov, read_cor_cov_single, read_cov_no_cor ,read_unique,read_dtype,mp,repeat,setup_cache,clear_cache,os
+from .custom_types import PenType,LambdaTerm,Reparameterization,ConstType,Constraint,VarType
+from .matrix_solvers import translate_sparse
+import math
 import sys
-
-class VarType(Enum):
-    NUMERIC = 1
-    FACTOR = 2
-
-def map_csc_to_eigen(X):
-   """
-   Pybind11 comes with copy overhead for sparse matrices, so instead of passing the
-   sparse matrix to c++, I pass the data, indices, and indptr arrays as buffers to c++.
-   see: https://pybind11.readthedocs.io/en/stable/advanced/pycpp/numpy.html.
-
-   An Eigen mapping can then be used to refer to these, without requiring an extra copy.
-   see: https://eigen.tuxfamily.org/dox/classEigen_1_1Map_3_01SparseMatrixType_01_4.html
-
-   The mapping needs to assume compressed storage, since then we can use the indices, indptr, and data
-   arrays directly for the valuepointer, innerPointer, and outerPointer fields of the sparse array
-   map constructor.
-   see: https://eigen.tuxfamily.org/dox/group__TutorialSparse.html (section sparse matrix format).
-
-   I got this idea from the NumpyEigen project, which also uses such a map!
-   see: https://github.com/fwilliams/numpyeigen/blob/master/src/npe_sparse_array.h#L74
-   """
-
-   if X.format != "csc":
-      raise TypeError(f"Format of sparse matrix passed to c++ MUST be 'csc' but is {X.getformat()}")
-   
-   if X.has_sorted_indices == False:
-      raise TypeError("Indices of sparse matrix passed to c++ MUST be sorted but are not.")
-
-   rows, cols = X.shape
-
-   # Cast to int64 here, since that's what the c++ side expects to be stored in the buffers
-   return rows, cols, X.nnz, X.data, X.indptr.astype(np.int64), X.indices.astype(np.int64)
-
-def map_csr_to_eigen(X):
-   """
-   see: :func:`map_csc_to_eigen`
-   """
-
-   if X.format != "csr":
-      raise TypeError(f"Format of sparse matrix passed to c++ MUST be 'csr' but is {X.getformat()}")
-   
-   if X.has_sorted_indices == False:
-      raise TypeError("Indices of sparse matrix passed to c++ MUST be sorted but are not.")
-
-   rows, cols = X.shape
-
-   # Cast to int64 here, since that's what the c++ side expects to be stored in the buffers
-   return rows, cols, X.nnz, X.data, X.indptr.astype(np.int64), X.indices.astype(np.int64)
-
-def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
-   """
-   Options 1 - 3 are natural reparameterization discussed in Wood (2017; 5.4.2)
-   with different strategies for the QR computation of :math:`\mathbf{X}`. Option 4 helps with stabilizing the REML computation
-   and is from Appendix B of Wood (2011) and section 6.2.7 in Wood (2017):
-
-      1. Form complete matrix :math:`\mathbf{X}` based on entire covariate.
-      2. Form matrix :math:`\mathbf{X}` only based on unique covariate values.
-      3. Form matrix :math:`\mathbf{X}` on a sample of values making up covariate. Covariate
-         is split up into ``n_bins`` equally wide bins. The number of covariate values
-         per bin is then calculated. Subsequently, the ratio relative to minimum bin size is
-         computed and each ratio is rounded to the nearest integer. Then ``ratio`` samples
-         are obtained from each bin. That way, imbalance in the covariate is approximately preserved when
-         forming the QR.
-      4. Transform term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` based on Appendix B of Wood (2011) and section 6.2.7 in Wood (2017)
-         so that they are full-rank and their log-determinant can be computed safely. In that case, only ``S`` needs
-         to be provided and has to be a list holding the penalties to be transformed. If the transformation is to be applied to
-         model matrices, coefficients, hessian, and covariance matrices X should be set to something other than ``None`` (does not matter what, can
-         for example be the first model matrix.) The :func:`mssm.src.python.gamm_solvers.reparam_model` function can be used to apply the transformation and also
-         returns the required transformation matrices to reverse it.
-   
-   For Options 1-3:
-
-      If ``QR==True`` then :math:`\mathbf{X}` is decomposed into :math:`\mathbf{Q}\mathbf{R}` directly via QR decomposition. Alternatively, we first
-      form :math:`\mathbf{X}^T\mathbf{X}` and then compute the cholesky :math:`\mathbf{L}` of this product - note that :math:`\mathbf{L}^T = \mathbf{R}`. Overall the latter
-      strategy is much faster (in particular if ``option==1``), but the increased loss of precision in :math:`\mathbf{L}^T = \mathbf{R}` might not be ok for some.
-
-      After transformation S only contains elements on it's diagonal and :math:`\mathbf{X}` the transformed functions. As discussed
-      in Wood (2017), the transformed functions are decreasingly flexible - so the elements on :math:`\mathbf{S}` diagonal become smaller
-      and eventually zero, for elements that are in the kernel of the original :math:`\mathbf{S}` (un-penalized == not flexible).
-
-      For a similar transformation (based solely on :math:`\mathbf{S}`), Wood et al. (2013) show how to further reduce the diagonally
-      transformed :math:`\mathbf{S}` to an even simpler identity penalty. As discussed also in Wood (2017) the same behavior of decreasing
-      flexibility if all entries on the diagonal of :math:`\mathbf{S}` are 1 can only be maintained if the transformed functions are
-      multiplied by a weight related to their wiggliness. Specifically, more flexible functions need to become smaller in
-      amplitude - so that for the same level of penalization they are removed earlier than less flexible ones. To achieve this
-      Wood further post-multiply the transformed matrix :math:`\mathbf{X}'` with a matrix that contains on it's diagonal the reciprocal of the
-      square root of the transformed penalty matrix (and 1s in the last cells corresponding to the kernel). This is done here
-      if ``identity=True``.
-
-      In ``mgcv`` the transformed model matrix and penalty can optionally be scaled by the root mean square value of the transformed
-      model matrix (see the nat.param function in mgcv). This is done here if ``scale=True``.
-
-   For Option 4:
-
-      Option 4 enforces re-parameterization of term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` based on section Wood (2011) and section 6.2.7 in Wood (2017).
-      In ``mssm`` multiple penalties can be placed on individual terms (i.e., tensor terms, random smooths, Kernel penalty) but
-      it is not always the case that the term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` - i.e., the sum over all those individual penalties multiplied with
-      their :math:`\lambda` parameters, is of full rank. If we need to form the inverse of the term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` this is problematic.
-      It is also problematic, as discussed by Wood (2011), if the different :math:`\lambda` are all of different magnitude in which case forming
-      the term-specific :math:`log(|\mathbf{S}_{\\boldsymbol{\lambda}}|+)` becomes numerically difficult.
-
-      The re-parameterization implemented by option 4, based on Appendix B in Wood (2011), solves these issues. After this re-parameterization a
-      term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` has been formed that is full rank. And :math:`log(|\mathbf{S}_{\\boldsymbol{\lambda}}|)` - no longer just a generalized determinant - can be
-      computed without running into numerical problems.
-
-      The strategy by Wood (2011) could be applied to form an overall - not just term-specific - :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` with these properties. However, this
-      does not work for general smooth models as defined by Wood et al. (2016). Hence, mssm opts for the blockwise strategy.
-      However, in ``mssm`` penalties currently cannot overlap, so this is not necessary at the moment.
-
-   References:
-      - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
-      - Wood, S. N., Scheipl, F., & Faraway, J. J. (2013). Straightforward intermediate rank tensor product smoothing in mixed models.
-      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-      - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-      - mgcv source code (accessed 2024). smooth.R file, nat.param function.
-   """
-
-   if option < 4:
-
-      # For option 1 just use provided basis matrix
-      if option != 1:
-         unq,idx,c = np.unique(cov,return_counts=True,return_index=True)
-         if option == 2:
-            # Form basis based on unique values in cov
-            sample = idx
-         elif option == 3:
-            # Form basis based on re-sampled values of cov to keep row number small but hopefully imbalance
-            # in the data preserved.
-            weights,values = np.histogram(cov,bins=n_bins)
-            ratio = np.round(weights/min(weights),decimals=0).astype(int)
-
-            sample = []
-            for bi in range(n_bins-1):
-               sample_val = np.random.choice(unq[(unq >= values[bi]) & (unq < values[bi+1])],size=ratio[bi],replace=True)
-               sample_idx = [idx[unq == sample_val[svi]][0] for svi in range(ratio[bi])]
-               sample.extend(sample_idx)
-            sample.append(idx[-1])
-            sample = np.array(sample)
-            
-         # Now re-form basis
-         X = X[sample,:]
-      
-      # Now decompose X = Q @ R
-      if QR:
-         _,R = scp.linalg.qr(X.toarray(),mode='economic')
-         R = scp.sparse.csr_array(R)
-         
-      else:
-         XX = (X.T @ X).tocsc()
-         
-         L,code = cpp_solvers.chol(*map_csc_to_eigen(XX))
-
-         if code != 0:
-            raise ValueError("Cholesky failed during reparameterization.")
-
-         R = L.T
-
-      # Now form B and proceed with eigen decomposition of it (see Wood, 2017)
-      # see also smooth.R nat.param function in mgcv.
-      # R.T @ A = S.T
-      # A = Rinv.T @ S.T
-      # R.T @ B = A.T
-      # A.T = S @ Rinv ## Transpose order reverses!
-      # B = Rinv.T @ A.T
-      # B = Rinv.T @ S @ Rinv
-      
-      B = cpp_solvers.solve_tr(*map_csc_to_eigen(R.T),cpp_solvers.solve_tr(*map_csc_to_eigen(R.T),S.T).T)
-
-      s, U =scp.linalg.eigh(B.toarray())
-
-      # Decreasing magnitude for ease of indexing..
-      s = np.flip(s)
-      U = scp.sparse.csc_array(np.flip(U,axis=1))
-
-      rank = len(s[s > 1e-7])
-
-      # First rank elements are non-zero - corresponding to penalized functions, last S.shape[1] - rank
-      # are zero corresponding to dimensionality of kernel of S
-      Srp = scp.sparse.diags([s[i] if s[i] > 1e-7 else 0 for i in range(S.shape[1])],offsets=0,format='csc')
-      Drp = scp.sparse.diags([s[i]**0.5 if s[i] > 1e-7 else 0 for i in range(S.shape[1])],offsets=0,format='csc')
-
-      # Now compute matrix to transform basis functions. The transformed functions are decreasingly flexible. I.e.,
-      # Xrp[:,i] is more flexible than Xrp[:,i+1]. According to Wood (2017) Xrp = Q @ U. Now we want to be able to
-      # evaluate the basis for new data resulting in Xpred. So we also have to transform Xpred. Following Wood (2017),
-      # based on QR decomposition we have X = Q @ R, so we form matrix C so that R @ C = U to have Xrp = Q @ R @ C = Q @ U.
-      # Then Xpred_rp = X_pred @ C can similarly be obtained.
-      # see smooth.R nat.param function in mgcv.
-      
-      C = cpp_solvers.backsolve_tr(*map_csc_to_eigen(R.tocsc()),U)
-
-      IRrp = None
-      if identity:
-         # Transform S to identity as described in Wood et al. (2013). Form inverse of root of transformed S for
-         # all cells not covering a kernel function. For those simply insert 1. Then post-multiply transformed X (or equivalently C) by it.
-         IRrp = [1/s[i]**0.5 if s[i] > 1e-7 else 1 for i in range(S.shape[1])]
-         Srp = scp.sparse.diags([1 if s[i] > 1e-7 else 0 for i in range(S.shape[1])],offsets=0,format='csc')
-         Drp = copy.deepcopy(Srp)
-
-         C = C @ scp.sparse.diags(IRrp,offsets=0,format='csc')
-
-      rms1 = rms2 = None
-      if scale:
-         # mgcv optionally scales the transformed model & penalty matrices (separately per range and kernel space columns of S) by the root mean square of the model matrix.
-         # see smooth.R nat.param function in mgcv.
-         Xrp = X @ C
-         rms1 = math.sqrt((Xrp[:,:rank]).power(2).mean())
-
-         # Scale transformation matrix
-         C[:,:rank] /= rms1
-         
-         # Now apply the separate scaling for Kernel of S as done by mgcv
-         if X.shape[1] - rank > 0:
-            rms2 = math.sqrt((Xrp[:,rank:]).power(2).mean())
-            C[:,rank:] /= rms2
-         
-         # Scale penalty
-         Srp /= rms1**2
-         Drp /= rms1
-
-      # Done, return
-      return C, Srp, Drp, IRrp, rms1, rms2, rank
-   
-   elif option == 4:
-      # Reparameterize S_\lambda for safe REML evaluation - based on section 6.2.7 in Wood (2017) and Appendix B of Wood (2011).
-      # S needs to be list holding penalties.
-
-      # We first sort S into term-specific groups of penalties
-      SJs = [] # SJs groups per term
-      ljs = [] # Lambda groups per term
-      SJ_reps = [] # How often should SJ be stacked
-      SJ_term_idx = [] # Penalty index of every SJ
-      SJ_idx = [] # start index of every SJ
-      SJ_coef = [] # Number of coef in the term penalized by a (sum of) SJ
-      SJ_idx_max = 0 # Max starting index - used to decide whether a new SJ should be added.
-      SJ_idx_len = 0 # Number of separate SJ blocks.
-
-      # Build S_emb and collect every block for pinv(S_emb)
-      for lti,lTerm in enumerate(S):
-         #print(f"pen: {lti}")
-
-         # Now collect the S_J for the pinv calculation in the next step.
-         if lti == 0 or lTerm.start_index > SJ_idx_max:
-            SJs.append([lTerm.S_J])
-            ljs.append([lTerm.lam])
-            SJ_term_idx.append([lti])
-            SJ_reps.append(lTerm.rep_sj)
-            SJ_coef.append(lTerm.S_J.shape[1])
-            SJ_idx.append(lTerm.start_index)
-            SJ_idx_max = lTerm.start_index
-            SJ_idx_len += 1
-
-         else: # A term with the same starting index exists already - so add the Sjs to the corresponding list
-            idx_match = [idx for idx in range(SJ_idx_len) if SJ_idx[idx] == lTerm.start_index]
-            #print(idx_match,lTerm.start_index)
-            if len(idx_match) > 1:
-               raise ValueError("Penalty index matches multiple previous locations.")
-            
-            SJs[idx_match[0]].append(lTerm.S_J)
-            ljs[idx_match[0]].append(lTerm.lam)
-            SJ_term_idx[idx_match[0]].append(lti)
-
-            if SJ_reps[idx_match[0]] != lTerm.rep_sj:
-               raise ValueError("Repeat Number for penalty does not match previous penalties repeat number.")
-      
-      # Now we can re-parameterize SJ groups of length > 1
-      Sj_reps = [] # Will hold transformed S_J
-      Q_reps = []
-      QT_reps = []
-      for pen in S:
-         Sj_reps.append(LambdaTerm(S_J=copy.deepcopy(pen.S_J),rep_sj=pen.rep_sj,lam=pen.lam,type=pen.type,rank=pen.rank,term=pen.term,start_index=pen.start_index,dist_param=pen.dist_param))
-
-      S_reps = [] # Term specific S_\lambda
-      eps = sys.float_info.epsilon**0.7
-      Mp = Sj_reps[0].start_index # Number of un-penalized dimensions (Kernel space dimension of total S_\lambda; Wood, 2011)
-      for grp_idx,SJgroup,LJgroup in zip(SJ_term_idx,SJs,ljs):
-
-         for rpidx in range(len(SJgroup)):
-            Sj_reps[grp_idx[rpidx]].rp_idx = len(S_reps)
-
-         normed_SJ = [SJ_mat/scp.sparse.linalg.norm(SJ_mat,ord='fro') for SJ_mat in SJgroup]
-         normed_S = normed_SJ[0]
-         for j in range(1,len(normed_SJ)):
-            normed_S += normed_SJ[j]
-
-         D, U = scp.linalg.eigh(normed_S.toarray())
-
-         # Decreasing magnitude for ease of indexing..
-         D = np.flip(D)
-         U = scp.sparse.csc_array(np.flip(U,axis=1))
-
-         Ur = U[:,D > max(D)*eps]
-         r = Ur.shape[1] # Range dimension
-         Mp += (normed_S.shape[1] - r)
-
-         # Initial re-parameterization as discussed by Wood (2011)
-         if r < normed_S.shape[1]:
-            SJbar = [Ur.T@SJ_mat@Ur for SJ_mat in SJgroup]
-
-            if not X is None:
-               Q_rep0 = copy.deepcopy(U) # Need to account for this when computing Q matrix.
-         else:
-            SJbar = copy.deepcopy(SJgroup)
-            Q_rep0 = None
-            
-         if len(SJgroup) == 1: # No further re-parameterization necessary
-            Sj_reps[grp_idx[0]].S_J = SJbar[0]
-            S_reps.append(SJbar[0]*LJgroup[0])
-
-            if not X is None:
-               if not Q_rep0 is None:
-                  Q_reps.append(scp.sparse.csc_array(Q_rep0))
-                  QT_reps.append(scp.sparse.csc_array(Q_rep0.T))
-               else:
-                  Q_reps.append(scp.sparse.eye(r,format='csc'))
-                  QT_reps.append(scp.sparse.eye(r,format='csc'))
-            continue
-
-         S_Jrep = copy.deepcopy(SJbar) # Original S_J transformed 
-         S_rep = None
-         Q_rep = None
-
-         # Initialization as described by Wood (2011)
-         K = 0
-         Q = r
-         rem_idx = np.arange(0,len(SJbar),dtype=int)
-
-         while True:
-            # Find max norm
-            norm_group = [scp.sparse.linalg.norm(SJ_mat*SJ_lam,ord='fro') for SJ_mat,SJ_lam in zip([SJbar[idx] for idx in rem_idx],[LJgroup[idx] for idx in rem_idx])]
-            
-            am_norm = np.argmax(norm_group)
-
-            # Find Sk = S_J with max norm, in Wood (2011) this can be multiple but we just use the max. as discussed in Wood (2017)
-            Sk = SJbar[rem_idx[am_norm]]*LJgroup[rem_idx[am_norm]]
-
-            # De-compose Sk - form Ur and Un
-            D, U =scp.linalg.eigh(Sk.toarray())
-
-            # Decreasing magnitude for ease of indexing..
-            D = np.flip(D)
-            U = scp.sparse.csc_array(np.flip(U,axis=1))
-            r = len(D[D > max(D)*eps]) # r is known in advance here almost every-time but we need to de-compose anyway..
-            
-            if r == Q:
-                  break
-            
-            # Seperate U into kernel and rank space of Sk
-            n = U.shape[1] - r
-            Un = U[:,r:]
-            Un = Un.reshape(Sk.shape[1],-1)
-
-            Ur = U[:,:r]
-            Ur = Ur.reshape(Sk.shape[1],-1)
-
-            Dr = np.diag(D[:r])
-            
-            # Sum up Sjk - remaining S_J not Sk
-            Sjk = None
-            for j in rem_idx:
-                  if j == rem_idx[am_norm]:
-                     continue
-
-                  if Sjk is None:
-                     Sjk = SJbar[j]*LJgroup[j]
-                  else:
-                     Sjk += SJbar[j]*LJgroup[j]
-            
-            if not Sjk is None:
-                  Sjk = Sjk.toarray()
-            else:
-                  raise ValueError("Problem during re-parameterization.")
-                  
-            # Compute C' in Wood (2011)
-
-            # Transform Sk
-            Sk = Dr + Ur.T@Sjk@Ur
-            
-            # Fill C' in Wood (2011)
-            #print(Sk.shape,(Ur.T@Sjk@Un).shape,(Un.T@Sjk@Ur).shape,(Un.T@Sjk@Un).shape)
-
-            C = np.concatenate((np.concatenate((Sk,Un.T@Sjk@Ur),axis=0),
-                                np.concatenate((Ur.T@Sjk@Un,Un.T@Sjk@Un),axis=0)),axis=1)
-            
-            #print(C.shape)
-
-            # Form S' in Wood (2011)
-            if S_rep is None:
-                  S_rep = C
-                  Ta = np.concatenate((Ur.toarray(),np.zeros((Ur.shape[0],n))),axis=1)
-                  Tg = U.toarray()
-                  
-                  if not X is None:
-                     if Q_rep0 is None:
-                        Q_rep = U.toarray()
-                     else:
-                        init_drop = Q_rep0.shape[1] - U.shape[1]
-                        
-                        Q_rep = np.concatenate((np.concatenate((U.toarray(),np.zeros((U.shape[0],init_drop))),axis=1),
-                                                np.concatenate((np.zeros((init_drop,U.shape[1])),np.identity(init_drop)),axis=1)),axis=0)
-            else:
-                  A = S_rep[:K,:K] # From partitioning step 6 in Wood, 2011
-                  B = S_rep[:K,K:] # From partitioning step 6 in Wood, 2011
-                  BU = B @ U
-                  S_rep = np.concatenate((np.concatenate((A,BU.T),axis=0),
-                                          np.concatenate((BU,C),axis=0)),axis=1)
-                  
-                  Ta = np.concatenate((np.concatenate((np.identity(K),np.zeros((K,r+n))),axis=1),
-                                       np.concatenate((np.zeros((Ur.shape[0],K)),Ur.toarray(),np.zeros((Ur.shape[0],n))),axis=1)),axis=0)
-                  
-                  Tg = np.concatenate((np.concatenate((np.identity(K),np.zeros((K,r+n))),axis=1),
-                                       np.concatenate((np.zeros((U.shape[0],K)),U.toarray()),axis=1)),axis=0)
-                  
-                  if not X is None:
-                     if Q_rep0 is None:
-                        Q_rep = Q_rep @ Tg
-                     else:
-                        init_drop = Q_rep0.shape[1] - Tg.shape[1]
-                        Q_rep = Q_rep @ np.concatenate((np.concatenate((Tg,np.zeros((Tg.shape[0],init_drop))),axis=1),
-                                                        np.concatenate((np.zeros((init_drop,Tg.shape[1])),np.identity(init_drop)),axis=1)),axis=0)
-
-            #print(Ta.shape,Tg.shape)
-            # Transform remaining terms that made up Sjk
-            for j in rem_idx:
-                  if j == rem_idx[am_norm]:
-                     S_Jrep[j] = Ta.T@S_Jrep[j]@Ta
-                     continue
-                  SJbar[j] = scp.sparse.csc_array(Un.T@SJbar[j]@Un)
-                  S_Jrep[j] = Tg.T@S_Jrep[j]@Tg
-
-            K += r
-            Q -= r
-            rem_idx = np.delete(rem_idx,am_norm)
-
-
-         for j in range(len(grp_idx)):
-            
-            Sj_reps[grp_idx[j]].S_J = scp.sparse.csc_array(S_Jrep[j])
-         
-         S_reps.append(scp.sparse.csc_array(S_rep))
-
-         if not X is None:
-            if not Q_rep0 is None:
-               Q_reps.append(scp.sparse.csc_array(Q_rep0@Q_rep))
-               QT_reps.append(scp.sparse.csc_array(Q_rep.T@Q_rep0.T))
-            else:
-               Q_reps.append(scp.sparse.csc_array(Q_rep))
-               QT_reps.append(scp.sparse.csc_array(Q_rep.T))
-         
-      return Sj_reps,S_reps,SJ_term_idx,SJ_idx,SJ_coef,Q_reps,QT_reps,Mp
-         
-   else:
-      raise NotImplementedError(f"Requested option {option} for reparameterization is not implemented.")
-   
 
 class lhs():
     """
@@ -482,368 +28,6 @@ class lhs():
     def __init__(self,variable:str,f:Callable=None) -> None:
         self.variable = variable
         self.f=f
-
-
-def get_coef_info_linear(has_intercept,lterm,var_types,coding_factors,factor_levels):
-    unpenalized_coef = 0
-    coef_names = []
-    total_coef = 0
-
-    # Main effects
-    if len(lterm.variables) == 1:
-        var = lterm.variables[0]
-        if var_types[var] == VarType.FACTOR:
-            
-            fl_start = 0
-
-            if has_intercept: # Dummy coding when intercept is added.
-                fl_start = 1
-
-            for fl in range(fl_start,len(factor_levels[var])):
-                coef_names.append(f"{var}_{coding_factors[var][fl]}")
-                unpenalized_coef += 1
-                total_coef += 1
-
-        else: # Continuous predictor
-            coef_names.append(f"{var}")
-            unpenalized_coef += 1
-            total_coef += 1
-
-    else: # Interactions
-        inter_coef_names = []
-
-        for var in lterm.variables:
-            new_inter_coef_names = []
-
-            # Interaction with categorical predictor as start
-            if var_types[var] == VarType.FACTOR:
-                fl_start = 0
-
-                if has_intercept: # Dummy coding when intercept is added.
-                    fl_start = 1
-
-                if len(inter_coef_names) == 0:
-                    for fl in range(fl_start,len(factor_levels[var])):
-                        new_inter_coef_names.append(f"{var}_{coding_factors[var][fl]}")
-                else:
-                    for old_name in inter_coef_names:
-                        for fl in range(fl_start,len(factor_levels[var])):
-                            new_inter_coef_names.append(old_name + f"_{var}_{coding_factors[var][fl]}")
-
-            else: # Interaction with continuous predictor as start
-                if len(inter_coef_names) == 0:
-                    new_inter_coef_names.append(var)
-                else:
-                    for old_name in inter_coef_names:
-                        new_inter_coef_names.append(old_name + f"_{var}")
-            
-            inter_coef_names = copy.deepcopy(new_inter_coef_names)
-
-        # Now add interaction term names
-        for name in inter_coef_names:
-            coef_names.append(name)
-            unpenalized_coef += 1
-            total_coef += 1
-
-    return total_coef,unpenalized_coef,coef_names
-
-def get_coef_info_smooth(sterm,factor_levels):
-    coef_names = []
-
-    vars = sterm.variables
-    # Calculate Coef names
-    if len(vars) > 1:
-        term_n_coef = np.prod(sterm.nk)
-        if sterm.te and sterm.is_identifiable:
-           # identifiable te() terms loose one coefficient since the identifiability constraint
-           # is computed after the tensor product calculation. So this term behaves
-           # different than all other terms in mssm, which is a bit annoying. But there is
-           # no easy solution - we could add 1 coefficient to the marginal basis for one variable
-           # but then we will always favor one direction.
-           term_n_coef -= 1        
-    else:
-        term_n_coef = sterm.nk
-
-    # Total coef accounting for potential by keywords.
-    n_coef = term_n_coef
-
-    # var label
-    var_label = vars[0]
-    if len(vars) > 1:
-        var_label = "_".join(vars)
-   
-    if sterm.binary is not None:
-        var_label += sterm.binary[0]
-
-    if sterm.by is not None:
-        by_levels = factor_levels[sterm.by]
-        n_coef *= len(by_levels)
-
-        for by_level in by_levels:
-            coef_names.extend([f"f_{var_label}_{ink}_{by_level}" for ink in range(term_n_coef)])
-         
-    else:
-         coef_names.extend([f"f_{var_label}_{ink}" for ink in range(term_n_coef)])
-         
-    return n_coef,coef_names
-
-def build_smooth_penalties(penalties,cur_pen_idx,
-                           pen,penid,sti,sterm,
-                           vars,by_levels,n_coef,col_S):
-    # We again have to deal with potential identifiable constraints!
-    # Then we again act as if n_k was n_k+1 for difference penalties
-
-    # penid % len(vars) because it will just go from 0-(len(vars)-1) and
-    # reset if penid >= len(vars) which might happen in case of multiple penalties on
-    # every tp basis
-
-    if len(vars) > 1:
-        id_k = sterm.nk[penid % len(vars)]
-    else:
-        id_k = n_coef
-
-    pen_kwargs = sterm.pen_kwargs[penid]
-    
-    # Determine penalty generator
-    constraint = None
-    if pen == PenType.DIFFERENCE:
-        pen_generator = diff_pen
-        if sterm.is_identifiable:
-            if sterm.te == False:
-               id_k += 1
-               constraint = sterm.Z[penid % len(vars)]
-    else:
-        pen_generator = id_dist_pen
-
-    # Again get penalty elements used by this term.
-    pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = pen_generator(id_k,constraint,**pen_kwargs)
-
-    # Make sure nk matches right dimension again
-    if sterm.is_identifiable:
-         if sterm.te == False:
-            id_k -= 1
-
-    if sterm.should_rp > 0:
-      # Re-parameterization was requested
-      S_J = scp.sparse.csc_array((pen_data,(pen_rows,pen_cols)),shape=(id_k,id_k))
-
-      # Re-parameterize
-      # Below will break for multiple penalties on term
-      if len(vars) > 1:
-         rp_idx = penid
-      else:
-         rp_idx = 0
-      
-      
-      #C, Srp, Drp, IRrp, rms1, rms2, rp_rank = reparam(sterm.RP[rp_idx].X,S_J,sterm.RP[rp_idx].cov,QR=True,option=sterm.should_rp,scale=False,identity=False)
-      C, Srp, Drp, IRrp, rms1, rms2, rp_rank = reparam(sterm.RP[rp_idx].X,S_J,sterm.RP[rp_idx].cov,QR=False,option=sterm.should_rp,scale=True,identity=True)
-
-      sterm.RP[rp_idx].C = C
-      sterm.RP[rp_idx].IRrp = IRrp
-      sterm.RP[rp_idx].rms1 = rms1
-      sterm.RP[rp_idx].rms2 = rms2
-      sterm.RP[rp_idx].rank = rank
-
-      # Delete un-necessary X and cov references
-      # Will break if we re-initialzie penalties at some point... ToDo
-      #sterm.RP[rp_idx].X = None
-      #sterm.RP[rp_idx].cov = None
-
-      # Update penalty and chol factor
-      pen_data,pen_rows,pen_cols = translate_sparse(Srp)
-      chol_data,chol_rows,chol_cols = translate_sparse(Drp)
-
-      if len(vars) == 1:
-         # Prevent problems with TE penalties later..
-         pen = PenType.REPARAM
-
-    # Create lambda term
-    lTerm = LambdaTerm(start_index=cur_pen_idx,
-                       type = pen,
-                       term=sti)
-
-    # For tensor product smooths we first have to recalculate:
-    # pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols via TP_pen()
-    # Then they can just be embedded via the calls below.
-
-    if len(vars) > 1:
-        # Absorb the identifiability constraint for te terms only after the tensor basis has been computed.
-        if sterm.te and sterm.is_identifiable:
-           constraint = sterm.Z[0] # Zero-index because a single set of identifiability constraints exists: one for the entire Tp basis.
-        else:
-           constraint = None
-        
-        pen_data,\
-        pen_rows,\
-        pen_cols,\
-        chol_data,\
-        chol_rows,\
-        chol_cols = TP_pen(scp.sparse.csc_array((pen_data,(pen_rows,pen_cols)),shape=(id_k,id_k)),
-                           scp.sparse.csc_array((chol_data,(chol_rows,chol_cols)),shape=(id_k,id_k)),
-                           penid % len(vars),sterm.nk,constraint)
-        
-        # For te/ti terms, penalty dim are nk_1 * nk_2 * ... * nk_j over all j variables
-        id_k = np.prod(sterm.nk)
-        
-        # For te terms we need to subtract one if term was made identifiable.
-        if sterm.te and sterm.is_identifiable:
-           id_k -= 1
-
-    
-    # Embed first penalty - if the term has a by-keyword more are added below.
-    lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,id_k,cur_pen_idx)
-    lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,id_k,cur_pen_idx)
-    lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,id_k)
-    
-    # Compute rank for TP penalty
-    if len(vars) > 1:
-      D = scp.linalg.eigh(lTerm.S_J.toarray(),eigvals_only=True)
-      rank = len(D[D > max(D)*sys.float_info.epsilon**0.7])
-    lTerm.rank = rank
-    
-        
-    if sterm.by is not None:
-        
-        if sterm.id is not None:
-
-            pen_iter = len(by_levels) - 1
-
-            #for _ in range(pen_iter):
-            #    lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,id_k,cur_pen_idx)
-            #    lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,id_k,cur_pen_idx)
-            
-            chol_rep = np.tile(chol_data,pen_iter)
-            idx_row_rep = np.repeat(np.arange(pen_iter),len(chol_rows))*id_k
-            idx_col_rep = np.repeat(np.arange(pen_iter),len(chol_cols))*id_k
-            chol_rep_row = np.tile(chol_rows,pen_iter) + idx_row_rep
-            chol_rep_cols = np.tile(chol_cols,pen_iter) + idx_col_rep
-            
-            lTerm.D_J_emb, _ = embed_in_S_sparse(chol_rep,chol_rep_row,chol_rep_cols,lTerm.D_J_emb,col_S,id_k*pen_iter,cur_pen_idx)
-
-            pen_rep = np.tile(pen_data,pen_iter)
-            idx_row_rep = np.repeat(np.arange(pen_iter),len(pen_rows))*id_k
-            idx_col_rep = np.repeat(np.arange(pen_iter),len(pen_cols))*id_k
-            pen_rep_row = np.tile(pen_rows,pen_iter) + idx_row_rep
-            pren_rep_cols = np.tile(pen_cols,pen_iter) + idx_col_rep
-
-            lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_rep,pen_rep_row,pren_rep_cols,lTerm.S_J_emb,col_S,id_k*pen_iter,cur_pen_idx)
-
-            # For pinv calculation during model fitting.
-            lTerm.rep_sj = pen_iter + 1
-            lTerm.rank = rank * (pen_iter + 1)
-            penalties.append(lTerm)
-
-        else:
-            # In case all levels get their own smoothing penalty - append first lterm then create new ones for
-            # remaining levels.
-            penalties.append(lTerm)
-
-            pen_iter = len(by_levels) - 1
-
-            for _ in range(pen_iter):
-
-                # Create lambda term
-                lTerm = LambdaTerm(start_index=cur_pen_idx,
-                                   type = pen,
-                                   term=sti)
-
-                # Embed penalties
-                lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,id_k,cur_pen_idx)
-                lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,id_k,cur_pen_idx)
-                lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,id_k)
-                lTerm.rank = rank
-                penalties.append(lTerm)
-
-    else:
-        penalties.append(lTerm)
-
-    return penalties,cur_pen_idx
-
-def build_irf_penalties(penalties,cur_pen_idx,
-                        pen,penid,irsti,irsterm,
-                        vars,by_levels,n_coef,col_S):
-    
-    if len(vars) > 1:
-        id_k = irsterm.nk[penid % len(vars)]
-    else:
-        id_k = n_coef
-
-    # Determine penalty generator
-    if pen == PenType.DIFFERENCE:
-        pen_generator = diff_pen
-    else:
-        pen_generator = id_dist_pen
-
-    # Get non-zero elements and indices for the penalty used by this term.
-    pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = pen_generator(id_k,None,**irsterm.pen_kwargs[penid])
-
-    # For tensor product smooths we first have to recalculate:
-    # pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols via TP_pen()
-    # Then they can just be embedded via the calls below.
-
-    if len(vars) > 1:
-        constraint = None
-        
-        pen_data,\
-        pen_rows,\
-        pen_cols,\
-        chol_data,\
-        chol_rows,\
-        chol_cols = TP_pen(scp.sparse.csc_array((pen_data,(pen_rows,pen_cols)),shape=(id_k,id_k)),
-                           scp.sparse.csc_array((chol_data,(chol_rows,chol_cols)),shape=(id_k,id_k)),
-                           penid % len(vars),irsterm.nk,constraint)
-        
-        # For te terms, penalty dim are nk_1 * nk_2 * ... * nk_j over all j variables
-        id_k = np.prod(irsterm.nk)
-
-    # Create lambda term
-    lTerm = LambdaTerm(start_index=cur_pen_idx,
-                        type = pen,
-                        term=irsti)
-
-    # Embed first penalty - if the term has a by-keyword more are added below.
-    lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,id_k,cur_pen_idx)
-    lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,id_k,cur_pen_idx)
-    lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,id_k)
-
-    # Compute rank for TP penalty
-    if len(vars) > 1:
-      D = scp.linalg.eigh(lTerm.S_J.toarray(),eigvals_only=True)
-      rank = len(D[D > max(D)*sys.float_info.epsilon**0.7])
-    lTerm.rank = rank
-        
-    if irsterm.by is not None:
-        if irsterm.id is not None:
-
-            for _ in range(len(by_levels)-1):
-                lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,id_k,cur_pen_idx)
-                lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,id_k,cur_pen_idx)
-
-            # For pinv calculation during model fitting.
-            lTerm.rep_sj = len(by_levels)
-            lTerm.rank = rank * len(by_levels)
-            penalties.append(lTerm)
-        else:
-            # In case all levels get their own smoothing penalty - append first lterm then create new ones for
-            # remaining levels.
-            penalties.append(lTerm)
-
-            for _ in range(len(by_levels)-1):
-                # Create lambda term
-                lTerm = LambdaTerm(start_index=cur_pen_idx,
-                                type = pen,
-                                term=irsti)
-
-                # Embed penalties
-                lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,id_k,cur_pen_idx)
-                lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,id_k,cur_pen_idx)
-                lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,id_k)
-                lTerm.rank = rank
-                penalties.append(lTerm)
-    else:
-        penalties.append(lTerm)
-    
-    return penalties,cur_pen_idx
 
 def compute_constraint_single_MP(sterm,vars,lhs_var,file,var_mins,var_maxs,file_loading_kwargs):
 
@@ -1215,6 +399,8 @@ class Formula():
       return cvi
   
     def __get_coef_info(self):
+      """Get's information about the number of coefficients from each term + the names of these coefficients. Some terms also provide info here about the number of unpenalized coefficients that come with the term.
+      """
       var_types = self.get_var_types()
       factor_levels = self.get_factor_levels()
       coding_factors = self.get_coding_factors()
@@ -1226,100 +412,76 @@ class Formula():
       self.coef_per_term = np.zeros(len(terms),dtype=int)
 
       for lti in self.get_linear_term_idx():
+         # Calculate Coef names for linear terms
          lterm = terms[lti]
 
          if isinstance(lterm,i):
-            self.coef_names.append("Intercept")
-            self.unpenalized_coef += 1
-            self.n_coef += 1
-            self.coef_per_term[lti] = 1
+            # Intercept
+            t_total_coef,\
+            t_unpenalized_coef,\
+            t_coef_names = lterm.get_coef_info()
          
          else:
             # Linear effects
             t_total_coef,\
             t_unpenalized_coef,\
-            t_coef_names = get_coef_info_linear(self.has_intercept(),
-                                                   lterm,var_types,
-                                                   coding_factors,
-                                                   factor_levels)
-            self.coef_names.extend(t_coef_names)
-            self.coef_per_term[lti] = t_total_coef
-            self.n_coef += t_total_coef
-            self.unpenalized_coef += t_unpenalized_coef
+            t_coef_names = lterm.get_coef_info(self.has_intercept(),
+                                               var_types,
+                                               factor_levels,
+                                               coding_factors)
+         self.coef_names.extend(t_coef_names)
+         self.coef_per_term[lti] = t_total_coef
+         self.n_coef += t_total_coef
+         self.unpenalized_coef += t_unpenalized_coef
       
       for irsti in self.get_ir_smooth_term_idx():
          # Calculate Coef names for impulse response terms
          irsterm = terms[irsti]
-         vars = irsterm.variables
-         n_coef = irsterm.nk
 
-         if len(vars) > 1:
-            n_coef = np.prod(irsterm.nk)
-
-         # var label
-         var_label = vars[0]
-         if len(vars) > 1:
-            var_label = "_".join(vars)
-
-         if irsterm.by is not None:
-            by_levels = factor_levels[irsterm.by]
-            n_coef *= len(by_levels)
-
-            for by_level in by_levels:
-               self.coef_names.extend([f"irf_{irsti}_{var_label}_{ink}_{by_level}" for ink in range(n_coef)])
+         t_total_coef,\
+         t_unpenalized_coef,\
+         t_coef_names = irsterm.get_coef_info(self.has_intercept(),
+                                              factor_levels)
          
-         else:
-            self.coef_names.extend([f"irf_{irsti}_{var_label}_{ink}" for ink in range(n_coef)])
-         
-         self.n_coef += n_coef
-         self.coef_per_term[irsti] = n_coef
+         self.coef_names.extend(t_coef_names)
+         self.coef_per_term[irsti] = t_total_coef
+         self.n_coef += t_total_coef
+         self.unpenalized_coef += t_unpenalized_coef
 
       for sti in self.get_smooth_term_idx():
-
+         # Calculate Coef names for smooth terms
          sterm = terms[sti]
-         s_total_coef,\
-         s_coef_names = get_coef_info_smooth(sterm,
-                                             factor_levels)
-         self.coef_names.extend(s_coef_names)
-         self.coef_per_term[sti] = s_total_coef
-         self.n_coef += s_total_coef
+
+         t_total_coef,\
+         t_unpenalized_coef,\
+         t_coef_names = sterm.get_coef_info(factor_levels)
+         
+         self.coef_names.extend(t_coef_names)
+         self.coef_per_term[sti] = t_total_coef
+         self.n_coef += t_total_coef
+         self.unpenalized_coef += t_unpenalized_coef
 
       for rti in self.get_random_term_idx():
+         # Calculate Coef names for random terms
          rterm = terms[rti]
-         vars = rterm.variables
 
          if isinstance(rterm,ri):
-            by_code_factors = coding_factors[vars[0]]
-
-            for fl in range(len(factor_levels[vars[0]])):
-               self.coef_names.append(f"ri_{vars[0]}_{by_code_factors[fl]}")
-               self.n_coef += 1
-
-            self.coef_per_term[rti]= len(factor_levels[vars[0]])
+            t_total_coef,\
+            t_unpenalized_coef,\
+            t_coef_names = rterm.get_coef_info(factor_levels,coding_factors)
 
          elif isinstance(rterm,rs):
             t_total_coef,\
-            _,\
-            t_coef_names = get_coef_info_linear(False,
-                                     rterm,var_types,
-                                     coding_factors,
-                                     factor_levels)
+            t_unpenalized_coef,\
+            t_coef_names = rterm.get_coef_info(var_types,
+                                               factor_levels,
+                                               coding_factors)
 
-            rterm.var_coef = t_total_coef # We need t_total_coef penalties for this term later.
-            by_code_factors = coding_factors[rterm.by]
-            by_code_levels = factor_levels[rterm.by]
+         self.coef_names.extend(t_coef_names)
+         self.coef_per_term[rti] = t_total_coef
+         self.n_coef += t_total_coef
+         self.unpenalized_coef += t_unpenalized_coef
             
-            rf_coef_names = []
-            for cname in t_coef_names:
-               rf_coef_names.extend([f"{cname}_{by_code_factors[fl]}" for fl in range(len(by_code_levels))])
-            
-            t_ncoef = len(rf_coef_names)
-            self.coef_names.extend(rf_coef_names)
-            self.coef_per_term[rti] = t_ncoef
-            self.n_coef += t_ncoef
-            
-               
-    
     def encode_data(self,data,prediction=False):
       """
       Encodes ``data``, which needs to be a ``pd.DataFrame`` and by default (if ``prediction==False``) builds an index
@@ -1845,10 +1007,9 @@ class Formula():
                if penid > 0:
                   cur_pen_idx = prev_pen_idx
 
-               penalties,cur_pen_idx = build_irf_penalties(penalties,cur_pen_idx,
-                                                           pen,penid,irsti,irsterm,
-                                                           vars,by_levels,n_coef,
-                                                           col_S)
+               penalties,cur_pen_idx = irsterm.build_penalty(irsti,penalties,cur_pen_idx,
+                                                             pen,penid,factor_levels,n_coef,
+                                                             col_S)
          
          # Keep track of previous penalty starting index
          prev_pen_idx = cur_pen_idx
@@ -1896,9 +1057,9 @@ class Formula():
                   cur_pen_idx = prev_pen_idx
                
                prev_n_pen = len(penalties)
-               penalties,cur_pen_idx = build_smooth_penalties(penalties,cur_pen_idx,
-                                                              pen,penid,sti,sterm,vars,
-                                                              by_levels,n_coef,col_S)
+               penalties,cur_pen_idx = sterm.build_penalty(sti,penalties,cur_pen_idx,
+                                                           pen,penid,factor_levels,n_coef,
+                                                           col_S)
 
                
                # Add necessary info for derivative approx. for factor smooth penalties
@@ -2057,62 +1218,11 @@ class Formula():
          prev_pen_idx = cur_pen_idx
 
       for rti in self.get_random_term_idx():
-
+         # Build penalties for random terms
          rterm = terms[rti]
-         vars = rterm.variables
 
-         if isinstance(rterm,ri):
-            idk = len(factor_levels[vars[0]])
-            pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = id_dist_pen(idk,None)
-
-            lTerm = LambdaTerm(start_index=cur_pen_idx,
-                               type = PenType.IDENTITY,
-                               term = rti)
-            
-            lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,idk,cur_pen_idx)
-            lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,idk,cur_pen_idx)
-            lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,idk)
-            lTerm.rank = rank
-            penalties.append(lTerm)
-
-         else:
-            if rterm.var_coef is None:
-               raise ValueError("Number of coefficients for random slope were not initialized.")
-            if len(vars) > 1 and rterm.var_coef > 1:
-               # Separate penalties for interactions involving at least one categorical factor.
-               # In that case, a separate penalty will describe the random coefficients for the random factor (rterm.by)
-               # per level of the (interaction of) categorical factor(s) involved in the interaction.
-               # For interactions involving only continuous variables this condition will be false and a single
-               # penalty will be estimated.
-               idk = len(factor_levels[rterm.by])
-               pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = id_dist_pen(idk,None)
-               for _ in range(rterm.var_coef):
-                  lTerm = LambdaTerm(start_index=cur_pen_idx,
-                                     type = PenType.IDENTITY,
-                                     term = rti)
-            
-                  lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,idk,cur_pen_idx)
-                  lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,idk,cur_pen_idx)
-                  lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,idk)
-                  lTerm.rank = rank
-                  penalties.append(lTerm)
-
-            else:
-               # Single penalty for random coefficients of a single variable (categorical or continuous) or an
-               # interaction of only continuous variables.
-               idk = len(factor_levels[rterm.by])*rterm.var_coef
-               pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = id_dist_pen(idk,None)
-
-
-               lTerm = LambdaTerm(start_index=cur_pen_idx,
-                                  type = PenType.IDENTITY,
-                                  term=rti)
-            
-               lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,idk,cur_pen_idx)
-               lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,idk,cur_pen_idx)
-               lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,idk)
-               lTerm.rank = rank
-               penalties.append(lTerm)
+         penalties,cur_pen_idx = rterm.build_penalty(rti,penalties,cur_pen_idx,
+                                                     factor_levels,col_S)
             
       if cur_pen_idx != col_S:
          raise ValueError(f"Penalty dimension {cur_pen_idx},{cur_pen_idx} does not match outer model matrix dimension {col_S}")
@@ -2213,493 +1323,6 @@ class Formula():
        """Returns a copy of sub-group variables for factor smooths."""
        return copy.deepcopy(self.__subgroup_variables)
 
-def embed_in_S_sparse(pen_data,pen_rows,pen_cols,S_emb,S_col,SJ_col,cIndex):
-   """Embed a term-specific penalty matrix (provided as elements, row and col indices) into the across-term penalty matrix (see Wood, 2017) """
-
-   embedding = np.array(pen_data)
-   r_embedding = np.array(pen_rows) + cIndex
-   c_embedding = np.array(pen_cols) + cIndex
-
-   if S_emb is None:
-      S_emb = scp.sparse.csc_array((embedding,(r_embedding,c_embedding)),shape=(S_col,S_col))
-   else:
-      S_emb += scp.sparse.csc_array((embedding,(r_embedding,c_embedding)),shape=(S_col,S_col))
-
-   return S_emb,cIndex+SJ_col
-
-def embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,Sj,SJ_col):
-   """Parameterize a term-specific penalty matrix (provided as elements, row and col indices)"""
-   embedding = np.array(pen_data)
-
-   if Sj is None:
-      Sj = scp.sparse.csc_array((embedding,(pen_rows,pen_cols)),shape=(SJ_col,SJ_col))
-   else:
-      Sj += scp.sparse.csc_array((embedding,(pen_rows,pen_cols)),shape=(SJ_col,SJ_col))
-      
-   return Sj
-
-def embed_shared_penalties(formulas):
-    """
-    Embed penalties from individual model into overall penalties for GAMLSS models.
-    """
-
-    shared_penalties = [copy.deepcopy(form.penalties) for form in formulas]
-
-    # Assign original formula index to each penalty
-    for fi in range(len(shared_penalties)):
-       for lterm in shared_penalties[fi]:
-          lterm.dist_param = fi
-
-    for fi,form in enumerate(formulas):
-        for ofi,other_form in enumerate(formulas):
-            if fi == ofi:
-                continue
-
-            if ofi < fi:
-                for lterm in shared_penalties[fi]:
-                    lterm.S_J_emb = scp.sparse.vstack([scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1])),
-                                                    lterm.S_J_emb]).tocsc()
-                    lterm.D_J_emb = scp.sparse.vstack([scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1])),
-                                                    lterm.D_J_emb]).tocsc()
-                    
-                    lterm.S_J_emb = scp.sparse.hstack([scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef)),
-                                                    lterm.S_J_emb]).tocsc()
-                    
-                    lterm.D_J_emb = scp.sparse.hstack([scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef)),
-                                                    lterm.D_J_emb]).tocsc()
-                    
-                    lterm.start_index += other_form.n_coef
-            
-            elif ofi > fi:
-                for lterm in shared_penalties[fi]:
-                    lterm.S_J_emb = scp.sparse.vstack([lterm.S_J_emb,
-                                                    scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1]))]).tocsc()
-                    
-                    lterm.D_J_emb = scp.sparse.vstack([lterm.D_J_emb,
-                                                    scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1]))]).tocsc()
-                    
-                    lterm.S_J_emb = scp.sparse.hstack([lterm.S_J_emb,
-                                                    scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef))]).tocsc()
-                    
-                    lterm.D_J_emb = scp.sparse.hstack([lterm.D_J_emb,
-                                                    scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef))]).tocsc()
-                
-    return shared_penalties
-
-def build_linear_term_matrix(ci,n_y,has_intercept,lti,lterm,var_types,var_map,factor_levels,ridx,cov_flat,use_only):
-   """Parameterize model matrix for a linear term."""
-   new_elements = []
-   new_rows = []
-   new_cols = []
-   new_ci = 0
-   # Main effects
-   if len(lterm.variables) == 1:
-      var = lterm.variables[0]
-      if var_types[var] == VarType.FACTOR:
-         offset = np.ones(n_y)
-         
-         fl_start = 0
-
-         if has_intercept: # Dummy coding when intercept is added.
-            fl_start = 1
-
-         for fl in range(fl_start,len(factor_levels[var])):
-            fridx = ridx[cov_flat[:,var_map[var]] == fl]
-            if use_only is None or lti in use_only:
-               new_elements.extend(offset[fridx])
-               new_rows.extend(fridx)
-               new_cols.extend([ci for _ in range(len(fridx))])
-            ci += 1
-            new_ci += 1
-
-      else: # Continuous predictor
-         slope = cov_flat[:,var_map[var]]
-         if use_only is None or lti in use_only:
-            new_elements.extend(slope)
-            new_rows.extend(ridx)
-            new_cols.extend([ci for _ in range(n_y)])
-         ci += 1
-         new_ci += 1
-
-   else: # Interactions
-      interactions = []
-      inter_idx = []
-
-      for var in lterm.variables:
-         new_interactions = []
-         new_inter_idx = []
-
-         # Interaction with categorical predictor as start
-         if var_types[var] == VarType.FACTOR:
-            fl_start = 0
-
-            if has_intercept: # Dummy coding when intercept is added.
-                  fl_start = 1
-
-            if len(interactions) == 0:
-                  for fl in range(fl_start,len(factor_levels[var])):
-                     new_interactions.append(np.ones(n_y))
-                     new_inter_idx.append(cov_flat[:,var_map[var]] == fl)
-
-            else:
-                  for old_inter,old_idx in zip(interactions,inter_idx):
-                     for fl in range(fl_start,len(factor_levels[var])):
-                        new_interactions.append(old_inter)
-                        new_idx = cov_flat[:,var_map[var]] == fl
-                        new_inter_idx.append(old_idx == new_idx)
-
-         else: # Interaction with continuous predictor as start
-            if len(interactions) == 0:
-                  new_interactions.append(cov_flat[:,var_map[var]])
-                  new_inter_idx.append(np.array([True for _ in range(n_y)]))
-
-            else:
-                  for old_inter,old_idx in zip(interactions,inter_idx):
-                     new_interactions.append(old_inter * cov_flat[:,var_map[var]]) # handle continuous * continuous case.
-                     new_inter_idx.append(old_idx)
-
-         
-         interactions = copy.deepcopy(new_interactions)
-         inter_idx = copy.deepcopy(new_inter_idx)
-
-      # Now write interaction terms into model matrix
-      for inter,inter_idx in zip(interactions,inter_idx):
-         if use_only is None or lti in use_only:
-            new_elements.extend(inter[ridx[inter_idx]])
-            new_rows.extend(ridx[inter_idx])
-            new_cols.extend([ci for _ in range(len(ridx[inter_idx]))])
-         ci += 1
-         new_ci += 1
-   
-   return new_elements,new_rows,new_cols,new_ci
-
-def build_ir_smooth_series(irsterm,s_cov,s_event,vars,var_map,var_mins,var_maxs,by_levels):
-   for vi in range(len(vars)):
-
-      if len(vars) > 1:
-         id_nk = irsterm.nk[vi]
-      else:
-         id_nk = irsterm.nk
-
-      # Create matrix for event corresponding to term.
-      # ToDo: For Multivariate case, the matrix term needs to be build iteratively for
-      # every level of the multivariate factor to make sure that the convolution operation
-      # works as intended. The splitting can happen later via by.
-      basis_kwargs_v = irsterm.basis_kwargs[vi]
-
-      if "max_c" in basis_kwargs_v and "min_c" in basis_kwargs_v:
-         matrix_term_v = irsterm.basis(s_cov[:,var_map[vars[vi]]],s_event, id_nk, **basis_kwargs_v)
-      else:
-         matrix_term_v = irsterm.basis(s_cov[:,var_map[vars[vi]]],s_event, id_nk,min_c=var_mins[vars[vi]],max_c=var_maxs[vars[vi]], **basis_kwargs_v)
-
-      if vi == 0:
-         matrix_term = matrix_term_v
-      else:
-         matrix_term = TP_basis_calc(matrix_term,matrix_term_v)
-   
-   
-   m_rows,m_cols = matrix_term.shape
-
-   # Handle optional by keyword
-   if irsterm.by is not None:
-      
-      by_matrix_term = np.zeros((m_rows,m_cols*len(by_levels)),dtype=float)
-
-      by_cov = s_cov[:,var_map[irsterm.by]]
-
-      # ToDo: For MV case this check will be true.
-      if len(np.unique(by_cov)) > 1:
-         raise ValueError(f"By-variable {irsterm.by} has varying levels on series level. This should not be the case.")
-      
-      # Fill the by matrix blocks.
-      cByIndex = 0
-      for by_level in range(len(by_levels)):
-         if by_level == by_cov[0]:
-            by_matrix_term[:,cByIndex:cByIndex+m_cols] = matrix_term
-         cByIndex += m_cols # Update column range associated with current level.
-      
-      final_term = by_matrix_term
-   else:
-      final_term = matrix_term
-   
-   return final_term
-
-def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,var_mins,var_maxs,factor_levels,ridx,cov,use_only,pool,tol):
-   """Parameterize model matrix for an impulse response term."""
-   vars = irsterm.variables
-   term_elements = []
-   term_idx = []
-
-   new_elements = []
-   new_rows = []
-   new_cols = []
-   new_ci = 0
-
-   # Calculate number of coefficients
-   n_coef = irsterm.nk
-
-   if len(vars) > 1:
-      n_coef = np.prod(irsterm.nk)
-
-   by_levels = None
-   if irsterm.by is not None:
-      by_levels = factor_levels[irsterm.by]
-      n_coef *= len(by_levels)
-
-   if pool is None:
-      for s_cov,s_event in zip(cov,irsterm.event_onset):
-         
-         final_term = build_ir_smooth_series(irsterm,s_cov,s_event,vars,var_map,var_mins,var_maxs,by_levels)
-
-         m_rows,m_cols = final_term.shape
-
-         # Find basis elements > 0
-         if len(term_idx) < 1:
-            for m_coli in range(m_cols):
-               term_elements.append([])
-               term_idx.append([])
-
-         for m_coli in range(m_cols):
-            final_col = final_term[:,m_coli]
-            cidx = abs(final_col) > tol
-            term_elements[m_coli].extend(final_col[cidx])
-            term_idx[m_coli].extend(cidx)
-
-      if n_coef != len(term_elements):
-         raise KeyError("Not all model matrix columns were created.")
-      
-      # Now collect actual row indices
-      for m_coli in range(len(term_elements)):
-
-         if use_only is None or irsti in use_only:
-            new_elements.extend(term_elements[m_coli])
-            new_rows.extend(ridx[term_idx[m_coli]])
-            new_cols.extend([ci for _ in range(len(term_elements[m_coli]))])
-         ci += 1
-         new_ci += 1
-
-   else:
-      
-      args = zip(repeat(irsterm),cov,irsterm.event_onset,repeat(vars),repeat(var_map),repeat(var_mins),repeat(var_maxs),repeat(by_levels))
-        
-      final_terms = pool.starmap(build_ir_smooth_series,args)
-      final_term = np.vstack(final_terms)
-      m_rows,m_cols = final_term.shape
-
-      for m_coli in range(m_cols):
-         if use_only is None or irsti in use_only:
-            final_col = final_term[:,m_coli]
-            cidx = abs(final_col) > tol
-            new_elements.extend(final_col[cidx])
-            new_rows.extend(ridx[cidx])
-            new_cols.extend([ci for _ in range(len(ridx[cidx]))])
-         ci += 1
-         new_ci += 1
-
-   
-   return new_elements,new_rows,new_cols,new_ci
-
-def build_smooth_term_matrix(ci,sti,sterm,var_map,var_mins,var_maxs,factor_levels,ridx,cov_flat,use_only,tol):
-   """Parameterize model matrix for a smooth term."""
-   vars = sterm.variables
-   term_ridx = []
-
-   new_elements = []
-   new_rows = []
-   new_cols = []
-   new_ci = 0
-
-   # Calculate Coef number for control checks
-   if len(vars) > 1:
-      n_coef = np.prod(sterm.nk)
-      if sterm.te and sterm.is_identifiable:
-         n_coef -= 1
-   else:
-      n_coef = sterm.nk
-   #print(n_coef)
-
-   if sterm.by is not None:
-      by_levels = factor_levels[sterm.by]
-      n_coef *= len(by_levels)
-      
-   # Calculate smooth term for corresponding covariate
-
-   # Handle identifiability constraints for every basis and
-   # optionally update tensor surface.
-   for vi in range(len(vars)):
-
-      if len(vars) > 1:
-         id_nk = sterm.nk[vi]
-      else:
-         id_nk = sterm.nk
-
-      if sterm.is_identifiable and sterm.te == False:
-         id_nk += 1
-
-      #print(var_mins[vars[0]],var_maxs[vars[0]])
-      matrix_term_v = sterm.basis(cov_flat[:,var_map[vars[vi]]],
-                                  None, id_nk, min_c=var_mins[vars[vi]],
-                                  max_c=var_maxs[vars[vi]], **sterm.basis_kwargs)
-
-      if sterm.is_identifiable and sterm.te == False:
-         if sterm.Z[vi].type == ConstType.QR:
-            matrix_term_v = matrix_term_v @ sterm.Z[vi].Z
-         elif sterm.Z[vi].type == ConstType.DROP:
-            matrix_term_v = np.delete(matrix_term_v,sterm.Z[vi].Z,axis=1)
-         elif sterm.Z[vi].type == ConstType.DIFF:
-            # Applies difference re-coding for sum-to-zero coefficients.
-            # Based on smoothCon in mgcv(2017). See constraints.py
-            # for more details.
-            matrix_term_v = np.diff(np.concatenate((matrix_term_v[:,sterm.Z[vi].Z:matrix_term_v.shape[1]],matrix_term_v[:,:sterm.Z[vi].Z]),axis=1))
-            matrix_term_v = np.concatenate((matrix_term_v[:,matrix_term_v.shape[1]-sterm.Z[vi].Z:],matrix_term_v[:,:matrix_term_v.shape[1]-sterm.Z[vi].Z]),axis=1)
-      
-      if sterm.should_rp > 0:
-         # Reparameterization of marginals was requested - at this point it can be easily evaluated.
-         matrix_term_v = matrix_term_v @ sterm.RP[vi].C
-
-      if vi == 0:
-         matrix_term = matrix_term_v
-      else:
-         matrix_term = TP_basis_calc(matrix_term,matrix_term_v)
-   
-   if sterm.is_identifiable and sterm.te:
-      if sterm.Z[0].type == ConstType.QR:
-         matrix_term = matrix_term @ sterm.Z[0].Z
-      elif sterm.Z[0].type == ConstType.DROP:
-         matrix_term = np.delete(matrix_term,sterm.Z[0].Z,axis=1)
-      elif sterm.Z[0].type == ConstType.DIFF:
-         matrix_term = np.diff(np.concatenate((matrix_term[:,sterm.Z[0].Z:matrix_term.shape[1]],matrix_term[:,:sterm.Z[0].Z]),axis=1))
-         matrix_term = np.concatenate((matrix_term[:,matrix_term.shape[1]-sterm.Z[0].Z:],matrix_term[:,:matrix_term.shape[1]-sterm.Z[0].Z]),axis=1)
-
-   m_rows, m_cols = matrix_term.shape
-   #print(m_cols)
-
-   # Multiply each row of model matrix by value in by_cont
-   if sterm.by_cont is not None:
-      by_cont_cov = cov_flat[:,var_map[sterm.by_cont]]
-      matrix_term *= by_cont_cov.reshape(-1,1)
-   
-   # Handle optional by keyword
-   if sterm.by is not None:
-      term_ridx = []
-
-      by_cov = cov_flat[:,var_map[sterm.by]]
-      
-      # Split by cov and update rows with elements in columns
-      for by_level in range(len(by_levels)):
-         by_cidx = by_cov == by_level
-         for m_coli in range(m_cols):
-            term_ridx.append(ridx[by_cidx,])
-   
-   # Handle optional binary keyword
-   elif sterm.binary is not None:
-      term_ridx = []
-
-      by_cov = cov_flat[:,var_map[sterm.binary[0]]]
-      by_cidx = by_cov == sterm.binary_level
-
-      for m_coli in range(m_cols):
-         term_ridx.append(ridx[by_cidx,])
-
-   # No by or binary just use rows/cols as they are
-   else:
-      term_ridx = [ridx[:] for _ in range(m_cols)]
-
-   f_cols = len(term_ridx)
-
-   if n_coef != f_cols:
-      raise KeyError("Not all model matrix columns were created.")
-
-   # Find basis elements > 0 and collect correspondings elements and row indices
-   for m_coli in range(f_cols):
-      final_ridx = term_ridx[m_coli]
-      final_col = matrix_term[final_ridx,m_coli%m_cols]
-
-      # Tolerance row index for this columns
-      cidx = abs(final_col) > tol
-      if use_only is None or sti in use_only:
-         new_elements.extend(final_col[cidx])
-         new_rows.extend(final_ridx[cidx])
-         new_cols.extend([ci for _ in range(len(final_ridx[cidx]))])
-      new_ci += 1
-      ci += 1
-      term_ridx[m_coli] = None
-   
-   return new_elements,new_rows,new_cols,new_ci
-
-def build_ri_term_matrix(ci,n_y,rti,rterm,var_map,factor_levels,ridx,cov_flat,use_only):
-   """Parameterize model matrix for a random intercept term."""
-   vars = rterm.variables
-   offset = np.ones(n_y)
-   by_cov = cov_flat[:,var_map[vars[0]]]
-
-   new_elements = []
-   new_rows = []
-   new_cols = []
-   new_ci = 0
-
-   for fl in range(len(factor_levels[vars[0]])):
-      fl_idx = by_cov == fl
-      if use_only is None or rti in use_only:
-         new_elements.extend(offset[fl_idx])
-         new_rows.extend(ridx[fl_idx])
-         new_cols.extend([ci for _ in range(len(offset[fl_idx]))])
-      new_ci += 1
-      ci += 1
-
-   return new_elements,new_rows,new_cols,new_ci
-
-def build_rs_term_matrix(ci,n_y,rti,rterm,var_types,var_map,factor_levels,ridx,cov_flat,use_only):
-   """Parameterize model matrix for a random slope term."""
-
-   by_cov = cov_flat[:,var_map[rterm.by]]
-   by_levels = factor_levels[rterm.by]
-   old_ci = ci
-
-   # First get all columns for all linear predictors associated with this
-   # term - might involve interactions!
-   lin_elements,\
-   lin_rows,\
-   lin_cols,\
-   lin_ci = build_linear_term_matrix(ci,n_y,False,rti,rterm,
-                                     var_types,var_map,factor_levels,
-                                     ridx,cov_flat,None)
-   
-   # Need to cast to np.array for indexing
-   lin_elements = np.array(lin_elements)
-   lin_rows = np.array(lin_rows)
-   lin_cols = np.array(lin_cols)
-
-   new_elements = []
-   new_rows = []
-   new_cols = []
-   new_ci = 0
-   
-   # For every column
-   for coef_i in range(lin_ci): 
-      # Collect the coefficinet column and row index
-      inter_i = lin_elements[lin_cols == old_ci]
-      rdx_i = lin_rows[lin_cols == old_ci]
-      # split the column over len(by_levels) columns for every level of the random factor
-      for fl in range(len(by_levels)): 
-         # First check which of the remaining rows correspond to current level of random factor
-         fl_idx = by_cov == fl
-         # Then adjust to the rows actually present in the interaction column
-         fl_idx = fl_idx[rdx_i]
-         # Now collect
-         if use_only is None or rti in use_only:
-            new_elements.extend(inter_i[fl_idx])
-            new_rows.extend(rdx_i[fl_idx])
-            new_cols.extend([ci for _ in range(len(inter_i[fl_idx]))])
-         new_ci += 1
-         ci += 1
-      old_ci += 1
-
-   # Matrix returned here holds for every linear coefficient one column for every level of the random
-   # factor. So: coef1_1, coef_1_2, coef1_3, ... coef_n_1, coef_n,2, coef_n_3
-
-   return new_elements,new_rows,new_cols,new_ci
-
 def build_sparse_matrix_from_formula(terms,has_intercept,
                                      ltx,irstx,stx,rtx,
                                      var_types,var_map,
@@ -2717,24 +1340,30 @@ def build_sparse_matrix_from_formula(terms,has_intercept,
 
    ci = 0
    for lti in ltx:
+      # Build matrix for linear terms
       lterm = terms[lti]
 
       if isinstance(lterm,i):
-         offset = np.ones(n_y)
-         if use_only is None or lti in use_only:
-            elements.extend(offset)
-            rows.extend(ridx)
-            cols.extend([ci for _ in range(n_y)])
-         ci += 1
-      
-      else:
-         
+         # Intercept
          new_elements,\
          new_rows,\
          new_cols,\
-         new_ci = build_linear_term_matrix(ci,n_y,has_intercept,lti,lterm,
-                                           var_types,var_map,factor_levels,
-                                           ridx,cov_flat,use_only)
+         new_ci = lterm.build_matrix(ci,lti,ridx,use_only)
+         
+         elements.extend(new_elements)
+         rows.extend(new_rows)
+         cols.extend(new_cols)
+         ci += new_ci
+      
+      else:
+         # Linear term
+         new_elements,\
+         new_rows,\
+         new_cols,\
+         new_ci = lterm.build_matrix(has_intercept,ci,lti,var_map,
+                                     var_types,factor_levels,ridx,
+                                     cov_flat,use_only)
+         
          elements.extend(new_elements)
          rows.extend(new_rows)
          cols.extend(new_cols)
@@ -2747,10 +1376,11 @@ def build_sparse_matrix_from_formula(terms,has_intercept,
       new_elements,\
       new_rows,\
       new_cols,\
-      new_ci = build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,
-                                           var_mins,var_maxs,
-                                           factor_levels,ridx,cov,
-                                           use_only,pool,tol)
+      new_ci = irsterm.build_matrix(ci,irsti,var_map,
+                                    var_mins,var_maxs,
+                                    factor_levels,ridx,cov,
+                                    use_only,pool,tol)
+      
       elements.extend(new_elements)
       rows.extend(new_rows)
       cols.extend(new_cols)
@@ -2763,10 +1393,11 @@ def build_sparse_matrix_from_formula(terms,has_intercept,
       new_elements,\
       new_rows,\
       new_cols,\
-      new_ci = build_smooth_term_matrix(ci,sti,sterm,var_map,
-                                        var_mins,var_maxs,
-                                        factor_levels,ridx,cov_flat,
-                                        use_only,tol)
+      new_ci = sterm.build_matrix(ci,sti,var_map,
+                                  var_mins,var_maxs,
+                                  factor_levels,ridx,cov_flat,
+                                  use_only,tol)
+      
       elements.extend(new_elements)
       rows.extend(new_rows)
       cols.extend(new_cols)
@@ -2779,23 +1410,20 @@ def build_sparse_matrix_from_formula(terms,has_intercept,
          new_elements,\
          new_rows,\
          new_cols,\
-         new_ci = build_ri_term_matrix(ci,n_y,rti,rterm,var_map,factor_levels,
-                                       ridx,cov_flat,use_only)
-         elements.extend(new_elements)
-         rows.extend(new_rows)
-         cols.extend(new_cols)
-         ci += new_ci
-
+         new_ci = rterm.build_matrix(ci,rti,var_map,factor_levels,
+                                     ridx,cov_flat,use_only)
+         
       elif isinstance(rterm,rs):
          new_elements,\
          new_rows,\
          new_cols,\
-         new_ci = build_rs_term_matrix(ci,n_y,rti,rterm,var_types,var_map,
-                                       factor_levels,ridx,cov_flat,use_only)
-         elements.extend(new_elements)
-         rows.extend(new_rows)
-         cols.extend(new_cols)
-         ci += new_ci
+         new_ci = rterm.build_matrix(ci,rti,var_map,var_types,
+                                     factor_levels,ridx,cov_flat,use_only)
+         
+      elements.extend(new_elements)
+      rows.extend(new_rows)
+      cols.extend(new_cols)
+      ci += new_ci
 
    mat = scp.sparse.csc_array((elements,(rows,cols)),shape=(n_y,ci))
 

@@ -2,12 +2,13 @@ import numpy as np
 import scipy as scp
 import copy
 from collections.abc import Callable
-from .src.python.formula import Formula,build_sparse_matrix_from_formula,VarType,lhs,ConstType,Constraint,pd,embed_shared_penalties,warnings
+from .src.python.formula import Formula,build_sparse_matrix_from_formula,lhs,pd,warnings
 from .src.python.exp_fam import Link,Logit,Identity,LOG,LOGb,Family,Binomial,Gaussian,GAMLSSFamily,GAUMLSS,Gamma,InvGauss,Binomial2,MULNOMLSS,GAMMALS,GENSMOOTHFamily,PropHaz,Poisson
 from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2,solve_gammlss_sparse,solve_generalSmooth_sparse
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
-from .src.python.penalties import PenType,LambdaTerm
+from .src.python.penalties import embed_shared_penalties
 from .src.python.utils import sample_MVN,REML,adjust_CI
+from .src.python.custom_types import VarType,ConstType,Constraint,PenType,LambdaTerm
 
 ##################################### GAMM class #####################################
 

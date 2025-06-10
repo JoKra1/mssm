@@ -3,7 +3,7 @@ from mssm.src.python.compare import compare_CDL
 import numpy as np
 import os
 from mssmViz.sim import*
-from mssm.src.python.formula import reparam
+from mssm.src.python.repara import reparam
 from mssm.src.python.gamm_solvers import compute_S_emb_pinv_det,cpp_chol,cpp_cholP,compute_eigen_perm,compute_Linv
 from mssm.src.python.utils import estimateVp
 import io
