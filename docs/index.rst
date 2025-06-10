@@ -53,7 +53,7 @@ To implement a new familiy for a **GAMMLSS** model requires implementing the :fu
 
 - Cox proportional Hazard models (:func:`mssm.src.python.exp_fam.PropHaz`)
 
-To implement a new  member of the most general kind of smooth model, you will only need to implement the :func:`mssm.src.python.exp_fam.GENSMOOTHFamily` template class - ``mssm`` even supports completely derivative-free estimation. You can check the :class:`mssm.models.GSMM` documentation for an example!
+To implement a new  member of the most general kind of smooth model, you will only need to implement the :func:`mssm.src.python.exp_fam.GSMMFamily` template class - ``mssm`` even supports completely derivative-free estimation. You can check the :class:`mssm.models.GSMM` documentation for an example!
 
 Supported Terms
 ----------------

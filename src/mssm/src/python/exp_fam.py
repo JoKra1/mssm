@@ -1771,7 +1771,7 @@ class GAMMALS(GAMLSSFamily):
       return coef
    
 
-class GENSMOOTHFamily:
+class GSMMFamily:
    """Base-class for General Smooth "families" as discussed by Wood, Pya, & Säfken (2016). For estimation of :class:``mssm.models.GSMM`` models via
    ``BFGS`` it is sufficient to implement :func:`llk`. :func:`gradient` and :func:`hessian` can then simply return ``None``. For exact estimation via
    Newton's method, the latter two functions need to be implemented and have to return the gradient and hessian at the current coefficient estimate
@@ -1817,7 +1817,13 @@ class GENSMOOTHFamily:
       pass
    
    def gradient(self,coef,coef_split_idx,y,Xs):
-       """Function to evaluate the gradient of the llk at current coefficient estimate ``coef``.
+      """Function to evaluate the gradient of the llk at current coefficient estimate ``coef``.
+
+      By default relies on numerical differentiation as implemented in scipy to approximate the Gradient from the implemented log-likelihood function.
+      See the link in the references for more details. 
+
+      References:
+         - ``scipy.optimize.approx_fprime``: at https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.approx_fprime.html
 
       :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be flattened!).
       :type coef: [float]
@@ -1829,11 +1835,17 @@ class GENSMOOTHFamily:
       :type Xs: [scp.sparse.csc_array]
       :return: The Gradient of the log-likelihood evaluated at ``coef`` as ``numpy.array``) of shape (-1,1).
       :rtype: [float]
-       """
-       pass
+      """
+      llk_warp = lambda x: self.llk(x,coef_split_idx,y,Xs)
+      
+      grad = scp.optimize.approx_fprime(coef.flatten(),llk_warp)
+      return grad.reshape(-1,1)
    
    def hessian(self,coef,coef_split_idx,y,Xs):
-       """Function to evaluate the hessian of the llk at current coefficient estimate ``coef``.
+      """Function to evaluate the hessian of the llk at current coefficient estimate ``coef``.
+
+      Only has to be implemented if full Newton is to be used to estimate coefficients. If the L-qEFS update by Krause et al. (in preparation) is
+      to be used insetad, this method does not have to be implemented.
 
       :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be flattened!).
       :type coef: [float]
@@ -1845,8 +1857,8 @@ class GENSMOOTHFamily:
       :type Xs: [scp.sparse.csc_array]
       :return: The Hessian of the log-likelihood evaluated at ``coef``.
       :rtype: ``scipy.sparse.csc_array``
-       """
-       pass
+      """
+      pass
    
    def init_coef(self,models):
       """(Optional) Function to initialize the coefficients of the model.
@@ -1872,7 +1884,7 @@ class GENSMOOTHFamily:
       """
       return None
    
-class PropHaz(GENSMOOTHFamily):
+class PropHaz(GSMMFamily):
    """Family for proportional Hazard model - a type of General Smooth model as discussed by Wood, Pya, & Säfken (2016).
    
    Based on Supplementary materials G in Wood, Pya, & Säfken (2016).

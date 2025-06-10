@@ -1,7 +1,7 @@
 import numpy as np
 import scipy as scp
 import math
-from ...models import GAMM,GAMMLSS,GSMM,Family,GAMLSSFamily,GENSMOOTHFamily,Gaussian,Identity
+from ...models import GAMM,GAMMLSS,GSMM,Family,GAMLSSFamily,GSMMFamily,Gaussian,Identity
 from .utils import correct_VB
 import warnings
 

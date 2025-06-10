@@ -5,8 +5,8 @@ from mssmViz.sim import*
 from numdifftools import Gradient,Hessian
 from mssm.src.python.gamm_solvers import deriv_transform_mu_eta,deriv_transform_eta_beta
 
-class GAMLSSGENSMOOTHFamily(GENSMOOTHFamily):
-    """Implementation of the ``GENSMOOTHFamily`` class that uses only information about the likelihood to estimate
+class GAMLSSGENSMOOTHFamily(GSMMFamily):
+    """Implementation of the ``GSMMFamily`` class that uses only information about the likelihood to estimate
     a GAMLSS model.
 
     References:

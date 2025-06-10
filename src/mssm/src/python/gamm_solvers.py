@@ -3798,7 +3798,7 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,form_n_coef,form_up
                                              np.ndarray.flatten(coef_rp),
                                              args=(coef_split_idx,y,Xs_rp,family,scp.sparse.csc_matrix((len(coef_rp), len(coef_rp)))),
                                              method="L-BFGS-B",
-                                             jac = __neg_pen_grad if use_grad else None,
+                                             jac = __neg_pen_grad,
                                              options={"maxiter":max_inner,
                                                       **init_bfgs_options})
                #print(opt_raw)
@@ -4070,8 +4070,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,form_up_coef,coef,coef_sp
     __neg_pen_grad = None
     if method == "qEFS":
       # Define negative penalized likelihood function to be minimized via BFGS
-      # plus function to evaluate negative gradient of penalized likelihood - the
-      # latter is only used if use_grad=True.
+      # plus function to evaluate negative gradient of penalized likelihood.
       def __neg_pen_llk(coef,coef_split_idx,y,Xs,family,S_emb):
          coef = coef.reshape(-1,1)
          neg_llk = -1 * family.llk(coef,coef_split_idx,y,Xs)

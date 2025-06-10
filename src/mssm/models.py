@@ -3,7 +3,7 @@ import scipy as scp
 import copy
 from collections.abc import Callable
 from .src.python.formula import Formula,build_sparse_matrix_from_formula,lhs,pd,warnings
-from .src.python.exp_fam import Link,Logit,Identity,LOG,LOGb,Family,Binomial,Gaussian,GAMLSSFamily,GAUMLSS,Gamma,InvGauss,Binomial2,MULNOMLSS,GAMMALS,GENSMOOTHFamily,PropHaz,Poisson
+from .src.python.exp_fam import Link,Logit,Identity,LOG,LOGb,Family,Binomial,Gaussian,GAMLSSFamily,GAUMLSS,Gamma,InvGauss,Binomial2,MULNOMLSS,GAMMALS,GSMMFamily,PropHaz,Poisson
 from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2,solve_gammlss_sparse,solve_generalSmooth_sparse
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 from .src.python.penalties import embed_shared_penalties
@@ -1634,20 +1634,16 @@ class GAMMLSS(GAMM):
 
 class GSMM(GAMMLSS):
     """
-    Class to fit General Smooth/Mixed Models (see Wood, Pya, & Säfken; 2016). Estimation is possible via exact Newton method for coefficients of via BFGS (see example below).
+    Class to fit General Smooth/Mixed Models (see Wood, Pya, & Säfken; 2016). Estimation is possible via exact Newton method for coefficients of via L-qEFS update (see Krause et al., in preparation and example below).
 
     Example::
 
-        class NUMDIFFGENSMOOTHFamily(GENSMOOTHFamily):
-            # Implementation of the ``GENSMOOTHFamily`` class that uses ``numdifftools`` to obtain the
-            # gradient and hessian of the likelihood to estimate a Gaussian GAMLSS via the general smooth code.
-
-            # For BFGS :func:``gradient`` and :func:``hessian`` can also just return None.
+        class NUMDIFFGENSMOOTHFamily(GSMMFamily):
+            # Implementation of the ``GSMMFamily`` class that uses finite differencing to obtain the
+            # gradient of the likelihood to estimate a Gaussian GAMLSS via the general smooth code and the L-qEFS update by Krause et al. (in preparation).
 
             # References:
-
             #    - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-            #    - P. Brodtkorb (2014). numdifftools. see https://github.com/pbrod/numdifftools
             #    - Nocedal & Wright (2006). Numerical Optimization. Springer New York.
             
 
@@ -1657,59 +1653,57 @@ class GSMM(GAMMLSS):
             
             def llk(self, coef, coef_split_idx, y, Xs):
                 return self.llkfun(coef, coef_split_idx, self.links, y, Xs,*self.llkargs)
-            
-            def gradient(self, coef, coef_split_idx, y, Xs):
-                return Gradient(self.llkfun)(np.ndarray.flatten(coef),coef_split_idx,self.links,y,Xs,*self.llkargs)
-            
-            def hessian(self, coef, coef_split_idx, y, Xs):
-                return scp.sparse.csc_array(Hessian(self.llkfun)(np.ndarray.flatten(coef),coef_split_idx,self.links,y,Xs))
-                
 
         def llk_gamm_fun(coef,coef_split_idx,links,y,Xs):
-                # Likelihood for a Gaussian GAM(LSS) - implemented so
-                # that the model can be estimated using the general smooth code.
+            # Likelihood for a Gaussian GAM(LSS) - implemented so
+            # that the model can be estimated using the general smooth code.
 
-                coef = coef.reshape(-1,1)
-                split_coef = np.split(coef,coef_split_idx)
-                eta_mu = Xs[0]@split_coef[0]
-                eta_sd = Xs[1]@split_coef[1]
-                
-                mu_mu = links[0].fi(eta_mu)
-                mu_sd = links[1].fi(eta_sd)
-                
-                family = GAUMLSS([Identity(),LOG()])
-                llk = family.llk(y,mu_mu,mu_sd)
-                return llk
+            coef = coef.reshape(-1,1)
+            split_coef = np.split(coef,coef_split_idx)
+            eta_mu = Xs[0]@split_coef[0]
+            eta_sd = Xs[1]@split_coef[1]
+            
+            mu_mu = links[0].fi(eta_mu)
+            mu_sd = links[1].fi(eta_sd)
+            
+            family = GAUMLSS([Identity(),LOG()])
+            llk = family.llk(y,mu_mu,mu_sd)
+            return llk
 
         # Simulate 500 data points
-        GAUMLSSDat = sim6(500,seed=20)
+        sim_dat = sim3(500,2,c=1,seed=0,family=Gaussian(),binom_offset = 0, correlate=False)
 
-        # We need to model the mean: \mu_i = \alpha + f(x0)
+        # We need to model the mean: \mu_i
         formula_m = Formula(lhs("y"),
-                        [i(),f(["x0"],nk=10)],
-                        data=GAUMLSSDat)
+                            [i(),f(["x0"]),f(["x1"]),f(["x2"]),f(["x3"])],
+                            data=sim_dat)
 
-        # and the standard deviation as well: log(\sigma_i) = \alpha + f(x0)
+        # And for sd - here constant
         formula_sd = Formula(lhs("y"),
-                        [i(),f(["x0"],nk=10)],
-                        data=GAUMLSSDat)
+                            [i()],
+                            data=sim_dat)
 
         # Collect both formulas
         formulas = [formula_m,formula_sd]
         links = [Identity(),LOG()]
 
         # Now define the general family + model and fit!
-        gsmm_fam = NUMDIFFGENSMOOTHFamily(2,links,llk_gamm_fun)
+        gsmm_fam = GAMLSSGENSMOOTHFamily(2,links,llk_gamm_fun,GAUMLSS(links))
         model = GSMM(formulas=formulas,family=gsmm_fam)
 
-        # First fit with bfgs and, to speed things up, only then with Newton
-        model.fit(init_coef=None,method="BFGS",extend_lambda=False,max_outer=100,seed=10,conv_tol=1e-3)
+        # Fit with SR1
+        bfgs_opt={"gtol":1e-9,
+                "ftol":1e-9,
+                "maxcor":30,
+                "maxls":200,
+                "maxfun":1e7}
+                        
+        model.fit(init_coef=None,method='qEFS',extend_lambda=False,
+                control_lambda=False,max_outer=200,max_inner=500,min_inner=500,
+                seed=0,qEFSH='SR1',max_restarts=0,overwrite_coef=False,
+                qEFS_init_converge=False,prefit_grad=True,
+                progress_bar=True,**bfgs_opt)
 
-        # Use BFGS estimate as initial estimate for Newton model
-        coef = model.overall_coef
-
-        # Now re-fit with full Newton
-        model.fit(init_coef=coef,method="Newton",extend_lambda=False,max_outer=100,seed=10,conv_tol=1e-7,restart=True)
 
     References:
      - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
@@ -1721,8 +1715,8 @@ class GSMM(GAMMLSS):
     
     :param formulas: A list of formulas, one per parameter of the likelihood that is to be modeled as a smooth model
     :type formulas: [Formula]
-    :param family: A GENSMOOTHFamily family.
-    :type family: GENSMOOTHFamily
+    :param family: A GSMMFamily family.
+    :type family: GSMMFamily
     :ivar float edf: The model estimated degrees of freedom as a float. Initialized with ``None``.
     :ivar [float] overall_term_edf: The estimated degrees of freedom per smooth term. Initialized with ``None``.
     :ivar scipy.sparse.csc_array or scipy.sparse.linalg.LinearOperator lvi: Either the inverse of the Cholesky factor of the conditional model coefficient covariance matrix - or (in case the ``L-BFGS-B`` optimizer was used and ``form_VH`` was set to False when calling ``model.fit()``) a :class:`scipy.sparse.linalg.LinearOperator` of the covariance matrix **not the root**. Initialized with ``None``.
@@ -1734,7 +1728,7 @@ class GSMM(GAMMLSS):
     :ivar Fit_info info: A :class:`Fit_info` instance, with information about convergence (speed) of the model.
     """
 
-    def __init__(self, formulas: [Formula], family: GENSMOOTHFamily):
+    def __init__(self, formulas: [Formula], family: GSMMFamily):
         super().__init__(formulas, family)
     
     def get_llk(self,penalized:bool=True,drop_NA=True):
@@ -1834,7 +1828,7 @@ class GSMM(GAMMLSS):
         :type init_lambda: [float],optional
         :param form_VH: Whether to explicitly form matrix ``V`` - the estimated inverse of the negative Hessian of the penalized likelihood - and ``H`` - the estimate of said Hessian - when using the ``qEFS`` method. If set to False, only ``V`` is returned - as a :class:`scipy.sparse.linalg.LinearOperator` - and available in ``self.overall_lvi``. Additionally, ``self.hessian`` will then be equal to ``None``. Note, that this will break default prediction/confidence interval methods - so do not call them. Defaults to True
         :type form_VH: bool,optional
-        :param use_grad: Whether to pass the :func:`self.family.gradient` function to the quasi newton optimizer. If set to False, the gradient of the penalized likelihood will be approximated via finite differences. Defaults to False
+        :param use_grad: Deprecated.
         :type use_grad: bool,optional
         :param build_mat: An (optional) list, containing one bool per :class:`mssm.src.python.formula.Formula` in ``self.formulas`` - indicating whether the corresponding model matrix should be built. Useful if multiple formulas specify the same model matrix, in which case only one needs to be built. Defaults to None, which means all model matrices are built.
         :type build_mat: [bool], optional
@@ -1858,7 +1852,7 @@ class GSMM(GAMMLSS):
         :type init_bfgs_options: dict,optional
         :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If none are provided, the ``gtol`` argument will be initialized to ``conv_tol``. Note also, that in any case the ``maxiter`` argument is automatically set to ``max_inner``. Defaults to None.
         :type bfgs_options: key=value,optional
-        :raises ValueError: Will throw an error when ``optimizer`` is not one of 'Newton', 'BFGS', 'L-BFGS-B'.
+        :raises ValueError: Will throw an error when ``optimizer`` is not 'Newton'.
         """
 
         if not bfgs_options:
@@ -1871,8 +1865,8 @@ class GSMM(GAMMLSS):
         if init_bfgs_options is None:
             init_bfgs_options = copy.deepcopy(bfgs_options)
 
-        if not optimizer in ["Newton", "BFGS", "L-BFGS-B"]:
-            raise ValueError("'optimizer' needs to be set to one of 'Newton', 'BFGS', 'L-BFGS-B'.")
+        if not optimizer in ["Newton"]:
+            raise ValueError("'optimizer' needs to be set to 'Newton'.")
         
         # Get y
         if drop_NA:

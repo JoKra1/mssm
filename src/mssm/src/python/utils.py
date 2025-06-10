@@ -7,7 +7,7 @@ import copy
 from ..python.gamm_solvers import cpp_backsolve_tr,compute_S_emb_pinv_det,cpp_chol,cpp_solve_coef,update_scale_edf,compute_Linv,apply_eigen_perm,tqdm,managers,shared_memory,cpp_solve_coefXX,update_PIRLS,PIRLS_pdat_weights,correct_coef_step,update_coef_gen_smooth,cpp_cholP,update_coef_gammlss,compute_lgdetD_bsb,calculate_edf,compute_eigen_perm,cpp_dChol,computeHSR1,computeH,update_coef,deriv_transform_mu_eta,deriv_transform_eta_beta,translate_sparse,map_csc_to_eigen
 from .file_loading import mp
 from .repara import reparam
-from ..python.exp_fam import Family,Gaussian, Identity,GAMLSSFamily,GENSMOOTHFamily
+from ..python.exp_fam import Family,Gaussian, Identity,GAMLSSFamily,GSMMFamily
 
 def sample_MVN(n,mu,scale,P,L,LI=None,use=None,seed=None):
     """
@@ -490,7 +490,7 @@ def compute_REML_candidate_GSMM(family,y,Xs,penalties,coef,n_coef,coef_split_idx
     S_emb,S_pinv,_,FS_use_rank = compute_S_emb_pinv_det(n_coef,penalties,"svd")
 
     try:
-        if isinstance(family,GENSMOOTHFamily): # GSMM
+        if isinstance(family,GSMMFamily): # GSMM
             
             # Compute likelihood for current estimate
             c_llk = family.llk(coef,coef_split_idx,y,Xs)
@@ -745,7 +745,7 @@ def estimateVp(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,drop_
     if not grid_type in ["JJJ1","JJJ2"]:
         raise ValueError("'grid_type' has to be set to one of 'JJJ1', 'JJJ2'.")
 
-    if isinstance(family,GENSMOOTHFamily):
+    if isinstance(family,GSMMFamily):
         if not bfgs_options:
             bfgs_options = {"ftol":1e-9,
                             "maxcor":30,
@@ -1534,7 +1534,7 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
     if not grid_type in ["JJJ1","JJJ2","JJJ3"]:
         raise ValueError("'grid_type' has to be set to one of 'JJJ1', 'JJJ2', or 'JJJ3'.")
 
-    if isinstance(family,GENSMOOTHFamily):
+    if isinstance(family,GSMMFamily):
         if not bfgs_options:
             bfgs_options = {"ftol":1e-9,
                             "maxcor":30,
