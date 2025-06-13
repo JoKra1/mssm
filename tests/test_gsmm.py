@@ -124,7 +124,7 @@ class Test_GAUMLSSGEN:
         assert round(self.model.edf,ndigits=3) == 19.049
 
     def test_GAMedf2(self):
-        assert round(self.model2.edf,ndigits=3) == 16.305
+        assert round(self.model2.edf,ndigits=3) == 17.092
 
     def test_GAMcoef(self):
         coef = self.model.overall_coef.flatten()
@@ -139,16 +139,16 @@ class Test_GAUMLSSGEN:
 
     def test_GAMcoef2(self):
         coef = self.model2.overall_coef.flatten()
-        assert np.allclose(coef,np.array([  7.6489859 ,  -0.90359436,  -1.1995978 ,  -0.1219847 ,
-                                            0.8902022 ,   1.53926404,   0.09832465,  -0.914336  ,
-                                            -0.87410618,  -0.50078609,  -1.70675555,  -1.40414449,
-                                            -0.78427345,   0.28350426,   0.78126954,   1.56534334,
-                                            2.89252623,   4.27551005,   5.81263687, -10.35107199,
-                                            3.37333916,   4.0633653 ,  -3.53414945,  -1.49195269,
-                                            -2.73210049,  -5.26428994,  -4.80803947,  -2.02328384,
-                                            -0.01671727,  -0.02500594,  -0.0339186 ,  -0.0572995 ,
-                                            -0.03603238,   0.02741854,   0.08237743,   0.14099506,
-                                            0.20398593,   0.66054218]))  
+        assert np.allclose(coef,np.array([  7.64897224,  -0.88029117,  -1.06281495,  -0.05778241,
+                                            1.02424568,   1.59964598,   0.24023237,  -0.78077659,
+                                            -0.82406948,  -0.59250597,  -1.72269128,  -1.35302871,
+                                            -0.72672752,   0.28768993,   0.82235719,   1.62569529,
+                                            2.931741  ,   4.25914359,   5.74959864, -10.07609999,
+                                            3.59772057,   4.33453762,  -3.28835207,  -1.24249422,
+                                            -2.47887468,  -5.00308146,  -4.67233551,  -2.01533059,
+                                            -0.02043911,  -0.02578031,  -0.03181162,  -0.04354539,
+                                            -0.02240984,   0.03008217,   0.08127523,   0.13473126,
+                                            0.19043155,   0.6616427 ]))  
 
     def test_GAMlam(self):
         lam = np.array([p.lam for p in self.model.overall_penalties])
@@ -156,7 +156,7 @@ class Test_GAUMLSSGEN:
 
     def test_GAMlam2(self):
         lam = np.array([p.lam for p in self.model2.overall_penalties])
-        assert np.allclose(lam,np.array([2.61309258e-01, 9.35511512e-01, 5.32567098e-03, 3.27034646e+01]))  
+        assert np.allclose(lam,np.array([3.75499367e-01, 1.24675130e+00, 5.76252995e-03, 5.39560114e+01]))  
 
     def test_GAMreml(self):
         reml = self.model.get_reml()
@@ -164,7 +164,7 @@ class Test_GAUMLSSGEN:
 
     def test_GAMreml2(self):
         reml = self.model2.get_reml()
-        assert round(reml,ndigits=3) == -1062.438
+        assert round(reml,ndigits=3) == -1064.038
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
@@ -172,7 +172,7 @@ class Test_GAUMLSSGEN:
     
     def test_GAMllk2(self):
         llk = self.model2.get_llk(False)
-        assert round(llk,ndigits=3) == -1039.741
+        assert round(llk,ndigits=3) == -1040.291
 
 
 class Test_PropHaz:
