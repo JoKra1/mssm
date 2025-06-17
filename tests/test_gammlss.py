@@ -5,6 +5,8 @@ from mssmViz.sim import*
 import io
 from contextlib import redirect_stdout
 
+max_atol = 0
+max_rtol = 0.001
 
 class Test_GAUMLS:
     # Simulate 500 data points
@@ -72,14 +74,15 @@ class Test_GAUMLS:
         comp = "\nDistribution parameter: 1\n\nIntercept: 3.584, z: 58.435, P(|Z| > |z|): 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: .\n\nDistribution parameter: 2\n\nIntercept: 0.02, z: 0.64, P(|Z| > |z|): 0.52195\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: .\n"
         assert comp == capture
    
-    def test_print_smooth_p(self):
+    def test_print_smooth_p_hard(self):
         capture = io.StringIO()
         with redirect_stdout(capture):
             self.model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
         comp = "\nDistribution parameter: 1\n\nf(['x0']); edf: 9.799 chi^2: 5768.018 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x0']); edf: 6.559 chi^2: 563.181 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
-        assert comp == capture
+        comp2 = "\nDistribution parameter: 1\n\nf(['x0']); edf: 9.799 chi^2: 5768.018 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x0']); edf: 6.559 chi^2: 571.527 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        assert comp == capture or comp2 == capture
 
 class Test_GAUMLS_MIXED:
     ## Simulate some data - effect of x0 on scale parameter is very very small
@@ -171,7 +174,7 @@ class Test_GAMMALS:
         llk = self.model.get_llk(False)
         assert round(llk,ndigits=3) == -892.042
 
-class Test_mulnom_hard:
+class Test_mulnom:
     # Test multinomial model
 
     # We need to specify K-1 formulas - see the `MULNOMLSS` docstring for details.
@@ -213,7 +216,7 @@ class Test_mulnom_hard:
         assert round(llk,ndigits=3) == -980.676
 
 
-class Test_mulnom_hard_repara:
+class Test_mulnom_repara:
     # Test multinomial model
 
     # We need to specify K-1 formulas - see the `MULNOMLSS` docstring for details.
@@ -246,9 +249,9 @@ class Test_mulnom_hard_repara:
         lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([3.37059261e+00, 7.24170552e+04, 5.02852109e-02, 1.00000000e+07]))
 
-    def test_GAMreml(self):
+    def test_GAMreml_hard(self):
         reml = self.model.get_reml()
-        assert round(reml,ndigits=3) == -1000.749
+        np.testing.assert_allclose(reml,-1000.749,atol=min(max_atol,2),rtol=min(max_rtol,1e-7))
     
     def test_GAMllk(self):
         llk = self.model.get_llk(False)

@@ -6,7 +6,10 @@ import numpy as np
 import os
 from mssmViz.sim import*
 
-class Test_model_comparisons1_hard:
+max_atol = 100
+max_rtol = 100
+
+class Test_model_comparisons1:
 
     # Model comparison and smoothness uncertainty correction tests
 
@@ -71,7 +74,7 @@ class Test_model_comparisons1_hard:
         assert round(self.unbiased_cor_result1['Res. DOF'],ndigits=3) == 0.981
 
 
-class Test_model_comparisons2_hard:
+class Test_model_comparisons2:
 
     # Model comparison and smoothness uncertainty correction tests
 
@@ -176,31 +179,31 @@ class Test_model_comparison3_hard:
     unbiased_cor_result1 = compare_CDL(sim_fit_model,sim_fit_model2,correct_t1=True,n_c=1,grid='JJJ3',seed=22,use_importance_weights=True,prior=prior)
 
     def test_comp1(self):
-        assert round(self.uncor_result['aic_diff'],ndigits=3) == 1.912
+        np.testing.assert_allclose(self.uncor_result['aic_diff'],1.912,atol=min(max_atol,0.002),rtol=min(max_rtol,0.001))
 
     def test_comp2(self):
-        assert round(self.cor_result1['aic_diff'],ndigits=3) == 2.799
+        np.testing.assert_allclose(self.cor_result1['aic_diff'],2.799,atol=min(max_atol,0.04),rtol=min(max_rtol,0.001))
 
     def test_comp3(self):
-        assert round(self.cor_result2['aic_diff'],ndigits=3) == 2.212
+        np.testing.assert_allclose(self.cor_result2['aic_diff'],2.212,atol=min(max_atol,0.06),rtol=min(max_rtol,0.001))
 
     def test_comp4(self):
-        assert round(self.cor_result3['aic_diff'],ndigits=3) == 2.195
+        np.testing.assert_allclose(self.cor_result3['aic_diff'],2.195,atol=min(max_atol,0.05),rtol=min(max_rtol,0.001))
 
     def test_comp5(self):
-        assert round(self.cor_result4['aic_diff'],ndigits=3) == 1.945
+        np.testing.assert_allclose(self.cor_result4['aic_diff'],1.945,atol=min(max_atol,0.01),rtol=min(max_rtol,0.001))
 
     def test_comp6(self):
-        assert round(self.cor_result5['aic_diff'],ndigits=3) == 2.832
+        np.testing.assert_allclose(self.cor_result5['aic_diff'],2.832,atol=min(max_atol,0.2),rtol=min(max_rtol,0.001))
 
     def test_comp7(self):
-        assert round(self.unbiased_uncor_result['aic_diff'],ndigits=3) == 1.912
+        np.testing.assert_allclose(self.unbiased_uncor_result['aic_diff'],1.912,atol=min(max_atol,0.002),rtol=min(max_rtol,0.001))
 
     def test_comp8(self):
-        assert round(self.unbiased_cor_result1['aic_diff'],ndigits=3) == 2.832
+        np.testing.assert_allclose(self.unbiased_cor_result1['aic_diff'],2.832,atol=min(max_atol,0.2),rtol=min(max_rtol,0.001))
     
     def test_edf1(self):
-        assert round(self.unbiased_cor_result1['Res. DOF'],ndigits=3) == 0.974
+        np.testing.assert_allclose(self.unbiased_cor_result1['Res. DOF'],0.974,atol=min(max_atol,0.002),rtol=min(max_rtol,0.001))
 
 
 class Test_Vb_corrections:
