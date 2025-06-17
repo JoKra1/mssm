@@ -3,8 +3,12 @@
 ![GitHub CI Stable](https://github.com/jokra1/mssm/actions/workflows/python-package.yml/badge.svg?branch=stable)
 ![Docs](https://github.com/jokra1/mssm/actions/workflows/documentation.yml/badge.svg?branch=main)
 [![codecov](https://codecov.io/gh/JoKra1/mssm/graph/badge.svg?token=B2NZBO4XJ3)](https://codecov.io/gh/JoKra1/mssm)
+![preprint](https://img.shields.io/badge/preprint-arXiv%3A2506.13132-orange?link=https%3A%2F%2Farxiv.org%2Fabs%2F2506.13132)
 
 ## Description
+
+> [!NOTE]
+> Our preprint detailing the algorithms implemented in the mssm toolbox is now available on [arXiv](https://arxiv.org/abs/2506.13132).
 
 ``mssm`` is a toolbox to estimate Generalized Additive Mixed Models (GAMMs), Generalized Additive Mixed Models of Location Scale and Shape (GAMMLSS), and more general (mixed) smooth models in the sense defined by [Wood, Pya, & Säfken (2016)](https://doi.org/10.1080/01621459.2016.1180986). Approximate estimation (and automatic regularization) of the latter only requires users to provide the (gradient of) the log-likelihood. Furthermore, ``mssm`` is an excellent choice for the modeling of multi-level time-series data, often estimating additive models with separate smooths for thousands of levels in a couple of minutes.
 
