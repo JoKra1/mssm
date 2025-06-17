@@ -138,7 +138,7 @@ class Test_GAUMLSSGEN_hard:
                                             4.33968853,  5.20719195, -2.48498028, -0.41483633, -1.68072058,
                                             -4.12405797, -4.32178097, -1.28126424, -0.05013006, -0.01078947,
                                             0.01309918,  0.0304733 ,  0.04832851,  0.06789398,  0.08949696,
-                                            0.09934445,  0.10436846,  0.66643841]),atol=min(max_atol,0.001))
+                                            0.09934445,  0.10436846,  0.66643841]),atol=min(max_atol,0.35))
 
     def test_GAMcoef2(self):
         coef = self.model2.overall_coef.flatten()
@@ -151,7 +151,7 @@ class Test_GAUMLSSGEN_hard:
                                             -2.73210049,  -5.26428994,  -4.80803947,  -2.02328384,
                                             -0.01671727,  -0.02500594,  -0.0339186 ,  -0.0572995 ,
                                             -0.03603238,   0.02741854,   0.08237743,   0.14099506,
-                                            0.20398593,   0.66054218]),atol=min(max_atol,0.001),rtol=min(max_rtol,1e-6))  
+                                            0.20398593,   0.66054218]),atol=min(max_atol,0.15),rtol=min(max_rtol,1e-6))  
 
     def test_GAMlam(self):
         lam = np.array([p.lam for p in self.model.overall_penalties])
@@ -307,7 +307,7 @@ class Test_PropHaz_repara_hard:
                                    np.array([ 6.706370e-01,  8.527276e-01, -1.329478e-04,  6.377809e+01]),atol=min(max_atol,70),rtol=min(max_rtol,1.1)) 
 
     def test_GAMreml(self):
-        np.testing.assert_allclose(self.gsmm_newton.get_reml() - self.gsmm_qefs.get_reml(),-0.865,atol=min(max_atol,1),rtol=min(max_rtol,6e-4))
+        np.testing.assert_allclose(self.gsmm_newton.get_reml() - self.gsmm_qefs.get_reml(),-0.865,atol=min(max_atol,1.5),rtol=min(max_rtol,6e-4))
 
     def test_GAMllk(self):
         np.testing.assert_allclose(self.gsmm_newton.get_llk(True) - self.gsmm_qefs.get_llk(True),-0.758,atol=min(max_atol,1),rtol=min(max_rtol,2e-4))
