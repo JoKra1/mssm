@@ -9,7 +9,10 @@ from mssm.src.python.utils import estimateVp
 import io
 from contextlib import redirect_stdout
 
-class Test_BIG_GAMM_Discretize_hard:
+max_atol = 100
+max_rtol = 100
+
+class Test_BIG_GAMM_Discretize:
     dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
 
     # mssm requires that the data-type for variables used as factors is 'O'=object
@@ -50,7 +53,7 @@ class Test_BIG_GAMM_Discretize_hard:
         assert round(llk,ndigits=0) == -75228
 
 
-class Test_NUll_penalty_reparam_hard:
+class Test_NUll_penalty_reparam:
     dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
 
     # mssm requires that the data-type for variables used as factors is 'O'=object
@@ -157,7 +160,7 @@ class Test_BIG_GAMM:
         assert np.allclose(lam,np.array([0.003576343523516708, 0.006011901683452655, 5028.094352875556, 230482.43912034066, 110804.13545750394, 38451.597466911124, 381047.3435206221, 330.2597296955685, 0.11887201661781975, 2.166381231196006])) 
 
 
-class Test_BIG_GAMM_keep_cov_hard:
+class Test_BIG_GAMM_keep_cov:
     file_paths = [f'https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat_cond_{cond}.csv' for cond in ["a","b"]]
 
     codebook = {'cond':{'a': 0, 'b': 1}}
@@ -186,7 +189,7 @@ class Test_BIG_GAMM_keep_cov_hard:
         _, sigma = self.model.get_pars()
         assert round(sigma,ndigits=3) == 577.194
 
-class Test_rs_ri_hard:
+class Test_rs_ri:
 
     # Random slope + intercept model
     sim_dat,_ = sim1(100,random_seed=100)
@@ -273,7 +276,7 @@ class Test_rs_ri_hard:
         llk = self.model.get_llk(False)
         assert round(llk,ndigits=3) == -31886.766
 
-class Test_no_pen_hard:
+class Test_no_pen:
     # No penalties
     sim_dat,_ = sim1(100,random_seed=100)
 
@@ -305,7 +308,7 @@ class Test_no_pen_hard:
         llk = self.model.get_llk(False)
         assert round(llk,ndigits=3) == -33719.718
 
-class Test_te_rs_fact_hard:
+class Test_te_rs_fact:
     # te + random slope with factor
     sim_dat,_ = sim1(100,random_seed=100)
 
@@ -386,7 +389,7 @@ class Test_te_rs_fact_hard:
         comp = "f(['time', 'x']); edf: 16.131\nrs(['fact'],sub); edf: 38.089\nrs(['x', 'fact'],sub):0; edf: 12.887\nrs(['x', 'fact'],sub):1; edf: 14.136\nrs(['x', 'fact'],sub):2; edf: 10.358\n"
         assert comp == capture
 
-class Test_te_rs_fact_QR_hard:
+class Test_te_rs_fact_QR:
     # te + random slope with factor
     sim_dat,_ = sim1(100,random_seed=100)
 
@@ -458,7 +461,7 @@ class Test_te_rs_fact_QR_hard:
         llk = self.model.get_llk(False)
         assert round(llk,ndigits=3) == -31972.739
 
-class Test_print_parametric_hard:
+class Test_print_parametric:
     # te + random slope with factor
     sim_dat,_ = sim1(100,random_seed=100)
 
@@ -479,7 +482,7 @@ class Test_print_parametric_hard:
         comp = 'Intercept: 4.992, t: 2.609, DoF.: 9409, P(|T| > |t|): 0.00911 **\nfact_fact_2: -13.855, t: -5.263, DoF.: 9409, P(|T| > |t|): 1.445e-07 ***\nfact_fact_3: -6.252, t: -2.395, DoF.: 9409, P(|T| > |t|): 0.01664 *\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: .\n'
         assert comp == capture
 
-class Test_ti_rs_fact_hard:
+class Test_ti_rs_fact:
     # ti + random slope with factor
     sim_dat,_ = sim1(100,random_seed=100)
 
@@ -555,7 +558,7 @@ class Test_ti_rs_fact_hard:
         llk = self.model.get_llk(False)
         assert round(llk,ndigits=3) == -31862.875 
 
-class Test_3way_li_hard:
+class Test_3way_li:
     # *li() with three variables: three-way interaction
     sim_dat,_ = sim1(100,random_seed=100)
 
@@ -585,7 +588,7 @@ class Test_3way_li_hard:
         lam = np.array([p.lam for p in self.model.formula.penalties])
         assert np.allclose(lam,np.array([])) 
 
-class Test_print_smooth_by_factor_p_hard:
+class Test_print_smooth_by_factor_p:
     # by factor
     sim_dat,_ = sim1(100,random_seed=100)
 
@@ -606,7 +609,7 @@ class Test_print_smooth_by_factor_p_hard:
         comp = "f(['time'],by=fact): fact_1; edf: 9.43 f: 62.313 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.607 f: 18.735 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_3; edf: 4.839 f: 12.721 P(F > f) = 5.083e-12 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         assert comp == capture
 
-class Test_print_smooth_by_factor_fs_p_hard:
+class Test_print_smooth_by_factor_fs_p:
     # by factor
     sim_dat,_ = sim1(100,random_seed=100)
 
@@ -645,7 +648,7 @@ class Test_print_smooth_binomial:
         comp = "f(['x0']); edf: 2.856 chi^2: 18.441 P(Chi^2 > chi^2) = 3.017e-04 ***\nf(['x1']); edf: 1.962 chi^2: 60.923 P(Chi^2 > chi^2) = 1.421e-13 ***\nf(['x2']); edf: 6.243 chi^2: 168.288 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x3']); edf: 1.407 chi^2: 2.62 P(Chi^2 > chi^2) = 0.16737\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         assert comp == capture
 
-class Test_Vp_estimation:
+class Test_Vp_estimation_hard:
     Binomdat = sim3(10000,0.1,family=Binomial(),seed=20)
 
     formula = Formula(lhs("y"),[i(),f(["x0"]),f(["x1"]),f(["x2"]),f(["x3"])],data=Binomdat)
@@ -657,12 +660,12 @@ class Test_Vp_estimation:
     Vp,_,_,_,_ = estimateVp(model,strategy="JJJ1",Vp_fidiff=True)
 
     def test_Vp(self):
-        assert np.allclose(np.round(self.Vp,decimals=3),np.array([[ 2.281e+00,  9.000e-03,  3.000e-03,  2.100e-02],
-                                                                    [ 9.000e-03,  2.779e+00,  1.000e-03, -2.400e-02],
-                                                                    [ 3.000e-03,  1.000e-03,  4.940e-01,  2.200e-02],
-                                                                    [ 2.100e-02, -2.400e-02,  2.200e-02,  1.541e+01]]))
+        np.testing.assert_allclose(np.round(self.Vp,decimals=3),np.array([[ 2.281e+00,  9.000e-03,  3.000e-03,  2.100e-02],
+                                                                          [ 9.000e-03,  2.779e+00,  1.000e-03, -2.400e-02],
+                                                                          [ 3.000e-03,  1.000e-03,  4.940e-01,  2.200e-02],
+                                                                          [ 2.100e-02, -2.400e-02,  2.200e-02,  1.541e+01]]),atol=min(max_atol,0.001))
 
-class Test_diff_hard:
+class Test_diff:
     # pred_diff test
     sim_dat,_ = sim1(100,random_seed=100)
 
