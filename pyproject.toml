@@ -9,10 +9,13 @@ build-backend = "setuptools.build_meta"
 
 [tool.cibuildwheel]
 before-test = "ls"
-skip = ["pp*","cp313-musllinux*"]
-test-skip = "*-win32 *i686"
-test-requires = ["pytest", "pytest-cov", "mssmViz"]
-test-command = "pytest {project}/tests --cov={project}"
+skip = ["pp*", "cp313-musllinux*", "*-win32", "*i686"]
+test-requires = ["pytest", "pytest-cov", "mssmViz", "numdifftools"]
+test-command = 'pytest {project}/tests/test_fast.py --cov={project}'
+
+# Build for intel macs as well
+[tool.cibuildwheel.macos]
+archs = ["x86_64", "arm64"]
 
 [project]
 dependencies=["numpy >= 1.24.1",
@@ -23,7 +26,7 @@ name = "mssm"
 authors = [
   { name="Joshua Krause", email="jokra001@proton.me" }
 ]
-description = "Toolbox for estimating Generalized Additive Mixed Models (GAMMs), Generalized Additive Mixed Models of Location Scale and Shape (GAMMLSS), and more general smooth models such as semi Markov-switching GAMMs (sMs-GAMMs; experimental)."
+description = "Toolbox for estimating Generalized Additive Mixed Models (GAMMs), Generalized Additive Mixed Models of Location Scale and Shape (GAMMLSS), and more general smooth models."
 readme = "README.md"
 requires-python = ">=3.10"
 classifiers = [

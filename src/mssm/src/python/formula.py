@@ -38,6 +38,25 @@ def map_csc_to_eigen(X):
 
    if X.format != "csc":
       raise TypeError(f"Format of sparse matrix passed to c++ MUST be 'csc' but is {X.getformat()}")
+   
+   if X.has_sorted_indices == False:
+      raise TypeError("Indices of sparse matrix passed to c++ MUST be sorted but are not.")
+
+   rows, cols = X.shape
+
+   # Cast to int64 here, since that's what the c++ side expects to be stored in the buffers
+   return rows, cols, X.nnz, X.data, X.indptr.astype(np.int64), X.indices.astype(np.int64)
+
+def map_csr_to_eigen(X):
+   """
+   see: :func:`map_csc_to_eigen`
+   """
+
+   if X.format != "csr":
+      raise TypeError(f"Format of sparse matrix passed to c++ MUST be 'csr' but is {X.getformat()}")
+   
+   if X.has_sorted_indices == False:
+      raise TypeError("Indices of sparse matrix passed to c++ MUST be sorted but are not.")
 
    rows, cols = X.shape
 
@@ -46,59 +65,68 @@ def map_csc_to_eigen(X):
 
 def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
    """
-    Options 1 - 3 are natural reparameterization discussed in Wood (2017; 5.4.2)
-    with different strategies for the QR computation of X.
+   Options 1 - 3 are natural reparameterization discussed in Wood (2017; 5.4.2)
+   with different strategies for the QR computation of :math:`\mathbf{X}`. Option 4 helps with stabilizing the REML computation
+   and is from Appendix B of Wood (2011) and section 6.2.7 in Wood (2017):
 
-       1. Form complete matrix X based on entire covariate.
-       2. Form matrix X only based on unique covariate values.
-       3. Form matrix X on a sample of values making up covariate. Covariate
-       is split up into ``n_bins`` equally wide bins. The number of covariate values
-       per bin is then calculated. Subsequently, the ratio relative to minimum bin size is
-       computed and each ratio is rounded to the nearest integer. Then ``ratio`` samples
-       are obtained from each bin. That way, imbalance in the covariate is approximately preserved when
-       forming the QR.
-       4. Transform term-specific S_\lambda based on section Wood (2011) and section 6.2.7 in Wood (2017)
-       so that they are full-rank and their log-determinant can be computed safely. In that case, only S needs
-       to be provided and has to be a list holding the penalties to be transformed
-    
-    If ``QR==True`` then X is decomposed into Q @ R directly via QR decomposition. Alternatively, we first
-    form X.T @ X and then compute the cholesky L of this product - note that L.T = R. Overall the latter
-    strategy is much faster (in particular if ``option==1``), but the increased loss of precision in L/R
-    might not be ok for some.
+      1. Form complete matrix :math:`\mathbf{X}` based on entire covariate.
+      2. Form matrix :math:`\mathbf{X}` only based on unique covariate values.
+      3. Form matrix :math:`\mathbf{X}` on a sample of values making up covariate. Covariate
+         is split up into ``n_bins`` equally wide bins. The number of covariate values
+         per bin is then calculated. Subsequently, the ratio relative to minimum bin size is
+         computed and each ratio is rounded to the nearest integer. Then ``ratio`` samples
+         are obtained from each bin. That way, imbalance in the covariate is approximately preserved when
+         forming the QR.
+      4. Transform term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` based on Appendix B of Wood (2011) and section 6.2.7 in Wood (2017)
+         so that they are full-rank and their log-determinant can be computed safely. In that case, only ``S`` needs
+         to be provided and has to be a list holding the penalties to be transformed. If the transformation is to be applied to
+         model matrices, coefficients, hessian, and covariance matrices X should be set to something other than ``None`` (does not matter what, can
+         for example be the first model matrix.) The :func:`mssm.src.python.gamm_solvers.reparam_model` function can be used to apply the transformation and also
+         returns the required transformation matrices to reverse it.
+   
+   For Options 1-3:
 
-    After transformation S only contains elements on it's diagonal and X the transformed functions. As discussed
-    in Wood (2017), the transformed functions are decreasingly flexible - so the elements on S diagonal become smaller
-    and eventually zero, for elements that are in the kernel of the original S (un-penalized == not flexible).
+      If ``QR==True`` then :math:`\mathbf{X}` is decomposed into :math:`\mathbf{Q}\mathbf{R}` directly via QR decomposition. Alternatively, we first
+      form :math:`\mathbf{X}^T\mathbf{X}` and then compute the cholesky :math:`\mathbf{L}` of this product - note that :math:`\mathbf{L}^T = \mathbf{R}`. Overall the latter
+      strategy is much faster (in particular if ``option==1``), but the increased loss of precision in :math:`\mathbf{L}^T = \mathbf{R}` might not be ok for some.
 
-    For a similar transformation (based solely on S), Wood et al. (2013) show how to further reduce the diagonally
-    transformed S to an even simpler identity penalty. As discussed also in Wood (2017) the same behavior of decreasing
-    flexibility if all entries on the diagonal of S are 1 can only be maintained if the transformed functions are
-    multiplied by a weight related to their wiggliness. Specifically, more flexible functions need to become smaller in
-    amplitude - so that for the same level of penalization they are removed earlier than less flexible ones. To achieve this
-    Wood further post-multiply the transformed matrix 'X with a matrix that contains on it's diagonal the reciprocal of the
-    square root of the transformed penalty matrix (and 1s in the last cells corresponding to the kernel). This is done here
-    if ``identity=True``.
+      After transformation S only contains elements on it's diagonal and :math:`\mathbf{X}` the transformed functions. As discussed
+      in Wood (2017), the transformed functions are decreasingly flexible - so the elements on :math:`\mathbf{S}` diagonal become smaller
+      and eventually zero, for elements that are in the kernel of the original :math:`\mathbf{S}` (un-penalized == not flexible).
 
-    In ``mgcv`` the transformed model matrix and penalty can optionally be scaled by the root mean square value of the transformed
-    model matrix (see the nat.param function in mgcv). This is done here if ``scale=True``.
+      For a similar transformation (based solely on :math:`\mathbf{S}`), Wood et al. (2013) show how to further reduce the diagonally
+      transformed :math:`\mathbf{S}` to an even simpler identity penalty. As discussed also in Wood (2017) the same behavior of decreasing
+      flexibility if all entries on the diagonal of :math:`\mathbf{S}` are 1 can only be maintained if the transformed functions are
+      multiplied by a weight related to their wiggliness. Specifically, more flexible functions need to become smaller in
+      amplitude - so that for the same level of penalization they are removed earlier than less flexible ones. To achieve this
+      Wood further post-multiply the transformed matrix :math:`\mathbf{X}'` with a matrix that contains on it's diagonal the reciprocal of the
+      square root of the transformed penalty matrix (and 1s in the last cells corresponding to the kernel). This is done here
+      if ``identity=True``.
 
-    Option 4 enforces re-parameterization of term-specific S_\lambda based on section Wood (2011) and section 6.2.7 in Wood (2017).
-    In ``mssm`` multiple penalties can be placed on individual terms (i.e., tensor terms, random smooths, Kernel penalty) but
-    it is not always the case that the term-specific S_\lambda - i.e., the sum over all those individual penalties multiplied with
-    their \lambda parameters, is of full rank. If we need to form the inverse of the term-specific S_\lambda this is problematic.
-    It is also probelmatic, as discussed by Wood (2011), if the different \lambda are all of different magnitude in which case forming
-    the term-specific log(|S_\lambda|+) becomes numerically difficult.
+      In ``mgcv`` the transformed model matrix and penalty can optionally be scaled by the root mean square value of the transformed
+      model matrix (see the nat.param function in mgcv). This is done here if ``scale=True``.
 
-    The re-parameterization implemented by option 4, based on Appendix B in Wood (2011), solves these issues. After this re-parameterization a
-    term-specific S_\lambda has been formed that is full rank. And log(|S_\lambda|) - no longer just a generalized determinant - can be
-    computed without running into numerical problems.
+   For Option 4:
 
-    The strategy by Wood (2011) is more general and could be applied to form an overall - not just term-specific - S_\lambda with these properties.
-    However, in ``mssm`` penalties currently cannot overlap, so this is not necessary at the moment.
+      Option 4 enforces re-parameterization of term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` based on section Wood (2011) and section 6.2.7 in Wood (2017).
+      In ``mssm`` multiple penalties can be placed on individual terms (i.e., tensor terms, random smooths, Kernel penalty) but
+      it is not always the case that the term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` - i.e., the sum over all those individual penalties multiplied with
+      their :math:`\lambda` parameters, is of full rank. If we need to form the inverse of the term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` this is problematic.
+      It is also problematic, as discussed by Wood (2011), if the different :math:`\lambda` are all of different magnitude in which case forming
+      the term-specific :math:`log(|\mathbf{S}_{\\boldsymbol{\lambda}}|+)` becomes numerically difficult.
 
-    References:
+      The re-parameterization implemented by option 4, based on Appendix B in Wood (2011), solves these issues. After this re-parameterization a
+      term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` has been formed that is full rank. And :math:`log(|\mathbf{S}_{\\boldsymbol{\lambda}}|)` - no longer just a generalized determinant - can be
+      computed without running into numerical problems.
+
+      The strategy by Wood (2011) could be applied to form an overall - not just term-specific - :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` with these properties. However, this
+      does not work for general smooth models as defined by Wood et al. (2016). Hence, mssm opts for the blockwise strategy.
+      However, in ``mssm`` penalties currently cannot overlap, so this is not necessary at the moment.
+
+   References:
       - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
       - Wood, S. N., Scheipl, F., & Faraway, J. J. (2013). Straightforward intermediate rank tensor product smoothing in mixed models.
+      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
       - mgcv source code (accessed 2024). smooth.R file, nat.param function.
    """
@@ -209,7 +237,7 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
       return C, Srp, Drp, IRrp, rms1, rms2, rank
    
    elif option == 4:
-      # Reparameterize S_\lambda for safe REML evaluation - based on section 6.2.7 in Wood (2017)
+      # Reparameterize S_\lambda for safe REML evaluation - based on section 6.2.7 in Wood (2017) and Appendix B of Wood (2011).
       # S needs to be list holding penalties.
 
       # We first sort S into term-specific groups of penalties
@@ -255,13 +283,15 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
       Q_reps = []
       QT_reps = []
       for pen in S:
-         Sj_reps.append(LambdaTerm(S_J=copy.deepcopy(pen.S_J),rep_sj=pen.rep_sj,lam=pen.lam,type=pen.type,rank=pen.rank,term=pen.term,start_index=pen.start_index))
+         Sj_reps.append(LambdaTerm(S_J=copy.deepcopy(pen.S_J),rep_sj=pen.rep_sj,lam=pen.lam,type=pen.type,rank=pen.rank,term=pen.term,start_index=pen.start_index,dist_param=pen.dist_param))
 
       S_reps = [] # Term specific S_\lambda
       eps = sys.float_info.epsilon**0.7
       Mp = Sj_reps[0].start_index # Number of un-penalized dimensions (Kernel space dimension of total S_\lambda; Wood, 2011)
       for grp_idx,SJgroup,LJgroup in zip(SJ_term_idx,SJs,ljs):
 
+         for rpidx in range(len(SJgroup)):
+            Sj_reps[grp_idx[rpidx]].rp_idx = len(S_reps)
 
          normed_SJ = [SJ_mat/scp.sparse.linalg.norm(SJ_mat,ord='fro') for SJ_mat in SJgroup]
          normed_S = normed_SJ[0]
@@ -283,7 +313,7 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
             SJbar = [Ur.T@SJ_mat@Ur for SJ_mat in SJgroup]
 
             if not X is None:
-               Q_rep0 = copy.deepcopy(Ur) # Need to account for this when computing Q matrix.
+               Q_rep0 = copy.deepcopy(U) # Need to account for this when computing Q matrix.
          else:
             SJbar = copy.deepcopy(SJgroup)
             Q_rep0 = None
@@ -365,7 +395,7 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
             #print(Sk.shape,(Ur.T@Sjk@Un).shape,(Un.T@Sjk@Ur).shape,(Un.T@Sjk@Un).shape)
 
             C = np.concatenate((np.concatenate((Sk,Un.T@Sjk@Ur),axis=0),
-                                          np.concatenate((Ur.T@Sjk@Un,Un.T@Sjk@Un),axis=0)),axis=1)
+                                np.concatenate((Ur.T@Sjk@Un,Un.T@Sjk@Un),axis=0)),axis=1)
             
             #print(C.shape)
 
@@ -376,22 +406,33 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
                   Tg = U.toarray()
                   
                   if not X is None:
-                     Q_rep = U.toarray()
+                     if Q_rep0 is None:
+                        Q_rep = U.toarray()
+                     else:
+                        init_drop = Q_rep0.shape[1] - U.shape[1]
+                        
+                        Q_rep = np.concatenate((np.concatenate((U.toarray(),np.zeros((U.shape[0],init_drop))),axis=1),
+                                                np.concatenate((np.zeros((init_drop,U.shape[1])),np.identity(init_drop)),axis=1)),axis=0)
             else:
-                  A = S_rep[:K,:K]
-                  B = S_rep[:K,:Q]
+                  A = S_rep[:K,:K] # From partitioning step 6 in Wood, 2011
+                  B = S_rep[:K,K:] # From partitioning step 6 in Wood, 2011
                   BU = B @ U
                   S_rep = np.concatenate((np.concatenate((A,BU.T),axis=0),
                                           np.concatenate((BU,C),axis=0)),axis=1)
                   
                   Ta = np.concatenate((np.concatenate((np.identity(K),np.zeros((K,r+n))),axis=1),
-                                       np.concatenate((np.zeros((Ur.shape[0],K)),Ur.toarray(),np.zeros(Ur.shape[0],n)),axis=1)),axis=0)
+                                       np.concatenate((np.zeros((Ur.shape[0],K)),Ur.toarray(),np.zeros((Ur.shape[0],n))),axis=1)),axis=0)
                   
-                  Tb = np.concatenate((np.concatenate((np.identity(K),np.zeros((K,r+n))),axis=1),
+                  Tg = np.concatenate((np.concatenate((np.identity(K),np.zeros((K,r+n))),axis=1),
                                        np.concatenate((np.zeros((U.shape[0],K)),U.toarray()),axis=1)),axis=0)
                   
                   if not X is None:
-                     Q_rep = Tb @ Q_rep
+                     if Q_rep0 is None:
+                        Q_rep = Q_rep @ Tg
+                     else:
+                        init_drop = Q_rep0.shape[1] - Tg.shape[1]
+                        Q_rep = Q_rep @ np.concatenate((np.concatenate((Tg,np.zeros((Tg.shape[0],init_drop))),axis=1),
+                                                        np.concatenate((np.zeros((init_drop,Tg.shape[1])),np.identity(init_drop)),axis=1)),axis=0)
 
             #print(Ta.shape,Tg.shape)
             # Transform remaining terms that made up Sjk
@@ -426,79 +467,6 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
    else:
       raise NotImplementedError(f"Requested option {option} for reparameterization is not implemented.")
    
-class PTerm():
-   # Storage for sojourn time distribution
-   def __init__(self,distribution:callable,
-                init_kwargs:dict or None=None,
-                fit_kwargs:dict or None=None,
-                split_by:str or None=None) -> None:
-      self.distribution = distribution
-      self.kwargs = init_kwargs # Any parameters required to use distribution.
-      if self.kwargs is None:
-         self.kwargs = {}
-      self.split_by = split_by
-      self.fit_kwargs = fit_kwargs
-      if self.fit_kwargs is None:
-         self.fit_kwargs = {}
-      self.n_by = None
-      self.params = None
-
-   def log_prob(self,d,by_i=None):
-      # Get log-probability of durations d under current
-      # sojourn distribution
-      if self.params is None:
-         return self.distribution.logpdf(d,**self.kwargs)
-
-      if self.split_by is None:
-         return self.distribution.logpdf(d,*self.params)
-      
-      # Optionally use distribution associated with a particular variable
-      return self.distribution.logpdf(d,*self.params[by_i,:])
-
-   def sample(self,N,by_i=None):
-      # Sample N values from current sojourn time distribution
-      if self.split_by is None:
-
-         if not self.params is None:
-            return self.distribution.rvs(*self.params,size=N)
-
-      if not self.params is None:
-         # Optionally again pick distribution parameters associated with
-         # specific by variable
-         return self.distribution.rvs(*self.params[by_i,:],size=N)
-      
-      # Initial sampling might be based on distributions default parameters
-      # as provided by scipy and any necessary parameter specified in kwargs.
-      return self.distribution.rvs(**self.kwargs,size=N)
-   
-   def fit(self,d,by_i=None):
-      # Update parameters of distribution(s)
-      if self.split_by is None:
-         self.params = self.distribution.fit(d,**self.fit_kwargs)
-      else:
-         fit = self.distribution.fit(d,**self.fit_kwargs)
-         if self.params is None:
-            self.params = np.zeros((self.n_by,len(fit)))
-         self.params[by_i,:] = fit
-   
-   def max_ppf(self,q):
-      # Return the criticial value for quantile q.
-      # In case split_by is true, return the max critical
-      # value taken over all splits
-      if self.params is None:
-         return self.distribution.ppf(q,**self.kwargs)
-      
-      if not self.split_by is None:
-         return max([self.distribution.ppf(q,*self.params[by_i,:]) for by_i in range(self.n_by)])
-      
-      return self.distribution.ppf(q,*self.params)
-      
-class PFormula():
-   def __init__(self,terms:list[PTerm]) -> None:
-      self.__terms = terms
-   
-   def get_terms(self):
-      return copy.deepcopy(self.__terms)
 
 class lhs():
     """
@@ -508,8 +476,7 @@ class lhs():
 
     :param variable: The dependent variable. Can point to continuous and categorical variables.
     :type variable: str
-    :param f: A function that will be applied to the ``variable`` before fitting. For example: np.log().
-    By default no function is applied to the ``variable``.
+    :param f: A function that will be applied to the ``variable`` before fitting. For example: np.log(). By default no function is applied to the ``variable``.
     :type f: Callable, optional
     """
     def __init__(self,variable:str,f:Callable=None) -> None:
@@ -521,7 +488,7 @@ def get_coef_info_linear(has_intercept,lterm,var_types,coding_factors,factor_lev
     unpenalized_coef = 0
     coef_names = []
     total_coef = 0
-    coef_per_term = []
+
     # Main effects
     if len(lterm.variables) == 1:
         var = lterm.variables[0]
@@ -537,13 +504,10 @@ def get_coef_info_linear(has_intercept,lterm,var_types,coding_factors,factor_lev
                 unpenalized_coef += 1
                 total_coef += 1
 
-            coef_per_term.append(len(factor_levels[var]) - fl_start)
-
         else: # Continuous predictor
             coef_names.append(f"{var}")
             unpenalized_coef += 1
             total_coef += 1
-            coef_per_term.append(1)
 
     else: # Interactions
         inter_coef_names = []
@@ -581,13 +545,10 @@ def get_coef_info_linear(has_intercept,lterm,var_types,coding_factors,factor_lev
             unpenalized_coef += 1
             total_coef += 1
 
-        coef_per_term.append(len(inter_coef_names))
-    return total_coef,unpenalized_coef,coef_names,coef_per_term
+    return total_coef,unpenalized_coef,coef_names
 
-def get_coef_info_smooth(has_scale_split,n_j,sterm,factor_levels):
+def get_coef_info_smooth(sterm,factor_levels):
     coef_names = []
-    total_coef = 0
-    coef_per_term = []
 
     vars = sterm.variables
     # Calculate Coef names
@@ -618,27 +579,15 @@ def get_coef_info_smooth(has_scale_split,n_j,sterm,factor_levels):
         by_levels = factor_levels[sterm.by]
         n_coef *= len(by_levels)
 
-        if sterm.by_latent is not False and has_scale_split is False:
-            n_coef *= n_j
-            for by_state in range(n_j):
-                for by_level in by_levels:
-                    coef_names.extend([f"f_{var_label}_{ink}_{by_level}_{by_state}" for ink in range(term_n_coef)])
-        else:
-            for by_level in by_levels:
-                coef_names.extend([f"f_{var_label}_{ink}_{by_level}" for ink in range(term_n_coef)])
+        for by_level in by_levels:
+            coef_names.extend([f"f_{var_label}_{ink}_{by_level}" for ink in range(term_n_coef)])
          
     else:
-        if sterm.by_latent is not False and has_scale_split is False:
-            for by_state in range(n_j):
-                coef_names.extend([f"f_{var_label}_{ink}_{by_state}" for ink in range(term_n_coef)])
-        else:
-            coef_names.extend([f"f_{var_label}_{ink}" for ink in range(term_n_coef)])
+         coef_names.extend([f"f_{var_label}_{ink}" for ink in range(term_n_coef)])
          
-    total_coef += n_coef
-    coef_per_term.append(n_coef)
-    return total_coef,coef_names,coef_per_term
+    return n_coef,coef_names
 
-def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
+def build_smooth_penalties(penalties,cur_pen_idx,
                            pen,penid,sti,sterm,
                            vars,by_levels,n_coef,col_S):
     # We again have to deal with potential identifiable constraints!
@@ -759,9 +708,6 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
 
             pen_iter = len(by_levels) - 1
 
-            if sterm.by_latent is not False and has_scale_split is False:
-                pen_iter = (len(by_levels)*n_j)-1
-
             #for _ in range(pen_iter):
             #    lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,id_k,cur_pen_idx)
             #    lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,id_k,cur_pen_idx)
@@ -794,9 +740,6 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
 
             pen_iter = len(by_levels) - 1
 
-            if sterm.by_latent is not False and has_scale_split is False:
-                pen_iter = (len(by_levels) * n_j)-1
-
             for _ in range(pen_iter):
 
                 # Create lambda term
@@ -812,24 +755,7 @@ def build_smooth_penalties(has_scale_split,n_j,penalties,cur_pen_idx,
                 penalties.append(lTerm)
 
     else:
-        if sterm.by_latent is not False and has_scale_split is False:
-            # Handle by latent split - all latent levels get unique id
-            penalties.append(lTerm)
-
-            for _ in range(n_j-1):
-                # Create lambda term
-                lTerm = LambdaTerm(start_index=cur_pen_idx,
-                                   type = pen,
-                                   term=sti)
-
-                # Embed penalties
-                lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,id_k,cur_pen_idx)
-                lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,id_k,cur_pen_idx)
-                lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,id_k)
-                lTerm.rank = rank
-                penalties.append(lTerm)
-        else:
-            penalties.append(lTerm)
+        penalties.append(lTerm)
 
     return penalties,cur_pen_idx
 
@@ -941,7 +867,7 @@ def compute_constraint_single_MP(sterm,vars,lhs_var,file,var_mins,var_maxs,file_
 
       var_cov_flat = read_cor_cov_single(lhs_var,vars[vi],file,file_loading_kwargs)
 
-      matrix_term_v = sterm.basis(None,var_cov_flat,
+      matrix_term_v = sterm.basis(var_cov_flat,
                                     None,id_nk,min_c=var_mins[vars[vi]],
                                     max_c=var_maxs[vars[vi]], **sterm.basis_kwargs)
 
@@ -967,42 +893,37 @@ class Formula():
 
     :param lhs: The lhs object defining the dependent variable.
     :type variable: lhs
-    :param terms: A list of the terms which should be added to the model. See ``mssm.src.python.terms`` for info on which terms can be added.
-    :type terms: list[GammTerm]
-    :param data: A pandas dataframe (with header!) of the data which should be used to estimate the model. The variable specified for ``lhs`` as
-    well as all variables included for a ``term`` in ``terms`` need to be present in the data, otherwise the call to Formula will throw an error.
+    :param terms: A list of the terms which should be added to the model. See :py:mod:`mssm.src.python.terms` for info on which terms can be added.
+    :type terms: [GammTerm]
+    :param data: A pandas dataframe (with header!) of the data which should be used to estimate the model. The variable specified for ``lhs`` as well as all variables included for a ``term`` in ``terms`` need to be present in the data, otherwise the call to Formula will throw an error.
     :type data: pd.DataFrame or None
-    :param p_formula: Experimental.
-    :type p_formula: PFormula or None=None
-    :param series_id: A tring identifying the individual experimental units. Usually a unique trial identifier. Can only be ignored if a
-   ``mssm.models.GAMM`` is to be estimated.
+    :param series_id: A string identifying the individual experimental units. Usually a unique trial identifier. Only necessary if approximate derivative computations are to be utilized for random smooth terms.
     :type series_id: str, optional
-    :param split_scale: Experimental. Whether or not a separate Gamm (including sseparate scale parameters) should be estimated per latent state. Only relevant
-    if a ``mssm.models.sMsGAMM`` is to be estimated.
-    :type split_scale: bool, optional
-    :param n_j: Experimental. Number of latent states to estimate. Only relevant if a ``mssm.models.sMsGAMM`` is to be estimated.
-    :type n_j: int, optional
     :param codebook: Codebook - keys should correspond to factor variable names specified in terms. Values should again be a ``dict``, with keys for each of K levels of the factor and value corresponding to an integer in {0,K}.
     :type codebook: dict or None
     :param print_warn: Whether warnings should be printed. Useful when fitting models from terminal. Defaults to True.
     :type print_warn: bool,optional
-    :param keep_cov: Whether or not the internal encoding structure of all predictor variables should be created when forming X.T@X iteratively instead of forming X directly. Can speed up estimation but increases memory footprint. Defaults to True.
+    :param keep_cov: Whether or not the internal encoding structure of all predictor variables should be created when forming :math:`\mathbf{X}^T\mathbf{X}` iteratively instead of forming :math:`\mathbf{X}` directly. Can speed up estimation but increases memory footprint. Defaults to True.
     :type keep_cov: bool,optional
-    :param file_paths: A list of paths to .csv files from which X.T@X and X.T@y should be created iteratively. Setting this to a non-empty list will prevent fitting X as a whole. ``data`` should then be set to ``None``. Defaults to an empty list.
+    :param file_paths: A list of paths to .csv files from which :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` should be created iteratively. Setting this to a non-empty list will prevent fitting X as a whole. ``data`` should then be set to ``None``. Defaults to an empty list.
     :type file_paths: [str],optional
-    :param file_loading_nc: How many cores to use to a) accumulate X in parallel (if ``data`` is not ``None`` and ``file_paths`` is an empty list) or b) to accumulate X.T@X and X.T@y (and \eta during estimation) (if ``data`` is ``None`` and ``file_paths`` is a non-empty list). For case b, this should really be set to the maimum number of cores available. For a this only really speeds up accumulating X if X has many many columns and/or rows. Defaults to 1.
+    :param file_loading_nc: How many cores to use to a) accumulate :math:`\mathbf{X}` in parallel (if ``data`` is not ``None`` and ``file_paths`` is an empty list) or b) to accumulate :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` (and :math:`\mathbf{\eta}` during estimation) (if ``data`` is ``None`` and ``file_paths`` is a non-empty list). For case b, this should really be set to the maimum number of cores available. For a this only really speeds up accumulating :math:`\mathbf{X}` if :math:`\mathbf{X}` has many many columns and/or rows. Defaults to 1.
     :type file_loading_nc: int,optional
-    :param file_loading_kwargs: Any key-word arguments to pass to pandas.read_csv when X.T@X and X.T@y should be created iteratively (if ``data`` is ``None`` and ``file_paths`` is a non-empty list). Defaults to ``{"header":0,"index_col":False}``.
+    :param file_loading_kwargs: Any key-word arguments to pass to pandas.read_csv when :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` should be created iteratively (if ``data`` is ``None`` and ``file_paths`` is a non-empty list). Defaults to ``{"header":0,"index_col":False}``.
     :type file_loading_kwargs: dict,optional
+    :ivar [int] coef_per_term: A list containing the number of coefficients corresponding to each term included in ``terms``. Initialized at construction.
+    :ivar [str] coef_names: A list containing a named identifier (e.g., "Intercept") for each coefficient estimated by the model. Initialized at construction.
+    :ivar int n_coef: The number of coefficients estimated by the model in total. Initialized at construction.
+    :ivar int unpenalized_coef: The number of un-penalized coefficients estimated by the model. Initialized at construction.
+    :ivar [float] or None y_flat: An array, containing all values on the dependent variable (i.e., specified by ``lhs.variable``) in order of the data-frame passed to ``data``. This variable will be initialized at construction but only if ``file_paths=None``, i.e., in case :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` are **not** created iteratively.
+    :ivar [float] or None cov_flat: An array, containing all (encoded, in case of categorical predictors) values on each predictor (each columns of ``cov_flat`` corresponds to a different predictor) variable included in any of the ``terms`` in order of the data-frame passed to ``data``. This variable will be initialized at construction but only if ``file_paths=None``, i.e., in case :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` are **not** created iteratively.
+    :ivar [bool] or None NOT_NA_flat: An array, containing an indication for each value on the dependent variable (i.e., specified by ``lhs.variable``) whether the corresponding value is not a number ("NA") or not. In order of the data-frame passed to ``data``. This variable will be initialized at construction but only if ``file_paths=None``, i.e., in case :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` are **not** created iteratively.
     """
     def __init__(self,
                  lhs:lhs,
-                 terms:list[GammTerm],
+                 terms:[GammTerm],
                  data:pd.DataFrame,
-                 p_formula:PFormula or None=None,
                  series_id:str or None=None,
-                 split_scale:bool=False,
-                 n_j:int=3,
                  codebook:dict or None=None,
                  print_warn=True,
                  keep_cov = False,
@@ -1013,13 +934,8 @@ class Formula():
         self.__lhs = lhs
         self.__terms = terms
         self.__data = data
-        self.p_formula = p_formula
         self.series_id = series_id
-        self.__split_scale = split_scale # Separate scale parameters per state, if true then formula counts for individual state.
-        self.__n_j = n_j # Number of latent states to estimate - not for irf terms but for f terms!
         self.print_warn = print_warn
-        if self.__split_scale and self.print_warn:
-           warnings.warn("split_scale==True! All terms will be estimted per latent stage, independent of terms' by_latent status.")
         self.keep_cov = keep_cov # For iterative X.T@X building, whether the encoded data should be kept or read in from file again during every iteration.
         self.file_paths = file_paths # If this will not be empty, we accumulate t(X)@X directly without forming X. Only useful if model is normal.
         self.file_loading_nc = file_loading_nc
@@ -1039,12 +955,11 @@ class Formula():
         self.__random_terms = []
         self.__has_intercept = False
         self.__has_irf = False
-        self.__has_by_latent = False
         self.__n_irf = 0
         self.unpenalized_coef = None
         self.coef_names = None
         self.n_coef = None # Number of total coefficients in formula.
-        self.ordered_coef_per_term = None # Number of coefficients associated with each term - order: linear terms, irf terms, f terms, random terms
+        self.coef_per_term = None # Number of coefficients associated with each term
         cvi = 0 # Number of variables included in some way as predictors
 
         # Encoding from data frame to series-level dependent values + predictor values (in cov)
@@ -1090,10 +1005,6 @@ class Formula():
             
             if isinstance(term, ri) or isinstance(term,rs):
                self.__random_terms.append(ti)
-
-            if not isinstance(term,irf):
-               if term.by_latent:
-                  self.__has_by_latent = True
             
             if isinstance(term,fs):
                if not term.approx_deriv is None:
@@ -1174,30 +1085,30 @@ class Formula():
                     
                     if isinstance(term, f) and not term.binary is None:
                         term.binary_level = self.__factor_codings[t_by][term.binary[1]]
+                
+                if not term.by_cont is None: # Continuous variable to be multiplied with model matrix for this term.
+                   t_by_cont = term.by_cont
 
-        # Also encode P-formula term variables.
-        if self.p_formula is not None:
-           for pti,pTerm in enumerate(self.p_formula.get_terms()):
-              pt_by = pTerm.split_by
-              if not pt_by is  None:
+                   if len(self.file_paths) == 0 and not t_by_cont in self.__data.columns:
+                        raise KeyError(f"By_cont-variable '{t_by_cont}' attributed to term {ti} does not exist in dataframe.")
+                   
+                   if len(self.file_paths) == 0:
+                        vartype = data[t_by_cont].dtype
+                   else:
+                        vartype = read_dtype(t_by_cont,self.file_paths[0],self.file_loading_kwargs)
 
-               if not pt_by in self.__data.columns:
-                  raise KeyError(f"By-variable '{pt_by}' attributed to P-term {pti} does not exist in dataframe.")
-               
-               if data[pt_by].dtype in ['float64','int64']:
-                  raise KeyError(f"Data-type of By-variable '{pt_by}' attributed to P-term {pti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'.")
-               
-               cvi = self.__encode_var(pt_by,'O',cvi,codebook)
-            
+                   if vartype not in ['float64','int64']:
+                     raise TypeError(f"Variable '{t_by_cont}' attributed to term {ti} must be numeric but is not.")
+                   
+                   cvi = self.__encode_var(t_by_cont,vartype,cvi,codebook)
+                   
+    
         if self.__n_irf > 0:
            self.__has_irf = True
+        
+        if self.__has_irf and (len(self.file_paths) != 0 or self.__data is None):
+           raise NotImplementedError("Building X.T@X iteratively does not support Impulse Response Terms (i.e., ``irf``) in the formula.")
 
-        if self.__has_irf and self.__split_scale:
-           raise ValueError("Formula includes an impulse response term. split_scale must be set to False!")
-        
-        if self.__has_irf and self.__has_by_latent:
-           raise NotImplementedError("Formula includes an impulse response term. Having regular smooth terms differ by latent stages is currently not supported.")
-        
         # Compute number of coef and coef names
         self.__get_coef_info()
         
@@ -1312,7 +1223,7 @@ class Formula():
       self.unpenalized_coef = 0
       self.n_coef = 0
       self.coef_names = []
-      self.ordered_coef_per_term = []
+      self.coef_per_term = np.zeros(len(terms),dtype=int)
 
       for lti in self.get_linear_term_idx():
          lterm = terms[lti]
@@ -1321,19 +1232,18 @@ class Formula():
             self.coef_names.append("Intercept")
             self.unpenalized_coef += 1
             self.n_coef += 1
-            self.ordered_coef_per_term.append(1)
+            self.coef_per_term[lti] = 1
          
          else:
             # Linear effects
             t_total_coef,\
             t_unpenalized_coef,\
-            t_coef_names,\
-            t_coef_per_term = get_coef_info_linear(self.has_intercept(),
+            t_coef_names = get_coef_info_linear(self.has_intercept(),
                                                    lterm,var_types,
                                                    coding_factors,
                                                    factor_levels)
             self.coef_names.extend(t_coef_names)
-            self.ordered_coef_per_term.extend(t_coef_per_term)
+            self.coef_per_term[lti] = t_total_coef
             self.n_coef += t_total_coef
             self.unpenalized_coef += t_unpenalized_coef
       
@@ -1356,24 +1266,22 @@ class Formula():
             n_coef *= len(by_levels)
 
             for by_level in by_levels:
-               self.coef_names.extend([f"irf_{irsterm.event}_{var_label}_{ink}_{by_level}" for ink in range(n_coef)])
+               self.coef_names.extend([f"irf_{irsti}_{var_label}_{ink}_{by_level}" for ink in range(n_coef)])
          
          else:
-            self.coef_names.extend([f"irf_{irsterm.event}_{var_label}_{ink}" for ink in range(n_coef)])
+            self.coef_names.extend([f"irf_{irsti}_{var_label}_{ink}" for ink in range(n_coef)])
          
          self.n_coef += n_coef
-         self.ordered_coef_per_term.append(n_coef)
+         self.coef_per_term[irsti] = n_coef
 
       for sti in self.get_smooth_term_idx():
 
          sterm = terms[sti]
          s_total_coef,\
-         s_coef_names,\
-         s_coef_per_term = get_coef_info_smooth(self.has_scale_split(),
-                                                self.__n_j,sterm,
-                                                factor_levels)
+         s_coef_names = get_coef_info_smooth(sterm,
+                                             factor_levels)
          self.coef_names.extend(s_coef_names)
-         self.ordered_coef_per_term.extend(s_coef_per_term)
+         self.coef_per_term[sti] = s_total_coef
          self.n_coef += s_total_coef
 
       for rti in self.get_random_term_idx():
@@ -1387,13 +1295,12 @@ class Formula():
                self.coef_names.append(f"ri_{vars[0]}_{by_code_factors[fl]}")
                self.n_coef += 1
 
-            self.ordered_coef_per_term.append(len(factor_levels[vars[0]]))
+            self.coef_per_term[rti]= len(factor_levels[vars[0]])
 
          elif isinstance(rterm,rs):
             t_total_coef,\
             _,\
-            t_coef_names,\
-            _ = get_coef_info_linear(False,
+            t_coef_names = get_coef_info_linear(False,
                                      rterm,var_types,
                                      coding_factors,
                                      factor_levels)
@@ -1408,7 +1315,7 @@ class Formula():
             
             t_ncoef = len(rf_coef_names)
             self.coef_names.extend(rf_coef_names)
-            self.ordered_coef_per_term.append(t_ncoef)
+            self.coef_per_term[rti] = t_ncoef
             self.n_coef += t_ncoef
             
                
@@ -1422,9 +1329,8 @@ class Formula():
       :type data: pd.DataFrame
       :param prediction: Whether or not a NA index and a column for the dependent variable should be generated.
       :type prediction: bool, optional
-      :return: A tuple with 7 entries: a ``np.array`` of the dependent variable described by ``self.__lhs`` or ``None``, a ``np.array`` with as many columns as there are predictor variables specified in ``self.__terms``, holding the encoded predictor variables (number of rows matches the number of rows of the first entry returned), either a ``np.array`` indicating for each row whether the dependent variable described by ``self.__lhs`` is NA or ``None``,
-      either like the first entry but split into a list of lists by ``self.series_id`` or ``None``, either like the second entry but split into a list of lists by ``self.series_id`` or ``None``, either like the third entry but split into a list of lists by ``self.series_id`` or ``None``, either a ``np.array`` indicating the start and end point for the splits used to split the previous three elements (identifying the start and end point of every level of ``self.series_id``) or ``None``.
-      :rtype: tuple
+      :return: A tuple with 7 (optional) entries: the dependent variable described by ``self.__lhs``, the encoded predictor variables as a (N,k) array (number of rows matches the number of rows of the first entry returned, the number of columns matches the number of k variables present in the formula), an indication for each row whether the dependent variable described by ``self.__lhs`` is NA, like the first entry but split into a list of lists by ``self.series_id``, like the second entry but split into a list of lists by ``self.series_id``, ike the third entry but split into a list of lists by ``self.series_id``, start and end points for the splits used to split the previous three elements (identifying the start and end point of every level of ``self.series_id``).
+      :rtype: (numpy.array or None, numpy.array or None, numpy.array or None, [numpy.array] or None, [numpy.array] or None, [numpy.array] or None, numpy.array or None)
       """
       # Build NA index
       if prediction:
@@ -1616,6 +1522,8 @@ class Formula():
       best_error = None
 
       iterator = range(self.discretize[sti]["restarts"])
+      seed = self.discretize[sti]["seed"]
+
       if self.print_warn:
          iterator = tqdm(iterator,desc="Clustering",leave=True)
 
@@ -1674,7 +1582,10 @@ class Formula():
 
             # Use heuristic to determine the number of clusters also used to discretize individual covariates
             # Then cluster - for estimation this only has to do once before starting the actual fitting routine
-            clust_centroids,clust_lab = scp.cluster.vq.kmeans2(clust,int((dig_cov_flat_unq.shape[1]*dig_cov_flat_unq.shape[0])**0.5),minit='++')
+            clust_centroids,clust_lab = scp.cluster.vq.kmeans2(clust,int((dig_cov_flat_unq.shape[1]*dig_cov_flat_unq.shape[0])**0.5),minit='++',seed=seed)
+
+            if seed is not None:
+               seed += 1
 
             # Compute clustering loss, according to scipy docs: https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.vq.kmeans2.html
             # Simply pick the cluster set out of all repetitions that minimizes the loss
@@ -1741,7 +1652,7 @@ class Formula():
                   
                   var_cov_flat = read_cov(self.__lhs.variable,vars[vi],self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
 
-                  matrix_term_v = sterm.basis(None,var_cov_flat,
+                  matrix_term_v = sterm.basis(var_cov_flat,
                                               None,id_nk,min_c=self.__var_mins[vars[vi]],
                                               max_c=self.__var_maxs[vars[vi]], **sterm.basis_kwargs)
 
@@ -1798,7 +1709,7 @@ class Formula():
                   
                   var_cov_flat = self.cov_flat[self.NOT_NA_flat,var_map[vars[vi]]]
 
-                  matrix_term_v = sterm.basis(None,var_cov_flat,
+                  matrix_term_v = sterm.basis(var_cov_flat,
                                               None,id_nk,min_c=self.__var_mins[vars[vi]],
                                               max_c=self.__var_maxs[vars[vi]], **sterm.basis_kwargs)
 
@@ -1823,7 +1734,7 @@ class Formula():
 
             var_cov_flat = self.cov_flat[self.NOT_NA_flat,var_map[vars[vi]]]
 
-            matrix_term_v = sterm.basis(None,var_cov_flat,
+            matrix_term_v = sterm.basis(var_cov_flat,
                                       None,id_nk,min_c=self.__var_mins[vars[vi]],
                                       max_c=self.__var_maxs[vars[vi]], **sterm.basis_kwargs)
 
@@ -1964,9 +1875,6 @@ class Formula():
                if sterm.by is not None:
                   added_not_penalized *= len(by_levels)
 
-               if sterm.by_latent is not False and self.has_scale_split() is False:
-                  added_not_penalized *= self.__n_j
-
                start_idx += added_not_penalized
                self.unpenalized_coef += added_not_penalized
 
@@ -1988,8 +1896,7 @@ class Formula():
                   cur_pen_idx = prev_pen_idx
                
                prev_n_pen = len(penalties)
-               penalties,cur_pen_idx = build_smooth_penalties(self.has_scale_split(),self.__n_j,
-                                                              penalties,cur_pen_idx,
+               penalties,cur_pen_idx = build_smooth_penalties(penalties,cur_pen_idx,
                                                               pen,penid,sti,sterm,vars,
                                                               by_levels,n_coef,col_S)
 
@@ -2247,11 +2154,11 @@ class Formula():
        return copy.deepcopy(self.__var_types)
     
     def get_var_mins(self) -> dict:
-       """Get a copy of the var mins dictionary. Keys are variables in the data, values are either the minimum value the variable takes on in ``self.__data`` for continuous variables or ``None` for categorical variables."""
+       """Get a copy of the var mins dictionary. Keys are variables in the data, values are either the minimum value the variable takes on in ``self.__data`` for continuous variables or ``None`` for categorical variables."""
        return copy.deepcopy(self.__var_mins)
     
     def get_var_maxs(self) -> dict:
-       """Get a copy of the var maxs dictionary. Keys are variables in the data, values are either the maximum value the variable takes on in ``self.__data`` for continuous variables or ``None` for categorical variables."""
+       """Get a copy of the var maxs dictionary. Keys are variables in the data, values are either the maximum value the variable takes on in ``self.__data`` for continuous variables or ``None`` for categorical variables."""
        return copy.deepcopy(self.__var_maxs)
     
     def get_var_mins_maxs(self) -> (dict,dict):
@@ -2273,14 +2180,6 @@ class Formula():
     def get_random_term_idx(self) -> list[int]:
        """Get a copy of the list of indices that identify random terms in ``self.__terms``."""
        return(copy.deepcopy(self.__random_terms))
-    
-    def get_nj(self) -> int:
-       """Get the number of latent states assumed by this formula."""
-       if self.__has_irf:
-          # Every event has an irf and there are always
-          # n_event + 1 states.
-          return self.__n_irf + 1
-       return self.__n_j
     
     def get_n_coef(self) -> int:
        """Get the number of coefficients that are implied by the formula."""
@@ -2305,10 +2204,6 @@ class Formula():
     def has_ir_terms(self) -> bool:
        """Does this formula include impulse response terms or not."""
        return self.__has_irf
-    
-    def has_scale_split(self) -> bool:
-       """Does this formula include a scale split or not."""
-       return self.__split_scale
     
     def get_term_names(self) -> list:
        """Returns a copy of the list with the names of the terms specified for this formula."""
@@ -2349,6 +2244,11 @@ def embed_shared_penalties(formulas):
     """
 
     shared_penalties = [copy.deepcopy(form.penalties) for form in formulas]
+
+    # Assign original formula index to each penalty
+    for fi in range(len(shared_penalties)):
+       for lterm in shared_penalties[fi]:
+          lterm.dist_param = fi
 
     for fi,form in enumerate(formulas):
         for ofi,other_form in enumerate(formulas):
@@ -2473,7 +2373,7 @@ def build_linear_term_matrix(ci,n_y,has_intercept,lti,lterm,var_types,var_map,fa
    
    return new_elements,new_rows,new_cols,new_ci
 
-def build_ir_smooth_series(irsterm,s_cov,s_state,vars,var_map,var_mins,var_maxs,by_levels):
+def build_ir_smooth_series(irsterm,s_cov,s_event,vars,var_map,var_mins,var_maxs,by_levels):
    for vi in range(len(vars)):
 
       if len(vars) > 1:
@@ -2481,16 +2381,16 @@ def build_ir_smooth_series(irsterm,s_cov,s_state,vars,var_map,var_mins,var_maxs,
       else:
          id_nk = irsterm.nk
 
-      # Create matrix for state corresponding to term.
+      # Create matrix for event corresponding to term.
       # ToDo: For Multivariate case, the matrix term needs to be build iteratively for
       # every level of the multivariate factor to make sure that the convolution operation
       # works as intended. The splitting can happen later via by.
       basis_kwargs_v = irsterm.basis_kwargs[vi]
 
       if "max_c" in basis_kwargs_v and "min_c" in basis_kwargs_v:
-         matrix_term_v = irsterm.basis(irsterm.event,s_cov[:,var_map[vars[vi]]],s_state, id_nk, **basis_kwargs_v)
+         matrix_term_v = irsterm.basis(s_cov[:,var_map[vars[vi]]],s_event, id_nk, **basis_kwargs_v)
       else:
-         matrix_term_v = irsterm.basis(irsterm.event,s_cov[:,var_map[vars[vi]]],s_state, id_nk,min_c=var_mins[vars[vi]],max_c=var_maxs[vars[vi]], **basis_kwargs_v)
+         matrix_term_v = irsterm.basis(s_cov[:,var_map[vars[vi]]],s_event, id_nk,min_c=var_mins[vars[vi]],max_c=var_maxs[vars[vi]], **basis_kwargs_v)
 
       if vi == 0:
          matrix_term = matrix_term_v
@@ -2524,7 +2424,7 @@ def build_ir_smooth_series(irsterm,s_cov,s_state,vars,var_map,var_mins,var_maxs,
    
    return final_term
 
-def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,var_mins,var_maxs,factor_levels,ridx,cov,state_est,use_only,pool,tol):
+def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,var_mins,var_maxs,factor_levels,ridx,cov,use_only,pool,tol):
    """Parameterize model matrix for an impulse response term."""
    vars = irsterm.variables
    term_elements = []
@@ -2547,9 +2447,9 @@ def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,var_mins,var_maxs,facto
       n_coef *= len(by_levels)
 
    if pool is None:
-      for s_cov,s_state in zip(cov,state_est):
+      for s_cov,s_event in zip(cov,irsterm.event_onset):
          
-         final_term = build_ir_smooth_series(irsterm,s_cov,s_state,vars,var_map,var_mins,var_maxs,by_levels)
+         final_term = build_ir_smooth_series(irsterm,s_cov,s_event,vars,var_map,var_mins,var_maxs,by_levels)
 
          m_rows,m_cols = final_term.shape
 
@@ -2580,7 +2480,7 @@ def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,var_mins,var_maxs,facto
 
    else:
       
-      args = zip(repeat(irsterm),cov,state_est,repeat(vars),repeat(var_map),repeat(var_mins),repeat(var_maxs),repeat(by_levels))
+      args = zip(repeat(irsterm),cov,irsterm.event_onset,repeat(vars),repeat(var_map),repeat(var_mins),repeat(var_maxs),repeat(by_levels))
         
       final_terms = pool.starmap(build_ir_smooth_series,args)
       final_term = np.vstack(final_terms)
@@ -2599,7 +2499,7 @@ def build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,var_mins,var_maxs,facto
    
    return new_elements,new_rows,new_cols,new_ci
 
-def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,var_maxs,factor_levels,ridx,cov_flat,state_est_flat,use_only,tol):
+def build_smooth_term_matrix(ci,sti,sterm,var_map,var_mins,var_maxs,factor_levels,ridx,cov_flat,use_only,tol):
    """Parameterize model matrix for a smooth term."""
    vars = sterm.variables
    term_ridx = []
@@ -2621,9 +2521,6 @@ def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,v
    if sterm.by is not None:
       by_levels = factor_levels[sterm.by]
       n_coef *= len(by_levels)
-
-      if sterm.by_latent is not False and has_scale_split is False:
-         n_coef *= n_j
       
    # Calculate smooth term for corresponding covariate
 
@@ -2640,7 +2537,7 @@ def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,v
          id_nk += 1
 
       #print(var_mins[vars[0]],var_maxs[vars[0]])
-      matrix_term_v = sterm.basis(None,cov_flat[:,var_map[vars[vi]]],
+      matrix_term_v = sterm.basis(cov_flat[:,var_map[vars[vi]]],
                                   None, id_nk, min_c=var_mins[vars[vi]],
                                   max_c=var_maxs[vars[vi]], **sterm.basis_kwargs)
 
@@ -2676,6 +2573,11 @@ def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,v
 
    m_rows, m_cols = matrix_term.shape
    #print(m_cols)
+
+   # Multiply each row of model matrix by value in by_cont
+   if sterm.by_cont is not None:
+      by_cont_cov = cov_flat[:,var_map[sterm.by_cont]]
+      matrix_term *= by_cont_cov.reshape(-1,1)
    
    # Handle optional by keyword
    if sterm.by is not None:
@@ -2702,19 +2604,6 @@ def build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,var_map,var_mins,v
    # No by or binary just use rows/cols as they are
    else:
       term_ridx = [ridx[:] for _ in range(m_cols)]
-
-   # Handle split by latent variable if a shared scale term across latent stages is assumed.
-   if sterm.by_latent is not False and has_scale_split is False:
-      new_term_ridx = []
-
-      # Split by state and update rows with elements in columns
-      for by_state in range(n_j):
-         for m_coli in range(len(term_ridx)):
-            # Adjust state estimate for potential by split earlier.
-            col_cor_state_est = state_est_flat[term_ridx[m_coli]]
-            new_term_ridx.append(term_ridx[m_coli][col_cor_state_est == by_state,])
-
-      term_ridx = new_term_ridx
 
    f_cols = len(term_ridx)
 
@@ -2812,14 +2701,12 @@ def build_rs_term_matrix(ci,n_y,rti,rterm,var_types,var_map,factor_levels,ridx,c
    return new_elements,new_rows,new_cols,new_ci
 
 def build_sparse_matrix_from_formula(terms,has_intercept,
-                                     has_scale_split,
                                      ltx,irstx,stx,rtx,
                                      var_types,var_map,
                                      var_mins,var_maxs,
                                      factor_levels,cov_flat,
-                                     cov,n_j,state_est_flat,
-                                     state_est,pool=None,
-                                     use_only=None,tol=1e-10):
+                                     cov,pool=None,use_only=None,
+                                     tol=0):
    
    """Builds the entire model-matrix specified by a formula."""
    n_y = cov_flat.shape[0]
@@ -2863,7 +2750,7 @@ def build_sparse_matrix_from_formula(terms,has_intercept,
       new_ci = build_ir_smooth_term_matrix(ci,irsti,irsterm,var_map,
                                            var_mins,var_maxs,
                                            factor_levels,ridx,cov,
-                                           state_est,use_only,pool,tol)
+                                           use_only,pool,tol)
       elements.extend(new_elements)
       rows.extend(new_rows)
       cols.extend(new_cols)
@@ -2876,10 +2763,10 @@ def build_sparse_matrix_from_formula(terms,has_intercept,
       new_elements,\
       new_rows,\
       new_cols,\
-      new_ci = build_smooth_term_matrix(ci,n_j,has_scale_split,sti,sterm,
-                                        var_map,var_mins,var_maxs,
+      new_ci = build_smooth_term_matrix(ci,sti,sterm,var_map,
+                                        var_mins,var_maxs,
                                         factor_levels,ridx,cov_flat,
-                                        state_est_flat,use_only,tol)
+                                        use_only,tol)
       elements.extend(new_elements)
       rows.extend(new_rows)
       cols.extend(new_cols)
