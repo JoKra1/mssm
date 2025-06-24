@@ -2931,8 +2931,8 @@ def correct_lambda_step_gamlss(family,mus,y,Xs,S_norm,n_coef,form_n_coef,form_up
       next_coef = np.concatenate(split_coef).reshape(-1,1)
 
       # Transform H, L, LV
-      H = Q_emb.T @ H @ Q_emb
-      L = Q_emb.T @ L
+      H = Q_emb @ H @ Q_emb.T
+      L = Q_emb @ L
       LV = LV @ Q_emb.T
 
    return next_coef,split_coef,next_mus,next_etas,H,L,LV,next_llk,next_pen_llk,eps,keep,drop,S_emb,gamlss_pen,total_edf,term_edfs,lam_delta
