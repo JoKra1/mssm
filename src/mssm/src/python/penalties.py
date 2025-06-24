@@ -32,12 +32,10 @@ def embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,Sj,SJ_col):
       
    return Sj
 
-def embed_shared_penalties(formulas):
+def embed_shared_penalties(shared_penalties,formulas):
    """
    Embed penalties from individual model into overall penalties for GAMLSS models.
    """
-
-   shared_penalties = [copy.deepcopy(form.penalties) for form in formulas]
 
    # Assign original formula index to each penalty
    for fi in range(len(shared_penalties)):

@@ -78,8 +78,8 @@ class Test_NUll_penalty_reparam:
     model.fit()
 
     #Compute re-parameterization strategy from Wood (2011)
-    S_emb,S_pinv,_,_ = compute_S_emb_pinv_det(len(model.coef),formula.penalties,"svd")
-    Sj_reps,S_reps,SJ_term_idx,S_idx,S_coefs,Q_reps,_,Mp = reparam(None,formula.penalties,None,option=4)
+    S_emb,S_pinv,_,_ = compute_S_emb_pinv_det(len(model.coef),model.overall_penalties,"svd")
+    Sj_reps,S_reps,SJ_term_idx,S_idx,S_coefs,Q_reps,_,Mp = reparam(None,model.overall_penalties,None,option=4)
 
     # For Computing derivative of log(|S_{\lambda}|) with respect to \lambda_j of univariate smooth term (Wood, 2011)
     S_rep = S_reps[0]
@@ -103,12 +103,12 @@ class Test_NUll_penalty_reparam:
     def test_reparam2(self):
         # General strategy, e.g. from Wood & Fasiolo, 2017
         assert np.allclose((self.S_inv@self.Sj_reps[0].S_J).trace(),
-                           (self.S_pinv@self.formula.penalties[0].S_J_emb).trace())
+                           (self.S_pinv@self.model.overall_penalties[0].S_J_emb).trace())
         
     def test_reparam3(self):
         # General strategy (here for tensor), e.g. from Wood & Fasiolo, 2017
         assert np.allclose((self.S_inv2@self.Sj_reps[6].S_J).trace(),
-                           (self.S_pinv@self.formula.penalties[6].S_J_emb).trace())
+                           (self.S_pinv@self.model.overall_penalties[6].S_J_emb).trace())
     
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=2) == 151.46 
@@ -156,7 +156,7 @@ class Test_BIG_GAMM:
         assert round(sigma,ndigits=3) == 577.194
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([0.003576343523516708, 0.006011901683452655, 5028.094352875556, 230482.43912034066, 110804.13545750394, 38451.597466911124, 381047.3435206221, 330.2597296955685, 0.11887201661781975, 2.166381231196006])) 
 
 
@@ -265,7 +265,7 @@ class Test_rs_ri:
                                             1.95026568e-04, -1.94851637e-02])) 
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([2.21567798e+00, 2.58200022e+04])) 
 
     def test_GAMreml(self):
@@ -301,7 +301,7 @@ class Test_no_pen:
                                             0.07117496,   0.29090723])) 
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([])) 
 
     def test_GAMllk(self):
@@ -368,7 +368,7 @@ class Test_te_rs_fact:
                                             5.32136453e-01])) 
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([2.21073262e-02, 3.79563141e-03, 6.78414676e-01, 2.50485765e+02,
                                          3.11881227e+01, 2.13019441e+02])) 
 
@@ -449,7 +449,7 @@ class Test_te_rs_fact_QR:
                                             5.32136453e-01])) 
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([2.21073262e-02, 3.79563141e-03, 6.78414676e-01, 2.50485765e+02,
                                          3.11881227e+01, 2.13019441e+02])) 
 
@@ -546,7 +546,7 @@ class Test_ti_rs_fact:
                                             -7.18868817e-02,  5.92954524e-01, -3.56891388e-01,  5.75216981e-01])) 
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([2.06462523e-01, 2.61797067e-01, 4.54850831e-03, 7.59911476e-02,
                                         5.72234072e-01, 2.49782036e+02, 2.32293389e+01, 3.00260310e+02])) 
 
@@ -585,7 +585,7 @@ class Test_3way_li:
                                                     -7.20358812e-04, -7.44800816e-05,  1.88303305e-04,  8.13699273e-05])) 
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([])) 
 
 class Test_print_smooth_by_factor_p:

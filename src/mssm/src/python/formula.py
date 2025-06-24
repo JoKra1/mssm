@@ -74,6 +74,9 @@ def compute_constraint_single_MP(sterm,vars,lhs_var,file,var_mins,var_maxs,file_
 
 class Formula():
     """The formula of a regression equation.
+   
+    **Note:** The class implements multiple ``get_*`` functions to access attributes stored in instance variables. The get functions always return a copy of the
+    instance variable and the results are thus safe to manipulate.
 
     :param lhs: The lhs object defining the dependent variable.
     :type variable: lhs
@@ -95,6 +98,9 @@ class Formula():
     :type file_loading_nc: int,optional
     :param file_loading_kwargs: Any key-word arguments to pass to pandas.read_csv when :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` should be created iteratively (if ``data`` is ``None`` and ``file_paths`` is a non-empty list). Defaults to ``{"header":0,"index_col":False}``.
     :type file_loading_kwargs: dict,optional
+    :ivar lhs lhs: The left-hand side object of the regression formula passed to the constructor. Initialized at construction.
+    :ivar [GammTerm] terms: The list of terms passed to the constructor. Initialized at construction.
+    :ivar pandas.DataFrame data: The dataframe passed to the constructor. Initialized at construction.
     :ivar [int] coef_per_term: A list containing the number of coefficients corresponding to each term included in ``terms``. Initialized at construction.
     :ivar [str] coef_names: A list containing a named identifier (e.g., "Intercept") for each coefficient estimated by the model. Initialized at construction.
     :ivar int n_coef: The number of coefficients estimated by the model in total. Initialized at construction.
@@ -115,35 +121,36 @@ class Formula():
                  file_loading_nc = 1,
                  file_loading_kwargs: dict = {"header":0,"index_col":False}) -> None:
         
-        self.__lhs = lhs
-        self.__terms = terms
-        self.__data = data
+        self.lhs = lhs
+        self.terms = terms
+        self.data = data
         self.series_id = series_id
         self.print_warn = print_warn
         self.keep_cov = keep_cov # For iterative X.T@X building, whether the encoded data should be kept or read in from file again during every iteration.
         self.file_paths = file_paths # If this will not be empty, we accumulate t(X)@X directly without forming X. Only useful if model is normal.
         self.file_loading_nc = file_loading_nc
         self.file_loading_kwargs = file_loading_kwargs
-        self.__factor_codings = {}
-        self.__coding_factors = {}
-        self.__factor_levels = {}
-        self.__var_to_cov = {}
-        self.__var_types = {}
-        self.__var_mins = {}
-        self.__var_maxs = {}
-        self.__subgroup_variables = []
-        self.__term_names = []
-        self.__linear_terms = []
-        self.__smooth_terms = []
-        self.__ir_smooth_terms = []
-        self.__random_terms = []
-        self.__has_intercept = False
-        self.__has_irf = False
-        self.__n_irf = 0
+        self.factor_codings = {}
+        self.coding_factors = {}
+        self.factor_levels = {}
+        self.var_to_cov = {}
+        self.var_types = {}
+        self.var_mins = {}
+        self.var_maxs = {}
+        self.subgroup_variables = []
+        self.term_names = []
+        self.linear_terms = []
+        self.smooth_terms = []
+        self.ir_smooth_terms = []
+        self.random_terms = []
+        self.has_intercept = False
+        self.has_irf = False
+        self.n_irf = 0
         self.unpenalized_coef = None
         self.coef_names = None
         self.n_coef = None # Number of total coefficients in formula.
         self.coef_per_term = None # Number of coefficients associated with each term
+        self.built_penalties = False
         cvi = 0 # Number of variables included in some way as predictors
 
         # Encoding from data frame to series-level dependent values + predictor values (in cov)
@@ -161,34 +168,34 @@ class Formula():
         self.discretize = {}
         
         # Perform input checks first for LHS/Dependent variable.
-        if len(self.file_paths) == 0 and self.__lhs.variable not in self.__data.columns:
-            raise IndexError(f"Column '{self.__lhs.variable}' does not exist in Dataframe.")
+        if len(self.file_paths) == 0 and self.lhs.variable not in self.data.columns:
+            raise IndexError(f"Column '{self.lhs.variable}' does not exist in Dataframe.")
 
         # Now some checks on the terms - some problems might only be caught later when the 
         # penalties are built.
-        for ti, term in enumerate(self.__terms):
+        for ti, term in enumerate(self.terms):
             
             # Collect term name
-            self.__term_names.append(term.name)
+            self.term_names.append(term.name)
 
             # Term allocation.
             if isinstance(term,i):
-                self.__has_intercept = True
-                self.__linear_terms.append(ti)
+                self.has_intercept = True
+                self.linear_terms.append(ti)
                 continue
             
             if isinstance(term,l):
-               self.__linear_terms.append(ti)
+               self.linear_terms.append(ti)
 
             if isinstance(term, f):
-               self.__smooth_terms.append(ti)
+               self.smooth_terms.append(ti)
 
             if isinstance(term,irf):
-               self.__ir_smooth_terms.append(ti)
-               self.__n_irf += 1
+               self.ir_smooth_terms.append(ti)
+               self.n_irf += 1
             
             if isinstance(term, ri) or isinstance(term,rs):
-               self.__random_terms.append(ti)
+               self.random_terms.append(ti)
             
             if isinstance(term,fs):
                if not term.approx_deriv is None:
@@ -203,7 +210,7 @@ class Formula():
             # All variables must exist in data
             for var in term.variables:
 
-                if len(self.file_paths) == 0 and not var in self.__data.columns:
+                if len(self.file_paths) == 0 and not var in self.data.columns:
                     raise KeyError(f"Variable '{var}' of term {ti} does not exist in dataframe.")
                 
                 if len(self.file_paths) == 0:
@@ -232,7 +239,7 @@ class Formula():
                     if t_by is None:
                        t_by = term.binary[0]
 
-                    if len(self.file_paths) == 0 and not t_by in self.__data.columns:
+                    if len(self.file_paths) == 0 and not t_by in self.data.columns:
                         raise KeyError(f"By-variable '{t_by}' attributed to term {ti} does not exist in dataframe.")
                     
                     if len(self.file_paths) == 0 and data[t_by].dtype in ['float64','int64']:
@@ -248,7 +255,7 @@ class Formula():
 
                        t_by_subgroup = term.by_subgroup
 
-                       if len(self.file_paths) == 0 and not t_by_subgroup[0] in self.__data.columns:
+                       if len(self.file_paths) == 0 and not t_by_subgroup[0] in self.data.columns:
                            raise KeyError(f"Sub-group by-variable '{t_by_subgroup}' attributed to term {ti} does not exist in dataframe.")
                         
                        if len(self.file_paths) == 0 and data[t_by_subgroup[0]].dtype in ['float64','int64']:
@@ -268,12 +275,12 @@ class Formula():
                         term.by += ":" + t_by_subgroup[1]
                     
                     if isinstance(term, f) and not term.binary is None:
-                        term.binary_level = self.__factor_codings[t_by][term.binary[1]]
+                        term.binary_level = self.factor_codings[t_by][term.binary[1]]
                 
                 if not term.by_cont is None: # Continuous variable to be multiplied with model matrix for this term.
                    t_by_cont = term.by_cont
 
-                   if len(self.file_paths) == 0 and not t_by_cont in self.__data.columns:
+                   if len(self.file_paths) == 0 and not t_by_cont in self.data.columns:
                         raise KeyError(f"By_cont-variable '{t_by_cont}' attributed to term {ti} does not exist in dataframe.")
                    
                    if len(self.file_paths) == 0:
@@ -287,10 +294,10 @@ class Formula():
                    cvi = self.__encode_var(t_by_cont,vartype,cvi,codebook)
                    
     
-        if self.__n_irf > 0:
-           self.__has_irf = True
+        if self.n_irf > 0:
+           self.has_irf = True
         
-        if self.__has_irf and (len(self.file_paths) != 0 or self.__data is None):
+        if self.has_irf and (len(self.file_paths) != 0 or self.data is None):
            raise NotImplementedError("Building X.T@X iteratively does not support Impulse Response Terms (i.e., ``irf``) in the formula.")
 
         # Compute number of coef and coef names
@@ -298,7 +305,7 @@ class Formula():
         
         # Encode data into columns usable by the model
         if len(self.file_paths) == 0 or self.keep_cov:
-            y_flat,cov_flat,NAs_flat,y,cov,NAs,sid = self.encode_data(self.__data)
+            y_flat,cov_flat,NAs_flat,y,cov,NAs,sid = self.encode_data(self.data)
 
             # Store encoding
             self.y_flat = y_flat
@@ -315,8 +322,8 @@ class Formula():
     
            if len(self.file_paths) != 0 and self.keep_cov == False:
               # Need to create cov_flat (or at least figure out the correct dimensions) and sid after all
-              #sid_var_cov_flat = read_cov(self.__lhs.variable,self.series_id,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
-              #self.cov_flat = np.zeros((len(sid_var_cov_flat),len(self.__var_to_cov.keys())),dtype=int)
+              #sid_var_cov_flat = read_cov(self.lhs.variable,self.series_id,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+              #self.cov_flat = np.zeros((len(sid_var_cov_flat),len(self.var_to_cov.keys())),dtype=int)
 
               #_, id = np.unique(sid_var_cov_flat,return_index=True)
               #self.sid = np.sort(id)
@@ -344,55 +351,55 @@ class Formula():
       if not by_subgroup is None:
          _org_var = var
          var += ":" + by_subgroup[1]
-         self.__subgroup_variables.append(var)
+         self.subgroup_variables.append(var)
 
-      if not var in self.__var_to_cov:
-         self.__var_to_cov[var] = cvi
+      if not var in self.var_to_cov:
+         self.var_to_cov[var] = cvi
 
          # Assign vartype enum and calculate mins/maxs for continuous variables
          if vartype in ['float64','int64']:
             # ToDo: these can be properties of the formula.
-            self.__var_types[var] = VarType.NUMERIC
+            self.var_types[var] = VarType.NUMERIC
             if len(self.file_paths) == 0:
-               self.__var_mins[var] = np.min(self.__data[var])
-               self.__var_maxs[var] = np.max(self.__data[var])
+               self.var_mins[var] = np.min(self.data[var])
+               self.var_maxs[var] = np.max(self.data[var])
             else:
                unique_var = read_unique(var,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
-               self.__var_mins[var] = np.min(unique_var)
-               self.__var_maxs[var] = np.max(unique_var)
+               self.var_mins[var] = np.min(unique_var)
+               self.var_maxs[var] = np.max(unique_var)
          else:
-            self.__var_types[var] = VarType.FACTOR
-            self.__var_mins[var] = None
-            self.__var_maxs[var] = None
+            self.var_types[var] = VarType.FACTOR
+            self.var_mins[var] = None
+            self.var_maxs[var] = None
 
             # Code factor variables into integers for easy dummy coding
             if len(self.file_paths) == 0:
                if by_subgroup is None:
-                  levels = np.unique(self.__data[var])
+                  levels = np.unique(self.data[var])
                else:
-                  levels = np.unique(self.__data.loc[self.__data[by_subgroup[0]] == by_subgroup[1],_org_var])
+                  levels = np.unique(self.data.loc[self.data[by_subgroup[0]] == by_subgroup[1],_org_var])
             else:
                if by_subgroup is None:
                   levels = read_unique(var,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
                else:
-                  rf_fac = read_cov(self.__lhs.variable,_org_var,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+                  rf_fac = read_cov(self.lhs.variable,_org_var,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
                   #print(len(rf_fac))
-                  sub_fac = read_cov(self.__lhs.variable,by_subgroup[0],self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+                  sub_fac = read_cov(self.lhs.variable,by_subgroup[0],self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
                   #print(len(rf_fac[sub_fac == by_subgroup[1]]))
                   levels = np.unique(rf_fac[sub_fac == by_subgroup[1]])
                   
 
-            self.__factor_codings[var] = {}
-            self.__coding_factors[var] = {}
-            self.__factor_levels[var] = levels
+            self.factor_codings[var] = {}
+            self.coding_factors[var] = {}
+            self.factor_levels[var] = levels
             
             for ci,c in enumerate(levels):
                if not codebook is None and var in codebook:
-                  self.__factor_codings[var][c] = codebook[var][c]
-                  self.__coding_factors[var][codebook[var][c]] = c
+                  self.factor_codings[var][c] = codebook[var][c]
+                  self.coding_factors[var][codebook[var][c]] = c
                else:
-                  self.__factor_codings[var][c] = ci
-                  self.__coding_factors[var][ci] = c
+                  self.factor_codings[var][c] = ci
+                  self.coding_factors[var][ci] = c
 
          cvi += 1
 
@@ -401,11 +408,11 @@ class Formula():
     def __get_coef_info(self):
       """Get's information about the number of coefficients from each term + the names of these coefficients. Some terms also provide info here about the number of unpenalized coefficients that come with the term.
       """
-      var_types = self.get_var_types()
-      factor_levels = self.get_factor_levels()
-      coding_factors = self.get_coding_factors()
+      var_types = self.var_types
+      factor_levels = self.factor_levels
+      coding_factors = self.coding_factors
 
-      terms = self.__terms
+      terms = self.terms
       self.unpenalized_coef = 0
       self.n_coef = 0
       self.coef_names = []
@@ -425,7 +432,7 @@ class Formula():
             # Linear effects
             t_total_coef,\
             t_unpenalized_coef,\
-            t_coef_names = lterm.get_coef_info(self.has_intercept(),
+            t_coef_names = lterm.get_coef_info(self.has_intercept,
                                                var_types,
                                                factor_levels,
                                                coding_factors)
@@ -440,7 +447,7 @@ class Formula():
 
          t_total_coef,\
          t_unpenalized_coef,\
-         t_coef_names = irsterm.get_coef_info(self.has_intercept(),
+         t_coef_names = irsterm.get_coef_info(self.has_intercept,
                                               factor_levels)
          
          self.coef_names.extend(t_coef_names)
@@ -491,7 +498,7 @@ class Formula():
       :type data: pd.DataFrame
       :param prediction: Whether or not a NA index and a column for the dependent variable should be generated.
       :type prediction: bool, optional
-      :return: A tuple with 7 (optional) entries: the dependent variable described by ``self.__lhs``, the encoded predictor variables as a (N,k) array (number of rows matches the number of rows of the first entry returned, the number of columns matches the number of k variables present in the formula), an indication for each row whether the dependent variable described by ``self.__lhs`` is NA, like the first entry but split into a list of lists by ``self.series_id``, like the second entry but split into a list of lists by ``self.series_id``, ike the third entry but split into a list of lists by ``self.series_id``, start and end points for the splits used to split the previous three elements (identifying the start and end point of every level of ``self.series_id``).
+      :return: A tuple with 7 (optional) entries: the dependent variable described by ``self.lhs``, the encoded predictor variables as a (N,k) array (number of rows matches the number of rows of the first entry returned, the number of columns matches the number of k variables present in the formula), an indication for each row whether the dependent variable described by ``self.lhs`` is NA, like the first entry but split into a list of lists by ``self.series_id``, like the second entry but split into a list of lists by ``self.series_id``, ike the third entry but split into a list of lists by ``self.series_id``, start and end points for the splits used to split the previous three elements (identifying the start and end point of every level of ``self.series_id``).
       :rtype: (numpy.array or None, numpy.array or None, numpy.array or None, [numpy.array] or None, [numpy.array] or None, [numpy.array] or None, numpy.array or None)
       """
       # Build NA index
@@ -501,14 +508,14 @@ class Formula():
       else:
          if data is None:
             # read in dep var - without NA correction!
-            y_flat = read_cov_no_cor(self.get_lhs().variable,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+            y_flat = read_cov_no_cor(self.lhs.variable,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
             NAs_flat = np.isnan(y_flat) == False
          else:
-            NAs_flat = np.isnan(data[self.get_lhs().variable]) == False
+            NAs_flat = np.isnan(data[self.lhs.variable]) == False
 
       if not data is None:
          if not prediction and data.shape[0] != data[NAs_flat].shape[0] and self.print_warn:
-            warnings.warn(f"{data.shape[0] - data[NAs_flat].shape[0]} {self.get_lhs().variable} values ({round((data.shape[0] - data[NAs_flat].shape[0]) / data.shape[0] * 100,ndigits=2)}%) are NA.")
+            warnings.warn(f"{data.shape[0] - data[NAs_flat].shape[0]} {self.lhs.variable} values ({round((data.shape[0] - data[NAs_flat].shape[0]) / data.shape[0] * 100,ndigits=2)}%) are NA.")
          n_y = data.shape[0]
       else:
          n_y = len(y_flat)
@@ -523,8 +530,8 @@ class Formula():
       var_map = self.get_var_map()
       n_var = len(var_map)
       var_keys = var_map.keys()
-      var_types = self.get_var_types()
-      factor_coding = self.get_factor_codings()
+      var_types = self.var_types
+      factor_coding = self.factor_codings
       
       # Collect every series from data frame, make sure to maintain the
       # order of the data frame.
@@ -540,7 +547,7 @@ class Formula():
       else:
          # Collect entire y column
          if not data is None:
-            y_flat = np.array(data[self.get_lhs().variable]).reshape(-1,1)
+            y_flat = np.array(data[self.lhs.variable]).reshape(-1,1)
          
          # Then split by seried id
          y = None
@@ -556,12 +563,12 @@ class Formula():
 
       for c in var_keys:
          if data is None:
-            if c in self.__subgroup_variables:
+            if c in self.subgroup_variables:
                c_raw = read_cov_no_cor(c.split(":")[0],self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
             else:
                c_raw = read_cov_no_cor(c,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
          else:
-            if c in self.__subgroup_variables:
+            if c in self.subgroup_variables:
                c_raw = np.array(data[c.split(":")[0]])
             else:
                c_raw = np.array(data[c])
@@ -571,7 +578,7 @@ class Formula():
             c_coding = factor_coding[c]
 
             # Code factor variable
-            if c in self.__subgroup_variables:
+            if c in self.subgroup_variables:
                # Set level to -1 which will be ignored later when building the factor smooth.
                c_code = [c_coding[cr] if cr in c_coding else -1 for cr in c_raw]
             else:
@@ -591,7 +598,7 @@ class Formula():
     
     def __discretize(self,sti):
       dig_cov_flat = np.zeros_like(self.cov_flat)
-      var_types = self.get_var_types()
+      var_types = self.var_types
       var_map = self.get_var_map()
       
       collected = []
@@ -622,7 +629,7 @@ class Formula():
     
     def __split_discretize(self,dig_cov_flat_all,sti):
       var_map = self.get_var_map()
-      factor_codings = self.get_factor_codings()
+      factor_codings = self.factor_codings
 
       # Create seried id column in ascending order:
       id_col = np.zeros(dig_cov_flat_all.shape[0],dtype=int)
@@ -630,10 +637,10 @@ class Formula():
       id_splits = [split + i for i,split in enumerate(id_splits)]
       id_col = np.concatenate(id_splits)
 
-      if not self.__terms[sti].by_subgroup is None:
+      if not self.terms[sti].by_subgroup is None:
          # Adjust for fact that this factor smooth is fitted for separate level of sub-group.
-         sub_group_fact = self.__terms[sti].by_subgroup[0]
-         sub_group_lvl = self.__terms[sti].by_subgroup[1]
+         sub_group_fact = self.terms[sti].by_subgroup[0]
+         sub_group_lvl = self.terms[sti].by_subgroup[1]
 
          # Build index vector corresponding only to series of sub-group level
          sub_lvl_idx = self.cov_flat[:,var_map[sub_group_fact]] == factor_codings[sub_group_fact][sub_group_lvl]
@@ -664,7 +671,7 @@ class Formula():
 
       # Now split dig_cov_flat_all per level of combination of all factor variables used for splitting, again correcting for any
       # potential sub-grouping
-      if self.__terms[sti].by_subgroup is None:
+      if self.terms[sti].by_subgroup is None:
          unq_fact_comb,unq_fact_comb_memb = np.unique(self.cov_flat[:,[var_map[fact] for fact in self.discretize[sti]["split_by"]]],
                                                       axis=0,return_inverse=True)
       else:
@@ -798,7 +805,7 @@ class Formula():
       
       for sti in self.get_smooth_term_idx():
 
-         sterm = self.__terms[sti]
+         sterm = self.terms[sti]
          vars = sterm.variables
 
          if not sterm.is_identifiable:
@@ -812,11 +819,11 @@ class Formula():
                   else:
                      id_nk = sterm.nk
                   
-                  var_cov_flat = read_cov(self.__lhs.variable,vars[vi],self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+                  var_cov_flat = read_cov(self.lhs.variable,vars[vi],self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
 
                   matrix_term_v = sterm.basis(var_cov_flat,
-                                              None,id_nk,min_c=self.__var_mins[vars[vi]],
-                                              max_c=self.__var_maxs[vars[vi]], **sterm.basis_kwargs)
+                                              None,id_nk,min_c=self.var_mins[vars[vi]],
+                                              max_c=self.var_maxs[vars[vi]], **sterm.basis_kwargs)
 
                   sterm.RP.append(Reparameterization(scp.sparse.csc_array(matrix_term_v),var_cov_flat))
 
@@ -832,10 +839,10 @@ class Formula():
 
             with mp.Pool(processes=10) as pool:
                C = pool.starmap(compute_constraint_single_MP,zip(repeat(sterm),repeat(vars),
-                                                                 repeat(self.__lhs.variable),
+                                                                 repeat(self.lhs.variable),
                                                                  self.file_paths,
-                                                                 repeat(self.__var_mins),
-                                                                 repeat(self.__var_maxs),
+                                                                 repeat(self.var_mins),
+                                                                 repeat(self.var_maxs),
                                                                  repeat(self.file_loading_kwargs)))
 
             if sterm.te or len(vars) == 1:
@@ -855,7 +862,7 @@ class Formula():
 
       for sti in self.get_smooth_term_idx():
 
-         sterm = self.__terms[sti]
+         sterm = self.terms[sti]
          vars = sterm.variables
 
          if not sterm.is_identifiable:
@@ -872,8 +879,8 @@ class Formula():
                   var_cov_flat = self.cov_flat[self.NOT_NA_flat,var_map[vars[vi]]]
 
                   matrix_term_v = sterm.basis(var_cov_flat,
-                                              None,id_nk,min_c=self.__var_mins[vars[vi]],
-                                              max_c=self.__var_maxs[vars[vi]], **sterm.basis_kwargs)
+                                              None,id_nk,min_c=self.var_mins[vars[vi]],
+                                              max_c=self.var_maxs[vars[vi]], **sterm.basis_kwargs)
 
                   sterm.RP.append(Reparameterization(scp.sparse.csc_array(matrix_term_v),var_cov_flat))
 
@@ -897,8 +904,8 @@ class Formula():
             var_cov_flat = self.cov_flat[self.NOT_NA_flat,var_map[vars[vi]]]
 
             matrix_term_v = sterm.basis(var_cov_flat,
-                                      None,id_nk,min_c=self.__var_mins[vars[vi]],
-                                      max_c=self.__var_maxs[vars[vi]], **sterm.basis_kwargs)
+                                      None,id_nk,min_c=self.var_mins[vars[vi]],
+                                      max_c=self.var_maxs[vars[vi]], **sterm.basis_kwargs)
 
             if sterm.te == False:
 
@@ -945,28 +952,117 @@ class Formula():
                sterm.Z.append(Constraint(int(matrix_term.shape[1]/2),ConstType.DROP))
             elif term_constraint == ConstType.DIFF:
                sterm.Z.append(Constraint(int(matrix_term.shape[1]/2),ConstType.DIFF))
+    
+    #### Getters ####
 
-    def build_penalties(self):
-      """Builds the penalties required by ``self.__terms``. Called automatically whenever needed. Call manually only for testing."""
+    def get_lhs(self) -> lhs:
+       """Get a copy of the ``lhs`` specified for this formula."""
+       return copy.deepcopy(self.lhs)
+    
+    def get_terms(self) -> list[GammTerm]:
+       """Get a copy of the ``terms`` specified for this formula."""
+       return copy.deepcopy(self.terms)
+    
+    def get_data(self) -> pd.DataFrame:
+       """Get a copy of the ``data`` specified for this formula."""
+       return copy.deepcopy(self.data)
 
-      if self.penalties is not None:
-         warnings.warn("Penalties were already initialized. Resetting them.")
-         self.__get_coef_info() # Because previous initialization might have over-written n_coef or unpenalized _coef
-         self.penalties = None
+    def get_factor_codings(self) -> dict:
+        """Get a copy of the factor coding dictionary. Keys are factor variables in the data, values are dictionaries, where the keys correspond to the levels (str) of the factor and the values to their encoded levels (int)."""
+        return copy.deepcopy(self.factor_codings)
+    
+    def get_coding_factors(self) -> dict:
+        """Get a copy of the factor coding dictionary. Keys are factor variables in the data, values are dictionaries, where the keys correspond to the encoded levels (int) of the factor and the values to their levels (str)."""
+        return copy.deepcopy(self.coding_factors)
+    
+    def get_var_map(self) -> dict:
+        """Get a copy of the var map dictionary. Keys are variables in the data, values their column index in the encoded predictor matrix returned by ``self.encode_data``."""
+        return copy.deepcopy(self.var_to_cov)
+    
+    def get_factor_levels(self) -> dict:
+       """Get a copy of the factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor."""
+       return copy.deepcopy(self.factor_levels)
+    
+    def get_var_types(self) -> dict:
+       """Get a copy of the var types dictionary. Keys are variables in the data, values are either ``VarType.NUMERIC`` for continuous variables or ``VarType.FACTOR`` for categorical variables."""
+       return copy.deepcopy(self.var_types)
+    
+    def get_var_mins(self) -> dict:
+       """Get a copy of the var mins dictionary. Keys are variables in the data, values are either the minimum value the variable takes on in ``self.data`` for continuous variables or ``None`` for categorical variables."""
+       return copy.deepcopy(self.var_mins)
+    
+    def get_var_maxs(self) -> dict:
+       """Get a copy of the var maxs dictionary. Keys are variables in the data, values are either the maximum value the variable takes on in ``self.data`` for continuous variables or ``None`` for categorical variables."""
+       return copy.deepcopy(self.var_maxs)
+    
+    def get_var_mins_maxs(self) -> (dict,dict):
+       """Get a tuple containing copies of both the mins and maxs directory. See ``self.get_var_mins`` and ``self.get_var_maxs``."""
+       return (copy.deepcopy(self.var_mins),copy.deepcopy(self.var_maxs))
+    
+    def get_linear_term_idx(self) -> list[int]:
+       """Get a copy of the list of indices that identify linear terms in ``self.terms``."""
+       return(copy.deepcopy(self.linear_terms))
+    
+    def get_smooth_term_idx(self) -> list[int]:
+       """Get a copy of the list of indices that identify smooth terms in ``self.terms``."""
+       return(copy.deepcopy(self.smooth_terms))
+    
+    def get_ir_smooth_term_idx(self) -> list[int]:
+       """Get a copy of the list of indices that identify impulse response terms in ``self.terms``."""
+       return(copy.deepcopy(self.ir_smooth_terms))
+    
+    def get_random_term_idx(self) -> list[int]:
+       """Get a copy of the list of indices that identify random terms in ``self.terms``."""
+       return(copy.deepcopy(self.random_terms))
+    
+    def get_n_coef(self) -> int:
+       """Get the number of coefficients that are implied by the formula."""
+       return self.n_coef
+    
+    def get_penalties(self) -> list:
+       """Get a copy of the penalties implied by the formula. Will be None if the penalties have not been initizlized yet."""
+       return copy.deepcopy(self.penalties)
+    
+    def get_depvar(self) -> list:
+       """Get a copy of the encoded dependent variable (defined via ``self.lhs``)."""
+       return copy.deepcopy(self.y_flat)
+    
+    def get_notNA(self) -> list:
+       """Get a copy of the encoded 'not a NA' vector for the dependent variable (defined via ``self.lhs``)."""
+       return copy.deepcopy(self.NOT_NA_flat)
+    
+    def get_has_intercept(self) -> bool:
+       """Does this formula include an intercept or not."""
+       return self.has_intercept
+    
+    def has_ir_terms(self) -> bool:
+       """Does this formula include impulse response terms or not."""
+       return self.has_irf
+    
+    def get_term_names(self) -> list:
+       """Returns a copy of the list with the names of the terms specified for this formula."""
+       return copy.deepcopy(self.term_names)
+   
+    def get_subgroup_variables(self) -> list:
+       """Returns a copy of sub-group variables for factor smooths."""
+       return copy.deepcopy(self.subgroup_variables)
+    
+def build_penalties(formula):
+      """Builds the penalties required by ``formula.terms``."""
 
-      col_S = self.n_coef
-      factor_levels = self.get_factor_levels()
-      terms = self.__terms
+      col_S = formula.n_coef
+      factor_levels = formula.factor_levels
+      terms = formula.terms
       penalties = []
-      start_idx = self.unpenalized_coef
+      start_idx = formula.unpenalized_coef
 
       if start_idx is None:
-         ValueError("Penalty start index is ill-defined. Make sure to call 'formula.__get_coef_info' before calling this function.")
+         ValueError("Penalty start index is ill-defined.")
 
       cur_pen_idx = start_idx
       prev_pen_idx = start_idx
 
-      for irsti in self.get_ir_smooth_term_idx():
+      for irsti in formula.get_ir_smooth_term_idx():
 
          irsterm = terms[irsti]
          vars = irsterm.variables
@@ -988,10 +1084,9 @@ class Formula():
                if irsterm.by is not None:
                   added_not_penalized *= len(by_levels)
                start_idx += added_not_penalized
-               self.unpenalized_coef += added_not_penalized
                cur_pen_idx = start_idx
 
-               if self.print_warn:
+               if formula.print_warn:
                   warnings.warn(f"Impulse response smooth {irsti} is not penalized. Smoothing terms should generally be penalized.")
 
             else:
@@ -1014,7 +1109,7 @@ class Formula():
          # Keep track of previous penalty starting index
          prev_pen_idx = cur_pen_idx
                         
-      for sti in self.get_smooth_term_idx():
+      for sti in formula.get_smooth_term_idx():
 
          sterm = terms[sti]
          vars = sterm.variables
@@ -1037,9 +1132,8 @@ class Formula():
                   added_not_penalized *= len(by_levels)
 
                start_idx += added_not_penalized
-               self.unpenalized_coef += added_not_penalized
 
-               if self.print_warn:
+               if formula.print_warn:
                   warnings.warn(f"Smooth {sti} is not penalized. Smoothing terms should generally be penalized.")
 
             else:
@@ -1065,8 +1159,8 @@ class Formula():
                # Add necessary info for derivative approx. for factor smooth penalties
                if isinstance(sterm,fs):
                   if not sterm.approx_deriv is None:
-                     penalties[-1].clust_series = self.discretize[sti]["clust_series"]
-                     penalties[-1].clust_weights = self.discretize[sti]["clust_weights"]
+                     penalties[-1].clust_series = formula.discretize[sti]["clust_series"]
+                     penalties[-1].clust_weights = formula.discretize[sti]["clust_weights"]
 
                if sterm.has_null_penalty:
 
@@ -1217,7 +1311,7 @@ class Formula():
          # Keep track of previous penalty starting index
          prev_pen_idx = cur_pen_idx
 
-      for rti in self.get_random_term_idx():
+      for rti in formula.get_random_term_idx():
          # Build penalties for random terms
          rterm = terms[rti]
 
@@ -1227,109 +1321,16 @@ class Formula():
       if cur_pen_idx != col_S:
          raise ValueError(f"Penalty dimension {cur_pen_idx},{cur_pen_idx} does not match outer model matrix dimension {col_S}")
 
-      self.penalties = penalties
-    
-    #### Getters ####
+      formula.built_penalties = True
+      return penalties
 
-    def get_lhs(self) -> lhs:
-       """Get a copy of the ``lhs`` specified for this formula."""
-       return copy.deepcopy(self.__lhs)
-    
-    def get_terms(self) -> list[GammTerm]:
-       """Get a copy of the ``terms`` specified for this formula."""
-       return copy.deepcopy(self.__terms)
-    
-    def get_data(self) -> pd.DataFrame:
-       """Get a copy of the ``data`` specified for this formula."""
-       return copy.deepcopy(self.__data)
-
-    def get_factor_codings(self) -> dict:
-        """Get a copy of the factor coding dictionary. Keys are factor variables in the data, values are dictionaries, where the keys correspond to the levels (str) of the factor and the values to their encoded levels (int)."""
-        return copy.deepcopy(self.__factor_codings)
-    
-    def get_coding_factors(self) -> dict:
-        """Get a copy of the factor coding dictionary. Keys are factor variables in the data, values are dictionaries, where the keys correspond to the encoded levels (int) of the factor and the values to their levels (str)."""
-        return copy.deepcopy(self.__coding_factors)
-    
-    def get_var_map(self) -> dict:
-        """Get a copy of the var map dictionary. Keys are variables in the data, values their column index in the encoded predictor matrix returned by ``self.encode_data``."""
-        return copy.deepcopy(self.__var_to_cov)
-    
-    def get_factor_levels(self) -> dict:
-       """Get a copy of the factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor."""
-       return copy.deepcopy(self.__factor_levels)
-    
-    def get_var_types(self) -> dict:
-       """Get a copy of the var types dictionary. Keys are variables in the data, values are either ``VarType.NUMERIC`` for continuous variables or ``VarType.FACTOR`` for categorical variables."""
-       return copy.deepcopy(self.__var_types)
-    
-    def get_var_mins(self) -> dict:
-       """Get a copy of the var mins dictionary. Keys are variables in the data, values are either the minimum value the variable takes on in ``self.__data`` for continuous variables or ``None`` for categorical variables."""
-       return copy.deepcopy(self.__var_mins)
-    
-    def get_var_maxs(self) -> dict:
-       """Get a copy of the var maxs dictionary. Keys are variables in the data, values are either the maximum value the variable takes on in ``self.__data`` for continuous variables or ``None`` for categorical variables."""
-       return copy.deepcopy(self.__var_maxs)
-    
-    def get_var_mins_maxs(self) -> (dict,dict):
-       """Get a tuple containing copies of both the mins and maxs directory. See ``self.get_var_mins`` and ``self.get_var_maxs``."""
-       return (copy.deepcopy(self.__var_mins),copy.deepcopy(self.__var_maxs))
-    
-    def get_linear_term_idx(self) -> list[int]:
-       """Get a copy of the list of indices that identify linear terms in ``self.__terms``."""
-       return(copy.deepcopy(self.__linear_terms))
-    
-    def get_smooth_term_idx(self) -> list[int]:
-       """Get a copy of the list of indices that identify smooth terms in ``self.__terms``."""
-       return(copy.deepcopy(self.__smooth_terms))
-    
-    def get_ir_smooth_term_idx(self) -> list[int]:
-       """Get a copy of the list of indices that identify impulse response terms in ``self.__terms``."""
-       return(copy.deepcopy(self.__ir_smooth_terms))
-    
-    def get_random_term_idx(self) -> list[int]:
-       """Get a copy of the list of indices that identify random terms in ``self.__terms``."""
-       return(copy.deepcopy(self.__random_terms))
-    
-    def get_n_coef(self) -> int:
-       """Get the number of coefficients that are implied by the formula."""
-       return self.n_coef
-    
-    def get_penalties(self) -> list:
-       """Get a copy of the penalties implied by the formula. Will be None if the penalties have not been initizlized yet."""
-       return copy.deepcopy(self.penalties)
-    
-    def get_depvar(self) -> list:
-       """Get a copy of the encoded dependent variable (defined via ``self.__lhs``)."""
-       return copy.deepcopy(self.y_flat)
-    
-    def get_notNA(self) -> list:
-       """Get a copy of the encoded 'not a NA' vector for the dependent variable (defined via ``self.__lhs``)."""
-       return copy.deepcopy(self.NOT_NA_flat)
-    
-    def has_intercept(self) -> bool:
-       """Does this formula include an intercept or not."""
-       return self.__has_intercept
-    
-    def has_ir_terms(self) -> bool:
-       """Does this formula include impulse response terms or not."""
-       return self.__has_irf
-    
-    def get_term_names(self) -> list:
-       """Returns a copy of the list with the names of the terms specified for this formula."""
-       return copy.deepcopy(self.__term_names)
-   
-    def get_subgroup_variables(self) -> list:
-       """Returns a copy of sub-group variables for factor smooths."""
-       return copy.deepcopy(self.__subgroup_variables)
-
-def build_sparse_matrix_from_formula(terms,has_intercept,
-                                     ltx,irstx,stx,rtx,
-                                     var_types,var_map,
-                                     var_mins,var_maxs,
-                                     factor_levels,cov_flat,
-                                     cov,pool=None,use_only=None,
-                                     tol=0):
+def build_sparse_matrix_from_formula(terms:list[GammTerm],has_intercept:bool,
+                                     ltx:list[int],irstx:list[int],stx:list[int],rtx:list[int],
+                                     var_types:dict,var_map:dict,
+                                     var_mins:dict,var_maxs:dict,
+                                     factor_levels:dict,cov_flat:np.ndarray,
+                                     cov:np.ndarray,pool=None,use_only:list[int]=None,
+                                     tol:float=0):
    
    """Builds the entire model-matrix specified by a formula."""
    n_y = cov_flat.shape[0]

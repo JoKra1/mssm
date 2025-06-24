@@ -2,7 +2,7 @@ import numpy as np
 import scipy as scp
 import copy
 from collections.abc import Callable
-from .src.python.formula import Formula,build_sparse_matrix_from_formula,lhs,pd,warnings
+from .src.python.formula import Formula,build_sparse_matrix_from_formula,lhs,pd,warnings,build_penalties
 from .src.python.exp_fam import Link,Logit,Identity,LOG,LOGb,Family,Binomial,Gaussian,GAMLSSFamily,GAUMLSS,Gamma,InvGauss,Binomial2,MULNOMLSS,GAMMALS,GSMMFamily,PropHaz,Poisson
 from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2,solve_gammlss_sparse,solve_generalSmooth_sparse
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
@@ -31,6 +31,7 @@ class GAMM:
     :ivar [float] term_edf: The estimated degrees of freedom per smooth term. Initialized with ``None``.
     :ivar scipy.sparse.csc_array lvi: The inverse of the Cholesky factor of the conditional model coefficient covariance matrix. Initialized with ``None``.
     :ivar float penalty: The total penalty applied to the model deviance after fitting as a float. Initialized with ``None``.
+    :ivar [LambdaTerm] overall_penalties:  Contains all penalties estimated for the model. Initialized with ``None``.
     :ivar scipy.sparse.csc_array hessian: Estimated hessian of the log-likelihood used during fitting - will be the expected hessian for non-canonical models. Initialized with ``None``.
     :ivar scipy.sparse.csc_array hessian_obs: Observed hessian of the log-likelihood at final coefficient estimate. Not updated for strictly additive models (i.e., Gaussian with identity link). Initialized with ``None``.
     :ivar Fit_info info: A :class:`Fit_info` instance, with information about convergence (speed) of the model.
@@ -58,6 +59,7 @@ class GAMM:
         self.penalty = 0
         self.hessian = None
         self.hessian_obs = None
+        self.overall_penalties = None
 
     ##################################### Getters #####################################
 
@@ -123,13 +125,13 @@ class GAMM:
         :return: Model matrix :math:`\mathbf{X}` used for fitting.
         :rtype: scp.sparse.csc_array
         """
-        if self.formula.penalties is None:
-            raise ValueError("Model matrix cannot be returned if penalties have not been initialized. Call model.fit() or model.formula.build_penalties() first.")
+        if self.formula.built_penalties == False:
+            raise ValueError("Model matrix cannot be returned if penalties have not been initialized. Call model.fit() first.")
         elif len(self.formula.file_paths) != 0:
             raise NotImplementedError("Cannot return the model-matrix if X.T@X was formed iteratively.")
         else:
-            terms = self.formula.get_terms()
-            has_intercept = self.formula.has_intercept()
+            terms = self.formula.terms
+            has_intercept = self.formula.has_intercept
             ltx = self.formula.get_linear_term_idx()
             irstx = self.formula.get_ir_smooth_term_idx()
             stx = self.formula.get_smooth_term_idx()
@@ -541,7 +543,7 @@ class GAMM:
         if (not isinstance(self.family,Gaussian) or isinstance(self.family.link,Identity) == False) and self.Wr is None:
             raise TypeError("Model is not Normal and pseudo-dat weights are not avilable. Call model.fit() first!")
         
-        if self.coef is None or self.formula.penalties is None:
+        if self.coef is None or self.overall_penalties is None:
             raise ValueError("Model needs to be estimated before evaluating the REML score. Call model.fit()")
         
         scale = self.family.scale
@@ -557,7 +559,7 @@ class GAMM:
         if self.info.dropped is not None:
             keep = [cidx for cidx in range(self.hessian.shape[1]) if cidx not in self.info.dropped]
             
-        reml = REML(llk,nH,self.coef,scale,self.formula.penalties,keep)
+        reml = REML(llk,nH,self.coef,scale,self.overall_penalties,keep)
         
         return reml
     
@@ -631,11 +633,13 @@ class GAMM:
         """
         # We need to initialize penalties
         if not restart:
-            self.formula.build_penalties()
-        penalties = self.formula.penalties
+            if self.overall_penalties is not None:
+                warnings.warn("Resetting penalties. If you don't want that set ``restart=True``.")
+            self.overall_penalties = build_penalties(self.formula)
+        penalties = self.overall_penalties
 
         if penalties is None and restart:
-            raise ValueError("Penalties were not initialized. Restart must be set to False.")
+            raise ValueError("Penalties were not initialized. ``Restart`` must be set to False.")
         
         if len(self.formula.discretize) != 0 and method != "Chol":
             raise ValueError("When discretizing derivative code, the method argument must be set to 'Chol'.")
@@ -644,8 +648,8 @@ class GAMM:
 
         if len(self.formula.file_paths) == 0:
             # We need to build the model matrix once
-            terms = self.formula.get_terms()
-            has_intercept = self.formula.has_intercept()
+            terms = self.formula.terms
+            has_intercept = self.formula.has_intercept
             ltx = self.formula.get_linear_term_idx()
             irstx = self.formula.get_ir_smooth_term_idx()
             stx = self.formula.get_smooth_term_idx()
@@ -695,10 +699,14 @@ class GAMM:
             
             else:
                 # Build row sets of model matrix in parallel:
+                rpXs = []
+                rpcovs = []
                 for sti in stx:
                     if terms[sti].should_rp:
                         for rpi in range(len(terms[sti].RP)):
                             # Don't need to pass those down to the processes.
+                            rpXs.append(terms[sti].RP[rpi].X)
+                            rpcovs.append(terms[sti].RP[rpi].cov)
                             terms[sti].RP[rpi].X = None
                             terms[sti].RP[rpi].cov = None
                 
@@ -712,6 +720,18 @@ class GAMM:
                                                                            repeat(cov)))
                     
                     model_mat = scp.sparse.vstack(Xs,format='csc')
+                
+                # Re-assign rpXs and covs
+                rpidx = 0
+                for sti in stx:
+                    if terms[sti].should_rp:
+                        for rpi in range(len(terms[sti].RP)):
+                            terms[sti].RP[rpi].X = rpXs[rpidx]
+                            terms[sti].RP[rpi].cov = rpcovs[rpidx]
+                            rpidx += 1
+
+                rpXs = None
+                rpcovs = None
 
             if len(irstx) > 0:
                 # Scipy 1.15.0 does not like indexing via pd.series object, bug?
@@ -869,8 +889,8 @@ class GAMM:
 
         # Then, we need to build the model matrix - but only for the terms which should
         # be included in the prediction!
-        terms = self.formula.get_terms()
-        has_intercept = self.formula.has_intercept()
+        terms = self.formula.terms
+        has_intercept = self.formula.has_intercept
         ltx = self.formula.get_linear_term_idx()
         irstx = self.formula.get_ir_smooth_term_idx()
         stx = self.formula.get_smooth_term_idx()
@@ -1021,7 +1041,6 @@ class GAMMLSS(GAMM):
         self.overall_lvi = None
         self.overall_coef = None
         self.overall_preds = None # etas
-        self.overall_penalties = None
         self.overall_mus = None # Expected values for each parameter of response distribution
         self.hessian = None
 
@@ -1076,7 +1095,7 @@ class GAMMLSS(GAMM):
         if self.formula is None: # Prevent problems when this is called from .print_smooth_terms()
             Xs = []
             for form in self.formulas:
-                if form.penalties is None:
+                if form.built_penalties == False:
                     raise ValueError("Model matrices cannot be returned if penalties have not been initialized. Call model.fit() first.")
                 
                 mod = GAMM(form,family=Gaussian())
@@ -1329,7 +1348,7 @@ class GAMMLSS(GAMM):
         return self.family.get_resid(self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat],*self.overall_mus)
         
 
-    def fit(self,max_outer=50,max_inner=200,min_inner=200,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=1,method="Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),should_keep_drop=True,prefit_grad=False,repara=False,progress_bar=True,n_cores=10,seed=0,init_lambda=None):
+    def fit(self,max_outer=50,max_inner=200,min_inner=200,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=1,restart=False,method="Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),should_keep_drop=True,prefit_grad=False,repara=False,progress_bar=True,n_cores=10,seed=0,init_lambda=None):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -1345,6 +1364,8 @@ class GAMMLSS(GAMM):
         :type extend_lambda: bool,optional
         :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for whether or not they (approxiately) increase the Laplace approximate restricted maximum likelihood of the model. Setting this to 0 disables control. Setting it to 1 means the step will never be smaller than the original EFS update but extensions will be removed in case the objective was exceeded. Setting it to 2 means that steps will be halved. Set to 1 by default.
         :type control_lambda: int,optional
+        :param restart: Whether fitting should be resumed. Only possible if the same model has previously completed at least one fitting iteration.
+        :type restart: bool,optional
         :param method: Which method to use to solve for the coefficients. The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR/Chol" or "LU/Chol". In that case the coefficients are still obtained via a Cholesky decomposition but a QR/LU decomposition is formed afterwards to check for rank deficiencies and to drop coefficients that cannot be estimated given the current smoothing parameter values. This takes substantially longer. Defaults to "Chol".
         :type method: str,optional
         :param check_cond: Whether to obtain an estimate of the condition number for the linear system that is solved. When ``check_cond=0``, no check will be performed. When ``check_cond=1``, an estimate of the condition number for the final system (at convergence) will be computed and warnings will be issued based on the outcome (see :func:`mssm.src.python.gamm_solvers.est_condition`). Defaults to 1.
@@ -1366,6 +1387,9 @@ class GAMMLSS(GAMM):
         :param init_lambda: A set of initial :math:`\lambda` parameters to use by the model. Length of list must match number of parameters to be estimated. Defaults to None
         :type init_lambda: [float],optional
         """
+
+        if self.overall_penalties is None and restart == True:
+            raise ValueError("Penalties were not initialized. ``Restart`` must be set to False.")
         
         # Get y
         y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
@@ -1376,29 +1400,39 @@ class GAMMLSS(GAMM):
 
         # Build penalties and model matrices for all formulas
         Xs = []
+        ind_penalties = []
         for form in self.formulas:
             mod = GAMM(form,family=Gaussian())
-            form.build_penalties()
+            if restart == False:
+                ind_penalties.append(build_penalties(form))
             Xs.append(mod.get_mmat())
 
         # Initialize coef from family
         coef = self.family.init_coef([GAMM(form,family=Gaussian()) for form in self.formulas])
 
         # Get GAMMLSS penalties
-        shared_penalties = embed_shared_penalties(self.formulas)
-        gamlss_pen = [pen for pens in shared_penalties for pen in pens]
-        self.overall_penalties = gamlss_pen
+        if restart == False:
+            shared_penalties = embed_shared_penalties(ind_penalties,self.formulas)
+            gamlss_pen = [pen for pens in shared_penalties for pen in pens]
+            self.overall_penalties = gamlss_pen
 
-        # Check for family-wide initialization of lambda values
-        if init_lambda is None:
-            init_lambda = self.family.init_lambda(self.formulas)
-
-        # Else tart with provided values or simply with much weaker penalty than for GAMs
-        for pen_i in range(len(gamlss_pen)):
+            # Clean up
+            shared_penalties = None
+            ind_penalties = None
+        
+            # Check for family-wide initialization of lambda values
             if init_lambda is None:
-                gamlss_pen[pen_i].lam = 0.01
-            else:
-                gamlss_pen[pen_i].lam = init_lambda[pen_i]
+                init_lambda = self.family.init_lambda(self.formulas)
+
+            # Else start with provided values or simply with much weaker penalty than for GAMs
+            for pen_i in range(len(gamlss_pen)):
+                if init_lambda is None:
+                    gamlss_pen[pen_i].lam = 0.01
+                else:
+                    gamlss_pen[pen_i].lam = init_lambda[pen_i]
+
+        else:
+            gamlss_pen = self.overall_penalties
 
         # Initialize overall coefficients if not done by family
         form_n_coef = [form.n_coef for form in self.formulas]
@@ -1883,6 +1917,9 @@ class GSMM(GAMMLSS):
         if not optimizer in ["Newton"]:
             raise ValueError("'optimizer' needs to be set to 'Newton'.")
         
+        if self.overall_penalties is None and restart == True:
+            raise ValueError("Penalties were not initialized. ``Restart`` must be set to False.")
+        
         # Get y
         if drop_NA:
             y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
@@ -1895,30 +1932,39 @@ class GSMM(GAMMLSS):
 
         # Build penalties and model matrices for all formulas
         Xs = []
+        ind_penalties = []
         for fi,form in enumerate(self.formulas):
             mod = GAMM(form,family=Gaussian())
             if build_mat is None or build_mat[fi]:
-                if self.overall_penalties is None or restart == False:
-                    form.build_penalties()
+                if restart == False:
+                    ind_penalties.append(build_penalties(form))
                 Xs.append(mod.get_mmat(drop_NA=drop_NA))
 
         # Get all penalties
-        shared_penalties = embed_shared_penalties(self.formulas)
-        shared_penalties = [sp for sp in shared_penalties if len(sp) > 0]
+        if restart == False:
+            shared_penalties = embed_shared_penalties(ind_penalties,self.formulas)
+            shared_penalties = [sp for sp in shared_penalties if len(sp) > 0]
 
-        smooth_pen = [pen for pens in shared_penalties for pen in pens]
-        self.overall_penalties = smooth_pen
+            smooth_pen = [pen for pens in shared_penalties for pen in pens]
+            self.overall_penalties = smooth_pen
 
-        # Check for family-wide initialization of lambda values
-        if init_lambda is None:
-            init_lambda = self.family.init_lambda(self.formulas)
+            # Clean up
+            shared_penalties = None
+            ind_penalties = None
         
-        # Otherwise initialize with provided values or simply with much weaker penalty than for GAMs
-        for pen_i in range(len(smooth_pen)):
+            # Check for family-wide initialization of lambda values
             if init_lambda is None:
-                smooth_pen[pen_i].lam = 0.001
-            else:
-                smooth_pen[pen_i].lam = init_lambda[pen_i]
+                init_lambda = self.family.init_lambda(self.formulas)
+            
+            # Otherwise initialize with provided values or simply with much weaker penalty than for GAMs
+            for pen_i in range(len(smooth_pen)):
+                if init_lambda is None:
+                    smooth_pen[pen_i].lam = 0.001
+                else:
+                    smooth_pen[pen_i].lam = init_lambda[pen_i]
+
+        else:
+            smooth_pen = self.overall_penalties
 
         # Initialize overall coefficients
         form_n_coef = [form.n_coef for form in self.formulas]

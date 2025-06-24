@@ -715,8 +715,11 @@ class f(GammTerm):
       else:
           coef_names.extend([f"f_{var_label}_{ink}" for ink in range(term_n_coef)])
       
-      # Don't know the number of unpenalized coef here so return zero to not mess with counter.
-      return n_coef,0,coef_names
+      # Check if term is penalized - if not we need to return the correct number of unpenalized coefficients
+      n_nopen = 0
+      if not self.is_penalized:
+        n_nopen = n_coef
+      return n_coef,n_nopen,coef_names
 
 class fs(f):
    """
@@ -1312,8 +1315,12 @@ class irf(GammTerm):
       else:
         coef_names.extend([f"irf_{ti}_{var_label}_{ink}" for ink in range(n_coef)])
       
-      # Again don't know number of penalized coefficients here.
-      return n_coef, 0, coef_names
+      # Check if term is penalized - if not we need to return the correct number of unpenalized coefficients
+      n_nopen = 0
+      if not self.is_penalized:
+        n_nopen = n_coef
+
+      return n_coef, n_nopen, coef_names
 
 
 def build_linear_term(lTerm,has_intercept:bool,ci:int,ti:int,var_map:dict,var_types:dict,factor_levels:dict,ridx:[int],cov_flat:[[int]],use_only:[int]):

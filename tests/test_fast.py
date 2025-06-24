@@ -35,7 +35,7 @@ class Test_GAM:
         assert round(sigma,ndigits=3) == 1084.879
     
     def test_GAMlam(self):
-        assert round(self.model.formula.penalties[0].lam,ndigits=5) == 0.0089
+        assert round(self.model.overall_penalties[0].lam,ndigits=5) == 0.0089
 
 class Test_GAM_TE:
 
@@ -177,7 +177,7 @@ class Test_GAMM:
         assert round(sigma,ndigits=3) == 577.194 
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([0.003576343523507944, 0.006011901683446546, 5028.094352541816, 230482.43896738067, 110804.13553081625, 38451.59746745403, 381047.3436998889, 330.25972969656937, 0.11887201661809699, 2.166381231169934])) 
 
     def test_GAMreml(self):
@@ -218,7 +218,7 @@ class Test_Binom_GAMM:
                         -0.05044390273197432, -0.03325208528628772])) 
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([122.52719452460906, 655.3557029613052, 1.3826427117149267, 2841.8313047699667])) 
 
     def test_GAMreml(self):
@@ -259,7 +259,7 @@ class Test_Gamma_GAMM:
                         -0.03330475732996358, -0.12102663295792625])) 
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([6.772970379249816, 14.900828781781744, 0.026452879018106484, 227.86741305016199])) 
 
     def test_GAMreml(self):
@@ -311,7 +311,7 @@ class Test_Overlap_GAMM:
                                         1.0573347505186208, 0.999116483922564, -1.09744680946051, 0.7031765530477949, 0.799916646746684])) 
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([227.8068139397452, 1.8954868106567002, 3.04743103446127])) 
 
     def test_GAMreml(self):
@@ -355,7 +355,7 @@ class Test_ri_li:
                                           1.3002335376265413, -0.7276918391919509, 0.2894890343822381, -0.3097228498687097])) 
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([7.880949768403679])) 
 
     def test_GAMreml(self):

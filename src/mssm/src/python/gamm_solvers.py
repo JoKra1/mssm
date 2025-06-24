@@ -1361,8 +1361,8 @@ def read_XTX(file,formula,nc):
    Reads subset of data and creates X.T@X with X = model matrix for that dataset.
    """
 
-   terms = formula.get_terms()
-   has_intercept = formula.has_intercept()
+   terms = formula.terms
+   has_intercept = formula.has_intercept
    ltx = formula.get_linear_term_idx()
    irstx = []
    stx = formula.get_smooth_term_idx()
@@ -1373,10 +1373,14 @@ def read_XTX(file,formula,nc):
    var_maxs = formula.get_var_maxs()
    factor_levels = formula.get_factor_levels()
 
+   rpXs = []
+   rpcovs = []
    for sti in stx:
       if terms[sti].should_rp:
          for rpi in range(len(terms[sti].RP)):
             # Don't need to pass those down to the processes.
+            rpXs.append(terms[sti].RP[rpi].X)
+            rpcovs.append(terms[sti].RP[rpi].cov)
             terms[sti].RP[rpi].X = None
             terms[sti].RP[rpi].cov = None
 
@@ -1407,6 +1411,19 @@ def read_XTX(file,formula,nc):
    
    XX = reduce(lambda xx1,xx2: xx1+xx2,XX)
    Xy = reduce(lambda xy1,xy2: xy1+xy2,Xy)
+
+   # Re-assign rpXs and covs
+   rpidx = 0
+   for sti in stx:
+      if terms[sti].should_rp:
+         for rpi in range(len(terms[sti].RP)):
+               terms[sti].RP[rpi].X = rpXs[rpidx]
+               terms[sti].RP[rpi].cov = rpcovs[rpidx]
+               rpidx += 1
+
+   rpXs = None
+   rpcovs = None
+
    return XX,Xy,len(y_flat_file)
 
 def keep_XTX(cov_flat,y_flat,formula,nc,progress_bar):
@@ -1414,8 +1431,8 @@ def keep_XTX(cov_flat,y_flat,formula,nc,progress_bar):
    Takes subsets of data and creates X.T@X with X = model matrix iteratively over these subsets.
    """
 
-   terms = formula.get_terms()
-   has_intercept = formula.has_intercept()
+   terms = formula.terms
+   has_intercept = formula.has_intercept
    ltx = formula.get_linear_term_idx()
    irstx = []
    stx = formula.get_smooth_term_idx()
@@ -1426,10 +1443,14 @@ def keep_XTX(cov_flat,y_flat,formula,nc,progress_bar):
    var_maxs = formula.get_var_maxs()
    factor_levels = formula.get_factor_levels()
 
+   rpXs = []
+   rpcovs = []
    for sti in stx:
       if terms[sti].should_rp:
          for rpi in range(len(terms[sti].RP)):
             # Don't need to pass those down to the processes.
+            rpXs.append(terms[sti].RP[rpi].X)
+            rpcovs.append(terms[sti].RP[rpi].cov)
             terms[sti].RP[rpi].X = None
             terms[sti].RP[rpi].cov = None
 
@@ -1469,6 +1490,18 @@ def keep_XTX(cov_flat,y_flat,formula,nc,progress_bar):
       else:
          XX += XX0
          Xy += Xy0
+   
+   # Re-assign rpXs and covs
+   rpidx = 0
+   for sti in stx:
+      if terms[sti].should_rp:
+         for rpi in range(len(terms[sti].RP)):
+               terms[sti].RP[rpi].X = rpXs[rpidx]
+               terms[sti].RP[rpi].cov = rpcovs[rpidx]
+               rpidx += 1
+
+   rpXs = None
+   rpcovs = None
 
    return XX,Xy
 
@@ -1488,8 +1521,8 @@ def read_eta(file,formula,coef,nc):
    Reads subset of data and creates model prediction for that dataset.
    """
 
-   terms = formula.get_terms()
-   has_intercept = formula.has_intercept()
+   terms = formula.terms
+   has_intercept = formula.has_intercept
    ltx = formula.get_linear_term_idx()
    irstx = []
    stx = formula.get_smooth_term_idx()
@@ -1500,10 +1533,14 @@ def read_eta(file,formula,coef,nc):
    var_maxs = formula.get_var_maxs()
    factor_levels = formula.get_factor_levels()
 
+   rpXs = []
+   rpcovs = []
    for sti in stx:
       if terms[sti].should_rp:
          for rpi in range(len(terms[sti].RP)):
             # Don't need to pass those down to the processes.
+            rpXs.append(terms[sti].RP[rpi].X)
+            rpcovs.append(terms[sti].RP[rpi].cov)
             terms[sti].RP[rpi].X = None
             terms[sti].RP[rpi].cov = None
 
@@ -1534,6 +1571,18 @@ def read_eta(file,formula,coef,nc):
    for eta_file in etas:
       eta.extend(eta_file)
 
+   # Re-assign rpXs and covs
+   rpidx = 0
+   for sti in stx:
+      if terms[sti].should_rp:
+         for rpi in range(len(terms[sti].RP)):
+               terms[sti].RP[rpi].X = rpXs[rpidx]
+               terms[sti].RP[rpi].cov = rpcovs[rpidx]
+               rpidx += 1
+
+   rpXs = None
+   rpcovs = None
+
    return eta
 
 def keep_eta(formula,coef,nc):
@@ -1541,8 +1590,8 @@ def keep_eta(formula,coef,nc):
    Forms subset of data and creates model prediction for that dataset.
    """
 
-   terms = formula.get_terms()
-   has_intercept = formula.has_intercept()
+   terms = formula.terms
+   has_intercept = formula.has_intercept
    ltx = formula.get_linear_term_idx()
    irstx = []
    stx = formula.get_smooth_term_idx()
@@ -1553,10 +1602,14 @@ def keep_eta(formula,coef,nc):
    var_maxs = formula.get_var_maxs()
    factor_levels = formula.get_factor_levels()
 
+   rpXs = []
+   rpcovs = []
    for sti in stx:
       if terms[sti].should_rp:
          for rpi in range(len(terms[sti].RP)):
             # Don't need to pass those down to the processes.
+            rpXs.append(terms[sti].RP[rpi].X)
+            rpcovs.append(terms[sti].RP[rpi].cov)
             terms[sti].RP[rpi].X = None
             terms[sti].RP[rpi].cov = None
 
@@ -1581,6 +1634,19 @@ def keep_eta(formula,coef,nc):
 
       for eta_split in etas:
          eta.extend(eta_split)
+   
+   # Re-assign rpXs and covs
+   rpidx = 0
+   for sti in stx:
+      if terms[sti].should_rp:
+         for rpi in range(len(terms[sti].RP)):
+               terms[sti].RP[rpi].X = rpXs[rpidx]
+               terms[sti].RP[rpi].cov = rpcovs[rpidx]
+               rpidx += 1
+
+   rpXs = None
+   rpcovs = None
+
    return eta
 
 

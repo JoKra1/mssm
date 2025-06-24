@@ -758,15 +758,9 @@ def estimateVp(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,drop_
                             "maxcor":30,
                             "maxls":100}
 
-    if isinstance(family,Family):
-        nPen = len(model.formula.penalties)
-        rPen = copy.deepcopy(model.formula.penalties)
-        S_emb,_,_,_ = compute_S_emb_pinv_det(model.hessian.shape[1],model.formula.penalties,"svd")
-
-    else: # GAMMLSS and GSMM case
-        nPen = len(model.overall_penalties)
-        rPen = copy.deepcopy(model.overall_penalties)
-        S_emb,_,_,_ = compute_S_emb_pinv_det(model.hessian.shape[1],model.overall_penalties,"svd")
+    nPen = len(model.overall_penalties)
+    rPen = copy.deepcopy(model.overall_penalties)
+    S_emb,_,_,_ = compute_S_emb_pinv_det(model.hessian.shape[1],model.overall_penalties,"svd")
     
     if isinstance(family,Family):
         y = model.formula.y_flat[model.formula.NOT_NA_flat]
@@ -789,10 +783,7 @@ def estimateVp(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,drop_
         # Approximate Vp via finite differencing or PQL approximation of negative REML.
 
         # Set up mean log-smoothing penalty vector - ignoring any a and b limits provided.
-        if isinstance(family,Family):
-            ep = np.log(np.array([pen.lam for pen in model.formula.penalties]).reshape(-1,1))
-        else:
-            ep = np.log(np.array([pen.lam for pen in model.overall_penalties]).reshape(-1,1))
+        ep = np.log(np.array([pen.lam for pen in model.overall_penalties]).reshape(-1,1))
 
         #from numdifftools import Hessian
         if Vp_fidiff:
@@ -840,7 +831,7 @@ def estimateVp(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,drop_
             Vp, Vpr, Ri, Rir, _, _ = compute_Vp_WPS(model.lvi if isinstance(family,Family) else model.overall_lvi,
                                                  model.hessian,
                                                  S_emb,
-                                                 model.formula.penalties if isinstance(family,Family) else model.overall_penalties,
+                                                 model.overall_penalties,
                                                  model.coef.reshape(-1,1) if isinstance(family,Family) else model.overall_coef.reshape(-1,1),
                                                  scale=orig_scale if isinstance(family,Family) else 1)
         
@@ -853,10 +844,7 @@ def estimateVp(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,drop_
     # Generate \lambda values from Vpr for which to compute REML, and Vb
 
     # First recompute mean, this time accepting limits imposed by a and b
-    if isinstance(family,Family):
-        ep = np.log(np.array([min(b,max(a,pen.lam)) for pen in model.formula.penalties]).reshape(-1,1))
-    else:
-        ep = np.log(np.array([min(b,max(a,pen.lam)) for pen in model.overall_penalties]).reshape(-1,1))
+    ep = np.log(np.array([min(b,max(a,pen.lam)) for pen in model.overall_penalties]).reshape(-1,1))
     #print(ep)
 
     n_est = nR
@@ -1547,15 +1535,9 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
                             "maxcor":30,
                             "maxls":100}
 
-    if isinstance(family,Family):
-        nPen = len(model.formula.penalties)
-        rPen = copy.deepcopy(model.formula.penalties)
-        S_emb,_,_,_ = compute_S_emb_pinv_det(model.hessian.shape[1],model.formula.penalties,"svd")
-
-    else: # GAMMLSS and GSMM case
-        nPen = len(model.overall_penalties)
-        rPen = copy.deepcopy(model.overall_penalties)
-        S_emb,_,_,_ = compute_S_emb_pinv_det(model.hessian.shape[1],model.overall_penalties,"svd")
+    nPen = len(model.overall_penalties)
+    rPen = copy.deepcopy(model.overall_penalties)
+    S_emb,_,_,_ = compute_S_emb_pinv_det(model.hessian.shape[1],model.overall_penalties,"svd")
     
     if isinstance(family,Family):
         y = model.formula.y_flat[model.formula.NOT_NA_flat]
@@ -1585,14 +1567,14 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
             Vp, Vpr, Vr, Vrr, _, dBetadRhos = compute_Vp_WPS(model.lvi if isinstance(family,Family) else model.overall_lvi,
                                                  model.hessian,
                                                  S_emb,
-                                                 model.formula.penalties if isinstance(family,Family) else model.overall_penalties,
+                                                 model.overall_penalties,
                                                  model.coef.reshape(-1,1) if isinstance(family,Family) else model.overall_coef.reshape(-1,1),
                                                  scale=orig_scale if isinstance(family,Family) else 1)
 
         # Compute approximate WPS (2016) correction
         if grid_type == "JJJ1" or (grid_type == "JJJ3" and only_expected_edf == False):
             if isinstance(family,Family):
-                Vc,Vcc = compute_Vb_corr_WPS(model.lvi,Vpr,Vr,model.hessian,S_emb,model.formula.penalties,model.coef.reshape(-1,1),scale=orig_scale)
+                Vc,Vcc = compute_Vb_corr_WPS(model.lvi,Vpr,Vr,model.hessian,S_emb,model.overall_penalties,model.coef.reshape(-1,1),scale=orig_scale)
             else:
                 Vc,Vcc = compute_Vb_corr_WPS(model.overall_lvi,Vpr,Vr,model.hessian,S_emb,model.overall_penalties,model.overall_coef.reshape(-1,1))
                 
@@ -1616,10 +1598,7 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
 
     if grid_type != "JJJ1":
         # Generate \lambda values from Vpr for which to compute REML, and Vb
-        if isinstance(family,Family):
-            ep = np.log(np.array([min(b,max(a,pen.lam)) for pen in model.formula.penalties]).reshape(-1,1))
-        else:
-            ep = np.log(np.array([min(b,max(a,pen.lam)) for pen in model.overall_penalties]).reshape(-1,1))
+        ep = np.log(np.array([min(b,max(a,pen.lam)) for pen in model.overall_penalties]).reshape(-1,1))
         #print(ep)
 
         n_est = nR
@@ -1843,7 +1822,7 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
                 yb = y
                 Xb = X
 
-                S_emb,_,S_root,_ = compute_S_emb_pinv_det(X.shape[1],model.formula.penalties,"svd",method != 'Chol')
+                S_emb,_,S_root,_ = compute_S_emb_pinv_det(X.shape[1],model.overall_penalties,"svd",method != 'Chol')
 
                 if isinstance(family,Gaussian) and isinstance(family.link,Identity): # strictly additive case
                     nH = (-1*model.hessian)*orig_scale
@@ -1873,7 +1852,7 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
                 _,_,_,Pr,_,LP,keep,drop = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,None,model.offset)
 
                 # Re-compute scale
-                _,_,_,_,_,scale = update_scale_edf(y,z,eta,Wr,X.shape[0],X.shape[1],LP,None,Pr,None,family,model.formula.penalties,keep,drop,n_c)
+                _,_,_,_,_,scale = update_scale_edf(y,z,eta,Wr,X.shape[0],X.shape[1],LP,None,Pr,None,family,model.overall_penalties,keep,drop,n_c)
                 
                 # And negative hessian
                 nH /= scale
