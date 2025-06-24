@@ -5345,8 +5345,8 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,form_n_coef,form_up
 
       # Transform H, L, LV
       if method != 'qEFS':
-         H = Q_emb.T @ H @ Q_emb
-         L = Q_emb.T @ L
+         H = Q_emb @ H @ Q_emb.T
+         L = Q_emb @ L
          LV = LV @ Q_emb.T
       else:
          # sk and yk of previous and current optimizer are in state after re-param and will have to be transformed here
