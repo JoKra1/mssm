@@ -7,7 +7,7 @@ from .src.python.exp_fam import Link,Logit,Identity,LOG,LOGb,Family,Binomial,Gau
 from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2,solve_gammlss_sparse,solve_generalSmooth_sparse
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 from .src.python.penalties import embed_shared_penalties
-from .src.python.utils import sample_MVN,REML,adjust_CI
+from .src.python.utils import sample_MVN,REML,adjust_CI,print_smooth_terms,print_parametric_terms,approx_smooth_p_values
 from .src.python.custom_types import VarType,ConstType,Constraint,PenType,LambdaTerm
 import davies
 
@@ -164,163 +164,6 @@ class GAMM:
             
             return model_mat
         
-    def approx_smooth_p_values(self):
-        """ Function to compute approximate p-values for smooth terms, testing whether :math:`\mathbf{f}=\mathbf{X}\\boldsymbol{\\beta} = \mathbf{0}` based on the algorithm by Wood (2013).
-
-        Wood (2013, 2017) generalize the :math:`\\boldsymbol{\\beta}_j^T\mathbf{V}_{\\boldsymbol{\\beta}_j}^{-1}\\boldsymbol{\\beta}_j` test-statistic for parametric terms
-        (computed by function :func:`mssm.models.print_parametric_terms`) to the coefficient vector :math:`\\boldsymbol{\\beta}_j` parameterizing smooth functions. :math:`\mathbf{V}` here is the
-        covariance matrix of the posterior distribution for :math:`\\boldsymbol{\\beta}` (see Wood, 2017). The idea is to replace
-        :math:`\mathbf{V}_{\\boldsymbol{\\beta}_j}^{-1}` with a rank :math:`r` pseudo-inverse (smooth blocks in :math:`\mathbf{V}` are usually
-        rank deficient). Wood (2013, 2017) suggest to base :math:`r` on the estimated degrees of freedom for the smooth term in question - but that :math:`r`  is usually not integer.
-
-        They provide a generalization that addresses the realness of :math:`r`, resulting in a test statistic :math:`T_r`, which follows a weighted
-        Chi-square distribution under the Null. Following the recommendation in Wood (2012) we here approximate the reference distribution under the Null by means of
-        a Gamma distribution with :math:`\\alpha=r/2` and :math:`\phi=2`. In case of a two-parameter distribution (i.e., estimated scale parameter :math:`\phi`), the
-        Chi-square reference distribution needs to be corrected, again resulting in a weighted chi-square distribution which should behave something like a
-        F distribution with DoF1 = :math:`r` and DoF2 = :math:`\epsilon_{DoF}` (i.e., the residual degrees of freedom), which would be the reference distribution for :math:`T_r/r` if :math:`r` were
-        integer and :math:`\mathbf{V}_{\\boldsymbol{\\beta}_j}` full rank. Hence, we approximate the reference distribution for :math:`T_r/r` with a Beta distribution, with
-        :math:`\\alpha=r/2` and :math:`\\beta=\epsilon_{DoF}/2` (see Wikipedia for the specific transformation applied to :math:`T_r/r` so that the resulting transformation is approximately beta
-        distributed) - which is similar to the Gamma approximation used for the Chi-square distribution in the no-scale parameter case.
-
-        **Warning:** Because of the approximations of the Null reference distribution, the resulting p-values are **even more approximate**. They should only be treated as indicative - even more so than the values
-        returned by ``gam.summary`` in ``mgcv``.
-
-        **Note:** Just like in ``mgcv``, the returned p-value is an average: two p-values are computed because of an ambiguity in forming :math:`T_r` and averaged to get the final one. For :math:`T_r` we return the max of the two
-        alternatives.
-
-        References:
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-         - Wood, S. N. (2013). On p-values for smooth components of an extended generalized additive model.
-         - ``testStat`` function in mgcv, see: https://github.com/cran/mgcv/blob/master/R/mgcv.r#L3780
-        
-        :return: Tuple conatining two lists: first list holds approximate p-values for all smooth terms, second list holds test statistic.
-        :rtype: ([float],[float])
-        """
-
-        terms = self.formula.get_terms()
-        X = self.get_mmat()
-        rs_df = X.shape[0] - self.edf
-
-        # Find smooth terms in formula
-        st_idx = self.formula.get_smooth_term_idx()
-
-        # Set-up storage
-        ps = []
-        Trs = []
-
-        # Loop over smooth terms
-        start_coef = self.formula.unpenalized_coef # Start indexing V_b after un-penalized coef
-        edf_idx = 0
-        for sti in st_idx:
-            if isinstance(terms[sti],fs) == False:
-                
-                n_s_coef = self.formula.coef_per_term[sti]
-                enumerator = range(1)
-                if not terms[sti].by is None and terms[sti].id is None:
-                    n_levels = len(self.formula.get_factor_levels()[terms[sti].by])
-                    enumerator = range(n_levels)
-                    n_s_coef = int(n_s_coef / n_levels)
-
-                for _ in enumerator:
-                    # Extract coefficients corresponding to smooth
-                    end_coef = start_coef+n_s_coef
-                    s_coef = self.coef[start_coef:end_coef].reshape(-1,1)
-
-                    # Extract sub-block of V_{b_j}
-                    V_b_j = ((self.lvi[:,start_coef:end_coef].T@self.lvi[:,start_coef:end_coef])*self.scale).toarray()
-
-                    # Form QR of sub-block of X associated with current smooth
-                    X_b_j = X[:,start_coef:end_coef]
-
-                    R = np.linalg.qr(X_b_j.toarray(),mode='r')
-
-                    # Form generalized inverse of V_f (see Wood, 2017; section 6.12.1)
-                    RVR = R@V_b_j@R.T
-
-                    # Eigen-decomposition:
-                    s, U =scp.linalg.eigh(RVR)
-                    s = np.flip(s)
-                    U = np.flip(U,axis=1)
-
-                    # get edf for this term and compute r,k,v, and p from Wood (2017)
-                    r = self.term_edf[edf_idx]
-                    k = int(r)
-                    if k > 0:
-                        v = r-k
-                        p = np.power(v*(1-v)/2,0.5)
-
-                        #print(k,s,s[:k-1],s[k-1],s[k])
-                        # Take only eigen-vectors need for the actual product for the test-statistic
-                        U = U[:,:k+1]
-
-                        # Fix sign of Eigen-vectors to sign of first row (based on testStat function in mgcv)
-                        sign = np.sign(U[0,:])
-                        U *= sign
-
-                        # Now we can reform the diagonal matrix needed for inverting RVR (computation follows Wood, 2012)
-                        S = np.zeros((U.shape[1],U.shape[1]))
-                        for ilam,lam in enumerate(s[:k-1]):
-                            S[ilam,ilam] = 1/lam
-
-                        Lb = np.array([[np.power(s[k-1],-0.5),0],
-                                    [0,np.power(s[k],-0.5)]])
-                        
-                        Bb = np.array([[1,p],
-                                    [p,v]])
-                        
-                        B = Lb@Bb@Lb.T
-                        
-                        S[k-1:k+1,k-1:k+1] = B
-
-                        # And finally compute the inverse
-                        RVRI1 = U@S@U.T
-
-                        # Also compute inverse for alternative version of Eigen-vectors (see Wood, 2017):
-                        U *= sign
-                        RVRI2 = U@S@U.T
-
-                        # And the test statistic defined in Wood (2012)
-                        Tr1 = (s_coef.T@R.T@RVRI1@R@s_coef)[0,0]
-                        Tr2 = (s_coef.T@R.T@RVRI2@R@s_coef)[0,0]
-                        
-                        # Now we need the p-value.
-                        if isinstance(self.family,Family) and self.family.twopar:
-                            # In case of an estimated scale parameter and integer r: Tr/r \sim F(r,rs_df)
-                            # Now to approximate the case where r is real, we can use a Beta (see Wikipedia):
-                            # if X \sim F(d1,d2) then (d1*X/d2) / (1 + (d1*X/d2)) \sim Beta(d1/2,d2/2)
-                            
-                            Tr1 /= r
-                            Tr2 /= r
-                            p1 = 1 - scp.stats.beta.cdf((r*Tr1/rs_df) / (1 + (r*Tr1/rs_df)),a=r/2,b=rs_df/2)
-                            p2 = 1 - scp.stats.beta.cdf((r*Tr2/rs_df) / (1 + (r*Tr2/rs_df)),a=r/2,b=rs_df/2)
-                            
-                        else:
-                            # Wood (2012) suggest that the Chi-square distribution of the Null can be
-                            # approximated with a gamma with alpha=r/2 and scale=2:
-
-                            p1 = 1-scp.stats.gamma.cdf(Tr1,a=r/2,scale=2)
-                            p2 = 1-scp.stats.gamma.cdf(Tr2,a=r/2,scale=2)
-
-                        p = (p1 + p2)/2
-                        Tr = max(Tr1,Tr2)
-                    
-                    else:
-                        warnings.warn(f"Function {sti} appears to be fully penalized. This function does not support such terms. Setting p=1.")
-                        p = 1
-                        Tr = -1
-                
-                    ps.append(p)
-                    Trs.append(Tr)
-
-                    # Prepare for next term
-                    edf_idx += 1
-                    start_coef += n_s_coef
-
-            else: # Random smooth terms are fully penalized
-                start_coef += self.formula.coef_per_term[sti]
-                edf_idx += 1
-        
-        return ps,Trs
     
     def print_smooth_terms(self,pen_cutoff=0.2,p_values=False):
         """Prints the name of the smooth terms included in the model. After fitting, the estimated degrees of freedom per term are printed as well.
@@ -337,113 +180,12 @@ class GAMM:
         :param p_values: Whether approximate p-values should be printed for the smooth terms, defaults to False
         :type p_values: bool, optional
         """
-        term_names = np.array(self.formula.get_term_names())
-        smooth_names = [*term_names[self.formula.get_smooth_term_idx()],
-                        *term_names[self.formula.get_random_term_idx()]]
-        
+        ps = None
+        Trs = None
         if p_values:
-            ps,Trs = self.approx_smooth_p_values()
-        
-        if self.term_edf is None:
-            for term in smooth_names:
-                print(term)
-        else:
-            terms = self.formula.get_terms()
-            coding_factors = self.formula.get_coding_factors()
-            name_idx = 0
-            edf_idx = 0
-            p_idx = 0
-            pen_out = 0
-            for sti in self.formula.get_smooth_term_idx():
-                sterm = terms[sti]
-                if not sterm.by is None and sterm.id is None:
-                    for li in range(len(self.formula.get_factor_levels()[sterm.by])):
-                        t_edf = round(self.term_edf[edf_idx],ndigits=3)
-                        e_str = smooth_names[name_idx] + f": {coding_factors[sterm.by][li]}; edf: {t_edf}"
-                        if t_edf < pen_cutoff:
-                            # Term has effectively been removed from the model
-                            e_str += " *"
-                            pen_out += 1
-                        if p_values and (isinstance(sterm,fs) == False):
-                            if isinstance(self.family,Family) and self.family.twopar:
-                                e_str += f" f: {round(Trs[p_idx],ndigits=3)} P(F > f) = "
-                            else:
-                                e_str += f" chi^2: {round(Trs[p_idx],ndigits=3)} P(Chi^2 > chi^2) = "
-                            
-                            if ps[p_idx] < 0.001:
-                                e_str += "{:.3e}".format(ps[p_idx],ndigits=3)
-                            else:
-                                e_str += f"{round(ps[p_idx],ndigits=5)}"
-                            
-                            if ps[p_idx] < 0.001:
-                                e_str += " ***"
-                            elif ps[p_idx] < 0.01:
-                                e_str += " **"
-                            elif ps[p_idx] < 0.05:
-                                e_str += " *"
-                            elif ps[p_idx] < 0.1:
-                                e_str += " ."
+            ps, Trs = approx_smooth_p_values(self)
 
-                            p_idx += 1
-
-                        print(e_str)
-                        edf_idx += 1
-                else:
-                    t_edf = round(self.term_edf[edf_idx],ndigits=3)
-                    e_str = smooth_names[name_idx] + f"; edf: {t_edf}"
-                    if t_edf < pen_cutoff:
-                        # Term has effectively been removed from the model
-                        e_str += " *"
-                        pen_out += 1
-                    if p_values and (isinstance(sterm,fs) == False):
-                        if isinstance(self.family,Family) and self.family.twopar:
-                            e_str += f" f: {round(Trs[p_idx],ndigits=3)} P(F > f) = "
-                        else:
-                            e_str += f" chi^2: {round(Trs[p_idx],ndigits=3)} P(Chi^2 > chi^2) = "
-                        
-                        if ps[p_idx] < 0.001:
-                            e_str += "{:.3e}".format(ps[p_idx],ndigits=3)
-                        else:
-                            e_str += f"{round(ps[p_idx],ndigits=5)}"
-                        
-                        if ps[p_idx] < 0.001:
-                            e_str += " ***"
-                        elif ps[p_idx] < 0.01:
-                            e_str += " **"
-                        elif ps[p_idx] < 0.05:
-                            e_str += " *"
-                        elif ps[p_idx] < 0.1:
-                            e_str += " ."
-                        
-                        p_idx += 1
-
-                    print(e_str)
-                    edf_idx += 1
-                
-                name_idx += 1
-            
-            for rti in self.formula.get_random_term_idx():
-                rterm = terms[rti]
-                if isinstance(rterm,rs):
-                    if rterm.var_coef > 1 and len(rterm.variables) > 1:
-                        for li in range(rterm.var_coef):
-                            print(smooth_names[name_idx] + f":{li}; edf: {round(self.term_edf[edf_idx],ndigits=3)}")
-                            edf_idx += 1
-                    else:
-                        print(smooth_names[name_idx] + f"; edf: {round(self.term_edf[edf_idx],ndigits=3)}")
-                        edf_idx += 1
-                else:
-                    print(smooth_names[name_idx] + f"; edf: {round(self.term_edf[edf_idx],ndigits=3)}")
-                    edf_idx += 1
-                name_idx += 1
-            
-            if p_values:
-                print("\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!")
-
-            if pen_out == 1:
-                print("\nOne term has been effectively penalized to zero and is marked with a '*'")
-            elif pen_out > 1:
-                print(f"\n{pen_out} terms have been effectively penalized to zero and are marked with a '*'")
+        print_smooth_terms(self,pen_cutoff=pen_cutoff,ps=ps,Trs=Trs)
                         
     def print_parametric_terms(self):
         """Prints summary output for linear/parametric terms in the model, not unlike the one returned in R when using the ``summary`` function
@@ -463,69 +205,7 @@ class GAMM:
 
         :raises NotImplementedError: Will throw an error when called for a model for which the model matrix was never former completely.
         """
-        # Wood (2017) section 6.12 defines that b_j.T@[V_{b_j}]^{-1}@b_j is the test-statistic following either
-        # an F distribution or a Chi-square distribution (the latter if we have a known scale parameter).
-        # Here we want to report single parameter tests for all un-penalized coefficients, so V_b_j is actually the
-        # diagonal elements of the initial n_j_coef*n_j_coef sub-block of V_b. Where n_j_coef is the number of un-penalized
-        # coefficients present in the model. We can form this block efficiently from L, where L.T@L = V, by taking only the
-        # first n_j_coef columns of L. 1 over the diagonal of the resulting sub-block then gives the desired inverse to compute
-        # the test-statistic for a single test. Note that for a single test we need to take the root of the F/Chi-square statistic
-        # to go to a t/N statistic. As a consequence, sqrt(b_j.T@[V_{b_j}]^{-1}@b_j) is actually abs(b_j/sqrt(V_{b_j})) as shown in
-        # section 1.3.3 of Wood (2017). So we can just compute that directly.
-
-        if len(self.formula.file_paths) != 0:
-            raise NotImplementedError("Cannot return p-value for parametric terms if X.T@X was formed iteratively.")
-
-        # Number of linear terms
-        n_j_coef = sum(self.formula.coef_per_term[self.formula.get_linear_term_idx()])
-
-        # Corresponding coef
-        coef_j = self.coef[:n_j_coef]
-
-        # and names...
-        coef_j_names = self.formula.coef_names[:n_j_coef]
-
-        # Form initial n_j_coef*n_j_coef sub-block of V_b
-        V_b_j = (self.lvi[:,:n_j_coef].T@self.lvi[:,:n_j_coef])*self.scale
-
-        # Now get the inverse of the diagonal for the test-statistic (ts)
-        V_b_inv_j = V_b_j.diagonal()
-
-        # Actual ts (all positive, later we should return * sign(coef_j)):
-        ts = np.abs(coef_j/np.sqrt(V_b_inv_j))
-
-        # Compute p(abs(T/N) > abs(t/n))
-        if isinstance(self.family,Family) and self.family.twopar:
-            ps = 1 - scp.stats.t.cdf(ts,df = len(self.formula.y_flat[self.formula.NOT_NA_flat]) - self.formula.n_coef)
-        else:
-            ps = 1 - scp.stats.norm.cdf(ts)
-
-        ps *= 2 # Correct for abs
-
-        for coef_name,coef,t,p in zip(coef_j_names,coef_j,ts,ps):
-            t_str = coef_name + f": {round(coef,ndigits=3)}, "
-
-            if isinstance(self.family,Family) and self.family.twopar:
-                t_str += f"t: {round(np.sign(coef)*t,ndigits=3)}, DoF.: {int(len(self.formula.y_flat[self.formula.NOT_NA_flat]) - self.formula.n_coef)}, P(|T| > |t|): "
-            else:
-                t_str += f"z: {round(np.sign(coef)*t,ndigits=3)}, P(|Z| > |z|): "
-
-            if p < 0.001:
-                t_str += "{:.3e}".format(p,ndigits=3)
-            else:
-                t_str += f"{round(p,ndigits=5)}"
-
-            if p < 0.001:
-                t_str += " ***"
-            elif p < 0.01:
-                t_str += " **"
-            elif p < 0.05:
-                t_str += " *"
-            elif p < 0.1:
-                t_str += " ."
-            print(t_str)
-
-        print("\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: .")
+        print_parametric_terms(self)
 
     def get_reml(self):
         """
@@ -1121,115 +801,10 @@ class GAMMLSS(GAMM):
 
         :raises NotImplementedError: Will throw an error when called for a model for which the model matrix was never former completely.
         """
-        # Prepare so that we can just call gamm.print_parametric_terms()
-        for formi,form in enumerate(self.formulas):
+
+        for formi, _ in enumerate(self.formulas):
             print(f"\nDistribution parameter: {formi + 1}\n")
-            self.formula = form
-            split_coef = np.split(self.overall_coef,self.coef_split_idx)
-            self.coef = np.ndarray.flatten(split_coef[formi])
-            self.scale=1
-            start = 0
-            if len(self.coef_split_idx) == 0:
-                end = form.n_coef
-            else:
-                end = self.coef_split_idx[0]
-                for pari in range(1,formi+1):
-                    start = end
-                    end += self.formulas[pari].n_coef
-
-            self.lvi = self.overall_lvi[:,start:end]
-
-            super().print_parametric_terms()
-
-        # Clean up
-        self.coef = None
-        self.lvi = None
-        self.formula = None
-        self.scale = None
-    
-    def approx_smooth_p_values(self):
-        """ Function to compute approximate p-values for smooth terms, testing whether :math:`\mathbf{f}=\mathbf{X}\\boldsymbol{\\beta} = \mathbf{0}` based on the algorithm by Wood (2013).
-
-        Wood (2013, 2017) generalize the :math:`\\boldsymbol{\\beta}_j^T\mathbf{V}_{\\boldsymbol{\\beta}_j}^{-1}\\boldsymbol{\\beta}_j` test-statistic for parametric terms
-        (computed by function :func:`mssm.models.print_parametric_terms`) to the coefficient vector :math:`\\boldsymbol{\\beta}_j` parameterizing smooth functions. :math:`\mathbf{V}` here is the
-        covariance matrix of the posterior distribution for :math:`\\boldsymbol{\\beta}` (see Wood, 2017). The idea is to replace
-        :math:`\mathbf{V}_{\\boldsymbol{\\beta}_j}^{-1}` with a rank :math:`r` pseudo-inverse (smooth blocks in :math:`\mathbf{V}` are usually
-        rank deficient). Wood (2013, 2017) suggest to base :math:`r` on the estimated degrees of freedom for the smooth term in question - but that :math:`r`  is usually not integer.
-
-        They provide a generalization that addresses the realness of :math:`r`, resulting in a test statistic :math:`T_r`, which follows a weighted
-        Chi-square distribution under the Null. Following the recommendation in Wood (2012) we here approximate the reference distribution under the Null by means of
-        a Gamma distribution with :math:`\\alpha=r/2` and :math:`\phi=2`.
-
-        **Warning:** Because of the approximations of the Null reference distribution, the resulting p-values are **even more approximate**. They should only be treated as indicative - even more so than the values
-        returned by ``gam.summary`` in ``mgcv``.
-
-        **Note:** Just like in ``mgcv``, the returned p-value is an average: two p-values are computed because of an ambiguity in forming :math:`T_r` and averaged to get the final one. For :math:`T_r` we return the max of the two
-        alternatives.
-
-        References:
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-         - Wood, S. N. (2013). On p-values for smooth components of an extended generalized additive model.
-         - ``testStat`` function in mgcv, see: https://github.com/cran/mgcv/blob/master/R/mgcv.r#L3780
-        
-        :return: Tuple conatining two lists: first list holds approximate p-values for all smooth terms in a separate list for each distribution parameter, second list holds test statistic again in a separate list for each distribution parameter.
-        :rtype: ([[float]],[[float]])
-        """
-        
-        if self.coef is None: # Prevent problems when this is called from .print_smooth_terms()
-            ps = []
-            Trs = []
-            idx = 0
-            start_idx = -1
-            pen_idx = 0
-            n_coef = 0
-            for formi,form in enumerate(self.formulas):
-                # Prepare formula, term_edf so that we can just call GAMM.print_smooth_terms()
-                print(f"\nDistribution parameter: {formi + 1}\n")
-                n_coef += form.n_coef
-                self.term_edf = []
-                for peni in range(pen_idx,len(self.overall_penalties)):
-                    if self.overall_penalties[peni].start_index >= n_coef:
-                        break
-                    elif self.overall_penalties[peni].start_index > start_idx:
-                        self.term_edf.append(self.overall_term_edf[idx])
-                        idx += 1
-                        start_idx = self.overall_penalties[peni].start_index
-                    pen_idx += 1
-                self.formula = form
-
-                # Now handle coef
-                split_coef = np.split(self.overall_coef,self.coef_split_idx)
-                self.coef = np.ndarray.flatten(split_coef[formi])
-
-                # and lvi + scale:
-                start = 0
-                if len(self.coef_split_idx) == 0:
-                    end = form.n_coef
-                else:
-                    end = self.coef_split_idx[0]
-                    for pari in range(1,formi+1):
-                        start = end
-                        end += self.formulas[pari].n_coef
-
-                self.lvi = self.overall_lvi[:,start:end]
-                self.scale = 1
-
-                form_ps,form_trs = super().approx_smooth_p_values()
-                ps.append(form_ps)
-                Trs.append(form_trs)
-            
-            # Clean up
-            self.coef = None
-            self.lvi = None
-            self.formula = None
-            self.scale = None
-            self.term_edf = None
-
-            # Return
-            return ps, Trs
-        
-        else:
-            return super().approx_smooth_p_values()
+            print_parametric_terms(self,par=formi)
     
     def print_smooth_terms(self, pen_cutoff=0.2,p_values=False):
         """Prints the name of the smooth terms included in the model. After fitting, the estimated degrees of freedom per term are printed as well.
@@ -1246,53 +821,15 @@ class GAMMLSS(GAMM):
         :param p_values: Whether approximate p-values should be printed for the smooth terms, defaults to False
         :type p_values: bool, optional
         """
-        idx = 0
-        start_idx = -1
-        pen_idx = 0
-        n_coef = 0
-        for formi,form in enumerate(self.formulas):
-            # Prepare formula, term_edf so that we can just call GAMM.print_smooth_terms()
+        ps = None
+        Trs = None
+        for formi, _ in enumerate(self.formulas):
             print(f"\nDistribution parameter: {formi + 1}\n")
-            n_coef += form.n_coef
-            self.term_edf = []
-            for peni in range(pen_idx,len(self.overall_penalties)):
-                if self.overall_penalties[peni].start_index >= n_coef:
-                    break
-                elif self.overall_penalties[peni].start_index > start_idx:
-                    self.term_edf.append(self.overall_term_edf[idx])
-                    idx += 1
-                    start_idx = self.overall_penalties[peni].start_index
-                pen_idx += 1
-            self.formula = form
-
-            # Now handle coef
+            
             if p_values:
-                split_coef = np.split(self.overall_coef,self.coef_split_idx)
-                self.coef = np.ndarray.flatten(split_coef[formi])
+                ps, Trs = approx_smooth_p_values(self,par=formi)
 
-                # and lvi + scale:
-                start = 0
-                if len(self.coef_split_idx) == 0:
-                    end = form.n_coef
-                else:
-                    end = self.coef_split_idx[0]
-                    for pari in range(1,formi+1):
-                        start = end
-                        end += self.formulas[pari].n_coef
-
-                self.lvi = self.overall_lvi[:,start:end]
-                self.scale = 1
-
-            super().print_smooth_terms(pen_cutoff,p_values)
-
-        # Clean up
-        self.formula = None
-        self.term_edf = None
-
-        if p_values:
-            self.coef = None
-            self.lvi = None
-            self.scale = None
+            print_smooth_terms(self,par=formi,pen_cutoff=pen_cutoff,ps=ps,Trs=Trs)
                         
     def get_reml(self):
         """
