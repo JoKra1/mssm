@@ -9,7 +9,6 @@ from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 from .src.python.penalties import embed_shared_penalties
 from .src.python.utils import sample_MVN,REML,adjust_CI,print_smooth_terms,print_parametric_terms,approx_smooth_p_values
 from .src.python.custom_types import VarType,ConstType,Constraint,PenType,LambdaTerm
-import davies
 
 ##################################### GAMM class #####################################
 
@@ -165,7 +164,7 @@ class GAMM:
             return model_mat
         
     
-    def print_smooth_terms(self,pen_cutoff=0.2,p_values=False):
+    def print_smooth_terms(self, pen_cutoff=0.2, p_values=False, edf1= True):
         """Prints the name of the smooth terms included in the model. After fitting, the estimated degrees of freedom per term are printed as well.
         Smooth terms with edf. < ``pen_cutoff`` will be highlighted. This only makes sense when extra Kernel penalties are placed on smooth terms to enable
         penalizing them to a constant zero. In that case edf. < ``pen_cutoff`` can then be taken as evidence that the smooth has all but notationally disappeared
@@ -179,11 +178,13 @@ class GAMM:
         :type pen_cutoff: float, optional
         :param p_values: Whether approximate p-values should be printed for the smooth terms, defaults to False
         :type p_values: bool, optional
+        :param edf1: Whether or not the estimated degrees of freedom should be corrected for smoothnes bias. Doing so results in more accurate p-values but can be expensive for large models for which the difference is anyway likely to be marginal, defaults to False
+        :type edf1: bool, optional
         """
         ps = None
         Trs = None
         if p_values:
-            ps, Trs = approx_smooth_p_values(self)
+            ps, Trs = approx_smooth_p_values(self,edf1=edf1)
 
         print_smooth_terms(self,pen_cutoff=pen_cutoff,ps=ps,Trs=Trs)
                         
@@ -473,7 +474,7 @@ class GAMM:
             self.hessian = -1*(XX/scale)
         
         self.coef = coef
-        self.scale = scale # ToDo: scale name is used in another context for more general mssm..
+        self.scale = scale
         self.pred = eta
         self.res = wres
         self.edf = edf
@@ -806,7 +807,7 @@ class GAMMLSS(GAMM):
             print(f"\nDistribution parameter: {formi + 1}\n")
             print_parametric_terms(self,par=formi)
     
-    def print_smooth_terms(self, pen_cutoff=0.2,p_values=False):
+    def print_smooth_terms(self, pen_cutoff=0.2, p_values=False, edf1 = True):
         """Prints the name of the smooth terms included in the model. After fitting, the estimated degrees of freedom per term are printed as well.
         Smooth terms with edf. < ``pen_cutoff`` will be highlighted. This only makes sense when extra Kernel penalties are placed on smooth terms to enable
         penalizing them to a constant zero. In that case edf. < ``pen_cutoff`` can then be taken as evidence that the smooth has all but notationally disappeared
@@ -820,6 +821,8 @@ class GAMMLSS(GAMM):
         :type pen_cutoff: float, optional
         :param p_values: Whether approximate p-values should be printed for the smooth terms, defaults to False
         :type p_values: bool, optional
+        :param edf1: Whether or not the estimated degrees of freedom should be corrected for smoothnes bias. Doing so results in more accurate p-values but can be expensive for large models for which the difference is anyway likely to be marginal, defaults to False
+        :type edf1: bool, optional
         """
         ps = None
         Trs = None
@@ -827,7 +830,7 @@ class GAMMLSS(GAMM):
             print(f"\nDistribution parameter: {formi + 1}\n")
             
             if p_values:
-                ps, Trs = approx_smooth_p_values(self,par=formi)
+                ps, Trs = approx_smooth_p_values(self,par=formi,edf1=edf1)
 
             print_smooth_terms(self,par=formi,pen_cutoff=pen_cutoff,ps=ps,Trs=Trs)
                         

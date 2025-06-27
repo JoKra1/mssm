@@ -9,6 +9,7 @@ from ..python.terms import fs, rs
 from .file_loading import mp
 from .repara import reparam
 from ..python.exp_fam import Family,Gaussian, Identity,GAMLSSFamily,GSMMFamily
+import davies
 
 def sample_MVN(n,mu,scale,P,L,LI=None,use=None,seed=None):
     """
@@ -392,7 +393,7 @@ def print_smooth_terms(model,par=0,pen_cutoff=0.2,ps=None,Trs=None):
             elif pen_out > 1:
                 print(f"\n{pen_out} terms have been effectively penalized to zero and are marked with a '*'")
 
-def approx_smooth_p_values(model,par=0):
+def approx_smooth_p_values(model,par=0,n_sel=1e5,edf1=True,seed=0):
         """ Function to compute approximate p-values for smooth terms, testing whether :math:`\mathbf{f}=\mathbf{X}\\boldsymbol{\\beta} = \mathbf{0}` based on the algorithm by Wood (2013).
 
         Wood (2013, 2017) generalize the :math:`\\boldsymbol{\\beta}_j^T\mathbf{V}_{\\boldsymbol{\\beta}_j}^{-1}\\boldsymbol{\\beta}_j` test-statistic for parametric terms
@@ -402,21 +403,23 @@ def approx_smooth_p_values(model,par=0):
         rank deficient). Wood (2013, 2017) suggest to base :math:`r` on the estimated degrees of freedom for the smooth term in question - but that :math:`r`  is usually not integer.
 
         They provide a generalization that addresses the realness of :math:`r`, resulting in a test statistic :math:`T_r`, which follows a weighted
-        Chi-square distribution under the Null. Following the recommendation in Wood (2012) we here approximate the reference distribution under the Null by means of
-        a Gamma distribution with :math:`\\alpha=r/2` and :math:`\phi=2`. In case of a two-parameter distribution (i.e., estimated scale parameter :math:`\phi`), the
-        Chi-square reference distribution needs to be corrected, again resulting in a weighted chi-square distribution which should behave something like a
-        F distribution with DoF1 = :math:`r` and DoF2 = :math:`\epsilon_{DoF}` (i.e., the residual degrees of freedom), which would be the reference distribution for :math:`T_r/r` if :math:`r` were
-        integer and :math:`\mathbf{V}_{\\boldsymbol{\\beta}_j}` full rank. Hence, we approximate the reference distribution for :math:`T_r/r` with a Beta distribution, with
+        Chi-square distribution under the Null. Following the recommendation in Wood (2013) we here approximate the reference distribution under the Null by means of the computations outlined in
+        the paper by Davies (1980). If this fails, we fall back on a Gamma distribution with :math:`\\alpha=r/2` and :math:`\phi=2`.
+        
+        In case of a two-parameter distribution (i.e., estimated scale parameter :math:`\phi`), the Chi-square reference distribution needs to be corrected, again resulting in a
+        weighted chi-square distribution which should behave something like a F distribution with DoF1 = :math:`r` and DoF2 = :math:`\epsilon_{DoF}` (i.e., the residual degrees of freedom),
+        which would be the reference distribution for :math:`T_r/r` if :math:`r` were integer and :math:`\mathbf{V}_{\\boldsymbol{\\beta}_j}` full rank. We again follow the recommendations by Wood (2013)
+        and rely on the methods by Davies (1980) to compute the p-value under this reference distribution. If this fails, we approximate the reference distribution for :math:`T_r/r` with a Beta distribution, with
         :math:`\\alpha=r/2` and :math:`\\beta=\epsilon_{DoF}/2` (see Wikipedia for the specific transformation applied to :math:`T_r/r` so that the resulting transformation is approximately beta
         distributed) - which is similar to the Gamma approximation used for the Chi-square distribution in the no-scale parameter case.
 
-        **Warning:** Because of the approximations of the Null reference distribution, the resulting p-values are **even more approximate**. They should only be treated as indicative - even more so than the values
-        returned by ``gam.summary`` in ``mgcv``.
+        **Warning:** The resulting p-values are **approximate**. They should only be treated as indicative.
 
         **Note:** Just like in ``mgcv``, the returned p-value is an average: two p-values are computed because of an ambiguity in forming :math:`T_r` and averaged to get the final one. For :math:`T_r` we return the max of the two
         alternatives.
 
         References:
+         - Davies, R. B. (1980). Algorithm AS 155: The Distribution of a Linear Combination of χ2 Random Variables.
          - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
          - Wood, S. N. (2013). On p-values for smooth components of an extended generalized additive model.
          - ``testStat`` function in mgcv, see: https://github.com/cran/mgcv/blob/master/R/mgcv.r#L3780
@@ -425,9 +428,17 @@ def approx_smooth_p_values(model,par=0):
         :type model: mssm.models.GAMM or mssm.models.GAMMLSS or mssm.models.GSMM
         :param par: Distribution parameter for which to compute p-values. Ignored when ``model`` is a GAMM. Defaults to 0
         :type par: int, optional
+        :param n_sel: Maximum number of rows of model matrix. For models with more observations a random sample of ``n_sel`` rows is obtained. Defaults to 1e5 
+        :type n_sel: int, optional
+        :param edf1: Whether or not the estimated degrees of freedom should be corrected for smoothnes bias. Doing so results in more accurate p-values but can be expensive for large models for which the difference is anyway likely to be marginal. Defaults to True
+        :type edf1: bool, optional
+        :param seed: Random seed determining the random sample computation. Defaults to 0
+        :type seed: int, optional
         :return: Tuple conatining two lists: first list holds approximate p-values for all smooth terms, second list holds test statistic.
         :rtype: ([float],[float])
         """
+
+        np_gen = np.random.default_rng(seed)
 
         if isinstance(model.family,Family): # GAMM case
             form = model.formula
@@ -436,6 +447,28 @@ def approx_smooth_p_values(model,par=0):
             lvi = model.lvi
             scale = model.scale
             term_edf = model.term_edf
+            rs_df = X.shape[0] - model.edf
+
+            # ToDo: move the edf1 computations outside. They have to be computed only once.
+            if edf1: # Use smoothing bias corrected edf as discussed by Wood (2017)
+
+                # Start with forming F matrix
+                nH = -1*model.hessian
+                F = model.lvi.T@model.lvi@(nH*scale)
+
+                term_edf = []
+                for peni, pen in enumerate(model.overall_penalties):
+                    S_start = pen.start_index
+                    S_len = pen.rep_sj * pen.S_J.shape[1]
+                    S_end = pen.start_index + S_len
+
+                    # Now compute sum of diagonal
+                    Fjc = F[S_start:S_end,:]
+                    Fjr = F[:,S_start:S_end]
+
+                    Fjtrace = Fjc.multiply(Fjr.T).sum()
+                    term_edf.append(min(2*model.term_edf[peni] - Fjtrace, pen.rep_sj * pen.S_J.shape[1]))
+
         else:
             # GAMMLSS or GSMM case
             form = model.formulas[par]
@@ -448,8 +481,34 @@ def approx_smooth_p_values(model,par=0):
             lvi = model.overall_lvi[:,split_idx]
             scale = 1
             term_edf = [model.overall_term_edf[tidx] for tidx in range(len(model.overall_penalties)) if model.overall_penalties[tidx].dist_param == par]
-            
-        rs_df = X.shape[0] - model.edf
+            rs_df = None
+
+            if edf1: # Use smoothing bias corrected edf as discussed by Wood (2017)
+
+                # Start with forming F matrix
+                nH = -1*model.hessian
+                F = model.overall_lvi.T@model.overall_lvi@nH
+
+                term_edf1 = []
+                edf_idx = 0
+                for peni,pen in enumerate(model.overall_penalties):
+                    if pen.dist_param != par:
+                        continue
+                    
+                    S_start = pen.start_index
+                    S_len = pen.rep_sj * pen.S_J.shape[1]
+                    S_end = pen.start_index + S_len
+
+                    # Now compute sum of diagonal
+                    Fjc = F[S_start:S_end,:]
+                    Fjr = F[:,S_start:S_end]
+
+                    Fjtrace = Fjc.multiply(Fjr.T).sum()
+                    term_edf1.append(min(2*term_edf[edf_idx] - Fjtrace, pen.rep_sj * pen.S_J.shape[1]))
+                    edf_idx += 1
+                
+                term_edf = term_edf1
+
         terms = form.get_terms()
 
         # Find smooth terms in formula
@@ -482,6 +541,11 @@ def approx_smooth_p_values(model,par=0):
 
                     # Form QR of sub-block of X associated with current smooth
                     X_b_j = X[:,start_coef:end_coef]
+
+                    if X_b_j.shape[0] > n_sel:
+                        # Select subset of rows randomly as suggested by Wood (2013)
+                        sel = np_gen.choice(X_b_j.shape[0],size=n_sel,replace=False)
+                        X_b_j = X_b_j[sel,:]
 
                     R = np.linalg.qr(X_b_j.toarray(),mode='r')
 
@@ -533,24 +597,95 @@ def approx_smooth_p_values(model,par=0):
                         # And the test statistic defined in Wood (2012)
                         Tr1 = (s_coef.T@R.T@RVRI1@R@s_coef)[0,0]
                         Tr2 = (s_coef.T@R.T@RVRI2@R@s_coef)[0,0]
+
+                        # ToDo: Handle v .. 0 case - eventhough it is unlikely.
+
+                        # And the weights for the chi-square distributions..
+                        v1 = (v + 1 + np.pow(1 - np.pow(v,2),0.5))/2
+                        v2 = v + 1 - v1
                         
                         # Now we need the p-value.
                         if isinstance(model.family,Family) and model.family.twopar:
-                            # In case of an estimated scale parameter and integer r: Tr/r \sim F(r,rs_df)
-                            # Now to approximate the case where r is real, we can use a Beta (see Wikipedia):
-                            # if X \sim F(d1,d2) then (d1*X/d2) / (1 + (d1*X/d2)) \sim Beta(d1/2,d2/2)
+                            # First try Davies as discussed by Wood (2013)
+
+                            # We have: v > 0. Based on Wood (2013), if k == 1 we need only 2 weighted chi-square variables.
+                            # When k > 1, we need 3 chi-square variables where the first one is unweighted with k-2+1 dof.
+
+                            # So start with unweighted variable
+                            n = []
+                            lb = []
+                            if k > 1:
+                                n.append(k-2+1) 
+                                lb.append(1)
                             
+                            # Now the weighted variables
+                            n.extend([1,1,rs_df])
+                            lb.extend([v1,v2])
+
+                            # cast to np.array - not lb since we still need to add weight for last variable
+                            nc = np.array([0 for _ in range(len(n))])
+                            n = np.array(n)
+                            
+                            # Compute as discussed by Wood (2017)
+                            p1,code1,_ = davies.daviesQF(np.array([*lb,-Tr1/rs_df]),nc,n,0,0,2e-5,4,10000)
+                            p2,code2,_ = davies.daviesQF(np.array([*lb,-Tr2/rs_df]),nc,n,0,0,2e-5,4,10000)
+                            p1 = 1 - p1
+                            p2 = 1 - p2
+
+                            # Since this approximates an F statistic we need to adjust Tr (see below):
                             Tr1 /= r
                             Tr2 /= r
-                            p1 = 1 - scp.stats.beta.cdf((r*Tr1/rs_df) / (1 + (r*Tr1/rs_df)),a=r/2,b=rs_df/2)
-                            p2 = 1 - scp.stats.beta.cdf((r*Tr2/rs_df) / (1 + (r*Tr2/rs_df)),a=r/2,b=rs_df/2)
+
+                            if code1 > 0 or code2 > 0:
+
+                                if code1 == 2 or code2 == 2:
+                                    warnings.warn("Round-off error in p-value computation might be problematic. Proceed with caution.")
+                            
+                                if code1 != 2 or code2 != 2:
+                                    warnings.warn(f"Falling back to approximate p-value computation. Error codes: {code1}, {code2}")
+                                    # Davies failed... Now, in case of an estimated scale parameter and integer r: Tr/r \sim F(r,rs_df)
+                                    # So to approximate the case where r is real, we can use a Beta (see Wikipedia):
+                                    # if X \sim F(d1,d2) then (d1*X/d2) / (1 + (d1*X/d2)) \sim Beta(d1/2,d2/2)
+                                    
+                                    p1 = 1 - scp.stats.beta.cdf((r*Tr1/rs_df) / (1 + (r*Tr1/rs_df)),a=r/2,b=rs_df/2)
+                                    p2 = 1 - scp.stats.beta.cdf((r*Tr2/rs_df) / (1 + (r*Tr2/rs_df)),a=r/2,b=rs_df/2)
                             
                         else:
-                            # Wood (2012) suggest that the Chi-square distribution of the Null can be
-                            # approximated with a gamma with alpha=r/2 and scale=2:
+                            # First try Davies as discussed by Wood (2013)
 
-                            p1 = 1-scp.stats.gamma.cdf(Tr1,a=r/2,scale=2)
-                            p2 = 1-scp.stats.gamma.cdf(Tr2,a=r/2,scale=2)
+                            # First handle un-weighted variable as described above
+                            n = []
+                            lb = []
+                            if k > 1:
+                                n.append(k-2+1) 
+                                lb.append(1)
+                            
+                            # Now the weighted variables
+                            n.extend([1,1])
+                            lb.extend([v1,v2])
+ 
+                            # cast to np.array
+                            nc = np.array([0 for _ in range(len(n))])
+                            n = np.array(n)
+                            lb = np.array(lb)
+                            
+                            p1,code1,_ = davies.daviesQF(lb,nc,n,Tr1,0,2e-5,3,10000)
+                            p2,code2,_ = davies.daviesQF(lb,nc,n,Tr2,0,2e-5,3,10000)
+                            p1 = 1 - p1
+                            p2 = 1 - p2
+
+                            if code1 > 0 or code2 > 0:
+
+                                if code1 == 2 or code2 == 2:
+                                    warnings.warn("Round-off error in p-value computation might be problematic. Proceed with caution.")
+                            
+                                if code1 != 2 or code2 != 2:
+                                    warnings.warn(f"Falling back to approximate p-value computation. Error codes: {code1}, {code2}")
+                                    # Davies failed... Now, Wood (2013) suggest that the Chi-square distribution of
+                                    # the Null can be approximated with a gamma with alpha=r/2 and scale=2:
+                                    
+                                    p1 = 1-scp.stats.gamma.cdf(Tr1,a=r/2,scale=2)
+                                    p2 = 1-scp.stats.gamma.cdf(Tr2,a=r/2,scale=2)
 
                         p = (p1 + p2)/2
                         Tr = max(Tr1,Tr2)
