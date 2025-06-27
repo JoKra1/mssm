@@ -919,7 +919,7 @@ Eigen::SparseMatrix<double,0,long long int> backsolve_tr(long long int Arows, lo
 }
 
 PYBIND11_MODULE(cpp_solvers, m) {
-    m.doc() = "cpp solvers for sms (DC) GAMM estimation";
+    m.doc() = "cpp solvers for GAMM, GAMMLSS, and GSMM estimation";
     m.def("dCholdRho", &dCholdRho, "Compute derivative of transpose of cholesky factor L of A.");
     m.def("chol", &chol, "Compute cholesky factor L of A");
     m.def("cholP", &cholP, "Compute cholesky factor L of A after applying a sparsity enhancing permutation to A");

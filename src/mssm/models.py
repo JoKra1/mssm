@@ -9,6 +9,7 @@ from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 from .src.python.penalties import embed_shared_penalties
 from .src.python.utils import sample_MVN,REML,adjust_CI
 from .src.python.custom_types import VarType,ConstType,Constraint,PenType,LambdaTerm
+import davies
 
 ##################################### GAMM class #####################################
 

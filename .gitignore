@@ -168,3 +168,5 @@ tests.*
 *.Rproj*
 .Rproj.user
 .Rhistory
+src/mssm/src/cpp/*.out
+src/mssm/src/cpp/*.out*
