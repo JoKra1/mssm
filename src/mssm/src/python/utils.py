@@ -286,7 +286,21 @@ def print_smooth_terms(model,par=0,pen_cutoff=0.2,ps=None,Trs=None):
             if model.overall_coef is None:
                 term_edf = None
             else:
-                term_edf = [model.overall_term_edf[tidx] for tidx in range(len(model.overall_penalties)) if model.overall_penalties[tidx].dist_param == par]
+                term_edf = []
+                prev_start_idx = 0
+                prev_edf_idx = 0
+                for pen in model.overall_penalties:
+
+                    if pen.dist_param > par:
+                        break
+                    
+                    if pen.start_index > prev_start_idx:
+                        if pen.dist_param == par:
+                            term_edf.append(model.overall_term_edf[prev_edf_idx])
+                        
+                        # Keep track of start idx (coef idx) and edf idx.
+                        prev_start_idx = pen.start_index
+                        prev_edf_idx += 1
 
         term_names = np.array(form.get_term_names())
         smooth_names = [*term_names[form.get_smooth_term_idx()],
@@ -393,7 +407,69 @@ def print_smooth_terms(model,par=0,pen_cutoff=0.2,ps=None,Trs=None):
             elif pen_out > 1:
                 print(f"\n{pen_out} terms have been effectively penalized to zero and are marked with a '*'")
 
-def approx_smooth_p_values(model,par=0,n_sel=1e5,edf1=True,seed=0):
+def compute_bias_corrected_edf(model,overwrite=False):
+    """This function computes and assigns smoothing bias corrected (term-wise) estimated degrees of freedom.
+
+    For a definition of smoothing bias-corrected estimated degrees of freedom see Wood (2017).
+
+    **Note:** This function modifies ``model``, setting ``edf1`` and ``term_edf1`` attributes.
+
+    References:
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+    :param model: Model for which to compute p values.
+    :type model: mssm.models.GAMM or mssm.models.GAMMLSS or mssm.models.GSMM
+    :param overwrite: Whether previously computed bias corrected edf should be overwritten. Otherwise this function immediately terminates if ``model.edf1 is not None``, defaults to False
+    :type overwrite: bool, optional
+    """
+
+    if model.edf1 is None or overwrite:
+        term_edf1 = []
+        edf1 = 0
+        
+        if isinstance(model.family,Family): # GAMM case
+            scale = model.scale
+
+            # Start with forming F matrix
+            nH = -1*model.hessian
+            F = model.lvi.T@model.lvi@(nH*scale)
+
+            edf1 += model.formula.unpenalized_coef
+            
+        else:
+
+            # Start with forming F matrix
+            nH = -1*model.hessian
+            F = model.overall_lvi.T@model.overall_lvi@nH
+
+            edf1 += np.sum([form.unpenalized_coef for form in model.formulas])
+        
+        F_diag = F.diagonal()
+
+        prev_start_idx = 0
+        for pen in model.overall_penalties:
+            if pen.start_index > prev_start_idx:
+                S_start = pen.start_index
+                S_len = pen.rep_sj * pen.S_J.shape[1]
+                S_end = pen.start_index + S_len
+
+                # Now compute sum of diagonal
+                Fjc = F[S_start:S_end,:]
+                Fjr = F[:,S_start:S_end]
+                Fjd = F_diag[S_start:S_end]
+
+                Fjtrace = Fjc.multiply(Fjr.T).sum()
+                t_edf1 = 2*np.sum(Fjd) - Fjtrace
+                term_edf1.append(t_edf1)
+                edf1 += t_edf1
+
+                # Update current start index
+                prev_start_idx = pen.start_index
+        
+        model.edf1 = edf1
+        model.term_edf1 = term_edf1
+
+def approx_smooth_p_values(model,par=0,n_sel=1e5,edf1=True,force_approx=False,seed=0):
         """ Function to compute approximate p-values for smooth terms, testing whether :math:`\mathbf{f}=\mathbf{X}\\boldsymbol{\\beta} = \mathbf{0}` based on the algorithm by Wood (2013).
 
         Wood (2013, 2017) generalize the :math:`\\boldsymbol{\\beta}_j^T\mathbf{V}_{\\boldsymbol{\\beta}_j}^{-1}\\boldsymbol{\\beta}_j` test-statistic for parametric terms
@@ -432,6 +508,8 @@ def approx_smooth_p_values(model,par=0,n_sel=1e5,edf1=True,seed=0):
         :type n_sel: int, optional
         :param edf1: Whether or not the estimated degrees of freedom should be corrected for smoothnes bias. Doing so results in more accurate p-values but can be expensive for large models for which the difference is anyway likely to be marginal. Defaults to True
         :type edf1: bool, optional
+        :param force_approx: Whether or not the p-value should be forced to be approximated based on a Gamma/Beta distribution. Only use for testing - in practice you want to keep this at ``False``. Defaults to False
+        :type force_approx: bool, optional
         :param seed: Random seed determining the random sample computation. Defaults to 0
         :type seed: int, optional
         :return: Tuple conatining two lists: first list holds approximate p-values for all smooth terms, second list holds test statistic.
@@ -440,34 +518,17 @@ def approx_smooth_p_values(model,par=0,n_sel=1e5,edf1=True,seed=0):
 
         np_gen = np.random.default_rng(seed)
 
+        if edf1: # Use smoothing bias corrected edf as discussed by Wood (2017)
+            compute_bias_corrected_edf(model)
+
         if isinstance(model.family,Family): # GAMM case
             form = model.formula
             X = model.get_mmat()
             coef = model.coef
             lvi = model.lvi
             scale = model.scale
-            term_edf = model.term_edf
+            term_edf = model.term_edf1 if edf1 else model.term_edf
             rs_df = X.shape[0] - model.edf
-
-            # ToDo: move the edf1 computations outside. They have to be computed only once.
-            if edf1: # Use smoothing bias corrected edf as discussed by Wood (2017)
-
-                # Start with forming F matrix
-                nH = -1*model.hessian
-                F = model.lvi.T@model.lvi@(nH*scale)
-
-                term_edf = []
-                for peni, pen in enumerate(model.overall_penalties):
-                    S_start = pen.start_index
-                    S_len = pen.rep_sj * pen.S_J.shape[1]
-                    S_end = pen.start_index + S_len
-
-                    # Now compute sum of diagonal
-                    Fjc = F[S_start:S_end,:]
-                    Fjr = F[:,S_start:S_end]
-
-                    Fjtrace = Fjc.multiply(Fjr.T).sum()
-                    term_edf.append(min(2*model.term_edf[peni] - Fjtrace, pen.rep_sj * pen.S_J.shape[1]))
 
         else:
             # GAMMLSS or GSMM case
@@ -480,34 +541,26 @@ def approx_smooth_p_values(model,par=0,n_sel=1e5,edf1=True,seed=0):
             coef = np.ndarray.flatten(split_coef[par])
             lvi = model.overall_lvi[:,split_idx]
             scale = 1
-            term_edf = [model.overall_term_edf[tidx] for tidx in range(len(model.overall_penalties)) if model.overall_penalties[tidx].dist_param == par]
+            term_edf = []
             rs_df = None
 
-            if edf1: # Use smoothing bias corrected edf as discussed by Wood (2017)
-
-                # Start with forming F matrix
-                nH = -1*model.hessian
-                F = model.overall_lvi.T@model.overall_lvi@nH
-
-                term_edf1 = []
-                edf_idx = 0
-                for peni,pen in enumerate(model.overall_penalties):
-                    if pen.dist_param != par:
-                        continue
+            prev_start_idx = 0
+            prev_edf_idx = 0
+            for pen in model.overall_penalties:
+                if pen.start_index > prev_start_idx:
                     
-                    S_start = pen.start_index
-                    S_len = pen.rep_sj * pen.S_J.shape[1]
-                    S_end = pen.start_index + S_len
+                    if pen.dist_param > par:
+                        break
 
-                    # Now compute sum of diagonal
-                    Fjc = F[S_start:S_end,:]
-                    Fjr = F[:,S_start:S_end]
-
-                    Fjtrace = Fjc.multiply(Fjr.T).sum()
-                    term_edf1.append(min(2*term_edf[edf_idx] - Fjtrace, pen.rep_sj * pen.S_J.shape[1]))
-                    edf_idx += 1
-                
-                term_edf = term_edf1
+                    if pen.dist_param == par: # Collect only those belonging to this par
+                        if edf1:
+                            term_edf.append(min(model.term_edf1[prev_edf_idx], pen.rep_sj * pen.S_J.shape[1]))
+                        else:
+                            term_edf.append(min(model.overall_term_edf[prev_edf_idx], pen.rep_sj * pen.S_J.shape[1]))
+                    
+                    # Keep track of start idx (coef idx) and edf idx.
+                    prev_start_idx = pen.start_index
+                    prev_edf_idx += 1
 
         terms = form.get_terms()
 
@@ -623,12 +676,12 @@ def approx_smooth_p_values(model,par=0,n_sel=1e5,edf1=True,seed=0):
                             lb.extend([v1,v2])
 
                             # cast to np.array - not lb since we still need to add weight for last variable
-                            nc = np.array([0 for _ in range(len(n))])
+                            nc = np.array([0 for _ in range(len(n))],dtype=np.float64)
                             n = np.array(n)
                             
                             # Compute as discussed by Wood (2017)
-                            p1,code1,_ = davies.daviesQF(np.array([*lb,-Tr1/rs_df]),nc,n,0,0,2e-5,4,10000)
-                            p2,code2,_ = davies.daviesQF(np.array([*lb,-Tr2/rs_df]),nc,n,0,0,2e-5,4,10000)
+                            p1,code1,_ = davies.daviesQF(np.array([*lb,-Tr1/rs_df]),nc,n,0,0,2e-5,len(n),10000)
+                            p2,code2,_ = davies.daviesQF(np.array([*lb,-Tr2/rs_df]),nc,n,0,0,2e-5,len(n),10000)
                             p1 = 1 - p1
                             p2 = 1 - p2
 
@@ -636,7 +689,7 @@ def approx_smooth_p_values(model,par=0,n_sel=1e5,edf1=True,seed=0):
                             Tr1 /= r
                             Tr2 /= r
 
-                            if code1 > 0 or code2 > 0:
+                            if code1 > 0 or code2 > 0 or force_approx:
 
                                 if code1 == 2 or code2 == 2:
                                     warnings.warn("Round-off error in p-value computation might be problematic. Proceed with caution.")
@@ -665,16 +718,16 @@ def approx_smooth_p_values(model,par=0,n_sel=1e5,edf1=True,seed=0):
                             lb.extend([v1,v2])
  
                             # cast to np.array
-                            nc = np.array([0 for _ in range(len(n))])
+                            nc = np.array([0. for _ in range(len(n))],dtype=np.float64)
                             n = np.array(n)
                             lb = np.array(lb)
                             
-                            p1,code1,_ = davies.daviesQF(lb,nc,n,Tr1,0,2e-5,3,10000)
-                            p2,code2,_ = davies.daviesQF(lb,nc,n,Tr2,0,2e-5,3,10000)
+                            p1,code1,_ = davies.daviesQF(lb,nc,n,Tr1,0,2e-5,len(n),15000)
+                            p2,code2,_ = davies.daviesQF(lb,nc,n,Tr2,0,2e-5,len(n),15000)
                             p1 = 1 - p1
                             p2 = 1 - p2
 
-                            if code1 > 0 or code2 > 0:
+                            if code1 > 0 or code2 > 0 or force_approx:
 
                                 if code1 == 2 or code2 == 2:
                                     warnings.warn("Round-off error in p-value computation might be problematic. Proceed with caution.")
