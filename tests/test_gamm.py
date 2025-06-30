@@ -673,7 +673,7 @@ class Test_te_p_values:
 
     model.fit(max_outer=100)
 
-    ps, Trs = model.approx_smooth_p_values()
+    ps, Trs = approx_smooth_p_values(model,par=0,edf1=False,force_approx=True)
 
     def test_p(self):
         np.testing.assert_allclose(self.ps,np.array([np.float64(0.24528857280469096), np.float64(0.0), np.float64(0.0)]),atol=min(max_atol,0),rtol=min(max_rtol,1e-6))

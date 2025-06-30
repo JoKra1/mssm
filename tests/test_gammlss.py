@@ -280,7 +280,11 @@ class Test_te_p_values:
     model = GAMMLSS(formulas,family)
     model.fit(max_inner=500,min_inner=50,control_lambda=2)
 
-    ps, Trs = model.approx_smooth_p_values()
+    ps0, Trs0 = approx_smooth_p_values(model,par=0,edf1=False,force_approx=True)
+    ps1, Trs1 = approx_smooth_p_values(model,par=1,edf1=False,force_approx=True)
+
+    ps = [ps0,ps1]
+    Trs = [Trs0,Trs1]
 
     def test_p1(self):
         np.testing.assert_allclose(self.ps[0],np.array([np.float64(0.39714921685433136), np.float64(0.0)]),atol=min(max_atol,0),rtol=min(max_rtol,1e-6))
