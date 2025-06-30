@@ -665,6 +665,22 @@ class Test_Vp_estimation_hard:
                                                                           [ 3.000e-03,  1.000e-03,  4.940e-01,  2.200e-02],
                                                                           [ 2.100e-02, -2.400e-02,  2.200e-02,  1.541e+01]]),atol=min(max_atol,0.001))
 
+class Test_te_p_values:
+    sim_dat = sim3(n=500,scale=2,c=0,seed=20)
+
+    formula = Formula(lhs("y"),[i(),f(["x0","x3"],te=True),f(["x1"]),f(["x2"])],data=sim_dat)
+    model = GAMM(formula,Gaussian())
+
+    model.fit(max_outer=100)
+
+    ps, Trs = model.approx_smooth_p_values()
+
+    def test_p(self):
+        np.testing.assert_allclose(self.ps,np.array([np.float64(0.24528857280469096), np.float64(0.0), np.float64(0.0)]),atol=min(max_atol,0),rtol=min(max_rtol,1e-6))
+
+    def test_trs(self):
+        np.testing.assert_allclose(self.Trs,np.array([np.float64(1.4741483696834052),np.float64(128.17369821317232),np.float64(126.04637199015741)]),atol=min(max_atol,0),rtol=min(max_rtol,1e-6))
+
 class Test_diff:
     # pred_diff test
     sim_dat,_ = sim1(100,random_seed=100)

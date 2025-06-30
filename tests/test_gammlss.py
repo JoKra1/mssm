@@ -256,6 +256,43 @@ class Test_mulnom_repara:
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
         assert round(llk,ndigits=3) == -980.676
+
+
+class Test_te_p_values:
+    sim_dat = sim3(n=500,scale=2,c=0,seed=20)
+    
+    formula_m = Formula(lhs("y"),
+                        [i(),f(["x0","x3"],te=True),f(["x1"])],
+                        data=sim_dat)
+
+    formula_sd = Formula(lhs("y"),
+                        [i(),f(["x0"]),f(["x2"])],
+                        data=sim_dat)
+
+    # Collect both formulas
+    formulas = [formula_m,formula_sd]
+
+    # Create Gaussian GAMMLSS family with identity link for mean
+    # and log link for sigma
+    family = GAUMLSS([Identity(),LOGb(-0.001)])
+
+    # Now define the model and fit!
+    model = GAMMLSS(formulas,family)
+    model.fit(max_inner=500,min_inner=50,control_lambda=2)
+
+    ps, Trs = model.approx_smooth_p_values()
+
+    def test_p1(self):
+        np.testing.assert_allclose(self.ps[0],np.array([np.float64(0.39714921685433136), np.float64(0.0)]),atol=min(max_atol,0),rtol=min(max_rtol,1e-6))
+
+    def test_p2(self):
+        np.testing.assert_allclose(self.ps[1],np.array([np.float64(0.738724988815144), np.float64(0.0)]),atol=min(max_atol,0),rtol=min(max_rtol,1e-6))
+
+    def test_trs1(self):
+        np.testing.assert_allclose(self.Trs[0],np.array([np.float64(5.67384667149778), np.float64(226.9137363518526)]),atol=min(max_atol,0),rtol=min(max_rtol,1e-6))
+
+    def test_trs2(self):
+        np.testing.assert_allclose(self.Trs[1],np.array([np.float64(0.11127579603700907), np.float64(135.27602836358722)]),atol=min(max_atol,0),rtol=min(max_rtol,1e-6))
      
 
 class Test_pred_whole_func_cor:
