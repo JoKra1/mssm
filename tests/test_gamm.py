@@ -606,7 +606,7 @@ class Test_print_smooth_by_factor_p:
             self.model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
-        comp = "f(['time'],by=fact): fact_1; edf: 9.43 f: 62.313 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.607 f: 18.735 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_3; edf: 4.839 f: 12.721 P(F > f) = 5.083e-12 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        comp = "f(['time'],by=fact): fact_1; edf: 9.43 f: 60.057 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.607 f: 16.831 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_3; edf: 4.839 f: 10.948 P(F > f) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         assert comp == capture
 
 class Test_print_smooth_by_factor_fs_p:
@@ -627,7 +627,7 @@ class Test_print_smooth_by_factor_fs_p:
             self.model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
-        comp = "f(['time'],by=fact): fact_1; edf: 9.493 f: 35.033 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.866 f: 10.265 P(F > f) = 1.559e-11 ***\nf(['time'],by=fact): fact_3; edf: 5.295 f: 3.324 P(F > f) = 0.00656 **\nf(['time'],by=sub); edf: 94.041\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        comp = "f(['time'],by=fact): fact_1; edf: 9.493 f: 34.404 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.866 f: 8.889 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_3; edf: 5.295 f: 3.238 P(F > f) = 0.00449 **\nf(['time'],by=sub); edf: 94.041\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         assert comp == capture
 
 class Test_print_smooth_binomial:
@@ -645,7 +645,7 @@ class Test_print_smooth_binomial:
             self.model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
-        comp = "f(['x0']); edf: 2.856 chi^2: 18.441 P(Chi^2 > chi^2) = 3.017e-04 ***\nf(['x1']); edf: 1.962 chi^2: 60.923 P(Chi^2 > chi^2) = 1.421e-13 ***\nf(['x2']); edf: 6.243 chi^2: 168.288 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x3']); edf: 1.407 chi^2: 2.62 P(Chi^2 > chi^2) = 0.16737\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        comp = "f(['x0']); edf: 2.856 chi^2: 18.417 P(Chi^2 > chi^2) = 7.220e-04 ***\nf(['x1']); edf: 1.962 chi^2: 59.723 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x2']); edf: 6.243 chi^2: 168.267 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x3']); edf: 1.407 chi^2: 2.731 P(Chi^2 > chi^2) = 0.19612\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         assert comp == capture
 
 class Test_Vp_estimation_hard:
