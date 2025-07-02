@@ -131,7 +131,7 @@ class Test_GAUMLSSGEN_hard:
         np.testing.assert_allclose(self.model2.edf,17.0917,atol=min(max_atol,0.5),rtol=min(max_rtol,0.025))
 
     def test_GAMcoef(self):
-        coef = self.model.overall_coef.flatten()
+        coef = self.model.coef.flatten()
         np.testing.assert_allclose(coef,np.array([ 7.64905998, -0.86968557, -0.83494213,  0.07122906,  1.20919857,
                                             1.67258359,  0.46597024, -0.53378393, -0.76055135, -0.7941819 ,
                                             -1.81015845, -1.07691283, -0.44119683,  0.33501224,  1.01000229,
@@ -142,7 +142,7 @@ class Test_GAUMLSSGEN_hard:
                                             0.09934445,  0.10436846,  0.66643841]),atol=min(max_atol,0.35))
 
     def test_GAMcoef2(self):
-        coef = self.model2.overall_coef.flatten()
+        coef = self.model2.coef.flatten()
         np.testing.assert_allclose(coef,np.array([  7.64897224,  -0.88029117,  -1.06281495,  -0.05778241,
                                                     1.02424568,   1.59964598,   0.24023237,  -0.78077659,
                                                     -0.82406948,  -0.59250597,  -1.72269128,  -1.35302871,
@@ -226,7 +226,7 @@ class Test_PropHaz_hard:
 
     def test_GAMcoef(self):
 
-        np.testing.assert_allclose((self.gsmm_newton.overall_coef - self.gsmm_qefs.overall_coef).flatten(),
+        np.testing.assert_allclose((self.gsmm_newton.coef - self.gsmm_qefs.coef).flatten(),
                            np.array([ 0.00085094, -0.00112174, -0.00254822, -0.00133955,  0.00105183,
                                         -0.00174351, -0.00296606,  0.00099741,  0.00571504, -0.00296058,
                                         -0.00230932,  0.00126035,  0.00379059,  0.00195697,  0.00087278,
@@ -293,7 +293,7 @@ class Test_PropHaz_repara_hard:
 
     def test_GAMcoef(self):
 
-        np.testing.assert_allclose((self.gsmm_newton.overall_coef - self.gsmm_qefs.overall_coef).flatten(),
+        np.testing.assert_allclose((self.gsmm_newton.coef - self.gsmm_qefs.coef).flatten(),
                            np.array([ 0.00130659, -0.00146633, -0.00482344, -0.00219018,  0.00408372,
                                     -0.00254493, -0.00538949,  0.00269739,  0.01220294, -0.00574834,
                                     -0.00341937,  0.00293582,  0.00723694,  0.0041163 ,  0.00185322,

@@ -37,7 +37,7 @@ class Test_GAUMLS:
         assert round(self.model.edf,ndigits=3) == 18.358
 
     def test_GAMcoef(self):
-        coef = self.model.overall_coef.flatten()
+        coef = self.model.coef.flatten()
         assert np.allclose(coef,np.array([ 3.58432714, -9.20689268, -0.3901218 ,  4.33485776, -2.83325345,
                                             -4.68428463, -1.93389004, -4.14504997, -6.70579839, -4.7240103 ,
                                             -5.19939664,  0.02026291, -1.35759472,  1.5379936 ,  2.39353569,
@@ -154,7 +154,7 @@ class Test_GAMMALS:
         assert round(self.model.edf,ndigits=3) == 14.677 
 
     def test_GAMcoef(self):
-        coef = self.model.overall_coef.flatten()
+        coef = self.model.coef.flatten()
         assert np.allclose(coef,np.array([ 1.14440894, -0.79166857,  1.95574948,  2.46973458,  1.7725019 ,
                                             1.29047048,  1.89204546,  1.34016392,  0.24865949, -0.66762416,
                                             -1.696964  ,  0.7715949 , -0.72928057,  0.87660987,  1.12963098,
@@ -192,7 +192,7 @@ class Test_mulnom:
         assert round(self.model.edf,ndigits=3) == 15.114
 
     def test_GAMcoef(self):
-        coef = self.model.overall_coef.flatten()
+        coef = self.model.coef.flatten()
         assert np.allclose(coef,np.array([ 1.32831232, -0.70411299,  0.26038397,  0.8585649 ,  1.31636532,
                                             1.46064575,  1.15467552,  0.34090563, -0.96911006, -2.2518714 ,
                                             0.66532703, -0.76857181, -0.20872371,  0.11240685,  0.42769554,
@@ -234,7 +234,7 @@ class Test_mulnom_repara:
         assert round(self.model.edf,ndigits=3) == 15.114
 
     def test_GAMcoef(self):
-        coef = self.model.overall_coef.flatten()
+        coef = self.model.coef.flatten()
         assert np.allclose(coef,np.array([ 1.32831232, -0.70411299,  0.26038397,  0.85856489,  1.31636532,
                                             1.46064575,  1.15467552,  0.34090563, -0.96911006, -2.2518714 ,
                                             0.66532703, -0.76857181, -0.20872371,  0.11240685,  0.42769554,
@@ -326,7 +326,7 @@ class Test_pred_whole_func_cor:
 
     # Test prediction code + whole-function correction
     pred_dat = pd.DataFrame({"x0":np.linspace(0,1,50)})
-    pred,pred_mat,ci = sim_fit_model.predict(0,[0,1],pred_dat,ci=True,whole_interval=True,seed=20)
+    pred,pred_mat,ci = sim_fit_model.predict([0,1],pred_dat,ci=True,whole_interval=True,seed=20,par=0)
 
     def test_pred(self):
         assert np.allclose(self.pred,np.array([-0.01138392,  0.05310652,  0.44636549,  1.15072365,  2.14835029,
@@ -391,7 +391,7 @@ class Test_diff_whole_func_cor:
     pred_dat2 = pd.DataFrame({"x0":np.linspace(0,1,50),
                           "cond":["b" for _ in range(50)]})
     
-    diff,ci = sim_fit_model.predict_diff(pred_dat2,pred_dat1,1,[1],whole_interval=True,seed=20)
+    diff,ci = sim_fit_model.predict_diff(pred_dat2,pred_dat1,[1],whole_interval=True,seed=20,par=1)
 
     def test_print_smooth_p_hard(self):
         capture = io.StringIO()

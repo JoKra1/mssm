@@ -182,10 +182,10 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
     if type(model1.family) != type(model2.family):
         raise ValueError("Both models should be estimated using the same family.")
     
-    if perform_GLRT and isinstance(model1.family,Family) and model1.formula.n_coef < model2.formula.n_coef:
+    if perform_GLRT and isinstance(model1.family,Family) and model1.formulas[0].n_coef < model2.formulas[0].n_coef:
         raise ValueError("For the GLRT, model1 needs to be set to the more complex model (i.e., needs to have more coefficients than model2).")
     
-    if perform_GLRT and (isinstance(model1.family,Family) == False) and len(model1.overall_coef) < len(model2.overall_coef):
+    if perform_GLRT and (isinstance(model1.family,Family) == False) and len(model1.coef) < len(model2.coef):
         raise ValueError("For the GLRT, model1 needs to be set to the more complex model (i.e., needs to have more coefficients than model2).")
     
     # Collect total DOF for uncertainty in \lambda using correction proposed by Greven & Scheipl (2016)
@@ -231,8 +231,8 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
                     F1 = V1@(X1.T@W1@X1)
                     F2 = V2@(X2.T@W2@X2)
             else: # GAMLSS or GSMM case
-                V1 = model1.overall_lvi.T @ model1.overall_lvi
-                V2 = model2.overall_lvi.T @ model2.overall_lvi
+                V1 = model1.lvi.T @ model1.lvi
+                V2 = model2.lvi.T @ model2.lvi
                 F1 = V1@(-1*model1.hessian)
                 F2 = V2@(-1*model2.hessian)
 

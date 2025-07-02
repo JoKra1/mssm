@@ -1416,7 +1416,7 @@ class GAUMLSS(GAMLSSFamily):
       mean_model.fit(progress_bar=False)
 
       m_coef,_ = mean_model.get_pars()
-      coef = np.concatenate((m_coef.reshape(-1,1),np.ones((models[1].formula.n_coef)).reshape(-1,1)))
+      coef = np.concatenate((m_coef.reshape(-1,1),np.ones((models[1].formulas[0].n_coef)).reshape(-1,1)))
 
       return coef
         
@@ -1767,7 +1767,7 @@ class GAMMALS(GAMLSSFamily):
       mean_model.fit(progress_bar=False,max_inner=1)
 
       m_coef,_ = mean_model.get_pars()
-      coef = np.concatenate((m_coef.reshape(-1,1),np.ones((models[1].formula.n_coef)).reshape(-1,1)))
+      coef = np.concatenate((m_coef.reshape(-1,1),np.ones((models[1].formulas[0].n_coef)).reshape(-1,1)))
       return coef
    
 
@@ -2217,5 +2217,5 @@ class PropHaz(GSMMFamily):
       """
 
       # Just set to very small positive values
-      coef = np.array([1e-4 for _ in range(models[0].formula.n_coef)]).reshape(-1,1)
+      coef = np.array([1e-4 for _ in range(models[0].formulas[0].n_coef)]).reshape(-1,1)
       return coef

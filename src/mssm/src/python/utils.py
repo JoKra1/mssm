@@ -163,7 +163,7 @@ def print_parametric_terms(model,par=0):
         # section 1.3.3 of Wood (2017). So we can just compute that directly.
 
         if isinstance(model.family,Family): # GAMM case
-            form = model.formula
+            form = model.formulas[0]
 
             coef = model.coef
             if coef is not None:
@@ -173,12 +173,12 @@ def print_parametric_terms(model,par=0):
             # GAMMLSS or GSMM case
             form = model.formulas[par]
             
-            if model.overall_coef is not None:
+            if model.coef is not None:
                 # Get coef and lvi for selected formula
-                split_coef = np.split(model.overall_coef,model.coef_split_idx)
-                split_idx = np.ndarray.flatten(np.split(np.arange(len(model.overall_coef)),model.coef_split_idx)[par])
+                split_coef = np.split(model.coef,model.coef_split_idx)
+                split_idx = np.ndarray.flatten(np.split(np.arange(len(model.coef)),model.coef_split_idx)[par])
                 coef = np.ndarray.flatten(split_coef[par])
-                lvi = model.overall_lvi[:,split_idx]
+                lvi = model.lvi[:,split_idx]
                 scale = 1
             else:
                 coef = None
@@ -272,7 +272,7 @@ def print_smooth_terms(model,par=0,pen_cutoff=0.2,ps=None,Trs=None):
             raise ValueError("``ps`` and ``Trs`` must have the same length but do not.")
 
         if isinstance(model.family,Family): # GAMM case
-            form = model.formula
+            form = model.formulas[0]
 
             if model.coef is None:
                 term_edf = None
@@ -283,7 +283,7 @@ def print_smooth_terms(model,par=0,pen_cutoff=0.2,ps=None,Trs=None):
             form = model.formulas[par]
 
             # Get term edf for par
-            if model.overall_coef is None:
+            if model.coef is None:
                 term_edf = None
             else:
                 term_edf = []
@@ -296,7 +296,7 @@ def print_smooth_terms(model,par=0,pen_cutoff=0.2,ps=None,Trs=None):
                     
                     if pen.start_index > prev_start_idx:
                         if pen.dist_param == par:
-                            term_edf.append(model.overall_term_edf[prev_edf_idx])
+                            term_edf.append(model.term_edf[prev_edf_idx])
                         
                         # Keep track of start idx (coef idx) and edf idx.
                         prev_start_idx = pen.start_index
@@ -434,13 +434,13 @@ def compute_bias_corrected_edf(model,overwrite=False):
             nH = -1*model.hessian
             F = model.lvi.T@model.lvi@(nH*scale)
 
-            edf1 += model.formula.unpenalized_coef
+            edf1 += model.formulas[0].unpenalized_coef
             
         else:
 
             # Start with forming F matrix
             nH = -1*model.hessian
-            F = model.overall_lvi.T@model.overall_lvi@nH
+            F = model.lvi.T@model.lvi@nH
 
             edf1 += np.sum([form.unpenalized_coef for form in model.formulas])
         
@@ -522,7 +522,7 @@ def approx_smooth_p_values(model,par=0,n_sel=1e5,edf1=True,force_approx=False,se
             compute_bias_corrected_edf(model)
 
         if isinstance(model.family,Family): # GAMM case
-            form = model.formula
+            form = model.formulas[0]
             X = model.get_mmat()
             coef = model.coef
             lvi = model.lvi
@@ -536,10 +536,10 @@ def approx_smooth_p_values(model,par=0,n_sel=1e5,edf1=True,force_approx=False,se
             X = model.get_mmat()[par]
 
             # Get coef and lvi for selected formula
-            split_coef = np.split(model.overall_coef,model.coef_split_idx)
-            split_idx = np.ndarray.flatten(np.split(np.arange(len(model.overall_coef)),model.coef_split_idx)[par])
+            split_coef = np.split(model.coef,model.coef_split_idx)
+            split_idx = np.ndarray.flatten(np.split(np.arange(len(model.coef)),model.coef_split_idx)[par])
             coef = np.ndarray.flatten(split_coef[par])
-            lvi = model.overall_lvi[:,split_idx]
+            lvi = model.lvi[:,split_idx]
             scale = 1
             term_edf = []
             rs_df = None
@@ -556,7 +556,7 @@ def approx_smooth_p_values(model,par=0,n_sel=1e5,edf1=True,force_approx=False,se
                         if edf1:
                             term_edf.append(min(model.term_edf1[prev_edf_idx], pen.rep_sj * pen.S_J.shape[1]))
                         else:
-                            term_edf.append(min(model.overall_term_edf[prev_edf_idx], pen.rep_sj * pen.S_J.shape[1]))
+                            term_edf.append(min(model.term_edf[prev_edf_idx], pen.rep_sj * pen.S_J.shape[1]))
                     
                     # Keep track of start idx (coef idx) and edf idx.
                     prev_start_idx = pen.start_index
@@ -893,7 +893,7 @@ def central_hessian(coef,llkfun,*llkgargs,**llkkwargs):
 
     return hes
 
-def adjust_CI(model,n_ps,b,predi_mat,use_terms,alpha,seed):
+def adjust_CI(model,n_ps,b,predi_mat,use_terms,alpha,seed,par=0):
         """
         Internal function to adjust point-wise CI to behave like whole-function interval (based on Wood, 2017; section 6.10.2 and Simpson, 2016):
 
@@ -930,7 +930,10 @@ def adjust_CI(model,n_ps,b,predi_mat,use_terms,alpha,seed):
         :type alpha: float
         :param seed: Can be used to provide a seed for the posterior sampling.
         :type seed: int or None
+        :param par: The index corresponding to the parameter of the log-likelihood for which samples are to be obtained for the coefficients, defaults to 0.
+        :type par: int, optional
         """
+
         use_post = None
         if not use_terms is None:
             # If we have many random factor levels, but want to make predictions only
@@ -940,7 +943,7 @@ def adjust_CI(model,n_ps,b,predi_mat,use_terms,alpha,seed):
             use_post = np.arange(0,predi_mat.shape[1])[use_post]
 
         # Sample deviations [*coef - coef] from posterior of model
-        post = model.sample_post(n_ps,use_post,deviations=True,seed=seed)
+        post = model.sample_post(n_ps,use_post,deviations=True,seed=seed,par=par)
 
         # To make computations easier take the abs of predi_mat@[*coef - coef], because [b,-b] is symmetric we can
         # simply check whether abs(predi_mat@[*coef - coef]) < b by computing abs(predi_mat@[*coef - coef])/b. The max of
@@ -1392,7 +1395,7 @@ def estimateVp(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,drop_
     S_emb,_,_,_ = compute_S_emb_pinv_det(model.hessian.shape[1],model.overall_penalties,"svd")
     
     if isinstance(family,Family):
-        y = model.formula.y_flat[model.formula.NOT_NA_flat]
+        y = model.formulas[0].y_flat[model.formulas[0].NOT_NA_flat]
         X = model.get_mmat()
 
         orig_scale = family.scale
@@ -1406,7 +1409,7 @@ def estimateVp(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,drop_
         Xs = model.get_mmat(drop_NA=drop_NA)
         X = Xs[0]
         orig_scale = 1
-        init_coef = copy.deepcopy(model.overall_coef)
+        init_coef = copy.deepcopy(model.coef)
     
     if grid_type == "JJJ1"  or grid_type == "JJJ2":
         # Approximate Vp via finite differencing or PQL approximation of negative REML.
@@ -1429,8 +1432,8 @@ def estimateVp(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,drop_
                 return -reml
             
             if isinstance(family,Family):
-                nHp = central_hessian(ep.flatten(),reml_wrapper,family,y,X,rPen,n_c,model.offset,model.pred,method)
-                #nHp = Hessian(reml_wrapper)(ep.flatten(),family,y,X,rPen,n_c,model.offset,model.pred)
+                nHp = central_hessian(ep.flatten(),reml_wrapper,family,y,X,rPen,n_c,model.offset,model.preds[0],method)
+                #nHp = Hessian(reml_wrapper)(ep.flatten(),family,y,X,rPen,n_c,model.offset,model.preds[0])
             else:
                 nHp = central_hessian(ep.flatten(),reml_wrapper,family,y,Xs,rPen,init_coef,len(init_coef),model.coef_split_idx,n_c=n_c,method=method,bfgs_options=bfgs_options)
             
@@ -1457,11 +1460,11 @@ def estimateVp(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,drop_
             #print(eig,1/eig)
         else:
             # Take PQL approximation instead
-            Vp, Vpr, Ri, Rir, _, _ = compute_Vp_WPS(model.lvi if isinstance(family,Family) else model.overall_lvi,
+            Vp, Vpr, Ri, Rir, _, _ = compute_Vp_WPS(model.lvi if isinstance(family,Family) else model.lvi,
                                                  model.hessian,
                                                  S_emb,
                                                  model.overall_penalties,
-                                                 model.coef.reshape(-1,1) if isinstance(family,Family) else model.overall_coef.reshape(-1,1),
+                                                 model.coef.reshape(-1,1) if isinstance(family,Family) else model.coef.reshape(-1,1),
                                                  scale=orig_scale if isinstance(family,Family) else 1)
         
         if grid_type == "JJJ1":
@@ -1784,7 +1787,7 @@ def compute_Vp_WPS(Vbr,H,S_emb,penalties,coef,scale=1):
     # Get partial derivatives of coef with respect to log(lambda) - see Wood (2017):
     dBetadRhos = np.zeros((len(coef),len(penalties)))
 
-    # Vbr.T@Vbr*scale = nH^{-1} - Vbr is available in model.lvi or model.overall_lvi after fitting
+    # Vbr.T@Vbr*scale = nH^{-1} - Vbr is available in model.lvi or model.lvi after fitting
     for peni,pen in enumerate(penalties):
         # Given in Wood (2017)
         dBetadRhos[:,[peni]] = -pen.lam *  (Vbr.T @ (Vbr @ (pen.S_J_emb @ coef)))
@@ -1927,7 +1930,7 @@ def compute_Vb_corr_WPS(Vbr,Vpr,Vr,H,S_emb,penalties,coef,scale=1):
     # Get partial derivatives of beta with respect to \rho, the log smoothing penalties
     dBetadRhos = np.zeros((len(coef),len(penalties)))
 
-    # Vbr.T@Vbr = nH^{-1} - Vbr is in principle available in model.lvi or model.overall_lvi after fitting,
+    # Vbr.T@Vbr = nH^{-1} - Vbr is in principle available in model.lvi or model.lvi after fitting,
     # but we need Rinv anyway..
     Rinv = compute_Linv(R.T).T
 
@@ -2169,7 +2172,7 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
     S_emb,_,_,_ = compute_S_emb_pinv_det(model.hessian.shape[1],model.overall_penalties,"svd")
     
     if isinstance(family,Family):
-        y = model.formula.y_flat[model.formula.NOT_NA_flat]
+        y = model.formulas[0].y_flat[model.formulas[0].NOT_NA_flat]
         X = model.get_mmat()
 
         orig_scale = family.scale
@@ -2183,7 +2186,7 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
         Xs = model.get_mmat(drop_NA=drop_NA)
         X = Xs[0]
         orig_scale = 1
-        init_coef = copy.deepcopy(model.overall_coef)
+        init_coef = copy.deepcopy(model.coef)
 
     Vp = None
     Vpr = None
@@ -2193,11 +2196,11 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
             Vp, Vpr, Vr, Vrr, _ = estimateVp(model,n_c=n_c,grid_type="JJJ1",Vp_fidiff=True)
         else:
             # Take PQL approximation instead
-            Vp, Vpr, Vr, Vrr, _, dBetadRhos = compute_Vp_WPS(model.lvi if isinstance(family,Family) else model.overall_lvi,
+            Vp, Vpr, Vr, Vrr, _, dBetadRhos = compute_Vp_WPS(model.lvi if isinstance(family,Family) else model.lvi,
                                                  model.hessian,
                                                  S_emb,
                                                  model.overall_penalties,
-                                                 model.coef.reshape(-1,1) if isinstance(family,Family) else model.overall_coef.reshape(-1,1),
+                                                 model.coef.reshape(-1,1) if isinstance(family,Family) else model.coef.reshape(-1,1),
                                                  scale=orig_scale if isinstance(family,Family) else 1)
 
         # Compute approximate WPS (2016) correction
@@ -2205,12 +2208,12 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
             if isinstance(family,Family):
                 Vc,Vcc = compute_Vb_corr_WPS(model.lvi,Vpr,Vr,model.hessian,S_emb,model.overall_penalties,model.coef.reshape(-1,1),scale=orig_scale)
             else:
-                Vc,Vcc = compute_Vb_corr_WPS(model.overall_lvi,Vpr,Vr,model.hessian,S_emb,model.overall_penalties,model.overall_coef.reshape(-1,1))
+                Vc,Vcc = compute_Vb_corr_WPS(model.lvi,Vpr,Vr,model.hessian,S_emb,model.overall_penalties,model.coef.reshape(-1,1))
                 
             if isinstance(family,Family):
                 V = Vc + Vcc + ((model.lvi.T@model.lvi)*orig_scale)
             else:
-                V = Vc + Vcc + model.overall_lvi.T@model.overall_lvi
+                V = Vc + Vcc + model.lvi.T@model.lvi
             
             if grid_type == "JJJ3":
                 # Can enforce lower bound of JJJ1 here
@@ -2586,7 +2589,7 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
                 if isinstance(family,Family):
                     Vr1 = model.lvi.T@model.lvi*orig_scale
                 else:
-                    Vr1 = model.overall_lvi.T@model.overall_lvi
+                    Vr1 = model.lvi.T@model.lvi
 
             V = Vr1 + Vcr.T @ Vcr
 
@@ -2622,7 +2625,7 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
             #    if isinstance(family,Family):
             #        Vr1 = model.lvi.T@model.lvi*orig_scale
             #    else:
-            #        Vr1 = model.overall_lvi.T@model.overall_lvi
+            #        Vr1 = model.lvi.T@model.lvi
 
             # Now, Greven & Scheipl provide final estimate =
             # E_{p|y}[V_\boldsymbol{\beta}(\lambda)] + E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] - E_{p|y}[\boldsymbol{\beta}] E_{p|y}[\boldsymbol{\beta}]^T
@@ -2666,7 +2669,7 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
                 W = model.Wr@model.Wr
                 ucF = (model.lvi.T@model.lvi)@((X.T@W@X))
         else: # GSMM/GAMLSS case
-            ucF = (model.overall_lvi.T@model.overall_lvi)@(-1*model.hessian)
+            ucF = (model.lvi.T@model.lvi)@(-1*model.hessian)
 
         total_edf2 = 2*model.edf - (ucF@ucF).trace()
         if total_edf > total_edf2:
