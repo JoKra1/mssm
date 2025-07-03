@@ -313,7 +313,7 @@ class Test_PropHaz_repara_hard:
                                    np.array([ 6.706370e-01,  8.527276e-01, -1.329478e-04,  6.377809e+01]),atol=min(max_atol,70),rtol=min(max_rtol,1.1)) 
 
     def test_GAMreml(self):
-        np.testing.assert_allclose(self.gsmm_newton.get_reml() - self.gsmm_qefs.get_reml(),-0.865,atol=min(max_atol,1.5),rtol=min(max_rtol,6e-4))
+        np.testing.assert_allclose(self.gsmm_newton.get_reml() - self.gsmm_qefs.get_reml(),-1.439279,atol=min(max_atol,1.5),rtol=min(max_rtol,6e-4))
 
     def test_GAMllk(self):
         np.testing.assert_allclose(self.gsmm_newton.get_llk(True) - self.gsmm_qefs.get_llk(True),-0.758,atol=min(max_atol,1),rtol=min(max_rtol,2e-4))

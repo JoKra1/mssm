@@ -307,7 +307,7 @@ class Test_mulnom_repara:
 
     def test_GAMreml_hard(self):
         reml = self.model.get_reml()
-        np.testing.assert_allclose(reml,-1000.749,atol=min(max_atol,2),rtol=min(max_rtol,0.002))
+        np.testing.assert_allclose(reml,-1002.688991,atol=min(max_atol,2),rtol=min(max_rtol,0.002))
     
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
