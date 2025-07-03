@@ -119,7 +119,7 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
         # Now correct for uncertainty in regularization parameters:
         cor_result_gs_1 = compare_CDL(sim_fit_model,sim_fit_model2,n_c=10,grid='JJJ3',seed=22,only_expected_edf=False,use_importance_weights=True,prior=prior)
 
-        # You can also set prior to ``None`` in which case the proposal distribution (by default a T-distribution with 40 df of freedom) is used as prior.
+        # You can also set prior to ``None`` in which case the proposal distribution (by default a T-distribution with 40 degrees of freedom) is used as prior.
 
     References:
      - Marra, G., & Wood, S. N. (2011) Practical variable selection for generalized additive models.
@@ -205,7 +205,7 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
         
         if correct_t1:
             # Section 6.12.4 suggests replacing t (edf) with t1 (2*t - (F@F).trace()) with F=(X.T@X+S_\llambda)^{-1}@X.T@X for GLRT - with the latter also being corrected for
-            # uncertainty in lambda. However, Wood et al., (2016) suggest that the aic should be computed based on t - so some book-keeping is ncessary.
+            # uncertainty in lambda. However, Wood et al., (2016) suggest that the aic should be computed based on t - so some book-keeping is necessary.
             aic_DOF1 = DOF1
             aic_DOF2 = DOF2
             DOF1 = DOF12

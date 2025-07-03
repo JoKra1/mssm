@@ -7,7 +7,7 @@ from .src.python.exp_fam import Link,Logit,Identity,LOG,LOGb,Family,Binomial,Gau
 from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2,solve_gammlss_sparse,solve_generalSmooth_sparse
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 from .src.python.penalties import embed_shared_penalties
-from .src.python.utils import sample_MVN,REML,adjust_CI,print_smooth_terms,print_parametric_terms,approx_smooth_p_values,compute_bias_corrected_edf
+from .src.python.utils import sample_MVN,REML,adjust_CI,print_smooth_terms,print_parametric_terms,approx_smooth_p_values,compute_bias_corrected_edf,GAMLSSGSMMFamily
 from .src.python.custom_types import VarType,ConstType,Constraint,PenType,LambdaTerm
 
 ##################################### GSMM class #####################################
@@ -228,12 +228,31 @@ class GSMM():
             pen = 0.5*self.penalty
         if self.coef is not None:
 
-            y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
+            ys = []
+            for fi,form in enumerate(self.formulas):
+                
+                # Repeated y-variable - don't have to pass all of them
+                if fi > 0 and form.get_lhs().variable == self.formulas[0].get_lhs().variable:
+                    ys.append(None)
+                    continue
+
+                # New y-variable
+                if drop_NA:
+                    y = form.y_flat[form.NOT_NA_flat]
+                else:
+                    y = form.y_flat
+
+                # Optionally apply function to dep. var.
+                if not form.get_lhs().f is None:
+                    y = form.get_lhs().f(y)
+                
+                # And collect
+                ys.append(y)
 
             # Build model matrices for all formulas
             Xs = self.get_mmat(drop_NA=drop_NA)
 
-            return self.family.llk(self.coef,self.coef_split_idx,y,Xs) - pen
+            return self.family.llk(self.coef,self.coef_split_idx,ys,Xs) - pen
 
         return None
 
@@ -402,15 +421,27 @@ class GSMM():
         if self.overall_penalties is None and restart == True:
             raise ValueError("Penalties were not initialized. ``Restart`` must be set to False.")
         
-        # Get y
-        if drop_NA:
-            y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
-        else:
-            y = self.formulas[0].y_flat
+        # Get ys
+        ys = []
+        for fi,form in enumerate(self.formulas):
+            
+            # Repeated y-variable - don't have to pass all of them
+            if fi > 0 and form.get_lhs().variable == self.formulas[0].get_lhs().variable:
+                ys.append(None)
+                continue
 
-        if not self.formulas[0].get_lhs().f is None:
+            # New y-variable
+            if drop_NA:
+                y = form.y_flat[form.NOT_NA_flat]
+            else:
+                y = form.y_flat
+
             # Optionally apply function to dep. var. before fitting. Not sure why that would be desirable for this model class...
-            y = self.formulas[0].get_lhs().f(y)
+            if not form.get_lhs().f is None:
+                y = form.get_lhs().f(y)
+            
+            # And collect
+            ys.append(y)
 
         # Build penalties and model matrices for all formulas
         Xs = []
@@ -470,7 +501,7 @@ class GSMM():
                 coef_split_idx[coef_i] += coef_split_idx[coef_i-1]
         
         # Now fit model
-        coef,H,LV,total_edf,term_edfs,penalty,smooth_pen,fit_info = solve_generalSmooth_sparse(self.family,y,Xs,form_n_coef,form_up_coef,coef,coef_split_idx,smooth_pen,
+        coef,H,LV,total_edf,term_edfs,penalty,smooth_pen,fit_info = solve_generalSmooth_sparse(self.family,ys,Xs,form_n_coef,form_up_coef,coef,coef_split_idx,smooth_pen,
                                                                                     max_outer,max_inner,min_inner,conv_tol,extend_lambda,extension_method_lam,
                                                                                     control_lambda,optimizer,method,check_cond,piv_tol,repara,should_keep_drop,form_VH,
                                                                                     use_grad,gamma,qEFSH,overwrite_coef,max_restarts,qEFS_init_converge,prefit_grad,
@@ -817,7 +848,12 @@ class GAMMLSS(GSMM):
             pen = 0.5*self.penalty
         if self.preds is not None:
             mus = [self.family.links[i].fi(self.preds[i]) for i in range(self.family.n_par)]
-            return self.family.llk(self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat],*mus) - pen
+
+            y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
+            if not self.formulas[0].get_lhs().f is None:
+                y = self.formulas[0].get_lhs().f(y)
+
+            return self.family.llk(y,*mus) - pen
 
         return None
                         
@@ -1246,13 +1282,18 @@ class GAMM(GAMMLSS):
             mu = self.preds[0]
             if isinstance(self.family,Gaussian) == False or isinstance(self.family.link,Identity) == False:
                 mu = self.family.link.fi(self.preds[0])
+            
+            y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
+            if not self.formulas[0].get_lhs().f is None:
+                y = self.formulas[0].get_lhs().f(y)
+
             if self.family.twopar:
                 scale = self.scale
                 if not ext_scale is None:
                     scale = ext_scale
-                return self.family.llk(self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat],mu,scale) - pen
+                return self.family.llk(y,mu,scale) - pen
             else:
-                return self.family.llk(self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat],mu) - pen
+                return self.family.llk(y,mu) - pen
         return None
 
     def get_reml(self):

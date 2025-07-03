@@ -2,82 +2,40 @@ from mssm.models import *
 import numpy as np
 import os
 from mssmViz.sim import*
-from numdifftools import Gradient,Hessian
-from mssm.src.python.gamm_solvers import deriv_transform_mu_eta,deriv_transform_eta_beta
 
+max_atol = 0 #0
+max_rtol = 0.001 #0.001
 
-max_atol = 100 #0
-max_rtol = 100 #0.001
-
-class GAMLSSGENSMOOTHFamily(GSMMFamily):
-    """Implementation of the ``GSMMFamily`` class that uses only information about the likelihood to estimate
-    a GAMLSS model.
-
-    References:
-
-        - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-        - Nocedal & Wright (2006). Numerical Optimization. Springer New York.
-    """
-
-    def __init__(self, pars: int, links:[Link], llkfun:Callable, *llkargs) -> None:
-        super().__init__(pars, links, *llkargs)
-        self.llkfun = llkfun
-    
-    def llk(self, coef, coef_split_idx, y, Xs):
-        return self.llkfun(coef, coef_split_idx, self.links, y, Xs,*self.llkargs)
-    
-    def gradient(self, coef, coef_split_idx, y, Xs):
-        """
-        Function to evaluate gradient for gsmm model.
-        """
-        coef = coef.reshape(-1,1)
-        split_coef = np.split(coef,coef_split_idx)
-        eta_mu = Xs[0]@split_coef[0]
-        if len(Xs) > 1:
-            eta_sd = Xs[1]@split_coef[1]
-        
-        # Get the Gamlss family
-        gammlss_family = self.llkargs[0]
-        
-        if len(Xs) > 1:
-            d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,[self.links[0].fi(eta_mu),self.links[1].fi(eta_sd)],gammlss_family)
-        else:
-            d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,[self.links[0].fi(eta_mu)],gammlss_family)
-            
-        grad,_ = deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs,only_grad=True)
-        #print(pgrad.flatten())
-        return grad.reshape(-1,1)
-    
-    def hessian(self, coef, coef_split_idx, y, Xs):
-        return None
-            
-
-def llk_gamm_fun(coef,coef_split_idx,links,y,Xs,gammlss_family):
-    """Likelihood for a GAM(LSS) - implemented so
-    that the model can be estimated using the general smooth code.
-
-    Note, gammlss_family is passed via llkargs so that this code works with
-    Gaussian and Gamma models.
-    """
-    coef = coef.reshape(-1,1)
-    split_coef = np.split(coef,coef_split_idx)
-    eta_mu = Xs[0]@split_coef[0]
-    if len(Xs) > 1:
-        eta_sd = Xs[1]@split_coef[1]
-    
-    mu_mu = links[0].fi(eta_mu)
-    if len(Xs) > 1:
-        mu_sd = links[1].fi(eta_sd)
-    
-    if len(Xs) > 1:
-        llk = gammlss_family.llk(y,mu_mu,mu_sd)
-    else:
-        llk = gammlss_family.llk(y,mu_mu)
-
-    if np.isnan(llk):
-        return -np.inf
-    
-    return llk
+default_gsmm_test_kwargs = {"init_coef":None,
+                            "max_outer":50,
+                            "max_inner":200,
+                            "min_inner":200,
+                            "conv_tol":1e-7,
+                            "extend_lambda":True,
+                            "extension_method_lam":"nesterov2",
+                            "control_lambda":1,
+                            "restart":False,
+                            "optimizer":"Newton",
+                            "method":"Chol",
+                            "check_cond":1,
+                            "piv_tol":np.power(np.finfo(float).eps,0.04),
+                            "progress_bar":False,
+                            "n_cores":10,
+                            "seed":0,
+                            "drop_NA":True,
+                            "init_lambda":None,
+                            "form_VH":True,
+                            "use_grad":False,
+                            "build_mat":None,
+                            "should_keep_drop":True,
+                            "gamma":1,
+                            "qEFSH":'SR1',
+                            "overwrite_coef":True,
+                            "max_restarts":0,
+                            "qEFS_init_converge":True,
+                            "prefit_grad":False,
+                            "repara":False,
+                            "init_bfgs_options":None}
 
 ################################################################## Tests ##################################################################
 
@@ -101,28 +59,41 @@ class Test_GAUMLSSGEN_hard:
     links = [Identity(),LOG()]
 
     # Now define the general family + model and fit!
-    gsmm_fam = GAMLSSGENSMOOTHFamily(2,links,llk_gamm_fun,GAUMLSS(links))
+    gsmm_fam = GAMLSSGSMMFamily(2,links,GAUMLSS(links))
     model = GSMM(formulas=formulas,family=gsmm_fam)
 
-    # First fit with SR1 and, to speed things up, only then with Newton
+    # First fit with SR1
     bfgs_opt={"gtol":1e-9,
             "ftol":1e-9,
             "maxcor":30,
             "maxls":200,
             "maxfun":1e7}
-                    
-    model.fit(init_coef=None,method='qEFS',extend_lambda=False,
-            control_lambda=False,max_outer=200,max_inner=500,min_inner=500,
-            seed=0,qEFSH='SR1',max_restarts=5,overwrite_coef=False,qEFS_init_converge=False,prefit_grad=True,
-            progress_bar=True,**bfgs_opt)
+    
+    test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
+    test_kwargs["method"] = 'qEFS'
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["control_lambda"] = False
+    test_kwargs["max_outer"] = 200
+    test_kwargs["max_inner"] = 500
+    test_kwargs["min_inner"] = 500
+    test_kwargs["seed"] = 0
+    test_kwargs["max_restarts"] = 5
+    test_kwargs["overwrite_coef"] = False
+    test_kwargs["qEFS_init_converge"] = False
+    test_kwargs["prefit_grad"] = True
+    test_kwargs = dict(test_kwargs,**bfgs_opt)
+
+    model.fit(**test_kwargs)
 
     model2 = copy.deepcopy(model)
+    test_kwargs["qEFSH"] = 'BFGS'
+    test_kwargs["max_restarts"] = 0
+    test_kwargs["overwrite_coef"] = True
+    test_kwargs["qEFS_init_converge"] = True
+    test_kwargs["prefit_grad"] = False
 
     # Now fit with BFGS
-    model2.fit(init_coef=None,method='qEFS',extend_lambda=False,
-            control_lambda=False,max_outer=200,max_inner=500,min_inner=500,
-            seed=0,qEFSH='BFGS',max_restarts=0,overwrite_coef=True,qEFS_init_converge=True,prefit_grad=False,
-            progress_bar=True,**bfgs_opt)
+    model2.fit(**test_kwargs)
 
     def test_GAMedf(self):
         np.testing.assert_allclose(self.model.edf,19.049,atol=min(max_atol,0.5),rtol=min(max_rtol,0.025))
@@ -200,13 +171,19 @@ class Test_PropHaz_hard:
     gsmm_newton_fam = PropHaz(ut,r)
     gsmm_newton = GSMM([copy.deepcopy(sim_formula_m)],gsmm_newton_fam)
 
+    test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
+    test_kwargs["method"] = 'QR/Chol'
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["control_lambda"] = False
+    test_kwargs["max_outer"] = 200
+    test_kwargs["max_inner"] = 500
+    test_kwargs["min_inner"] = 500
+    test_kwargs["seed"] = 0
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        gsmm_newton.fit(init_coef=None,method="QR/Chol",extend_lambda=False,
-                        control_lambda=False,max_outer=200,seed=0,max_inner=500,
-                        min_inner=500,progress_bar=True)
+        gsmm_newton.fit(**test_kwargs)
         
-
     gsmm_qefs_fam = PropHaz(ut,r)
     gsmm_qefs = GSMM([copy.deepcopy(sim_formula_m)],gsmm_qefs_fam)
 
@@ -219,10 +196,20 @@ class Test_PropHaz_hard:
                     "maxls":200,
                     "maxfun":1e7}
         
-        gsmm_qefs.fit(init_coef=None,method='qEFS',extend_lambda=False,
-                        control_lambda=False,max_outer=200,max_inner=500,min_inner=500,
-                        seed=0,qEFSH='SR1',max_restarts=0,overwrite_coef=False,qEFS_init_converge=False,prefit_grad=True,
-                        progress_bar=True,**bfgs_opt)
+        test_kwargs["method"] = 'qEFS'
+        test_kwargs["extend_lambda"] = False
+        test_kwargs["control_lambda"] = False
+        test_kwargs["max_outer"] = 200
+        test_kwargs["max_inner"] = 500
+        test_kwargs["min_inner"] = 500
+        test_kwargs["seed"] = 0
+        test_kwargs["max_restarts"] = 0
+        test_kwargs["overwrite_coef"] = False
+        test_kwargs["qEFS_init_converge"] = False
+        test_kwargs["prefit_grad"] = True
+        test_kwargs = dict(test_kwargs,**bfgs_opt)
+        
+        gsmm_qefs.fit(**test_kwargs)
 
     def test_GAMcoef(self):
 
@@ -267,13 +254,20 @@ class Test_PropHaz_repara_hard:
     gsmm_newton_fam = PropHaz(ut,r)
     gsmm_newton = GSMM([copy.deepcopy(sim_formula_m)],gsmm_newton_fam)
 
+    test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
+    test_kwargs["method"] = 'QR/Chol'
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["control_lambda"] = False
+    test_kwargs["max_outer"] = 200
+    test_kwargs["max_inner"] = 500
+    test_kwargs["min_inner"] = 500
+    test_kwargs["seed"] = 0
+    test_kwargs["repara"] = True
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        gsmm_newton.fit(init_coef=None,method="QR/Chol",extend_lambda=False,
-                        control_lambda=False,max_outer=200,seed=0,max_inner=500,
-                        min_inner=500,progress_bar=True,repara=True)
+        gsmm_newton.fit(**test_kwargs)
         
-
     gsmm_qefs_fam = PropHaz(ut,r)
     gsmm_qefs = GSMM([copy.deepcopy(sim_formula_m)],gsmm_qefs_fam)
 
@@ -286,10 +280,21 @@ class Test_PropHaz_repara_hard:
                     "maxls":200,
                     "maxfun":1e7}
         
-        gsmm_qefs.fit(init_coef=None,method='qEFS',extend_lambda=False,
-                        control_lambda=False,max_outer=200,max_inner=500,min_inner=500,
-                        seed=0,qEFSH='SR1',max_restarts=0,overwrite_coef=False,qEFS_init_converge=False,prefit_grad=True,
-                        progress_bar=True,repara=True,**bfgs_opt)
+        test_kwargs["method"] = 'qEFS'
+        test_kwargs["extend_lambda"] = False
+        test_kwargs["control_lambda"] = False
+        test_kwargs["max_outer"] = 200
+        test_kwargs["max_inner"] = 500
+        test_kwargs["min_inner"] = 500
+        test_kwargs["seed"] = 0
+        test_kwargs["max_restarts"] = 0
+        test_kwargs["overwrite_coef"] = False
+        test_kwargs["qEFS_init_converge"] = False
+        test_kwargs["prefit_grad"] = True
+        test_kwargs["repara"] = True
+        test_kwargs = dict(test_kwargs,**bfgs_opt)
+        
+        gsmm_qefs.fit(**test_kwargs)
 
     def test_GAMcoef(self):
 

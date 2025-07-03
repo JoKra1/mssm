@@ -8,8 +8,137 @@ from ..python.gamm_solvers import cpp_backsolve_tr,compute_S_emb_pinv_det,cpp_ch
 from ..python.terms import fs, rs
 from .file_loading import mp
 from .repara import reparam
-from ..python.exp_fam import Family,Gaussian, Identity,GAMLSSFamily,GSMMFamily
+from ..python.exp_fam import Family,Gaussian, Identity,GAMLSSFamily,GSMMFamily,Link
 import davies
+
+class GAMLSSGSMMFamily(GSMMFamily):
+    """Implementation of the ``GSMMFamily`` class that uses only information about the likelihood to estimate any implemented GAMMLSS model.
+    
+    Allows to estimate any GAMMLSS as a GSMM via the L-qEFS update. Example::
+
+        # Simulate 500 data points
+        sim_dat = sim3(500,2,c=1,seed=0,family=Gaussian(),binom_offset = 0, correlate=False)
+
+        # We need to model the mean: \mu_i
+        formula_m = Formula(lhs("y"),
+                            [i(),f(["x0"]),f(["x1"]),f(["x2"]),f(["x3"])],
+                            data=sim_dat)
+
+        # And for sd - here constant
+        formula_sd = Formula(lhs("y"),
+                            [i()],
+                            data=sim_dat)
+
+        # Collect both formulas
+        formulas = [formula_m,formula_sd]
+        links = [Identity(),LOG()]
+
+        # Now define the general family + model
+        gsmm_fam = GAMLSSGSMMFamily(2,links,GAUMLSS(links))
+        model = GSMM(formulas=formulas,family=gsmm_fam)
+
+        # Fit with SR1
+        bfgs_opt={"gtol":1e-9,
+                "ftol":1e-9,
+                "maxcor":30,
+                "maxls":200,
+                "maxfun":1e7}
+                        
+        model.fit(init_coef=None,method='qEFS',extend_lambda=False,
+                control_lambda=False,max_outer=200,max_inner=500,min_inner=500,
+                seed=0,qEFSH='SR1',max_restarts=5,overwrite_coef=False,qEFS_init_converge=False,prefit_grad=True,
+                progress_bar=True,**bfgs_opt)
+        
+        ################### Or for a multinomial model: ###################
+        
+        formulas = [Formula(lhs("y"),
+                        [i(),f(["x0"])],
+                        data=sim5(1000,seed=91)) for k in range(4)]
+
+        # Create family - again specifying K-1 pars - here 4!
+        family = MULNOMLSS(4)
+
+        # Collect both formulas
+        links = family.links
+
+        # Now again define the general family + model
+        gsmm_fam = GAMLSSGSMMFamily(4,links,family)
+        model = GSMM(formulas=formulas,family=gsmm_fam)
+
+        # And fit with SR1
+        bfgs_opt={"gtol":1e-9,
+                "ftol":1e-9,
+                "maxcor":30,
+                "maxls":200,
+                "maxfun":1e7}
+                        
+        model.fit(init_coef=None,method='qEFS',extend_lambda=False,
+                control_lambda=False,max_outer=200,max_inner=500,min_inner=500,
+                seed=0,qEFSH='SR1',max_restarts=0,overwrite_coef=False,qEFS_init_converge=False,prefit_grad=True,
+                progress_bar=True,**bfgs_opt)
+
+    References:
+        - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+        - Nocedal & Wright (2006). Numerical Optimization. Springer New York.
+
+    :param pars: Number of parameters of the likelihood.
+    :type pars: int
+    :param links: List of Link functions for each parameter of the likelihood, e.g., `links=[Identity(),LOG()]`.
+    :type links: [Link]
+    :param gammlss_family: Any implemented member of the :class:`GAMLSSFamily` class. Available in ``self.llkargs[0]``.
+    :type gammlss_family: GAMLSSFamily
+    """
+
+    def __init__(self, pars: int, links:[Link], gammlss_family:GAMLSSFamily) -> None:
+        super().__init__(pars, links, gammlss_family)
+    
+    def llk(self, coef, coef_split_idx, ys, Xs):
+        """
+        Function to evaluate log-likelihood of GAMM(LSS) model when estimated via GSMM.
+        """
+        y = ys[0]
+        gammlss_family = self.llkargs[0]
+        coef = coef.reshape(-1,1)
+        split_coef = np.split(coef,coef_split_idx)
+        etas = [Xs[ei]@split_coef[ei] for ei in range(len(Xs))]
+        mus = [self.links[ei].fi(etas[ei]) for ei in range(len(Xs))]
+        
+        llk = gammlss_family.llk(y,*mus)
+
+        if np.isnan(llk):
+            return -np.inf
+        
+        return llk
+    
+    def gradient(self, coef, coef_split_idx, ys, Xs):
+        """
+        Function to evaluate gradient of GAMM(LSS) model when estimated via GSMM.
+        """
+        y = ys[0]
+        coef = coef.reshape(-1,1)
+        split_coef = np.split(coef,coef_split_idx)
+        etas = [Xs[ei]@split_coef[ei] for ei in range(len(Xs))]
+        mus = [self.links[ei].fi(etas[ei]) for ei in range(len(Xs))]
+        
+        # Get the Gamlss family
+        gammlss_family = self.llkargs[0]
+        
+        if gammlss_family.d_eta == False:
+         
+            d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,mus,gammlss_family)
+        else:
+            d1eta = [fd1(y,*mus) for fd1 in gammlss_family.d1]
+            d2eta = [fd2(y,*mus) for fd2 in gammlss_family.d2]
+            d2meta = [fd2m(y,*mus) for fd2m in gammlss_family.d2m]
+            
+        # Get gradient
+        grad,_ = deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs,only_grad=True)
+
+        return grad.reshape(-1,1)
+    
+    def hessian(self, coef, coef_split_idx, ys, Xs):
+        return None
+
 
 def sample_MVN(n,mu,scale,P,L,LI=None,use=None,seed=None):
     """

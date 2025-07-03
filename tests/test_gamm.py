@@ -9,8 +9,24 @@ from mssm.src.python.utils import estimateVp
 import io
 from contextlib import redirect_stdout
 
-max_atol = 100
-max_rtol = 100
+max_atol = 0 #0
+max_rtol = 0.001 #0.001
+
+default_gamm_test_kwargs = {"max_outer":50,
+                            "max_inner":100,
+                            "conv_tol":1e-7,
+                            "extend_lambda":True,
+                            "control_lambda":True,
+                            "exclude_lambda":False,
+                            "extension_method_lam" : "nesterov",
+                            "restart":False,
+                            "method":"Chol",
+                            "check_cond":1,
+                            "progress_bar":True,
+                            "n_cores":10,
+                            "offset" : None}
+
+################################################################## Tests ##################################################################
 
 class Test_BIG_GAMM_Discretize:
     dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
@@ -35,7 +51,7 @@ class Test_BIG_GAMM_Discretize:
         
     model = GAMM(formula,Gaussian())
 
-    model.fit()
+    model.fit(**default_gamm_test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=0) == 2434
@@ -75,7 +91,7 @@ class Test_NUll_penalty_reparam:
         
     model = GAMM(formula,Gaussian())
 
-    model.fit()
+    model.fit(**default_gamm_test_kwargs)
 
     #Compute re-parameterization strategy from Wood (2011)
     S_emb,S_pinv,_,_ = compute_S_emb_pinv_det(len(model.coef),model.overall_penalties,"svd")
@@ -146,7 +162,10 @@ class Test_BIG_GAMM:
         
     model = GAMM(formula,Gaussian())
 
-    model.fit(exclude_lambda=True)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["exclude_lambda"] = True
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 153.707 
@@ -180,7 +199,7 @@ class Test_BIG_GAMM_keep_cov:
         
     model = GAMM(formula,Gaussian())
 
-    model.fit()
+    model.fit(**default_gamm_test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=1) == 153.7
@@ -200,7 +219,10 @@ class Test_rs_ri:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(max_outer=100)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_outer"] = 100
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 97.59 
@@ -286,7 +308,10 @@ class Test_no_pen:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(max_outer=100)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_outer"] = 100
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 6 
@@ -318,7 +343,10 @@ class Test_te_rs_fact:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(max_outer=100)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_outer"] = 100
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 92.601 
@@ -399,7 +427,11 @@ class Test_te_rs_fact_QR:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(max_outer=100,method="QR")
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_outer"] = 100
+    test_kwargs["method"] = "QR"
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 92.601
@@ -471,7 +503,10 @@ class Test_print_parametric:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(max_outer=100)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_outer"] = 100
+
+    model.fit(**test_kwargs)
     
     def test_print_parametric(self):
         capture = io.StringIO()
@@ -492,7 +527,10 @@ class Test_ti_rs_fact:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(max_outer=100)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_outer"] = 100
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 103.555 
@@ -569,7 +607,7 @@ class Test_3way_li:
     model = GAMM(formula,Gaussian())
 
     # then fit
-    model.fit()
+    model.fit(**default_gamm_test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 12 
@@ -598,7 +636,10 @@ class Test_print_smooth_by_factor_p:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(max_outer=100)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_outer"] = 100
+
+    model.fit(**test_kwargs)
     
     def test_print_smooth_p(self):
         capture = io.StringIO()
@@ -619,7 +660,10 @@ class Test_print_smooth_by_factor_fs_p:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(max_outer=100)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_outer"] = 100
+
+    model.fit(**test_kwargs)
     
     def test_print_smooth_p(self):
         capture = io.StringIO()
@@ -637,7 +681,11 @@ class Test_print_smooth_binomial:
 
     # By default, the Binomial family assumes binary data and uses the logit link.
     model = GAMM(formula,Binomial())
-    model.fit(max_inner=1)
+
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_inner"] = 1
+
+    model.fit(**test_kwargs)
 
     def test_print_smooth_p(self):
         capture = io.StringIO()
@@ -655,7 +703,11 @@ class Test_Vp_estimation_hard:
 
     # By default, the Binomial family assumes binary data and uses the logit link.
     model = GAMM(formula,Binomial())
-    model.fit(max_inner=1)
+    
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_inner"] = 1
+
+    model.fit(**test_kwargs)
 
     Vp,_,_,_,_ = estimateVp(model,strategy="JJJ1",Vp_fidiff=True)
 
@@ -671,7 +723,10 @@ class Test_te_p_values:
     formula = Formula(lhs("y"),[i(),f(["x0","x3"],te=True),f(["x1"]),f(["x2"])],data=sim_dat)
     model = GAMM(formula,Gaussian())
 
-    model.fit(max_outer=100)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_outer"] = 100
+
+    model.fit(**test_kwargs)
 
     ps, Trs = approx_smooth_p_values(model,par=0,edf1=False,force_approx=True)
 
@@ -691,7 +746,10 @@ class Test_diff:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(max_outer=100)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_outer"] = 100
+
+    model.fit(**test_kwargs)
 
     pred_dat1 = pd.DataFrame({"time":np.linspace(min(sim_dat["time"]),max(sim_dat["time"]),50),
                                 "x":[0 for _ in range(50)],

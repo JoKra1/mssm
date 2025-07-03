@@ -4,6 +4,22 @@ import numpy as np
 import os
 from mssmViz.sim import*
 
+default_gamm_test_kwargs = {"max_outer":50,
+                            "max_inner":100,
+                            "conv_tol":1e-7,
+                            "extend_lambda":True,
+                            "control_lambda":True,
+                            "exclude_lambda":False,
+                            "extension_method_lam" : "nesterov",
+                            "restart":False,
+                            "method":"Chol",
+                            "check_cond":1,
+                            "progress_bar":True,
+                            "n_cores":10,
+                            "offset" : None}
+
+################################################################## Tests ##################################################################
+
 class Test_GAM:
 
     dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
@@ -22,7 +38,10 @@ class Test_GAM:
         
     model = GAMM(formula,Gaussian())
 
-    model.fit(exclude_lambda=True)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["exclude_lambda"] = True
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 9.723
@@ -56,7 +75,10 @@ class Test_GAM_TE:
         
     model = GAMM(formula,Gaussian())
 
-    model.fit(exclude_lambda=True)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["exclude_lambda"] = True
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 33.835 
@@ -92,7 +114,10 @@ class Test_GAM_TE_BINARY:
         
     model = GAMM(formula,Gaussian())
 
-    model.fit(exclude_lambda=True)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["exclude_lambda"] = True
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 29.845 
@@ -167,7 +192,10 @@ class Test_GAMM:
         
     model = GAMM(formula,Gaussian())
 
-    model.fit(exclude_lambda=True)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["exclude_lambda"] = True
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 153.707 
@@ -197,7 +225,10 @@ class Test_Binom_GAMM:
 
     # By default, the Binomial family assumes binary data and uses the logit link.
     model = GAMM(formula,Binomial())
-    model.fit(max_inner=1)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_inner"] = 1
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 13.468 
@@ -238,7 +269,11 @@ class Test_Gamma_GAMM:
 
     # By default, the Gamma family assumes that the model predictions match log(\mu_i), i.e., a log-link is used.
     model = GAMM(formula,Gamma())
-    model.fit(max_inner=1)
+
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_inner"] = 1
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 17.814 
@@ -284,7 +319,7 @@ class Test_Overlap_GAMM:
                                         series_id="series")
 
     model = GAMM(overlap_formula,Gaussian())
-    model.fit()
+    model.fit(**default_gamm_test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 54.547 
@@ -333,7 +368,7 @@ class Test_ri_li:
     model = GAMM(formula,Gaussian())
 
     # then fit
-    model.fit()
+    model.fit(**default_gamm_test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 27.458 

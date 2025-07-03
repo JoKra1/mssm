@@ -1796,7 +1796,7 @@ class GSMMFamily:
       self.links = links
       self.llkargs = llkargs # Any arguments that need to be passed to evaluate the likelihood/gradiant/hessian
 
-   def llk(self,coef,coef_split_idx,y,Xs):
+   def llk(self,coef,coef_split_idx,ys,Xs):
       """log-probability of data under given model.
 
       References:
@@ -1807,8 +1807,8 @@ class GSMMFamily:
       :type coef: [float]
       :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
       :type coef_split_idx: [int]
-      :param y: The vector containing each observation.
-      :type y: [float]
+      :param ys: List containing the vectors of observations passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
+      :type ys: [[float] or None]
       :param Xs: A list of sparse model matrices per likelihood parameter.
       :type Xs: [scp.sparse.csc_array]
       :return: The log-likelihood evaluated at ``coef``.
@@ -1816,7 +1816,7 @@ class GSMMFamily:
       """
       pass
    
-   def gradient(self,coef,coef_split_idx,y,Xs):
+   def gradient(self,coef,coef_split_idx,ys,Xs):
       """Function to evaluate the gradient of the llk at current coefficient estimate ``coef``.
 
       By default relies on numerical differentiation as implemented in scipy to approximate the Gradient from the implemented log-likelihood function.
@@ -1829,19 +1829,19 @@ class GSMMFamily:
       :type coef: [float]
       :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
       :type coef_split_idx: [int]
-      :param y: The vector containing each observation.
-      :type y: [float]
+      :param ys: List containing the vectors of observations passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
+      :type ys: [[float] or None]
       :param Xs: A list of sparse model matrices per likelihood parameter.
       :type Xs: [scp.sparse.csc_array]
       :return: The Gradient of the log-likelihood evaluated at ``coef`` as ``numpy.array``) of shape (-1,1).
       :rtype: [float]
       """
-      llk_warp = lambda x: self.llk(x,coef_split_idx,y,Xs)
+      llk_warp = lambda x: self.llk(x,coef_split_idx,ys,Xs)
       
       grad = scp.optimize.approx_fprime(coef.flatten(),llk_warp)
       return grad.reshape(-1,1)
    
-   def hessian(self,coef,coef_split_idx,y,Xs):
+   def hessian(self,coef,coef_split_idx,ys,Xs):
       """Function to evaluate the hessian of the llk at current coefficient estimate ``coef``.
 
       Only has to be implemented if full Newton is to be used to estimate coefficients. If the L-qEFS update by Krause et al. (in preparation) is
@@ -1851,8 +1851,8 @@ class GSMMFamily:
       :type coef: [float]
       :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
       :type coef_split_idx: [int]
-      :param y: The vector containing each observation.
-      :type y: [float]
+      :param ys: List containing the vectors of observations passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
+      :type ys: [[float] or None]
       :param Xs: A list of sparse model matrices per likelihood parameter.
       :type Xs: [scp.sparse.csc_array]
       :return: The Hessian of the log-likelihood evaluated at ``coef``.
@@ -1907,7 +1907,7 @@ class PropHaz(GSMMFamily):
       self.__qs = None
       self.__avs = None
    
-   def llk(self,coef,coef_split_idx,delta,Xs):
+   def llk(self,coef,coef_split_idx,ys,Xs):
       """Log-likelihood function as defined by Wood, Pya, & Säfken (2016).
 
       References:
@@ -1916,8 +1916,9 @@ class PropHaz(GSMMFamily):
 
       ``delta`` (passed as dependent variable) holds values in ``{0,1}``, indicating whether the event was observed or not.
       """
-
+      
       # Extract and define all variables defined by WPS (2016)
+      delta = ys[0]
       ut = self.llkargs[0]
       r = self.llkargs[1]
       nt = len(ut)
@@ -1950,7 +1951,7 @@ class PropHaz(GSMMFamily):
       return llk
 
 
-   def gradient(self, coef, coef_split_idx, delta, Xs):
+   def gradient(self, coef, coef_split_idx, ys, Xs):
       """Gradient as defined by Wood, Pya, & Säfken (2016).
 
       References:
@@ -1961,6 +1962,7 @@ class PropHaz(GSMMFamily):
       """
       
       # Extract and define all variables defined by WPS (2016)
+      delta = ys[0]
       ut = self.llkargs[0]
       r = self.llkargs[1]
       nt = len(ut)
@@ -2000,7 +2002,7 @@ class PropHaz(GSMMFamily):
       return g.reshape(-1,1)
 
 
-   def hessian(self, coef, coef_split_idx, delta, Xs):
+   def hessian(self, coef, coef_split_idx, ys, Xs):
       """Hessian as defined by Wood, Pya, & Säfken (2016).
 
       References:
@@ -2011,6 +2013,7 @@ class PropHaz(GSMMFamily):
       """
 
       # Extract and define all variables defined by WPS (2016)
+      delta = ys[0]
       ut = self.llkargs[0]
       r = self.llkargs[1]
       nt = len(ut)

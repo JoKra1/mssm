@@ -5,8 +5,29 @@ from mssmViz.sim import*
 import io
 from contextlib import redirect_stdout
 
-max_atol = 100
-max_rtol = 100
+max_atol = 0 #0
+max_rtol = 0.001 #0.001
+
+default_gammlss_test_kwargs = {"max_outer":50,
+                               "max_inner":200,
+                               "min_inner":200,
+                               "conv_tol":1e-7,
+                               "extend_lambda":True,
+                               "extension_method_lam":"nesterov2",
+                               "control_lambda":1,
+                               "restart":False,
+                               "method":"Chol",
+                               "check_cond":1,
+                               "piv_tol":np.power(np.finfo(float).eps,0.04),
+                               "should_keep_drop":True,
+                               "prefit_grad":False,
+                               "repara":False,
+                               "progress_bar":True,
+                               "n_cores":10,
+                               "seed":0,
+                               "init_lambda":None}
+
+################################################################## Tests ##################################################################
 
 class Test_GAUMLS:
     # Simulate 500 data points
@@ -31,7 +52,13 @@ class Test_GAUMLS:
 
     # Now define the model and fit!
     model = GAMMLSS(formulas,family)
-    model.fit(extension_method_lam="nesterov",max_inner=50,min_inner=50)
+
+    test_kwargs = copy.deepcopy(default_gammlss_test_kwargs)
+    test_kwargs["extension_method_lam"] = "nesterov"
+    test_kwargs["max_inner"] = 50
+    test_kwargs["min_inner"] = 50
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 18.358
@@ -107,7 +134,14 @@ class Test_GAUMLS_MIXED:
     sim1_formulas = [sim1_formula_m,sim1_formula_sd]
 
     model = GAMMLSS(sim1_formulas,family)
-    model.fit(seed=30,max_outer=250,max_inner=500,extend_lambda=True,method="QR/Chol")
+
+    test_kwargs = copy.deepcopy(default_gammlss_test_kwargs)
+    test_kwargs["max_inner"] = 500
+    test_kwargs["max_outer"] = 250
+    test_kwargs["seed"] = 30
+    test_kwargs["method"] = "QR/Chol"
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 26.196
@@ -148,7 +182,13 @@ class Test_GAMMALS:
 
     # Now define the model and fit!
     model = GAMMLSS(formulas,family)
-    model.fit(extension_method_lam="nesterov",max_inner=50,min_inner=50)
+
+    test_kwargs = copy.deepcopy(default_gammlss_test_kwargs)
+    test_kwargs["extension_method_lam"] = "nesterov"
+    test_kwargs["max_inner"] = 50
+    test_kwargs["min_inner"] = 50
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 14.677 
@@ -186,7 +226,15 @@ class Test_mulnom:
 
     # Fit the model
     model = GAMMLSS(formulas,family)
-    model.fit(method="Chol",control_lambda=0,extend_lambda=False,max_outer=200,max_inner=500,should_keep_drop=False)
+
+    test_kwargs = copy.deepcopy(default_gammlss_test_kwargs)
+    test_kwargs["control_lambda"] = False
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["max_outer"] = 200
+    test_kwargs["max_inner"] = 500
+    test_kwargs["should_keep_drop"] = False
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 15.114
@@ -228,7 +276,16 @@ class Test_mulnom_repara:
 
     # Fit the model
     model = GAMMLSS(formulas,family)
-    model.fit(method="Chol",control_lambda=0,extend_lambda=False,max_outer=200,max_inner=500,should_keep_drop=False,repara=True)
+
+    test_kwargs = copy.deepcopy(default_gammlss_test_kwargs)
+    test_kwargs["control_lambda"] = 0
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["max_outer"] = 200
+    test_kwargs["max_inner"] = 500
+    test_kwargs["should_keep_drop"] = False
+    test_kwargs["repara"] = True
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 15.114
@@ -277,7 +334,13 @@ class Test_te_p_values:
 
     # Now define the model and fit!
     model = GAMMLSS(formulas,family)
-    model.fit(max_inner=500,min_inner=50,control_lambda=2)
+
+    test_kwargs = copy.deepcopy(default_gammlss_test_kwargs)
+    test_kwargs["control_lambda"] = 2
+    test_kwargs["max_inner"] = 500
+    test_kwargs["min_inner"] = 50
+
+    model.fit(**test_kwargs)
 
     ps0, Trs0 = approx_smooth_p_values(model,par=0,edf1=False,force_approx=True)
     ps1, Trs1 = approx_smooth_p_values(model,par=1,edf1=False,force_approx=True)
@@ -322,7 +385,11 @@ class Test_pred_whole_func_cor:
     sim1_formulas = [sim1_formula_m,sim1_formula_sd]
 
     sim_fit_model = GAMMLSS(sim1_formulas,family)
-    sim_fit_model.fit(extension_method_lam="nesterov")
+    
+    test_kwargs = copy.deepcopy(default_gammlss_test_kwargs)
+    test_kwargs["extension_method_lam"] = "nesterov"
+
+    sim_fit_model.fit(**test_kwargs)
 
     # Test prediction code + whole-function correction
     pred_dat = pd.DataFrame({"x0":np.linspace(0,1,50)})
@@ -383,7 +450,11 @@ class Test_diff_whole_func_cor:
     sim1_formulas = [sim1_formula_m,sim1_formula_sd]
 
     sim_fit_model = GAMMLSS(sim1_formulas,family)
-    sim_fit_model.fit(extension_method_lam="nesterov2")
+
+    test_kwargs = copy.deepcopy(default_gammlss_test_kwargs)
+    test_kwargs["extension_method_lam"] = "nesterov2"
+
+    sim_fit_model.fit(**test_kwargs)
 
     pred_dat1 = pd.DataFrame({"x0":np.linspace(0,1,50),
                           "cond":["a" for _ in range(50)]})

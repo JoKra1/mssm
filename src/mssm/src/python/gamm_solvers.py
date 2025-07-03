@@ -3101,7 +3101,7 @@ def solve_gammlss_sparse(family,y,Xs,form_n_coef,form_up_coef,coef,coef_split_id
 
 ################################################ General Smooth model code ################################################
 
-def correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb,a):
+def correct_coef_step_gen_smooth(family,ys,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb,a):
     """
     Apply step size correction to Newton update for general smooth models, as discussed by WPS (2016).
 
@@ -3110,7 +3110,7 @@ def correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk
     """
     
     # Step size control for newton step.
-    next_llk = family.llk(next_coef,coef_split_idx,y,Xs)
+    next_llk = family.llk(next_coef,coef_split_idx,ys,Xs)
     
     # Evaluate improvement of penalized llk under new and old coef - but in both
     # cases for current lambda (see Wood, Li, Shaddick, & Augustin; 2017)
@@ -3129,7 +3129,7 @@ def correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk
         next_coef = (coef + next_coef)/2
         
         # Update pen_llk
-        next_llk = family.llk(next_coef,coef_split_idx,y,Xs)
+        next_llk = family.llk(next_coef,coef_split_idx,ys,Xs)
         next_pen_llk = next_llk - 0.5*next_coef.T@S_emb@next_coef
         
     # Update step-size for gradient
@@ -3162,11 +3162,11 @@ def back_track_alpha(coef,step,llk_fun,grad_fun,*llk_args,alpha_max=1,c1=1e-4,ma
    
    return None
 
-def check_drop_valid_gensmooth(y,coef,Xs,S_emb,keep,family):
+def check_drop_valid_gensmooth(ys,coef,Xs,S_emb,keep,family):
    """Checks whether an identified set of coefficients to be dropped from the model results in a valid log-likelihood.
 
-   :param y: Vector of response variable
-   :type y: numpy.array
+   :param ys: List holding vectors of observations
+   :type ys: [numpy.array]
    :param coef: Vector of coefficientss
    :type coef: numpy.array
    :param coef_split_idx: List with indices to split coef - one per parameter of response distribution
@@ -3193,7 +3193,7 @@ def check_drop_valid_gensmooth(y,coef,Xs,S_emb,keep,family):
    rS_emb = rS_emb[:,keep]
 
    # Re-compute llk
-   c_llk = family.llk(dropcoef,rcoef_split_idx,y,rXs)
+   c_llk = family.llk(dropcoef,rcoef_split_idx,ys,rXs)
    c_pen_llk = c_llk - 0.5*dropcoef.T@rS_emb@dropcoef
 
    if (np.isinf(c_pen_llk[0,0]) or np.isnan(c_pen_llk[0,0])):
@@ -3201,7 +3201,7 @@ def check_drop_valid_gensmooth(y,coef,Xs,S_emb,keep,family):
    
    return True,c_pen_llk
 
-def restart_coef(coef,c_llk,c_pen_llk,n_coef,coef_split_idx,y,Xs,S_emb,family,outer,restart_counter):
+def restart_coef(coef,c_llk,c_pen_llk,n_coef,coef_split_idx,ys,Xs,S_emb,family,outer,restart_counter):
    """Shrink coef towards random vector to restart algorithm if it get's stuck.
 
    :param coef: _description_
@@ -3210,8 +3210,8 @@ def restart_coef(coef,c_llk,c_pen_llk,n_coef,coef_split_idx,y,Xs,S_emb,family,ou
    :type n_coef: _type_
    :param coef_split_idx: _description_
    :type coef_split_idx: _type_
-   :param y: _description_
-   :type y: _type_
+   :param ys: _description_
+   :type ys: _type_
    :param Xs: _description_
    :type Xs: _type_
    :param S_emb: _description_
@@ -3235,7 +3235,7 @@ def restart_coef(coef,c_llk,c_pen_llk,n_coef,coef_split_idx,y,Xs,S_emb,family,ou
       # Re-compute llk
       with warnings.catch_warnings():
          warnings.simplefilter("ignore")
-         res_llk = family.llk(res_coef,coef_split_idx,y,Xs)
+         res_llk = family.llk(res_coef,coef_split_idx,ys,Xs)
          res_pen_llk = res_llk - 0.5*res_coef.T@S_emb@res_coef
 
       if (np.isinf(res_pen_llk[0,0]) or np.isnan(res_pen_llk[0,0])):
@@ -3305,13 +3305,13 @@ def test_SR1(sk,yk,rho,sks,yks,rhos):
    rhos = np.delete(rhos,0)
    return Fail
 
-def handle_drop_gsmm(family, y, coef, keep, Xs, S_emb):
+def handle_drop_gsmm(family, ys, coef, keep, Xs, S_emb):
    """Drop coefficients and make sure this is reflected in the model matrices, total penalty, llk, and penalized llk.
 
    :param family: Model family
    :type family: Family
-   :param y: Vector of observations
-   :type y: numpy.array
+   :param ys: List with vector of observations
+   :type ys: [numpy.array]
    :param coef: Vector of coefficients
    :type coef: numpy.array
    :param keep: List of parameter indices to keep.
@@ -3335,12 +3335,12 @@ def handle_drop_gsmm(family, y, coef, keep, Xs, S_emb):
    rS_emb = rS_emb[:,keep]
 
    # Re-compute llk
-   c_llk = family.llk(coef,rcoef_split_idx,y,rXs)
+   c_llk = family.llk(coef,rcoef_split_idx,ys,rXs)
    c_pen_llk = c_llk - 0.5*coef.T@rS_emb@coef
 
    return coef, rcoef_split_idx, rXs, rS_emb, c_llk, c_pen_llk
     
-def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,FS_use_rank,smooth_pen,c_llk,outer,max_inner,min_inner,conv_tol,method,piv_tol,keep_drop,opt_raw):
+def update_coef_gen_smooth(family,ys,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,FS_use_rank,smooth_pen,c_llk,outer,max_inner,min_inner,conv_tol,method,piv_tol,keep_drop,opt_raw):
    """
    Repeatedly perform Newton/Graidnet update with step length control to the coefficient vector - based on
    steps outlined by WPS (2016).
@@ -3361,15 +3361,15 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,F
    if method == "qEFS":
       # Define wrapper for negative (penalized) likelihood function plus function to evaluate negative gradient of the former likelihood
       # to compute line-search.
-      def __neg_llk(coef,coef_split_idx,y,Xs,family,S_emb):
+      def __neg_llk(coef,coef_split_idx,ys,Xs,family,S_emb):
          coef = coef.reshape(-1,1)
-         neg_llk = -1 * family.llk(coef,coef_split_idx,y,Xs)
+         neg_llk = -1 * family.llk(coef,coef_split_idx,ys,Xs)
          return neg_llk + 0.5*coef.T@S_emb@coef
       
-      def __neg_grad(coef,coef_split_idx,y,Xs,family,S_emb):
+      def __neg_grad(coef,coef_split_idx,ys,Xs,family,S_emb):
          # see Wood, Pya & Saefken (2016)
          coef = coef.reshape(-1,1)
-         grad = family.gradient(coef,coef_split_idx,y,Xs)
+         grad = family.gradient(coef,coef_split_idx,ys,Xs)
          pgrad = np.array([grad[i] - (S_emb[[i],:]@coef)[0] for i in range(len(grad))])
          return -1*pgrad.flatten()
       
@@ -3383,14 +3383,14 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,F
       # Now optimize penalized problem
       opt = scp.optimize.minimize(__neg_llk,
                                  np.ndarray.flatten(coef),
-                                 args=(coef_split_idx,y,Xs,family,S_emb),
+                                 args=(coef_split_idx,ys,Xs,family,S_emb),
                                  method="L-BFGS-B",
                                  jac = __neg_grad,
                                  options={"maxiter":max_inner,
                                           **opt_raw.bfgs_options})
 
       coef = opt["x"].reshape(-1,1)
-      c_llk = family.llk(coef,coef_split_idx,y,Xs)
+      c_llk = family.llk(coef,coef_split_idx,ys,Xs)
 
       # Now approximate hessian of llk at penalized solution:
 
@@ -3450,7 +3450,7 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,F
       # Handle previous drop
       full_coef = np.zeros_like(coef) # Prepare zeroed full coef vector
       full_coef_split_idx = copy.deepcopy(coef_split_idx) # Original split index
-      coef, coef_split_idx, Xs, S_emb, c_llk, c_pen_llk = handle_drop_gsmm(family, y, coef, keep, Xs, S_emb) # Drop
+      coef, coef_split_idx, Xs, S_emb, c_llk, c_pen_llk = handle_drop_gsmm(family, ys, coef, keep, Xs, S_emb) # Drop
 
    converged = False
    checked_identifiable = False
@@ -3461,7 +3461,7 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,F
          break
       
       # Get llk derivatives with respect to coef
-      grad = family.gradient(coef,coef_split_idx,y,Xs)
+      grad = family.gradient(coef,coef_split_idx,ys,Xs)
 
       if grad_only == False:
          if method == "qEFS":
@@ -3479,12 +3479,12 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,F
 
             if form == 'SR1':
                # Find step satisfying armijo condition
-               alpha = back_track_alpha(coef,step,__neg_llk,__neg_grad,coef_split_idx,y,Xs,family,S_up,alpha_max=1)
+               alpha = back_track_alpha(coef,step,__neg_llk,__neg_grad,coef_split_idx,ys,Xs,family,S_up,alpha_max=1)
                new_slope = 1
             else:
                # Find a step that meets the Wolfe conditions (Nocedal & Wright, 2004)
                alpha,_,_,_,_,new_slope = scp.optimize.line_search(__neg_llk,__neg_grad,coef.flatten(),step.flatten(),
-                                                                  args=(coef_split_idx,y,Xs,family,S_up),
+                                                                  args=(coef_split_idx,ys,Xs,family,S_up),
                                                                   maxiter=100,amax=1)
             
             if alpha is None:
@@ -3492,7 +3492,7 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,F
                alpha = 1e-7
 
             # Compute gradient at new point
-            next_grad_up = family.gradient(coef + alpha*step,coef_split_idx,y,Xs)
+            next_grad_up = family.gradient(coef + alpha*step,coef_split_idx,ys,Xs)
             if shrinkage:
                next_grad_up = np.array([next_grad_up[i] - (S_up[[i],:]@(coef + alpha*step))[0] for i in range(len(next_grad_up))]).reshape(-1,1)
 
@@ -3507,9 +3507,9 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,F
 
                if outer == 0 and len(sks) == 0 and (skip or new_slope is None):
                   # Potentially very bad start estimate, try find a better one
-                  coef, _, _ = restart_coef(coef,None,None,len(coef),coef_split_idx,y,Xs,S_emb,family,inner,0)
-                  c_llk = family.llk(coef,coef_split_idx,y,Xs)
-                  grad = family.gradient(coef,coef_split_idx,y,Xs)
+                  coef, _, _ = restart_coef(coef,None,None,len(coef),coef_split_idx,ys,Xs,S_emb,family,inner,0)
+                  c_llk = family.llk(coef,coef_split_idx,ys,Xs)
+                  grad = family.gradient(coef,coef_split_idx,ys,Xs)
 
             if new_slope is not None and (form != 'SR1' or (skip == False)):
                # Wolfe/Armijo met, can collect update vectors
@@ -3628,7 +3628,7 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,F
             pgrad = np.array([grad[i] - (S_emb[[i],:]@coef)[0] for i in range(len(grad))]).reshape(-1,1)
 
          else:
-            H = family.hessian(coef,coef_split_idx,y,Xs)
+            H = family.hessian(coef,coef_split_idx,ys,Xs)
 
       ##################################### Update coef and perform step size control #####################################
 
@@ -3648,7 +3648,7 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,F
          with warnings.catch_warnings(): # Line search might fail, but we handle that.
             warnings.simplefilter("ignore")
             # Find step satisfying armijo condition
-            alpha_pen = back_track_alpha(coef,pen_step,__neg_llk,__neg_grad,coef_split_idx,y,Xs,family,S_emb,alpha_max=10)
+            alpha_pen = back_track_alpha(coef,pen_step,__neg_llk,__neg_grad,coef_split_idx,ys,Xs,family,S_emb,alpha_max=10)
 
          # Just backtrack in step size control
          if alpha_pen is None:
@@ -3669,28 +3669,28 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,F
          prev_llk = c_llk
 
       # Perform step length control - will immediately pass if line search was succesful.
-      coef,c_llk,c_pen_llk,a = correct_coef_step_gen_smooth(family,y,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb,a)
+      coef,c_llk,c_pen_llk,a = correct_coef_step_gen_smooth(family,ys,Xs,coef,next_coef,coef_split_idx,c_llk,S_emb,a)
 
       # Very poor start estimate, restart
       if grad_only and outer == 0 and inner <= 20 and np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
-         coef, _, _ = restart_coef(coef,None,None,len(coef),coef_split_idx,y,Xs,S_emb,family,inner,0)
-         c_llk = family.llk(coef,coef_split_idx,y,Xs)
+         coef, _, _ = restart_coef(coef,None,None,len(coef),coef_split_idx,ys,Xs,S_emb,family,inner,0)
+         c_llk = family.llk(coef,coef_split_idx,ys,Xs)
          c_pen_llk = c_llk - 0.5*coef.T@S_emb@coef
          a = 0.1
 
       # Check if this step would converge, if that is the case try gradient first
       if method == 'qEFS' and np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk):
 
-         alpha_pen_grad = back_track_alpha(prev_coef,pgrad,__neg_llk,__neg_grad,coef_split_idx,y,Xs,family,S_emb,alpha_max=1)
+         alpha_pen_grad = back_track_alpha(prev_coef,pgrad,__neg_llk,__neg_grad,coef_split_idx,ys,Xs,family,S_emb,alpha_max=1)
 
          if alpha_pen_grad is not None:
 
             # Test llk for improvement over quasi newton step
-            grad_pen_llk = family.llk(prev_coef + alpha_pen_grad*pgrad,coef_split_idx,y,Xs) - 0.5*(prev_coef + alpha_pen_grad*pgrad).T@S_emb@(prev_coef + alpha_pen_grad*pgrad)
+            grad_pen_llk = family.llk(prev_coef + alpha_pen_grad*pgrad,coef_split_idx,ys,Xs) - 0.5*(prev_coef + alpha_pen_grad*pgrad).T@S_emb@(prev_coef + alpha_pen_grad*pgrad)
 
             if grad_pen_llk > c_pen_llk:
                next_coef = prev_coef + alpha_pen_grad*pgrad
-               coef,c_llk,c_pen_llk,a = correct_coef_step_gen_smooth(family,y,Xs,prev_coef,next_coef,coef_split_idx,prev_llk,S_emb,a)
+               coef,c_llk,c_pen_llk,a = correct_coef_step_gen_smooth(family,ys,Xs,prev_coef,next_coef,coef_split_idx,prev_llk,S_emb,a)
 
       if np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol*np.abs(c_pen_llk) and (method != "qEFS" or (opt["nit"] == 1 and outer > 0) or (updates >= maxcor)):
          converged = True
@@ -3706,7 +3706,7 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,F
                break
             else:
                # Found drop, but need to check whether it is safe
-               drop_valid,drop_pen_llk = check_drop_valid_gensmooth(y,coef,Xs,S_emb,keep,family)
+               drop_valid,drop_pen_llk = check_drop_valid_gensmooth(ys,coef,Xs,S_emb,keep,family)
 
                # Skip if likelihood becomes invalid
                if drop_valid == False:
@@ -3722,7 +3722,7 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,F
                # At this point: found & accepted drop -> adjust parameters
                full_coef = np.zeros_like(coef) # Prepare zeroed full coef vector
                full_coef_split_idx = copy.deepcopy(coef_split_idx)
-               coef, coef_split_idx, Xs, S_emb, c_llk, c_pen_llk = handle_drop_gsmm(family, y, coef, keep, Xs, S_emb) # Drop
+               coef, coef_split_idx, Xs, S_emb, c_llk, c_pen_llk = handle_drop_gsmm(family, ys, coef, keep, Xs, S_emb) # Drop
                converged = False # Re-iterate until convergence
                inner = -1 # Reset fitting iterations
                checked_identifiable = True
@@ -3816,7 +3816,7 @@ def update_coef_gen_smooth(family,y,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,F
    
    return full_coef,H,L,LV,c_llk,c_pen_llk,eps,keep,drop
 
-def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,form_n_coef,form_up_coef,coef,
+def correct_lambda_step_gen_smooth(family,ys,Xs,S_norm,n_coef,form_n_coef,form_up_coef,coef,
                                     coef_split_idx,smooth_pen,lam_delta,
                                     extend_by,was_extended,c_llk,fit_info,outer,
                                     max_inner,min_inner,conv_tol,gamma,method,qEFSH,overwrite_coef,qEFS_init_converge,optimizer,
@@ -3866,7 +3866,7 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,form_n_coef,form_up
             if qEFS_init_converge:
                opt_raw = scp.optimize.minimize(__neg_pen_llk,
                                              np.ndarray.flatten(coef_rp),
-                                             args=(coef_split_idx,y,Xs_rp,family,scp.sparse.csc_matrix((len(coef_rp), len(coef_rp)))),
+                                             args=(coef_split_idx,ys,Xs_rp,family,scp.sparse.csc_matrix((len(coef_rp), len(coef_rp)))),
                                              method="L-BFGS-B",
                                              jac = __neg_pen_grad,
                                              options={"maxiter":max_inner,
@@ -3876,7 +3876,7 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,form_n_coef,form_up
                   # Set "initial" coefficients to solution found for un-penalized problem.
                   if overwrite_coef:
                      coef_rp = opt_raw["x"].reshape(-1,1)
-                     c_llk = family.llk(coef_rp,coef_split_idx,y,Xs_rp)
+                     c_llk = family.llk(coef_rp,coef_split_idx,ys,Xs_rp)
 
                   __old_opt = opt_raw.hess_inv
                   __old_opt.init = True
@@ -3901,7 +3901,7 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,form_n_coef,form_up
             __old_opt.bfgs_options = bfgs_options
 
             
-         next_coef,H,L,LV,next_llk,next_pen_llk,eps,keep,drop = update_coef_gen_smooth(family,y,Xs_rp,coef_rp,
+         next_coef,H,L,LV,next_llk,next_pen_llk,eps,keep,drop = update_coef_gen_smooth(family,ys,Xs_rp,coef_rp,
                                                                                        coef_split_idx,S_emb,
                                                                                        S_norm,S_pinv,FS_use_rank,smooth_pen_rp,
                                                                                        c_llk,outer,max_inner,
@@ -4089,7 +4089,7 @@ def correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,form_n_coef,form_up
 
    return next_coef,H,L,LV,V,next_llk,next_pen_llk,__old_opt,keep,drop,S_emb,smooth_pen,total_edf,term_edfs,lam_delta
 
-def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,form_up_coef,coef,coef_split_idx,smooth_pen,
+def solve_generalSmooth_sparse(family,ys,Xs,form_n_coef,form_up_coef,coef,coef_split_idx,smooth_pen,
                               max_outer=50,max_inner=50,min_inner=50,conv_tol=1e-7,
                               extend_lambda=True,extension_method_lam = "nesterov2",
                               control_lambda=True,optimizer="Newton",method="Chol",
@@ -4133,7 +4133,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,form_up_coef,coef,coef_sp
     S_norm /= scp.sparse.linalg.norm(S_norm,ord=None)
 
     # Compute penalized likelihood for current estimate
-    c_llk = family.llk(coef,coef_split_idx,y,Xs)
+    c_llk = family.llk(coef,coef_split_idx,ys,Xs)
     c_pen_llk = c_llk - 0.5*coef.T@S_emb@coef
 
     __neg_pen_llk = None
@@ -4141,15 +4141,15 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,form_up_coef,coef,coef_sp
     if method == "qEFS":
       # Define negative penalized likelihood function to be minimized via BFGS
       # plus function to evaluate negative gradient of penalized likelihood.
-      def __neg_pen_llk(coef,coef_split_idx,y,Xs,family,S_emb):
+      def __neg_pen_llk(coef,coef_split_idx,ys,Xs,family,S_emb):
          coef = coef.reshape(-1,1)
-         neg_llk = -1 * family.llk(coef,coef_split_idx,y,Xs)
+         neg_llk = -1 * family.llk(coef,coef_split_idx,ys,Xs)
          return neg_llk + 0.5*coef.T@S_emb@coef
       
-      def __neg_pen_grad(coef,coef_split_idx,y,Xs,family,S_emb):
+      def __neg_pen_grad(coef,coef_split_idx,ys,Xs,family,S_emb):
          # see Wood, Pya & Saefken (2016)
          coef = coef.reshape(-1,1)
-         grad = family.gradient(coef,coef_split_idx,y,Xs)
+         grad = family.gradient(coef,coef_split_idx,ys,Xs)
          pgrad = np.array([grad[i] - (S_emb[[i],:]@coef)[0] for i in range(len(grad))])
          return -1*pgrad.flatten()
 
@@ -4166,7 +4166,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,form_up_coef,coef,coef_sp
          S_emb_rp = S_emb
          S_norm_rp = S_norm
 
-      coef,_,_,_,c_llk,c_pen_llk,_,_,_ = update_coef_gen_smooth(family,y,Xs_rp,coef_rp,
+      coef,_,_,_,c_llk,c_pen_llk,_,_,_ = update_coef_gen_smooth(family,ys,Xs_rp,coef_rp,
                                                                   coef_split_idx,S_emb_rp,
                                                                   S_norm_rp,None,None,None,
                                                                   c_llk,0,max_inner,
@@ -4201,7 +4201,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,form_up_coef,coef,coef_sp
       # 3) Propose new lambda
       coef,H,L,LV,V,c_llk,c_pen_llk,\
       __old_opt,keep,drop,S_emb,smooth_pen,\
-      total_edf,term_edfs,lam_delta = correct_lambda_step_gen_smooth(family,y,Xs,S_norm,n_coef,form_n_coef,form_up_coef,coef,
+      total_edf,term_edfs,lam_delta = correct_lambda_step_gen_smooth(family,ys,Xs,S_norm,n_coef,form_n_coef,form_up_coef,coef,
                                                                            coef_split_idx,smooth_pen,lam_delta,
                                                                            extend_by,was_extended,c_llk,fit_info,outer,
                                                                            max_inner,min_inner,conv_tol,gamma,method,qEFSH,overwrite_coef,
@@ -4222,7 +4222,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,form_up_coef,coef,coef_sp
          if one_update_counter > 3 and ((outer <= 10) or (restart_counter < max_restarts)):
             # Prevent getting stuck in local optimum (early on). Shrink coef towards
             # random vector that still results in valid llk
-            coef, c_llk, c_pen_llk = restart_coef(coef,c_llk,c_pen_llk,n_coef,coef_split_idx,y,Xs,S_emb,family,outer,restart_counter)
+            coef, c_llk, c_pen_llk = restart_coef(coef,c_llk,c_pen_llk,n_coef,coef_split_idx,ys,Xs,S_emb,family,outer,restart_counter)
             restart_counter += 1
             #print(res_checks)
          
@@ -4249,7 +4249,7 @@ def solve_generalSmooth_sparse(family,y,Xs,form_n_coef,form_up_coef,coef,coef_sp
                # Optionally trigger re-start for efs method. Shrink coef towards
                # random vector that still results in valid llk
                if method=="qEFS" and (restart_counter < max_restarts):
-                  coef, c_llk, c_pen_llk = restart_coef(coef,c_llk,c_pen_llk,n_coef,coef_split_idx,y,Xs,S_emb,family,outer,restart_counter)
+                  coef, c_llk, c_pen_llk = restart_coef(coef,c_llk,c_pen_llk,n_coef,coef_split_idx,ys,Xs,S_emb,family,outer,restart_counter)
                   restart_counter += 1
                else:
                   if progress_bar:
