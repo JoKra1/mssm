@@ -175,7 +175,7 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
     :type bfgs_options: key=value,optional
     :raises ValueError: If both models are from different families.
     :raises ValueError: If ``perform_GLRT=True`` and ``model1`` has fewer coef than ``model2`` - i.e., ``model1`` has to be the notationally more complex one.
-    :return: A dictionary with outcomes of all tests. Key ``H1`` will be a bool indicating whether Null hypothesis was rejected or not, ``p`` will be the p-value, ``chi^2`` will be the test statistic used, ``Res. DOF`` will be the degrees of freedom used by the test, ``aic1`` and ``aic2`` will be the aic scores for both models.
+    :return: A dictionary with outcomes of all tests. Key ``H1`` will be a bool indicating whether Null hypothesis was rejected or not, ``p`` will be the p-value, ``test_stat`` will be the test statistic used, ``Res. DOF`` will be the degrees of freedom used by the test, ``aic1`` and ``aic2`` will be the aic scores for both models.
     :rtype: dict
     """
 
@@ -287,7 +287,13 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
         if llk1 > llk2 and DOF1 < DOF2:
             warnings.warn("Model with more coefficients has higher likelihood but lower expected degrees of freedom. Interpret results with caution.")
 
-        p = 1 - scp.stats.chi2.cdf(test_stat,test_DOF_diff)
+        if isinstance(model1.family,Family) and model1.family.twopar: # F-test
+            test_stat/= test_DOF_diff
+            X = model1.get_mmat()
+            rs_df = X.shape[0] - max(DOF1,DOF2)
+            p = 1 - scp.stats.f.cdf(test_stat,test_DOF_diff,rs_df)
+        else: # Chi-square test.
+            p = 1 - scp.stats.chi2.cdf(test_stat,test_DOF_diff)
 
         # Reject NULL?
         H1 = p <= alpha
@@ -302,7 +308,7 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
 
     result = {"H1":H1,
               "p":p,
-              "chi^2":stat,
+              "test_stat":stat,
               "DOF1":DOF1,
               "DOF2":DOF2,
               "DOF12":aic_DOF1,

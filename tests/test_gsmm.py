@@ -2,40 +2,7 @@ from mssm.models import *
 import numpy as np
 import os
 from mssmViz.sim import*
-
-max_atol = 0 #0
-max_rtol = 0.001 #0.001
-
-default_gsmm_test_kwargs = {"init_coef":None,
-                            "max_outer":50,
-                            "max_inner":200,
-                            "min_inner":200,
-                            "conv_tol":1e-7,
-                            "extend_lambda":True,
-                            "extension_method_lam":"nesterov2",
-                            "control_lambda":1,
-                            "restart":False,
-                            "optimizer":"Newton",
-                            "method":"Chol",
-                            "check_cond":1,
-                            "piv_tol":np.power(np.finfo(float).eps,0.04),
-                            "progress_bar":False,
-                            "n_cores":10,
-                            "seed":0,
-                            "drop_NA":True,
-                            "init_lambda":None,
-                            "form_VH":True,
-                            "use_grad":False,
-                            "build_mat":None,
-                            "should_keep_drop":True,
-                            "gamma":1,
-                            "qEFSH":'SR1',
-                            "overwrite_coef":True,
-                            "max_restarts":0,
-                            "qEFS_init_converge":True,
-                            "prefit_grad":False,
-                            "repara":False,
-                            "init_bfgs_options":None}
+from .defaults import default_gsmm_test_kwargs,max_atol,max_rtol
 
 ################################################################## Tests ##################################################################
 

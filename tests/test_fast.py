@@ -3,20 +3,7 @@ from mssm.src.python.compare import compare_CDL
 import numpy as np
 import os
 from mssmViz.sim import*
-
-default_gamm_test_kwargs = {"max_outer":50,
-                            "max_inner":100,
-                            "conv_tol":1e-7,
-                            "extend_lambda":True,
-                            "control_lambda":True,
-                            "exclude_lambda":False,
-                            "extension_method_lam" : "nesterov",
-                            "restart":False,
-                            "method":"Chol",
-                            "check_cond":1,
-                            "progress_bar":True,
-                            "n_cores":10,
-                            "offset" : None}
+from .defaults import default_gamm_test_kwargs
 
 ################################################################## Tests ##################################################################
 

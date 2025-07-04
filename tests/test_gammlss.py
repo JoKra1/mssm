@@ -4,28 +4,7 @@ import os
 from mssmViz.sim import*
 import io
 from contextlib import redirect_stdout
-
-max_atol = 0 #0
-max_rtol = 0.001 #0.001
-
-default_gammlss_test_kwargs = {"max_outer":50,
-                               "max_inner":200,
-                               "min_inner":200,
-                               "conv_tol":1e-7,
-                               "extend_lambda":True,
-                               "extension_method_lam":"nesterov2",
-                               "control_lambda":1,
-                               "restart":False,
-                               "method":"Chol",
-                               "check_cond":1,
-                               "piv_tol":np.power(np.finfo(float).eps,0.04),
-                               "should_keep_drop":True,
-                               "prefit_grad":False,
-                               "repara":False,
-                               "progress_bar":True,
-                               "n_cores":10,
-                               "seed":0,
-                               "init_lambda":None}
+from .defaults import default_gammlss_test_kwargs,max_atol,max_rtol
 
 ################################################################## Tests ##################################################################
 

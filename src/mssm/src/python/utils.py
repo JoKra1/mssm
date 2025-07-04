@@ -744,136 +744,149 @@ def approx_smooth_p_values(model,par=0,n_sel=1e5,edf1=True,force_approx=False,se
                     k = int(r)
                     if k > 0:
                         v = r-k
-                        p = np.power(v*(1-v)/2,0.5)
 
-                        #print(k,s,s[:k-1],s[k-1],s[k])
-                        # Take only eigen-vectors need for the actual product for the test-statistic
-                        U = U[:,:k+1]
-
-                        # Fix sign of Eigen-vectors to sign of first row (based on testStat function in mgcv)
-                        sign = np.sign(U[0,:])
-                        U *= sign
-
-                        # Now we can reform the diagonal matrix needed for inverting RVR (computation follows Wood, 2012)
-                        S = np.zeros((U.shape[1],U.shape[1]))
-                        for ilam,lam in enumerate(s[:k-1]):
-                            S[ilam,ilam] = 1/lam
-
-                        Lb = np.array([[np.power(s[k-1],-0.5),0],
-                                    [0,np.power(s[k],-0.5)]])
-                        
-                        Bb = np.array([[1,p],
-                                    [p,v]])
-                        
-                        B = Lb@Bb@Lb.T
-                        
-                        S[k-1:k+1,k-1:k+1] = B
-
-                        # And finally compute the inverse
-                        RVRI1 = U@S@U.T
-
-                        # Also compute inverse for alternative version of Eigen-vectors (see Wood, 2017):
-                        U *= sign
-                        RVRI2 = U@S@U.T
-
-                        # And the test statistic defined in Wood (2012)
-                        Tr1 = (s_coef.T@R.T@RVRI1@R@s_coef)[0,0]
-                        Tr2 = (s_coef.T@R.T@RVRI2@R@s_coef)[0,0]
-
-                        # ToDo: Handle v .. 0 case - eventhough it is unlikely.
-
-                        # And the weights for the chi-square distributions..
-                        v1 = (v + 1 + np.pow(1 - np.pow(v,2),0.5))/2
-                        v2 = v + 1 - v1
-                        
-                        # Now we need the p-value.
-                        if isinstance(model.family,Family) and model.family.twopar:
-                            # First try Davies as discussed by Wood (2013)
-
-                            # We have: v > 0. Based on Wood (2013), if k == 1 we need only 2 weighted chi-square variables.
-                            # When k > 1, we need 3 chi-square variables where the first one is unweighted with k-2+1 dof.
-
-                            # So start with unweighted variable
-                            n = []
-                            lb = []
-                            if k > 1:
-                                n.append(k-2+1) 
-                                lb.append(1)
+                        if v == 0: # Integer case - standard F-test
                             
-                            # Now the weighted variables
-                            n.extend([1,1,rs_df])
-                            lb.extend([v1,v2])
+                            if isinstance(model.family,Family) and model.family.twopar:
+                                Tr1 /= k
+                                Tr2 /= k
 
-                            # cast to np.array - not lb since we still need to add weight for last variable
-                            nc = np.array([0 for _ in range(len(n))],dtype=np.float64)
-                            n = np.array(n)
-                            
-                            # Compute as discussed by Wood (2017)
-                            p1,code1,_ = davies.daviesQF(np.array([*lb,-Tr1/rs_df]),nc,n,0,0,2e-5,len(n),10000)
-                            p2,code2,_ = davies.daviesQF(np.array([*lb,-Tr2/rs_df]),nc,n,0,0,2e-5,len(n),10000)
-                            p1 = 1 - p1
-                            p2 = 1 - p2
+                                p1 = 1 - scp.stats.f.cdf(Tr1,k,rs_df)
+                                p2 = 1 - scp.stats.f.cdf(Tr2,k,rs_df)
 
-                            # Since this approximates an F statistic we need to adjust Tr (see below):
-                            Tr1 /= r
-                            Tr2 /= r
+                            else: # Integer case - standard Chi-square test
+                                p1 = 1 - scp.stats.chi2.cdf(Tr1,k)
+                                p2 = 1 - scp.stats.chi2.cdf(Tr2,k)
 
-                            if code1 > 0 or code2 > 0 or force_approx:
-
-                                if code1 == 2 or code2 == 2:
-                                    warnings.warn("Round-off error in p-value computation might be problematic. Proceed with caution.")
-                            
-                                if code1 != 2 or code2 != 2:
-                                    warnings.warn(f"Falling back to approximate p-value computation. Error codes: {code1}, {code2}")
-                                    # Davies failed... Now, in case of an estimated scale parameter and integer r: Tr/r \sim F(r,rs_df)
-                                    # So to approximate the case where r is real, we can use a Beta (see Wikipedia):
-                                    # if X \sim F(d1,d2) then (d1*X/d2) / (1 + (d1*X/d2)) \sim Beta(d1/2,d2/2)
-                                    
-                                    p1 = 1 - scp.stats.beta.cdf((r*Tr1/rs_df) / (1 + (r*Tr1/rs_df)),a=r/2,b=rs_df/2)
-                                    p2 = 1 - scp.stats.beta.cdf((r*Tr2/rs_df) / (1 + (r*Tr2/rs_df)),a=r/2,b=rs_df/2)
-                            
                         else:
-                            # First try Davies as discussed by Wood (2013)
+                            p = np.power(v*(1-v)/2,0.5)
 
-                            # First handle un-weighted variable as described above
-                            n = []
-                            lb = []
-                            if k > 1:
-                                n.append(k-2+1) 
-                                lb.append(1)
-                            
-                            # Now the weighted variables
-                            n.extend([1,1])
-                            lb.extend([v1,v2])
- 
-                            # cast to np.array
-                            nc = np.array([0. for _ in range(len(n))],dtype=np.float64)
-                            n = np.array(n)
-                            lb = np.array(lb)
-                            
-                            p1,code1,_ = davies.daviesQF(lb,nc,n,Tr1,0,2e-5,len(n),15000)
-                            p2,code2,_ = davies.daviesQF(lb,nc,n,Tr2,0,2e-5,len(n),15000)
-                            p1 = 1 - p1
-                            p2 = 1 - p2
+                            #print(k,s,s[:k-1],s[k-1],s[k])
+                            # Take only eigen-vectors need for the actual product for the test-statistic
+                            U = U[:,:k+1]
 
-                            if code1 > 0 or code2 > 0 or force_approx:
+                            # Fix sign of Eigen-vectors to sign of first row (based on testStat function in mgcv)
+                            sign = np.sign(U[0,:])
+                            U *= sign
 
-                                if code1 == 2 or code2 == 2:
-                                    warnings.warn("Round-off error in p-value computation might be problematic. Proceed with caution.")
+                            # Now we can reform the diagonal matrix needed for inverting RVR (computation follows Wood, 2012)
+                            S = np.zeros((U.shape[1],U.shape[1]))
+                            for ilam,lam in enumerate(s[:k-1]):
+                                S[ilam,ilam] = 1/lam
+
+                            Lb = np.array([[np.power(s[k-1],-0.5),0],
+                                        [0,np.power(s[k],-0.5)]])
                             
-                                if code1 != 2 or code2 != 2:
-                                    warnings.warn(f"Falling back to approximate p-value computation. Error codes: {code1}, {code2}")
-                                    # Davies failed... Now, Wood (2013) suggest that the Chi-square distribution of
-                                    # the Null can be approximated with a gamma with alpha=r/2 and scale=2:
-                                    
-                                    p1 = 1-scp.stats.gamma.cdf(Tr1,a=r/2,scale=2)
-                                    p2 = 1-scp.stats.gamma.cdf(Tr2,a=r/2,scale=2)
+                            Bb = np.array([[1,p],
+                                        [p,v]])
+                            
+                            B = Lb@Bb@Lb.T
+                            
+                            S[k-1:k+1,k-1:k+1] = B
+
+                            # And finally compute the inverse
+                            RVRI1 = U@S@U.T
+
+                            # Also compute inverse for alternative version of Eigen-vectors (see Wood, 2017):
+                            U *= sign
+                            RVRI2 = U@S@U.T
+
+                            # And the test statistic defined in Wood (2012)
+                            Tr1 = (s_coef.T@R.T@RVRI1@R@s_coef)[0,0]
+                            Tr2 = (s_coef.T@R.T@RVRI2@R@s_coef)[0,0]
+
+                            # And the weights for the chi-square distributions..
+                            v1 = (v + 1 + np.pow(1 - np.pow(v,2),0.5))/2
+                            v2 = v + 1 - v1
+                            
+                            # Now we need the p-value.
+                            if isinstance(model.family,Family) and model.family.twopar:
+                                # First try Davies as discussed by Wood (2013)
+
+                                # We have: v > 0. Based on Wood (2013), if k == 1 we need only 2 weighted chi-square variables.
+                                # When k > 1, we need 3 chi-square variables where the first one is unweighted with k-2+1 dof.
+
+                                # So start with unweighted variable
+                                n = []
+                                lb = []
+                                if k > 1:
+                                    n.append(k-2+1) 
+                                    lb.append(1)
+                                
+                                # Now the weighted variables
+                                n.extend([1,1,rs_df])
+                                lb.extend([v1,v2])
+
+                                # cast to np.array - not lb since we still need to add weight for last variable
+                                nc = np.array([0 for _ in range(len(n))],dtype=np.float64)
+                                n = np.array(n)
+                                
+                                # Compute as discussed by Wood (2017)
+                                p1,code1,_ = davies.daviesQF(np.array([*lb,-Tr1/rs_df]),nc,n,0,0,2e-5,len(n),20000)
+                                p2,code2,_ = davies.daviesQF(np.array([*lb,-Tr2/rs_df]),nc,n,0,0,2e-5,len(n),20000)
+                                p1 = 1 - p1
+                                p2 = 1 - p2
+
+                                # Since this approximates an F statistic we need to adjust Tr (see below):
+                                Tr1 /= r
+                                Tr2 /= r
+
+                                if code1 > 0 or code2 > 0 or force_approx:
+
+                                    if code1 == 2 or code2 == 2:
+                                        warnings.warn("Round-off error in p-value computation might be problematic. Proceed with caution.")
+                                
+                                    if code1 != 2 or code2 != 2:
+                                        warnings.warn(f"Falling back to approximate p-value computation. Error codes: {code1}, {code2}")
+                                        # Davies failed... Now, in case of an estimated scale parameter and integer r: Tr/r \sim F(r,rs_df)
+                                        # So to approximate the case where r is real, we can use a Beta (see Wikipedia):
+                                        # if X \sim F(d1,d2) then (d1*X/d2) / (1 + (d1*X/d2)) \sim Beta(d1/2,d2/2)
+                                        
+                                        p1 = 1 - scp.stats.beta.cdf((r*Tr1/rs_df) / (1 + (r*Tr1/rs_df)),a=r/2,b=rs_df/2)
+                                        p2 = 1 - scp.stats.beta.cdf((r*Tr2/rs_df) / (1 + (r*Tr2/rs_df)),a=r/2,b=rs_df/2)
+                                
+                            else:
+                                # First try Davies as discussed by Wood (2013)
+
+                                # First handle un-weighted variable as described above
+                                n = []
+                                lb = []
+                                if k > 1:
+                                    n.append(k-2+1) 
+                                    lb.append(1)
+                                
+                                # Now the weighted variables
+                                n.extend([1,1])
+                                lb.extend([v1,v2])
+    
+                                # cast to np.array
+                                nc = np.array([0. for _ in range(len(n))],dtype=np.float64)
+                                n = np.array(n)
+                                lb = np.array(lb)
+                                
+                                p1,code1,_ = davies.daviesQF(lb,nc,n,Tr1,0,2e-5,len(n),20000)
+                                p2,code2,_ = davies.daviesQF(lb,nc,n,Tr2,0,2e-5,len(n),20000)
+                                p1 = 1 - p1
+                                p2 = 1 - p2
+
+                                if code1 > 0 or code2 > 0 or force_approx:
+
+                                    if code1 == 2 or code2 == 2:
+                                        warnings.warn("Round-off error in p-value computation might be problematic. Proceed with caution.")
+                                
+                                    if code1 != 2 or code2 != 2:
+                                        warnings.warn(f"Falling back to approximate p-value computation. Error codes: {code1}, {code2}")
+                                        # Davies failed... Now, Wood (2013) suggest that the Chi-square distribution of
+                                        # the Null can be approximated with a gamma with alpha=r/2 and scale=2:
+                                        
+                                        p1 = 1-scp.stats.gamma.cdf(Tr1,a=r/2,scale=2)
+                                        p2 = 1-scp.stats.gamma.cdf(Tr2,a=r/2,scale=2)
 
                         p = (p1 + p2)/2
                         Tr = max(Tr1,Tr2)
                     
                     else:
-                        warnings.warn(f"Function {sti} appears to be fully penalized. This function does not support such terms. Setting p=1.")
+                        warnings.warn(f"Function {sti} appears to be fully penalized. This function does not support such terms. Setting p=1 and Tr=-1.")
                         p = 1
                         Tr = -1
                 

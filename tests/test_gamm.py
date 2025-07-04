@@ -8,23 +8,7 @@ from mssm.src.python.gamm_solvers import compute_S_emb_pinv_det,cpp_chol,cpp_cho
 from mssm.src.python.utils import estimateVp
 import io
 from contextlib import redirect_stdout
-
-max_atol = 0 #0
-max_rtol = 0.001 #0.001
-
-default_gamm_test_kwargs = {"max_outer":50,
-                            "max_inner":100,
-                            "conv_tol":1e-7,
-                            "extend_lambda":True,
-                            "control_lambda":True,
-                            "exclude_lambda":False,
-                            "extension_method_lam" : "nesterov",
-                            "restart":False,
-                            "method":"Chol",
-                            "check_cond":1,
-                            "progress_bar":True,
-                            "n_cores":10,
-                            "offset" : None}
+from .defaults import default_gamm_test_kwargs,max_atol,max_rtol
 
 ################################################################## Tests ##################################################################
 

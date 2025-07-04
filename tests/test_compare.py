@@ -5,62 +5,7 @@ from mssm.src.python.utils import estimateVp,correct_VB,DummyRhoPrior
 import numpy as np
 import os
 from mssmViz.sim import*
-
-max_atol = 0 #0
-max_rtol = 0.001 #0.001
-
-default_compare_test_kwargs = {"correct_V":True,
-                               "correct_t1":False,
-                               "perform_GLRT":False,
-                               "nR":250,
-                               "n_c":10,
-                               "alpha":0.05,
-                               "grid":'JJJ1',
-                               "a":1e-7,
-                               "b":1e7,
-                               "df":40,
-                               "verbose":False,
-                               "drop_NA":True,
-                               "method":"Chol",
-                               "seed":None,
-                               "only_expected_edf":False,
-                               "Vp_fidiff":False,
-                               "use_importance_weights":True,
-                               "prior":None,
-                               "recompute_H":False}
-
-default_gamm_test_kwargs = {"max_outer":50,
-                            "max_inner":100,
-                            "conv_tol":1e-7,
-                            "extend_lambda":True,
-                            "control_lambda":True,
-                            "exclude_lambda":False,
-                            "extension_method_lam" : "nesterov",
-                            "restart":False,
-                            "method":"Chol",
-                            "check_cond":1,
-                            "progress_bar":True,
-                            "n_cores":10,
-                            "offset" : None}
-
-default_gammlss_test_kwargs = {"max_outer":50,
-                               "max_inner":200,
-                               "min_inner":200,
-                               "conv_tol":1e-7,
-                               "extend_lambda":True,
-                               "extension_method_lam":"nesterov2",
-                               "control_lambda":1,
-                               "restart":False,
-                               "method":"Chol",
-                               "check_cond":1,
-                               "piv_tol":np.power(np.finfo(float).eps,0.04),
-                               "should_keep_drop":True,
-                               "prefit_grad":False,
-                               "repara":False,
-                               "progress_bar":True,
-                               "n_cores":10,
-                               "seed":0,
-                               "init_lambda":None}
+from .defaults import default_compare_test_kwargs,default_gamm_test_kwargs,default_gammlss_test_kwargs,max_atol,max_rtol
 
 ################################################################## Tests ##################################################################
 
