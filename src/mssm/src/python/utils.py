@@ -2198,7 +2198,7 @@ class DummyRhoPrior(RhoPrior):
         return ld
 
 
-def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_t=True,form_t1=False,verbose=False,drop_NA=True,method="Chol",only_expected_edf=False,Vp_fidiff=False,use_importance_weights=True,prior=None,recompute_H=False,seed=None,**bfgs_options):
+def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_t1=False,verbose=False,drop_NA=True,method="Chol",only_expected_edf=False,Vp_fidiff=False,use_importance_weights=True,prior=None,recompute_H=False,seed=None,**bfgs_options):
     """Estimate :math:`\\tilde{\mathbf{V}}`, the covariance matrix of the marginal posterior :math:`\\boldsymbol{\\beta} | y` to account for smoothness uncertainty.
     
     Wood et al. (2016) and Wood (2017) show that when basing conditional versions of model selection criteria or hypothesis
@@ -2269,8 +2269,6 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
     :type df: int, optional
     :param n_c: Number of cores to use during parallel parts of the correction, defaults to 10
     :type n_c: int, optional
-    :param form_t: Whether or not the smoothness uncertainty corrected edf should be computed, defaults to True
-    :type form_t: bool, optional
     :param form_t1: Whether or not the smoothness uncertainty + smoothness bias corrected edf should be computed, defaults to False
     :type form_t1: bool, optional
     :param verbose: Whether to print progress information or not, defaults to False
@@ -2793,38 +2791,36 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
         raise ValueError("Failed to estimate marginal covariance matrix for ecoefficients.")
 
     # Compute corrected edf (e.g., for AIC; Wood, Pya, & Saefken, 2016)
-    total_edf = None
-    if form_t or form_t1:
-        F = V@(nH)
+    F = V@(nH)
 
-        edf = F.diagonal()
-        total_edf = F.trace()
+    edf = F.diagonal()
+    total_edf = F.trace()
 
     # In mgcv, an upper limit is enforced on edf and total_edf when they are uncertainty corrected - based on t1 in section 6.1.2 of Wood (2017)
     # so the same is done here.
-    total_edf2 = None
-    if grid_type == "JJJ1" or grid_type == "JJJ2" or grid_type == "JJJ3":
-        if isinstance(family,Family):
-            if isinstance(family,Gaussian) and isinstance(family.link,Identity): # Strictly additive case
-                ucF = (model.lvi.T@model.lvi)@((X.T@X))
-            else: # Generalized case
-                W = model.Wr@model.Wr
-                ucF = (model.lvi.T@model.lvi)@((X.T@W@X))
-        else: # GSMM/GAMLSS case
-            ucF = (model.lvi.T@model.lvi)@(-1*model.hessian)
+    if isinstance(family,Family):
+        if isinstance(family,Gaussian) and isinstance(family.link,Identity): # Strictly additive case
+            ucF = (model.lvi.T@model.lvi)@((X.T@X))
+        else: # Generalized case
+            W = model.Wr@model.Wr
+            ucF = (model.lvi.T@model.lvi)@((X.T@W@X))
+    else: # GSMM/GAMLSS case
+        ucF = (model.lvi.T@model.lvi)@(-1*model.hessian)
 
-        total_edf2 = 2*model.edf - (ucF@ucF).trace()
-        if total_edf > total_edf2:
-            #print(edf)
-            total_edf = total_edf2
-            #edf = None
+    # Compute upper bound
+    ucFFd = ucF.multiply(ucF.T).sum(axis=0)
+    total_edf2 = 2*model.edf - np.sum(ucFFd)
+    edf2 = 2*ucF.diagonal() - ucFFd
+
+    # Enforce upper bound
+    if total_edf > total_edf2:
+        total_edf = total_edf2
+        edf = edf2
 
     # Compute uncertainty corrected smoothness bias corrected edf (t1 in section 6.1.2 of Wood, 2017)
-    edf2 = None
     if form_t1:
-        edf2 = 2*edf - (F@F).diagonal()
-        if total_edf2 is None: # Otherwise respect upper bound.
-            total_edf2 = 2*total_edf - (F@F).trace()
+        total_edf2 += (total_edf - model.edf)
+        edf2 += (edf - ucF.diagonal())
 
     if verbose and grid_type != "JJJ1":
         print(f"Correction was based on {rGrid.shape[0]} samples in total.")    

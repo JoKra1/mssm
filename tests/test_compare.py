@@ -112,31 +112,31 @@ class Test_model_comparisons1:
     unbiased_cor_result1 = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
 
     def test_comp1(self):
-        assert round(self.uncor_result['aic_diff'],ndigits=3) == 1.945
+        assert round(self.uncor_result['aic_diff'],ndigits=3) == 1.98
 
     def test_comp2(self):
-        assert round(self.cor_result1['aic_diff'],ndigits=3) == 1.946
+        assert round(self.cor_result1['aic_diff'],ndigits=3) == 1.981
 
     def test_comp3(self):
-        assert round(self.cor_result2['aic_diff'],ndigits=3) == 1.668
+        assert round(self.cor_result2['aic_diff'],ndigits=3) == 1.703
 
     def test_comp4(self):
-        assert round(self.cor_result3['aic_diff'],ndigits=3) == 1.701
+        assert round(self.cor_result3['aic_diff'],ndigits=3) == 1.736
 
     def test_comp5(self):
-        assert round(self.cor_result4['aic_diff'],ndigits=3) == 1.946
+        assert round(self.cor_result4['aic_diff'],ndigits=3) == 1.981
 
     def test_comp6(self):
-        assert round(self.cor_result5['aic_diff'],ndigits=3) == 2.942
+        assert round(self.cor_result5['aic_diff'],ndigits=3) == 2.977
 
     def test_comp7(self):
-        assert round(self.unbiased_uncor_result['aic_diff'],ndigits=3) == 1.945
+        assert round(self.unbiased_uncor_result['aic_diff'],ndigits=3) == 1.98
 
     def test_comp8(self):
-        assert round(self.unbiased_cor_result1['aic_diff'],ndigits=3) == 2.942
+        assert round(self.unbiased_cor_result1['aic_diff'],ndigits=3) == 2.977
     
     def test_edf1(self):
-        assert round(self.unbiased_cor_result1['Res. DOF'],ndigits=3) == 0.981
+        assert round(self.unbiased_cor_result1['Res. DOF'],ndigits=3) == 1.48
 
 
 class Test_model_comparisons2:
@@ -241,31 +241,31 @@ class Test_model_comparisons2:
     unbiased_cor_result1 = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
 
     def test_comp1(self):
-        assert round(self.uncor_result['aic_diff'],ndigits=3) == 25.323
+        assert round(self.uncor_result['aic_diff'],ndigits=3) == 25.03
 
     def test_comp2(self):
-        assert round(self.cor_result1['aic_diff'],ndigits=3) == 25.149
+        assert round(self.cor_result1['aic_diff'],ndigits=3) == 24.856
 
     def test_comp3(self):
-        assert round(self.cor_result2['aic_diff'],ndigits=3) == 24.838
+        assert round(self.cor_result2['aic_diff'],ndigits=3) == 24.545
 
     def test_comp4(self):
-        assert round(self.cor_result3['aic_diff'],ndigits=3) == 24.819
+        assert round(self.cor_result3['aic_diff'],ndigits=3) == 24.526
 
     def test_comp5(self):
-        assert round(self.cor_result4['aic_diff'],ndigits=3) == 25.058
+        assert round(self.cor_result4['aic_diff'],ndigits=3) == 24.765
 
     def test_comp6(self):
-        assert round(self.cor_result5['aic_diff'],ndigits=3) == 25.058
+        assert round(self.cor_result5['aic_diff'],ndigits=3) == 24.765
 
     def test_comp7(self):
-        assert round(self.unbiased_uncor_result['aic_diff'],ndigits=3) == 25.323
+        assert round(self.unbiased_uncor_result['aic_diff'],ndigits=3) == 25.03
 
     def test_comp8(self):
-        assert round(self.unbiased_cor_result1['aic_diff'],ndigits=3) == 25.058
+        assert round(self.unbiased_cor_result1['aic_diff'],ndigits=3) == 24.765
     
     def test_edf1(self):
-        assert round(self.unbiased_cor_result1['Res. DOF'],ndigits=3) == 22.091
+        assert round(self.unbiased_cor_result1['Res. DOF'],ndigits=3) == 21.959
 
 class Test_model_comparison3_hard:
 
@@ -400,7 +400,7 @@ class Test_model_comparison3_hard:
         np.testing.assert_allclose(self.unbiased_cor_result1['aic_diff'],2.832,atol=min(max_atol,0.2),rtol=min(max_rtol,0.001))
     
     def test_edf1(self):
-        np.testing.assert_allclose(self.unbiased_cor_result1['Res. DOF'],0.974,atol=min(max_atol,0.002),rtol=min(max_rtol,0.001))
+        np.testing.assert_allclose(self.unbiased_cor_result1['Res. DOF'],1.434149,atol=min(max_atol,0.002),rtol=min(max_rtol,0.001))
 
 
 class Test_Vb_corrections:

@@ -245,20 +245,9 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
             DOF2 = DOF22
 
 
-    # Compute un-penalized likelihood based on scale estimate of more complex (in terms of edf - so actually more complex) model if a scale was estimated (see section 3.1.4, Wood, 2017).
-    if isinstance(model1.family,Family):
-        ext_scale = None
-        if model1.family.twopar:
-            if DOF1 > DOF2:
-                _,ext_scale = model1.get_pars()
-            else:
-                _,ext_scale = model2.get_pars()
-
-        llk1 = model1.get_llk(penalized=False,ext_scale=ext_scale)
-        llk2 = model2.get_llk(penalized=False,ext_scale=ext_scale)
-    else:
-        llk1 = model1.get_llk(penalized=False)
-        llk2 = model2.get_llk(penalized=False)
+    # Compute un-penalized likelihood
+    llk1 = model1.get_llk(penalized=False)
+    llk2 = model2.get_llk(penalized=False)
 
     # Compute Chi-square statistic...
     stat = 2 * (llk1 - llk2)
