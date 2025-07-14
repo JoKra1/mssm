@@ -10,6 +10,7 @@ from .file_loading import mp
 from .repara import reparam
 from ..python.exp_fam import Family,Gaussian, Identity,GAMLSSFamily,GSMMFamily,Link
 import davies
+import dChol
 
 class GAMLSSGSMMFamily(GSMMFamily):
     """Implementation of the ``GSMMFamily`` class that uses only information about the likelihood to estimate any implemented GAMMLSS model.
@@ -2092,74 +2093,28 @@ def compute_Vb_corr_WPS(Vbr,Vpr,Vr,H,S_emb,penalties,coef,scale=1):
     # Supplementary materials D in WPS (2016) show how to obtain those from partial derivatives of elements in R 
     # with respect to each \rho, obtaining the latter is implemented in cpp_dchol.
     dRdRhos = []
+    R2 = R.toarray()
+
     for pen in penalties:
 
-        #dDat, dRow, dcol = cpp_dChol(R, pen.lam*pen.S_J_emb.tocsr())
+        A = pen.lam*pen.S_J_emb.toarray()
+        dRdRho = dChol.dChol(R2,A)
 
-        #dDat = [d for r in dDat for d in r]
-        #dcol = [d for r in dcol for d in r]
+        # Now inverse computations (see sup. materials D in WPS, 2016)
+        # Let's review this:
+        # The un-numbered equation between eq. (6) and (7) - the Taylor expansion - 
+        # suggests that we need dR'.Td\rho where R'.T@R' = Vb.
+        # we have: R.T@R = nH = Vb^{-1} (assuming Vb/nH are unscaled)
+        # and thus: R^{-1}@R^{-T} = Vb.
+        # Hence: R' = R^{-T}
+        # and:   R'.T = R^{-1}
+        # So: dR'.Td\rho = dR^{-1}d\rho = R^{-1}@dRd\rho@R^{-1}
+        # and we either have to take the transpose or change the flip the indexing in the 5 term sum!
+        dRdRhos.append((Rinv@dRdRho)@Rinv)
 
-        #dRdRhos.append(scp.sparse.csr_array((dDat,(dRow,dcol)),shape=Vc.shape))
-
-
-        if True:
-            dChol2 = np.zeros(H.shape)
-            A = pen.lam*pen.S_J_emb.toarray()
-            R2 = R.toarray()
-
-            for i in range(H.shape[1]):
-                Rii = 0
-                dRii = 0
-                for j in range(i,H.shape[1]):
-                    
-                    Bij = A[i,j]
-                    if i > 0:
-                        k = 0
-                        while k < i:
-                            Bij -= ((dChol2[k,i]*R2[k,j]) + (R2[k,i]*dChol2[k,j]))
-                            k += 1
-                        
-                    if i == j:
-                        Rii = R2[i,i]
-                        dRii = 0.5*Bij/Rii
-                        dChol2[i,j] = dRii
-                    elif j > i:
-                        dChol2[i,j] = (Bij - (R2[i,j] * dRii))/Rii
-            
-            
-            dRdRhos.append(dChol2)
-            
-    
-    # Now inverse computations (see sup. materials D in WPS, 2016)
-    # Let's review this:
-    # The un-numbered equation between eq. (6) and (7) - the Taylor expansion - 
-    # suggests that we need dR'.Td\rho where R'.T@R' = Vb.
-    # we have: R.T@R = nH = Vb^{-1} (assuming Vb/nH are unscaled)
-    # and thus: R^{-1}@R^{-T} = Vb.
-    # Hence: R' = R^{-T}
-    # and:   R'.T = R^{-1}
-    # So: dR'.Td\rho = dR^{-1}d\rho = R^{-1}@dRd\rho@R^{-1}
-    # and we either have to take the transpose or change the flip the indexing in the 5 term sum!
-
-    #print((R@Rinv).max())
-
-    for dRi in range(len(dRdRhos)):
-        dRdRhos[dRi] = (Rinv@dRdRhos[dRi])@Rinv
-    
     # Now final sum
-    Vcc = np.zeros_like(Vc)
-    for j in range(Vc.shape[0]):
-        for m in range(j,Vc.shape[1]):
+    Vcc = dChol.computeV2(Vpr,dRdRhos,Vc.shape[1])
 
-            for i in range(len(coef)):
-                for l in range(len(penalties)):
-                    for k in range(len(penalties)):
-
-                        Vcc[j,m] += dRdRhos[k][j,i] * Vpr[k,l] * dRdRhos[l][m,i]
-
-                        if m > j:
-                            Vcc[m,j] += dRdRhos[k][m,i] * Vpr[k,l] * dRdRhos[l][j,i]
-    
     # Done, don't forget to scale Vcc since nH was unscaled!
     return Vc, scale*Vcc
 

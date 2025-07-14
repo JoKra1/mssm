@@ -44,4 +44,9 @@ ext2 = Pybind11Extension(name='davies',
                         sources=['src/mssm/src/cpp/davies.cpp'],
                         cxx_std=14)
 
-setup(ext_modules=[ext1,ext2])
+ext3 = Pybind11Extension(name='dChol',
+                        sources=['src/mssm/src/cpp/dchol.cpp'],
+                        include_dirs=[get_eigen_include()],
+                        cxx_std=14)
+
+setup(ext_modules=[ext1,ext2,ext3])
