@@ -57,6 +57,15 @@ Eigen::MatrixXd dChol(const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dy
                     return dC;
                 }
 
+Eigen::MatrixXd invdChol(const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &R,
+                         const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &Rinv,
+                         const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &A)
+                {
+                    Eigen::MatrixXd dC = dChol(R,A);
+
+                    return (Rinv*dC)*Rinv;
+                }
+
 Eigen::MatrixXd computeV2(const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &Vpr,
                           py::list dRdRhos,
                           size_t Hcols)
@@ -66,14 +75,14 @@ Eigen::MatrixXd computeV2(const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen
                     */
 
                     Eigen::MatrixXd Vcc = Eigen::MatrixXd::Zero(Hcols,Hcols);
-
-                    auto i = Eigen::seq(0,Hcols-1);
                     size_t npen = dRdRhos.size();
 
                     for (size_t j = 0; j < Hcols; j++)
                     {
                         for (size_t m = j; m < Hcols; m++)
                         {
+                            auto i = Eigen::seq(m,Hcols-1);
+
                             for (size_t l = 0; l < npen; l++)
                             {
                                 py::handle dRdRho_lh = dRdRhos[l];
@@ -112,5 +121,6 @@ Eigen::MatrixXd computeV2(const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen
 
 PYBIND11_MODULE(dChol, m) {
     m.def("dChol", &dChol, py::arg("R").noconvert(), py::arg("A").noconvert(), "Let R be the transpose of Cholesky factor of some matrix H + a*A. Function returns derivative of this sum with respect to a.");
+    m.def("invdChol", &invdChol, py::arg("R").noconvert(), py::arg("Rinv").noconvert(), py::arg("A").noconvert(), "Let R be the transpose of Cholesky factor of some matrix H + a*A and Rinv be the inverse of R. Function returns derivative of inverse of this sum with respect to a.");
     m.def("computeV2", &computeV2, "Computes second term of the smoothing penalty uncertainty correction proposed by Wood, S. N., Pya, N., Saefken, B., (2016).");
 }
