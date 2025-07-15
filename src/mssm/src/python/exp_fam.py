@@ -1789,12 +1789,14 @@ class GSMMFamily:
    :type pars: int
    :param links: List of Link functions for each parameter of the likelihood, e.g., `links=[Identity(),LOG()]`.
    :type links: [Link]
+   :ivar int, optional extra_coef: Number of extra coefficients required by specific family or ``None``. By default set to ``None`` and changed to ``int`` by specific families requiring this.
    
    """
    def __init__(self,pars:int,links:[Link],*llkargs) -> None:
       self.n_par = pars
       self.links = links
       self.llkargs = llkargs # Any arguments that need to be passed to evaluate the likelihood/gradiant/hessian
+      self.extra_coef = None
 
    def llk(self,coef,coef_split_idx,ys,Xs):
       """log-probability of data under given model.

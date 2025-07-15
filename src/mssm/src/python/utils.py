@@ -1985,12 +1985,12 @@ def compute_Vp_WPS(Vbr,H,S_emb,penalties,coef,scale=1):
             
             # Now second partial derivative of hessian of negative penalized likelihood with respect to log(lambda) - assuming that H does not
             # depend on log(lambda)
-            t4 = 0.5 * ((penalties[peni].S_J_emb*penalties[peni].lam) @ Vbr.T @ Vbr @ (penalties[penj].S_J_emb*penalties[penj].lam) @ Vbr.T @ Vbr).trace()
+            t4 = 0.5 * (penalties[peni].D_J_emb.T @ Vbr.T @ Vbr @ penalties[penj].D_J_emb).power(2).sum()*penalties[peni].lam*penalties[penj].lam
 
             # And first
             t5 = 0
             if gamma:
-                t5 = 0.5 * (Vbr.T @ Vbr @ (penalties[peni].S_J_emb*penalties[peni].lam)).trace()
+                t5 = 0.5 * (Vbr @ penalties[peni].D_J_emb).power(2).sum()*penalties[peni].lam
             
             # Collect result
             Vpij = t1 - t2 + t3 + t4 - t5

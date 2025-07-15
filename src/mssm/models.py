@@ -455,7 +455,7 @@ class GSMM():
 
         # Get all penalties
         if restart == False:
-            shared_penalties = embed_shared_penalties(ind_penalties,self.formulas)
+            shared_penalties = embed_shared_penalties(ind_penalties,self.formulas,self.family.extra_coef)
             shared_penalties = [sp for sp in shared_penalties if len(sp) > 0]
 
             smooth_pen = [pen for pens in shared_penalties for pen in pens]
@@ -484,6 +484,11 @@ class GSMM():
         form_up_coef = [form.unpenalized_coef for form in self.formulas]
         n_coef = np.sum(form_n_coef)
 
+        if self.family.extra_coef is not None:
+            form_n_coef.append(self.family.extra_coef)
+            form_up_coef.append(self.family.extra_coef)
+            n_coef += self.family.extra_coef
+
         # Again check first for family wide initialization
         if init_coef is None:
             init_coef = self.family.init_coef([GAMM(form,family=Gaussian()) for form in self.formulas])
@@ -491,6 +496,9 @@ class GSMM():
         # Otherwise again initialize with provided values or randomly
         if not init_coef is None:
             coef = np.array(init_coef).reshape(-1,1)
+            
+            if self.family.extra_coef is not None:
+                coef = np.concatenate((coef,np.ones(self.family.extra_coef).reshape(-1,1)),axis=0)
         else:
             coef = scp.stats.norm.rvs(size=n_coef,random_state=seed).reshape(-1,1)
 
@@ -521,9 +529,10 @@ class GSMM():
         self.info = fit_info
 
         # Assign predictions and parameter estimates
-        split_coef = np.split(coef,coef_split_idx)
-        self.preds = [X@spcoef for X,spcoef in zip(Xs,split_coef)]
-        self.mus = [link.fi(pred) for link,pred in zip(self.family.links,self.preds)]
+        if build_mat is None:
+            split_coef = np.split(coef,coef_split_idx)
+            self.preds = [X@spcoef for X,spcoef in zip(Xs,split_coef)]
+            self.mus = [link.fi(pred) for link,pred in zip(self.family.links,self.preds)]
     
     ##################################### Prediction #####################################
 
@@ -1014,7 +1023,7 @@ class GAMMLSS(GSMM):
 
         # Get GAMMLSS penalties
         if restart == False:
-            shared_penalties = embed_shared_penalties(ind_penalties,self.formulas)
+            shared_penalties = embed_shared_penalties(ind_penalties,self.formulas,None)
             gamlss_pen = [pen for pens in shared_penalties for pen in pens]
             self.overall_penalties = gamlss_pen
 

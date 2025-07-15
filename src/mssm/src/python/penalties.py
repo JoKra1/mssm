@@ -32,7 +32,7 @@ def embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,Sj,SJ_col):
       
    return Sj
 
-def embed_shared_penalties(shared_penalties,formulas):
+def embed_shared_penalties(shared_penalties,formulas,extra_coef):
    """
    Embed penalties from individual model into overall penalties for GAMLSS models.
    """
@@ -45,36 +45,52 @@ def embed_shared_penalties(shared_penalties,formulas):
    for fi,form in enumerate(formulas):
       for ofi,other_form in enumerate(formulas):
          if fi == ofi:
-               continue
+            continue
 
          if ofi < fi:
-               for lterm in shared_penalties[fi]:
-                  lterm.S_J_emb = scp.sparse.vstack([scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1])),
-                                                   lterm.S_J_emb]).tocsc()
-                  lterm.D_J_emb = scp.sparse.vstack([scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1])),
-                                                   lterm.D_J_emb]).tocsc()
-                  
-                  lterm.S_J_emb = scp.sparse.hstack([scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef)),
-                                                   lterm.S_J_emb]).tocsc()
-                  
-                  lterm.D_J_emb = scp.sparse.hstack([scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef)),
-                                                   lterm.D_J_emb]).tocsc()
-                  
-                  lterm.start_index += other_form.n_coef
+            for lterm in shared_penalties[fi]:
+               lterm.S_J_emb = scp.sparse.vstack([scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1])),
+                                                lterm.S_J_emb]).tocsc()
+               lterm.D_J_emb = scp.sparse.vstack([scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1])),
+                                                lterm.D_J_emb]).tocsc()
+               
+               lterm.S_J_emb = scp.sparse.hstack([scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef)),
+                                                lterm.S_J_emb]).tocsc()
+               
+               lterm.D_J_emb = scp.sparse.hstack([scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef)),
+                                                lterm.D_J_emb]).tocsc()
+               
+               lterm.start_index += other_form.n_coef
          
          elif ofi > fi:
-               for lterm in shared_penalties[fi]:
-                  lterm.S_J_emb = scp.sparse.vstack([lterm.S_J_emb,
-                                                   scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1]))]).tocsc()
+            for lterm in shared_penalties[fi]:
+               lterm.S_J_emb = scp.sparse.vstack([lterm.S_J_emb,
+                                                scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1]))]).tocsc()
+               
+               lterm.D_J_emb = scp.sparse.vstack([lterm.D_J_emb,
+                                                scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1]))]).tocsc()
+               
+               lterm.S_J_emb = scp.sparse.hstack([lterm.S_J_emb,
+                                                scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef))]).tocsc()
+               
+               lterm.D_J_emb = scp.sparse.hstack([lterm.D_J_emb,
+                                                scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef))]).tocsc()
                   
-                  lterm.D_J_emb = scp.sparse.vstack([lterm.D_J_emb,
-                                                   scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1]))]).tocsc()
-                  
-                  lterm.S_J_emb = scp.sparse.hstack([lterm.S_J_emb,
-                                                   scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef))]).tocsc()
-                  
-                  lterm.D_J_emb = scp.sparse.hstack([lterm.D_J_emb,
-                                                   scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef))]).tocsc()
+   if extra_coef is not None:
+      for fi,form in enumerate(formulas):
+         for lterm in shared_penalties[fi]:
+            lterm.S_J_emb = scp.sparse.vstack([lterm.S_J_emb,
+                                             scp.sparse.csc_array((extra_coef,lterm.S_J_emb.shape[1]))]).tocsc()
+            
+            lterm.D_J_emb = scp.sparse.vstack([lterm.D_J_emb,
+                                             scp.sparse.csc_array((extra_coef,lterm.S_J_emb.shape[1]))]).tocsc()
+            
+            lterm.S_J_emb = scp.sparse.hstack([lterm.S_J_emb,
+                                             scp.sparse.csc_array((lterm.S_J_emb.shape[0],extra_coef))]).tocsc()
+            
+            lterm.D_J_emb = scp.sparse.hstack([lterm.D_J_emb,
+                                             scp.sparse.csc_array((lterm.S_J_emb.shape[0],extra_coef))]).tocsc()
+
                
    return shared_penalties
 
