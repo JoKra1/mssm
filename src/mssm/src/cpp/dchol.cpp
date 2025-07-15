@@ -76,12 +76,14 @@ Eigen::MatrixXd computeV2(const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen
 
                     Eigen::MatrixXd Vcc = Eigen::MatrixXd::Zero(Hcols,Hcols);
                     size_t npen = dRdRhos.size();
+                    double Vjm;
 
                     for (size_t j = 0; j < Hcols; j++)
                     {
                         for (size_t m = j; m < Hcols; m++)
                         {
                             auto i = Eigen::seq(m,Hcols-1);
+                            Vjm = 0.0;
 
                             for (size_t l = 0; l < npen; l++)
                             {
@@ -103,19 +105,14 @@ Eigen::MatrixXd computeV2(const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen
 
                                     Eigen::Map<Eigen::MatrixXd> mk(ptr_k,Hcols,Hcols);
 
-                                    Vcc(j,m) += (mk(j,i).array() * Vpr(k,l) * ml(m,i).array()).sum();
+                                    Vjm += (mk(j,i).array() * Vpr(k,l) * ml(m,i).array()).sum();
 
-                                    if (m > j)
-                                    {
-                                        Vcc(m,j) += (mk(m,i).array() * Vpr(k,l) * ml(j,i).array()).sum();
-                                    }
                                 }
                             }
+                            Vcc(j,m) = Vcc(m,j) = Vjm;
                         }
                     }
-                    
                    return Vcc;
-
                 }
 
 
