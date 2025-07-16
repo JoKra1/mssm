@@ -1,7 +1,7 @@
 import math
 import numpy as np
 import scipy as scp
-from .matrix_solvers import cpp_solvers,map_csc_to_eigen,translate_sparse,cpp_chol,compute_Linv
+from .matrix_solvers import eigen_solvers,map_csc_to_eigen,translate_sparse,cpp_chol,compute_Linv
 from .penalties import embed_in_S_sparse
 from .custom_types import LambdaTerm
 import copy
@@ -108,7 +108,7 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
       else:
          XX = (X.T @ X).tocsc()
          
-         L,code = cpp_solvers.chol(*map_csc_to_eigen(XX))
+         L,code = eigen_solvers.chol(*map_csc_to_eigen(XX))
 
          if code != 0:
             raise ValueError("Cholesky failed during reparameterization.")
@@ -124,7 +124,7 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
       # B = Rinv.T @ A.T
       # B = Rinv.T @ S @ Rinv
       
-      B = cpp_solvers.solve_tr(*map_csc_to_eigen(R.T),cpp_solvers.solve_tr(*map_csc_to_eigen(R.T),S.T).T)
+      B = eigen_solvers.solve_tr(*map_csc_to_eigen(R.T),eigen_solvers.solve_tr(*map_csc_to_eigen(R.T),S.T).T)
 
       s, U =scp.linalg.eigh(B.toarray())
 
@@ -146,7 +146,7 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
       # Then Xpred_rp = X_pred @ C can similarly be obtained.
       # see smooth.R nat.param function in mgcv.
       
-      C = cpp_solvers.backsolve_tr(*map_csc_to_eigen(R.tocsc()),U)
+      C = eigen_solvers.backsolve_tr(*map_csc_to_eigen(R.tocsc()),U)
 
       IRrp = None
       if identity:

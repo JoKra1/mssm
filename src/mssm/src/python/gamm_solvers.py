@@ -259,7 +259,7 @@ def PIRLS_newton_weights(y,mu,eta,family:Family):
 
    return z, w, invalid_idx.flatten()
 
-def update_PIRLS(y,yb,mu,eta,X,Xb,family):
+def update_PIRLS(y,yb,mu,eta,X,Xb,family,Lrhoi):
    # Update the PIRLS weights and data (if the model is not Gaussian)
    # and update the fitting matrices yb & Xb
    z = None
@@ -274,6 +274,22 @@ def update_PIRLS(y,yb,mu,eta,X,Xb,family):
       # Update yb and Xb
       yb = Wr @ z[inval == False]
       Xb = (Wr @ X[inval == False,:]).tocsc()
+
+      if Lrhoi is not None:
+         # Apply ar1 model to working linear model.
+         # Basically z_i ~ N(X@b,W^-1*phi), where W=Wr@Wr
+         # Now: Wr@z_i = Wr@X@b + e and instead of assuming e ~ N(0,\phi)
+         # We Assume e ~ N(0,V\phi) where V=Lrho^T@Lrho is covariance matrix of ar1 model.
+         # Let Lhroi = Lrho^-1. Then: Lhroi^T@Wr@z_i = Lhroi^T@Wr@X@b + eps
+         # with eps ~ N(0,\phi)
+         # see section 1.8.4 of Wood (2017)
+         
+         Lrhoiv = Lrhoi[inval == False,:]
+         Lrhoiv = Lrhoiv[:,inval == False]
+
+         yb = Lrhoiv.T@yb # Lhroi^T@Wr@z_i
+         Xb = Lrhoiv.T@Xb #Lhroi^T@Wr@X
+         Xb.sort_indices()
       
    return yb,Xb,z,Wr
 
@@ -551,18 +567,27 @@ def calculate_term_edf(penalties,param_penalized):
    
    return term_edf
 
-def update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,penalties,keep,drop,n_c):
+def update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,Lrhoi,family,penalties,keep,drop,n_c):
    # Updates the scale of the model. For this the edf
    # are computed as well - they are returned because they are needed for the
    # lambda step proposal anyway.
    
-   # Calculate Pearson residuals for GAMM (Wood, 3.1.5 & 3.1.7)
+   # Calculate Pearson/working residuals for GAMM (Wood, 3.1.5 & 3.1.7)
    # Standard residuals for AMM
    dropped = 0
    if isinstance(family,Gaussian) == False or isinstance(family.link,Identity) == False:
       inval = np.isnan(z)
       dropped = np.sum(inval) # Make sure to only take valid z/eta/w here and for computing the scale
-      wres = Wr @ (z[inval == False] - eta[inval == False]).reshape(-1,1)
+
+      # Apply ar1 model to working residuals 
+      if Lrhoi is not None:
+         inval_f = (inval == False).flatten()
+         Lrhoiv = Lrhoi[inval_f,:]
+         Lrhoiv = Lrhoiv[:,inval_f]
+
+         wres = Lrhoiv.T@ (Wr @ (z[inval == False] - eta[inval == False]).reshape(-1,1))
+      else:
+         wres = Wr @ (z[inval == False] - eta[inval == False]).reshape(-1,1)
    else:
       wres = y - eta
 
@@ -667,7 +692,7 @@ def update_coef(yb,X,Xb,family,S_emb,S_root,n_c,formula,offset):
    
    return eta,mu,coef,Pr,P,LP,keep,drop
 
-def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,S_root,S_pinv,FS_use_rank,penalties,n_c,formula,form_Linv,offset):
+def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,Lrhoi,family,S_emb,S_root,S_pinv,FS_use_rank,penalties,n_c,formula,form_Linv,offset):
    # Solves the additive model for a given set of weights and penalty
    eta,mu,coef,Pr,P,LP,keep,drop = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,formula,offset)
    
@@ -707,13 +732,13 @@ def update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,X,Xb,family,S_emb,S_root,S_pinv,
       L = scp.sparse.csc_array((Ldat,(Lrow,Lcol)),shape=(S_emb.shape[1],S_emb.shape[1]))
 
    # Update scale parameter - and un-pivot + optionally pad InvCholXXSP
-   wres,InvCholXXS,total_edf,term_edfs,Bs,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,penalties,keep,drop,n_c)
+   wres,InvCholXXS,total_edf,term_edfs,Bs,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,Lrhoi,family,penalties,keep,drop,n_c)
    return eta,mu,coef,L,InvCholXXS,lgdetDs,bsbs,total_edf,term_edfs,Bs,scale,wres,keep,drop
 
 def init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
                   family,col_S,penalties,
                   pinv,n_c,formula,form_Linv,
-                  method,offset):
+                  method,offset,Lrhoi):
    # Initial fitting iteration without step-length control for gam.
 
    # Compute starting estimate S_emb and S_pinv
@@ -731,7 +756,7 @@ def init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
    # compare the result to.
 
    # First (optionally, only in the non Gaussian case) compute pseudo-dat and weights:
-   yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta - offset,X,Xb,family)
+   yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta - offset,X,Xb,family,Lrhoi)
    
    # Solve additive model
    eta,mu,coef,\
@@ -743,7 +768,7 @@ def init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
    term_edfs,\
    Bs,scale,wres,\
    keep, drop = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
-                                         X,Xb,family,S_emb,S_root,S_pinv,
+                                         X,Xb,Lrhoi,family,S_emb,S_root,S_pinv,
                                          FS_use_rank,penalties,n_c,
                                          formula,form_Linv,offset)
    
@@ -907,7 +932,7 @@ def undo_extension_lambda_step(lti,lam,dLam,extend_by, was_extended, method, fam
    return lam, dLam
 
 def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,coef,
-                        family,col_S,S_emb,penalties,
+                        Lrhoi,family,col_S,S_emb,penalties,
                         was_extended,pinv,lam_delta,
                         extend_by,o_iter,dev_check,n_c,
                         control_lambda,extend_lambda,
@@ -936,7 +961,7 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,coef,
       term_edfs,\
       Bs,scale,wres,\
       keep, drop = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
-                                            X,Xb,family,S_emb,S_root,S_pinv,
+                                            X,Xb,Lrhoi,family,S_emb,S_root,S_pinv,
                                             FS_use_rank,penalties,n_c,
                                             formula,form_Linv,offset)
       
@@ -960,7 +985,7 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,coef,
             dev,pen_dev,mu,eta,n_coef = correct_coef_step(n_coef,n_coef2,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,len(penalties),S_emb,None,n_c,offset)
 
             # Update PIRLS weights
-            yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family)
+            yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family,None)
 
             # Convergence check for inner loop
             if i_iter > 0:
@@ -1001,7 +1026,7 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,coef,
          if form_Linv:
             InvCholXXSP = compute_Linv(LP,n_c)
          
-         wres,InvCholXXS,total_edf,term_edfs,_,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,family,penalties,keep,drop,n_c)
+         wres,InvCholXXS,total_edf,term_edfs,_,scale = update_scale_edf(y,z,eta,Wr,rowsX,colsX,LP,InvCholXXSP,Pr,lgdetDs,None,family,penalties,keep,drop,n_c)
 
          # Unpivot Cholesky of negative penalized hessian - InvCholXXS has already been un-pivoted (and padded) by `update_scale_edf`!
          CholXXS = P.T@LP
@@ -1071,7 +1096,7 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,coef,
                   mu = family.link.fi(eta)
             
             # Reset PIRLS weights
-            yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family)
+            yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family,None)
             
       if check[0,0] >= check_criterion or (control_lambda == False) or lam_accepted:
          # Accept the step and propose a new one as well! (part of step 6 in Wood, 2017; here uses efs from Wood & Fasiolo, 2017 to propose new lambda delta)
@@ -1109,7 +1134,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
                       extend_lambda=True,control_lambda=True,
                       exclude_lambda=False,extension_method_lam = "nesterov",
                       form_Linv=True,method="Chol",check_cond=2,progress_bar=False,
-                      n_c=10,offset=0):
+                      n_c=10,offset=0,Lrhoi=None):
    # Estimates a penalized Generalized additive mixed model, following the steps outlined in Wood, Li, Shaddick, & Augustin (2017)
    # "Generalized Additive Models for Gigadata" referred to as Wood (2017) below.
 
@@ -1118,6 +1143,13 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    coef = None
    n_coef = None
    K2 = None
+
+   if Lrhoi is not None and isinstance(family,Gaussian) and isinstance(family.link,Identity):
+      # Can simply apply ar1 model at start, then we estimate Lrhoi.T@y ~ N(Lrhoi.T@X@coef,scale)
+      # Need to fix eta and resid after convergence.
+      y = Lrhoi.T@y
+      X = (Lrhoi.T@X).tocsc()
+      X.sort_indices()
 
    # Additive mixed model can simply be fit on y and X
    # Generalized mixed model needs to be fit on weighted X and pseudo-dat
@@ -1136,9 +1168,9 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    # Compute starting estimates
    dev,pen_dev,eta,mu,coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,S_emb = init_step_gam(y,yb,mu,eta,rowsX,colsX,X,Xb,
                                                                                                      family,col_S,penalties,
-                                                                                                     pinv,n_c,None,form_Linv,method,offset)
+                                                                                                     pinv,n_c,None,form_Linv,method,offset,Lrhoi)
    
-   yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family)
+   yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family,Lrhoi)
    
    if check_cond == 2:
       K2,_,_,Kcode = est_condition(CholXXS,InvCholXXS,verbose=False)
@@ -1182,7 +1214,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
             # Update pseudo-dat weights for next coefficient step (step 1 in Wood, 2017; but moved after the coef correction because z and Wr depend on
             # mu and eta, which change during the correction but anything that needs to be computed during the correction (deviance) does not depend on
             # z and Wr).
-            yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta - offset,X,Xb,family)
+            yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta - offset,X,Xb,family,Lrhoi)
          else:
             coef = n_coef
 
@@ -1219,7 +1251,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
 
          # Now check step length and compute lambda + coef update. (steps 6-7 in Wood, 2017)
          yb,Xb,z,Wr,eta,mu,n_coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb,lam_checks,keep,drop = correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,coef,
-                                                                                                                                                                     family,col_S,S_emb,penalties,
+                                                                                                                                                                     Lrhoi,family,col_S,S_emb,penalties,
                                                                                                                                                                      was_extended,pinv,lam_delta,
                                                                                                                                                                      extend_by,o_iter,dev,n_c,
                                                                                                                                                                      control_lambda,extend_lambda,
@@ -1240,7 +1272,7 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
          term_edfs,\
          _,scale,wres,\
          keep, drop = update_coef_and_scale(y,yb,z,Wr,rowsX,colsX,
-                                            X,Xb,family,S_emb,None,None,None,
+                                            X,Xb,Lrhoi,family,S_emb,None,None,None,
                                             penalties,n_c,None,form_Linv,offset)
          
       fit_info.dropped = drop
@@ -1278,14 +1310,33 @@ def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
    # time with a weight of zero for any dropped obs.
    WN = None
    if Wr is not None:
-      inval_check =  np.any(np.isnan(z))
+      inval = np.isnan(z)
+      inval_check =  np.any(inval)
+
+      wres2 = None
+      if Lrhoi is not None: # Need to return ar-corrected and "normal" working residuals
+         wres2 = Wr @ (z[inval == False] - eta[inval == False]).reshape(-1,1)
 
       if inval_check:
-         _, w, inval = PIRLS_pdat_weights(y,mu,eta-offset,family)
-         w[inval] = 0
+         w_full = np.zeros_like(eta)
+         w_full[inval==False] = Wr.diagonal()
+         w = w_full
 
          # Re-compute weight matrix
          Wr = scp.sparse.spdiags([np.sqrt(np.ndarray.flatten(w))],[0])
+
+         # Adjust working residuals
+         wres_full = np.zeros_like(eta)
+         wres_full[inval==False] = wres
+         wres = wres_full
+
+         if Lrhoi is not None:
+            wres_full2 = np.zeros_like(eta)
+            wres_full2[inval==False] = wres2
+            wres2 = wres_full2
+      
+      if wres2 is not None:
+         wres = [wres,wres2]
    
       # Compute Newton weights once to enable computation of observed hessian
       _, wN, inval = PIRLS_newton_weights(y,mu,eta-offset,family)
@@ -1710,7 +1761,7 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
    # Compute starting estimates
    dev,pen_dev,eta,mu,coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,S_emb = init_step_gam(y,Xy,mu,eta,rowsX,colsX,None,XX,
                                                                                                      family,col_S,penalties,
-                                                                                                     pinv,n_c,formula,form_Linv,"Chol",0)
+                                                                                                     pinv,n_c,formula,form_Linv,"Chol",0,None)
    
    # Initialize extension variable
    extend_by = initialize_extension(extension_method_lam,penalties)
@@ -1769,7 +1820,7 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
 
          # Now check step length and compute lambda + coef update.
          _,_,_,_,eta,mu,n_coef,CholXXS,InvCholXXS,total_edf,term_edfs,scale,wres,lam_delta,extend_by,penalties,was_extended,S_emb,lam_checks,_,_ = correct_lambda_step(y,Xy,None,None,rowsX,colsX,None,XX,coef,
-                                                                                                                                                                        family,col_S,S_emb,penalties,
+                                                                                                                                                                        None,family,col_S,S_emb,penalties,
                                                                                                                                                                         was_extended,pinv,lam_delta,
                                                                                                                                                                         extend_by,o_iter,dev,
                                                                                                                                                                         n_c,control_lambda,extend_lambda,
@@ -1788,7 +1839,7 @@ def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
          term_edfs,\
          _,scale,wres,\
          _, _ = update_coef_and_scale(y,Xy,None,None,rowsX,colsX,
-                                            None,XX,family,S_emb,None,None,None,
+                                            None,XX,None,family,S_emb,None,None,None,
                                             penalties,n_c,formula,form_Linv,0)
 
       fit_info.iter += 1

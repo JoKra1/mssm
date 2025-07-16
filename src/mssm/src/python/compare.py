@@ -217,22 +217,13 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
         
         if correct_t1:
             # Compute uncertainty un-corrected but smoothness bias corrected edf (t1 in section 6.1.2 of Wood, 2017)
-            if isinstance(model1.family,Family):
-                X1 = model1.get_mmat()
-                X2 = model2.get_mmat()
-                V1 = model1.lvi.T @ model1.lvi
-                V2 = model2.lvi.T @ model2.lvi
-                if isinstance(model1.family,Gaussian) and isinstance(model1.family.link,Identity): # Strictly additive case
-                    F1 = V1@(X1.T@X1)
-                    F2 = V2@(X2.T@X2)
-                else: # Generalized case
-                    W1 = model1.Wr@model1.Wr
-                    W2 = model2.Wr@model2.Wr
-                    F1 = V1@(X1.T@W1@X1)
-                    F2 = V2@(X2.T@W2@X2)
-            else: # GAMLSS or GSMM case
-                V1 = model1.lvi.T @ model1.lvi
-                V2 = model2.lvi.T @ model2.lvi
+            V1 = model1.lvi.T @ model1.lvi
+            V2 = model2.lvi.T @ model2.lvi
+            if isinstance(model1.family,Family) and model1.family.twopar: # Undo scaling by phi
+                F1 = V1@(-1*model1.hessian*model1.scale)
+                F2 = V2@(-1*model2.hessian*model2.scale)
+
+            else: # single par GAMM or GAMLSS or GSMM case
                 F1 = V1@(-1*model1.hessian)
                 F2 = V2@(-1*model2.hessian)
 
@@ -247,6 +238,14 @@ def compare_CDL(model1:GAMM or GAMMLSS or GSMM,
             DOF1 = DOF12
             DOF2 = DOF22
 
+    # Correct dof for scale paramter
+    if isinstance(model1.family,Family) and model1.family.twopar:
+        DOF1 += 1
+        DOF2 += 1
+
+        if aic_DOF1 is not None:
+            aic_DOF1 += 1
+            aic_DOF2 += 1
 
     # Compute un-penalized likelihood
     llk1 = model1.get_llk(penalized=False)

@@ -4,13 +4,47 @@ import math
 import warnings
 from itertools import permutations,product,repeat
 import copy
-from ..python.gamm_solvers import cpp_backsolve_tr,compute_S_emb_pinv_det,cpp_chol,cpp_solve_coef,update_scale_edf,compute_Linv,apply_eigen_perm,tqdm,managers,shared_memory,cpp_solve_coefXX,update_PIRLS,PIRLS_pdat_weights,correct_coef_step,update_coef_gen_smooth,cpp_cholP,update_coef_gammlss,compute_lgdetD_bsb,calculate_edf,compute_eigen_perm,cpp_dChol,computeHSR1,computeH,update_coef,deriv_transform_mu_eta,deriv_transform_eta_beta,translate_sparse,map_csc_to_eigen
+from ..python.gamm_solvers import cpp_backsolve_tr,compute_S_emb_pinv_det,cpp_chol,cpp_solve_coef,update_scale_edf,compute_Linv,apply_eigen_perm,tqdm,managers,shared_memory,cpp_solve_coefXX,update_PIRLS,PIRLS_pdat_weights,correct_coef_step,update_coef_gen_smooth,cpp_cholP,update_coef_gammlss,compute_lgdetD_bsb,calculate_edf,compute_eigen_perm,computeHSR1,computeH,update_coef,deriv_transform_mu_eta,deriv_transform_eta_beta,translate_sparse,map_csc_to_eigen
 from ..python.terms import fs, rs
 from .file_loading import mp
 from .repara import reparam
 from ..python.exp_fam import Family,Gaussian, Identity,GAMLSSFamily,GSMMFamily,Link
 import davies
 import dChol
+
+def computeAr1Chol(formula,rho):
+    """Computes the inverse of the cholesky of the (scaled) variance matrix of an ar1 model.
+
+    :param formula: Formula of the model
+    :type formula: mssm.src.python.formula.Formula
+    :param rho: ar1 weight.
+    :type rho: float
+    :return: Tuple, containing banded inverse Cholesky as a scipy array and the correction needed to get the likelihood of the ar1 model.
+    :rtype: scipy.sparse.csc_array, float
+    """
+
+    y_flat = formula.y_flat[formula.NOT_NA_flat]
+    n_y = len(y_flat)
+    d0 = np.tile(1/np.sqrt(1-np.power(rho,2)),n_y)
+    d1 = np.tile(-rho/np.sqrt(1-np.power(rho,2)),n_y-1)
+
+    # Correct ar1 process for individual (time) series
+    if formula.series_id is not None:
+        start = np.tile(False,len(formula.y_flat))
+        start[formula.sid] = True
+        start = start[formula.NOT_NA_flat]
+        sid0 = np.where(start)[0]
+        sid1 = sid0[1:] - 1
+        
+        d0[sid0] = 1
+        d1[sid1] = 0
+
+    Lrhoi = scp.sparse.diags_array([d0,d1],format='csr',offsets=[0,1])
+
+    # Likelihood correction computed as done by mgcv. see: https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/bam.r#L2761
+    llc = (n_y - (np.sum(start) if formula.series_id is not None else 1))*np.log(1/np.sqrt(1-np.power(rho,2)))
+
+    return Lrhoi,llc
 
 class GAMLSSGSMMFamily(GSMMFamily):
     """Implementation of the ``GSMMFamily`` class that uses only information about the likelihood to estimate any implemented GAMMLSS model.
@@ -1146,7 +1180,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0,init_eta=No
                 mu = family.link.fi(eta)
 
             # First pseudo-dat iteration
-            yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family)
+            yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family,None)
 
             # Solve coef
             eta,mu,coef,Pr,_,LP,keep,drop = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,None,offset)
@@ -1163,7 +1197,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0,init_eta=No
                     dev,pen_dev,mu,eta,coef = correct_coef_step(coef,n_coef,dev,pen_dev,c_dev_prev,family,eta,mu,y,X,len(penalties),S_emb,None,n_c,offset)
 
                 # Update PIRLS weights
-                yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family)
+                yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family,None)
 
                 # Convergence check for inner loop
                 if newt_iter > 0:
@@ -1207,7 +1241,7 @@ def compute_reml_candidate_GAMM(family,y,X,penalties,n_c=10,offset=0,init_eta=No
 
         # Get edf and optionally estimate scale (scale will be kept at fixed (e.g., 1) for Generalized case)
         #InvCholXXSP = compute_Linv(LP,n_c)
-        _,_,edf,_,_,scale = update_scale_edf(y,z,eta,Wr,X.shape[0],X.shape[1],LP,None,Pr,None,family,penalties,keep,drop,n_c)
+        _,_,edf,_,_,scale = update_scale_edf(y,z,eta,Wr,X.shape[0],X.shape[1],LP,None,Pr,None,None,family,penalties,keep,drop,n_c)
         #print(edf-(InvCholXXS.T@InvCholXXS@nH).trace())
         #edf = (InvCholXXS.T@InvCholXXS@nH).trace()
 
@@ -1526,6 +1560,9 @@ def estimateVp(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,drop_
 
     if not grid_type in ["JJJ1","JJJ2"]:
         raise ValueError("'grid_type' has to be set to one of 'JJJ1', 'JJJ2'.")
+    
+    if isinstance(family,Family) and model.rho is not None and grid_type != "JJJ1":
+        raise ValueError("For models with an ar1 model only grid_type='JJJ1' is supported.")
 
     if isinstance(family,GSMMFamily):
         if not bfgs_options:
@@ -1883,7 +1920,7 @@ def _compute_VB_corr_terms_MP(family,address_y,address_dat,address_ptr,address_i
    eta = (X @ coef).reshape(-1,1) + offset
    
    # Compute scale
-   _,_,edf,_,_,scale = update_scale_edf(y,None,eta,None,X.shape[0],X.shape[1],LP,None,Pr,None,family,rPen,None,None,10)
+   _,_,edf,_,_,scale = update_scale_edf(y,None,eta,None,X.shape[0],X.shape[1],LP,None,Pr,None,None,family,rPen,None,None,10)
 
    llk = family.llk(y,eta,scale)
 
@@ -2255,6 +2292,9 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
 
     if not grid_type in ["JJJ1","JJJ2","JJJ3"]:
         raise ValueError("'grid_type' has to be set to one of 'JJJ1', 'JJJ2', or 'JJJ3'.")
+    
+    if isinstance(family,Family) and model.rho is not None and grid_type != "JJJ1":
+        raise ValueError("For models with an ar1 model only grid_type='JJJ1' is supported.")
 
     if isinstance(family,GSMMFamily):
         if not bfgs_options:
@@ -2559,7 +2599,7 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
                     mu = family.link.fi(eta)
                     
                     # Compute pseudo-dat and weights for mean coef
-                    yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-model.offset,X,Xb,family)
+                    yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-model.offset,X,Xb,family,None)
 
                     inval_check =  np.any(np.isnan(z))
 
@@ -2579,7 +2619,7 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
                 _,_,_,Pr,_,LP,keep,drop = update_coef(yb,X,Xb,family,S_emb,S_root,n_c,None,model.offset)
 
                 # Re-compute scale
-                _,_,_,_,_,scale = update_scale_edf(y,z,eta,Wr,X.shape[0],X.shape[1],LP,None,Pr,None,family,model.overall_penalties,keep,drop,n_c)
+                _,_,_,_,_,scale = update_scale_edf(y,z,eta,Wr,X.shape[0],X.shape[1],LP,None,Pr,None,None,family,model.overall_penalties,keep,drop,n_c)
                 
                 # And negative hessian
                 nH /= scale

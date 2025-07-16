@@ -1,6 +1,6 @@
 import numpy as np
 import scipy as scp
-import cpp_solvers
+import eigen_solvers
 import warnings
 from multiprocessing import managers,shared_memory
 import multiprocessing as mp
@@ -74,53 +74,50 @@ def translate_sparse(mat):
 
   return data, rows, cols
 
-def cpp_dChol(R,A):
-   return cpp_solvers.dCholdRho(*map_csr_to_eigen(R),*map_csr_to_eigen(A))
-
 def cpp_chol(A):
-   return cpp_solvers.chol(*map_csc_to_eigen(A))
+   return eigen_solvers.chol(*map_csc_to_eigen(A))
 
 def cpp_cholP(A):
-   return cpp_solvers.cholP(*map_csc_to_eigen(A))
+   return eigen_solvers.cholP(*map_csc_to_eigen(A))
 
 def cpp_qr(A):
-   return cpp_solvers.pqr(*map_csc_to_eigen(A))
+   return eigen_solvers.pqr(*map_csc_to_eigen(A))
 
 def cpp_qrr(A):
-   return cpp_solvers.pqrr(*map_csc_to_eigen(A))
+   return eigen_solvers.pqrr(*map_csc_to_eigen(A))
 
 def cpp_dqrr(A):
-   return cpp_solvers.dpqrr(A)
+   return eigen_solvers.dpqrr(A)
 
 def cpp_symqr(A,tol):
-   return cpp_solvers.spqr(*map_csc_to_eigen(A),tol)
+   return eigen_solvers.spqr(*map_csc_to_eigen(A),tol)
 
 def cpp_solve_qr(A):
-   return cpp_solvers.solve_pqr(*map_csc_to_eigen(A))
+   return eigen_solvers.solve_pqr(*map_csc_to_eigen(A))
 
 def cpp_solve_am(y,X,S):
-   return cpp_solvers.solve_am(y,*map_csc_to_eigen(X),*map_csc_to_eigen(S))
+   return eigen_solvers.solve_am(y,*map_csc_to_eigen(X),*map_csc_to_eigen(S))
 
 def cpp_solve_coef(y,X,S):
-   return cpp_solvers.solve_coef(y,*map_csc_to_eigen(X),*map_csc_to_eigen(S))
+   return eigen_solvers.solve_coef(y,*map_csc_to_eigen(X),*map_csc_to_eigen(S))
 
 def cpp_solve_coef_pqr(y,X,E):
-   return cpp_solvers.solve_coef_pqr(y,*map_csc_to_eigen(X),*map_csc_to_eigen(E))
+   return eigen_solvers.solve_coef_pqr(y,*map_csc_to_eigen(X),*map_csc_to_eigen(E))
 
 def cpp_solve_coefXX(Xy,XXS):
-   return cpp_solvers.solve_coefXX(Xy,*map_csc_to_eigen(XXS))
+   return eigen_solvers.solve_coefXX(Xy,*map_csc_to_eigen(XXS))
 
 def cpp_solve_L(X,S):
-   return cpp_solvers.solve_L(*map_csc_to_eigen(X),*map_csc_to_eigen(S))
+   return eigen_solvers.solve_L(*map_csc_to_eigen(X),*map_csc_to_eigen(S))
 
 def cpp_solve_LXX(XXS):
-   return cpp_solvers.solve_L(*map_csc_to_eigen(XXS))
+   return eigen_solvers.solve_L(*map_csc_to_eigen(XXS))
 
 def cpp_solve_tr(A,C):
-   return cpp_solvers.solve_tr(*map_csc_to_eigen(A),C)
+   return eigen_solvers.solve_tr(*map_csc_to_eigen(A),C)
 
 def cpp_backsolve_tr(A,C):
-   return cpp_solvers.backsolve_tr(*map_csc_to_eigen(A),C)
+   return eigen_solvers.backsolve_tr(*map_csc_to_eigen(A),C)
 
 def est_condition(L,Linv,seed=0,verbose=True):
    """Estimate the condition number ``K`` - the ratio of the largest to smallest singular values - of matrix ``A``, where ``A.T@A = L@L.T``.
@@ -329,7 +326,7 @@ def compute_block_linv_shared(address_dat,address_ptr,address_idx,shape_dat,shap
    indptr = np.ndarray(shape_ptr,dtype=np.int64,buffer=ptr_shared.buf)
    indices = np.ndarray(shape_dat,dtype=np.int64,buffer=idx_shared.buf)
 
-   L = cpp_solvers.solve_tr(rows, cols, nnz, data, indptr, indices, T)
+   L = eigen_solvers.solve_tr(rows, cols, nnz, data, indptr, indices, T)
 
    return L
 

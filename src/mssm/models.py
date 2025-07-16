@@ -7,7 +7,7 @@ from .src.python.exp_fam import Link,Logit,Identity,LOG,LOGb,Family,Binomial,Gau
 from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2,solve_gammlss_sparse,solve_generalSmooth_sparse
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 from .src.python.penalties import embed_shared_penalties
-from .src.python.utils import sample_MVN,REML,adjust_CI,print_smooth_terms,print_parametric_terms,approx_smooth_p_values,compute_bias_corrected_edf,GAMLSSGSMMFamily
+from .src.python.utils import sample_MVN,REML,adjust_CI,print_smooth_terms,print_parametric_terms,approx_smooth_p_values,compute_bias_corrected_edf,GAMLSSGSMMFamily,computeAr1Chol
 from .src.python.custom_types import VarType,ConstType,Constraint,PenType,LambdaTerm
 
 ##################################### GSMM class #####################################
@@ -1228,6 +1228,8 @@ class GAMM(GAMMLSS):
         self.Wr = None
         self.WN = None
         self.hessian_obs = None
+        self.rho = None
+        self.res_ar = None
 
 
     ##################################### Getters #####################################
@@ -1296,10 +1298,21 @@ class GAMM(GAMMLSS):
             if not self.formulas[0].get_lhs().f is None:
                 y = self.formulas[0].get_lhs().f(y)
 
+            if self.rho is not None:
+                # Need to correct for the "weights" of the covariance matrix of the ar1 model, as done in the bam function in
+                # mgcv. see: https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/bam.r#L2761
+                _,ar_cor = computeAr1Chol(self.formulas[0],self.rho)
+                pen -= ar_cor
+
             if self.family.twopar:
                 scale = self.scale
                 if not ext_scale is None:
                     scale = ext_scale
+
+                if self.rho is not None and isinstance(self.family,Gaussian) and isinstance(self.family.link,Identity):
+                    y = self.res_ar
+                    mu = 0
+
                 return self.family.llk(y,mu,scale) - pen
             else:
                 return self.family.llk(y,mu) - pen
@@ -1427,7 +1440,7 @@ class GAMM(GAMMLSS):
                 
     ##################################### Fitting #####################################
     
-    def fit(self,max_outer=50,max_inner=100,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=False,extension_method_lam = "nesterov",restart=False,method="Chol",check_cond=1,progress_bar=True,n_cores=10,offset = None):
+    def fit(self,max_outer=50,max_inner=100,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=False,extension_method_lam = "nesterov",restart=False,method="Chol",check_cond=1,progress_bar=True,n_cores=10,offset = None,rho=None):
         """
         Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
 
@@ -1455,6 +1468,8 @@ class GAMM(GAMMLSS):
         :type n_cores: int,optional
         :param offset: Mimics the behavior of the ``offset`` argument for ``gam`` in ``mgcv`` in R. If a value is provided here (can either be a float or a ``numpy.array`` of shape (-1,1) - if it is an array, then the first dimension has to match the number of observations in the data. NANs present in the dependent variable will be excluded from the offset vector.) then it is consistently added to the linear predictor during estimation. It will **not** be used by any other function of the :class:`GAMM` class (e.g., for prediction). This argument is ignored if ``len(self.formulas[0].file_paths)>0`` that is, if :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` should be created iteratively. Defaults to None.
         :type offset: float or [float],optional
+        :param rho: Optional correlation parameter for an "ar1 residual model". Essentially mimics the behavior of the ``rho`` paramter for the ``bam`` function in ``mgcv``. **Note**, if you want to re-start the ar1 process multiple times (for example because you work with time-series data and have multiple time-series) then you must pass the ``series.id`` argument to the :class:`Formula` used for this model. Defaults to None.
+        :type rho: float,optional
         """
         # We need to initialize penalties
         if not restart:
@@ -1468,6 +1483,12 @@ class GAMM(GAMMLSS):
         
         if len(self.formulas[0].discretize) != 0 and method != "Chol":
             raise ValueError("When discretizing derivative code, the method argument must be set to 'Chol'.")
+        
+        if len(self.formulas[0].file_paths) != 0 and rho is not None:
+            raise ValueError("ar1 model of the residuals is not supported when iteratviely building the model matrix.")
+        
+        if max_inner > 1 and rho is not None:
+            raise ValueError("ar1 model of the residuals only supported for ``max_inner=1``.")
         
         self.offset = 0
 
@@ -1566,6 +1587,12 @@ class GAMM(GAMMLSS):
             # Get initial estimate of mu based on family:
             init_mu_flat = self.family.init_mu(y_flat)
 
+            # Optionally set up ar1 model
+            Lrhoi = None
+            if rho is not None:
+                self.rho = rho
+                Lrhoi,_ = computeAr1Chol(self.formulas[0],rho)
+            
             # Now we have to estimate the model
             coef,eta,wres,Wr,WN,scale,LVI,edf,term_edf,penalty,fit_info = solve_gamm_sparse(init_mu_flat,y_flat,
                                                                                       model_mat,penalties,self.formulas[0].n_coef,
@@ -1574,7 +1601,7 @@ class GAMM(GAMMLSS):
                                                                                       exclude_lambda,extension_method_lam,
                                                                                       len(self.formulas[0].discretize) == 0,
                                                                                       method,check_cond,progress_bar,n_cores,
-                                                                                      self.offset)
+                                                                                      self.offset,Lrhoi)
             
             self.Wr = Wr
             self.WN = WN
@@ -1586,11 +1613,28 @@ class GAMM(GAMMLSS):
 
             # Compute (expected) Hessian of llk (Wood, 2011)
             if not isinstance(self.family,Gaussian) or isinstance(self.family.link,Identity) == False:
-                self.hessian = -1 * ((model_mat.T@(Wr@Wr)@model_mat).tocsc()/scale)
-                # Compute observed Hessian of llk
-                self.hessian_obs = -1 * ((model_mat.T@(WN)@model_mat).tocsc()/scale)
+
+                if rho is not None:
+                    self.res_ar = wres[0]
+                    wres = wres[1]
+
+                    self.hessian = -1 * ((model_mat.T@(Wr@Lrhoi@Lrhoi.T@Wr)@model_mat).tocsc()/scale)
+
+                else:
+                    self.hessian = -1 * ((model_mat.T@(Wr@Wr)@model_mat).tocsc()/scale)
+
+                    # Compute observed Hessian of llk
+                    self.hessian_obs = -1 * ((model_mat.T@(WN)@model_mat).tocsc()/scale)
+
             else:
-                self.hessian = -1 * ((model_mat.T@model_mat).tocsc()/scale)
+                if rho is not None:
+                    self.hessian = -1 * ((model_mat.T@Lrhoi@Lrhoi.T@model_mat).tocsc()/scale)
+                    eta = model_mat@coef.reshape(-1,1)
+                    self.res_ar = wres
+                    wres = y_flat.reshape(-1,1) - eta
+
+                else:
+                    self.hessian = -1 * ((model_mat.T@model_mat).tocsc()/scale)
 
                 if offset is not None:
                     # Assign correct offset and re-adjust y_flat + eta
