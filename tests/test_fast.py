@@ -214,6 +214,7 @@ class Test_Binom_GAMM:
     model = GAMM(formula,Binomial())
     test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
     test_kwargs["max_inner"] = 1
+    test_kwargs["control_lambda"] = 2
 
     model.fit(**test_kwargs)
 

@@ -668,6 +668,7 @@ class Test_print_smooth_binomial:
 
     test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
     test_kwargs["max_inner"] = 1
+    test_kwargs["control_lambda"] = 2
 
     model.fit(**test_kwargs)
 
@@ -690,6 +691,7 @@ class Test_Vp_estimation_hard:
     
     test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
     test_kwargs["max_inner"] = 1
+    test_kwargs["control_lambda"] = 2
 
     model.fit(**test_kwargs)
 

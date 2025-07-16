@@ -39,7 +39,7 @@ class Test_GAUMLSSGEN_hard:
     test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
     test_kwargs["method"] = 'qEFS'
     test_kwargs["extend_lambda"] = False
-    test_kwargs["control_lambda"] = False
+    test_kwargs["control_lambda"] = 1
     test_kwargs["max_outer"] = 200
     test_kwargs["max_inner"] = 500
     test_kwargs["min_inner"] = 500
@@ -48,7 +48,7 @@ class Test_GAUMLSSGEN_hard:
     test_kwargs["overwrite_coef"] = False
     test_kwargs["qEFS_init_converge"] = False
     test_kwargs["prefit_grad"] = True
-    test_kwargs = dict(test_kwargs,**bfgs_opt)
+    test_kwargs["bfgs_options"] = bfgs_opt
 
     model.fit(**test_kwargs)
 
@@ -165,7 +165,7 @@ class Test_PropHaz_hard:
         
         test_kwargs["method"] = 'qEFS'
         test_kwargs["extend_lambda"] = False
-        test_kwargs["control_lambda"] = False
+        test_kwargs["control_lambda"] = 1
         test_kwargs["max_outer"] = 200
         test_kwargs["max_inner"] = 500
         test_kwargs["min_inner"] = 500
@@ -174,7 +174,7 @@ class Test_PropHaz_hard:
         test_kwargs["overwrite_coef"] = False
         test_kwargs["qEFS_init_converge"] = False
         test_kwargs["prefit_grad"] = True
-        test_kwargs = dict(test_kwargs,**bfgs_opt)
+        test_kwargs["bfgs_options"] = bfgs_opt
         
         gsmm_qefs.fit(**test_kwargs)
 
@@ -249,7 +249,7 @@ class Test_PropHaz_repara_hard:
         
         test_kwargs["method"] = 'qEFS'
         test_kwargs["extend_lambda"] = False
-        test_kwargs["control_lambda"] = False
+        test_kwargs["control_lambda"] = 1
         test_kwargs["max_outer"] = 200
         test_kwargs["max_inner"] = 500
         test_kwargs["min_inner"] = 500
@@ -259,7 +259,7 @@ class Test_PropHaz_repara_hard:
         test_kwargs["qEFS_init_converge"] = False
         test_kwargs["prefit_grad"] = True
         test_kwargs["repara"] = True
-        test_kwargs = dict(test_kwargs,**bfgs_opt)
+        test_kwargs["bfgs_options"] = bfgs_opt
         
         gsmm_qefs.fit(**test_kwargs)
 

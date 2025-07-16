@@ -20,7 +20,8 @@ class GSMM():
 
         class NUMDIFFGENSMOOTHFamily(GSMMFamily):
             # Implementation of the ``GSMMFamily`` class that uses finite differencing to obtain the
-            # gradient of the likelihood to estimate a Gaussian GAMLSS via the general smooth code and the L-qEFS update by Krause et al. (in preparation).
+            # gradient of the likelihood to estimate a Gaussian GAMLSS via the general smooth code and
+            # the L-qEFS update by Krause et al. (in preparation).
 
             # References:
             #    - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
@@ -82,7 +83,7 @@ class GSMM():
                 control_lambda=False,max_outer=200,max_inner=500,min_inner=500,
                 seed=0,qEFSH='SR1',max_restarts=0,overwrite_coef=False,
                 qEFS_init_converge=False,prefit_grad=True,
-                progress_bar=True,**bfgs_opt)
+                progress_bar=True,bfgs_options=bfgs_opt)
 
 
     References:
@@ -340,27 +341,33 @@ class GSMM():
     
     ##################################### Fitting #####################################
     
-    def fit(self,init_coef=None,max_outer=50,max_inner=200,min_inner=200,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=1,restart=False,optimizer="Newton",method="Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),progress_bar=True,n_cores=10,seed=0,drop_NA=True,init_lambda=None,form_VH=True,use_grad=False,build_mat=None,should_keep_drop=True,gamma=1,qEFSH='SR1',overwrite_coef=True,max_restarts=0,qEFS_init_converge=True,prefit_grad=False,repara=False,init_bfgs_options=None,**bfgs_options):
+    def fit(self,init_coef=None,max_outer=200,max_inner=500,min_inner=None,conv_tol=1e-7,extend_lambda=False,extension_method_lam="nesterov2",control_lambda=None,restart=False,optimizer="Newton",method="QR/Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),progress_bar=True,n_cores=10,seed=0,drop_NA=True,init_lambda=None,form_VH=True,use_grad=False,build_mat=None,should_keep_drop=True,gamma=1,qEFSH='SR1',overwrite_coef=True,max_restarts=0,qEFS_init_converge=False,prefit_grad=True,repara=None,init_bfgs_options=None,bfgs_options=None):
         """
-        Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
+        Fit the specified model.
 
+        **Note**: Keyword arguments are initialized to maximise stability. For faster configurations (necessary for larger models) see examples below.
+        
+        :param init_coef: An initial estimate for the coefficients. Must be a numpy array of shape (-1,1). Defaults to None.
+        :type init_coef: numpy.array,optional
         :param max_outer: The maximum number of fitting iterations.
         :type max_outer: int,optional
         :param max_inner: The maximum number of fitting iterations to use by the inner Newton step for coefficients.
         :type max_inner: int,optional
-        :param min_inner: The minimum number of fitting iterations to use by the inner Newton step for coefficients.
+        :param min_inner: The minimum number of fitting iterations to use by the inner Newton step for coefficients. By default set to ``max_inner``.
         :type min_inner: int,optional
         :param conv_tol: The relative (change in penalized deviance is compared against ``conv_tol`` * previous penalized deviance) criterion used to determine convergence.
         :type conv_tol: float,optional
-        :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the number of new smoothing penalty proposals necessary. Enabled by default.
+        :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the number of new smoothing penalty proposals necessary for models with heavily penalized functions. Disabled by default.
         :type extend_lambda: bool,optional
-        :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for whether or not they (approxiately) increase the Laplace approximate restricted maximum likelihood of the model. Setting this to 0 disables control. Setting it to 1 means the step will never be smaller than the original EFS update but extensions will be removed in case the objective was exceeded. Setting it to 2 means that steps will be halved. Set to 1 by default.
+        :param extension_method_lam: **Experimental - do not change!** Which method to use to extend lambda proposals. Set to 'nesterov2' by default.
+        :type extension_method_lam: str,optional
+        :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for whether or not they (approxiately) increase the Laplace approximate restricted maximum likelihood of the model. For ``method != 'qEFS'`` the following options are available: setting this to 0 disables control. Setting it to 1 means the step will never be smaller than the original EFS update but extensions will be removed in case the objective was exceeded (only has an effect when setting ``extend_lambda=True``). Setting it to 2 means that steps will generally be halved when they fail to increase the aproximate REML criterion. For ``method=='qEFS'`` the following options are available: setting this to 0 disables control. Setting it to 1 means the check described by Krause et al. (submitted) will be performed to control updates to lambda. Setting it to 2 means that steps will generally be halved when they fail to increase the aproximate REML criterion (note, that the gradient is based on quasi-newton approximations as well and thus less accurate). Setting it to 3 means both checks (i.e., 1 and 2) are performed. Set to 2 by default if ``method != 'qEFS'`` and otherwise to 1.
         :type control_lambda: int,optional
         :param restart: Whether fitting should be resumed. Only possible if the same model has previously completed at least one fitting iteration.
         :type restart: bool,optional
         :param optimizer: Deprecated. Defaults to "Newton"
         :type optimizer: str,optional
-        :param method: Which method to use to solve for the coefficients (and smoothing parameters). The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR/Chol" or "LU/Chol". In that case the coefficients are still obtained via a Cholesky decomposition but a QR/LU decomposition is formed afterwards to check for rank deficiencies and to drop coefficients that cannot be estimated given the current smoothing parameter values. This takes substantially longer. If this is set to ``'qEFS'``, then the coefficients are estimated via quasi netwon and the smoothing penalties are estimated from the quasi newton approximation to the hessian. This only requieres first derviative information. Defaults to "Chol".
+        :param method: Which method to use to solve for the coefficients (and smoothing parameters). "Chol" relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR/Chol" or "LU/Chol". In that case the coefficients are still obtained via a Cholesky decomposition but a QR/LU decomposition is formed afterwards to check for rank deficiencies and to drop coefficients that cannot be estimated given the current smoothing parameter values. This takes substantially longer. If this is set to ``'qEFS'``, then the coefficients are estimated via quasi netwon and the smoothing penalties are estimated from the quasi newton approximation to the hessian. This only requieres first derviative information. Defaults to "QR/Chol".
         :type method: str,optional
         :param check_cond: Whether to obtain an estimate of the condition number for the linear system that is solved. When ``check_cond=0``, no check will be performed. When ``check_cond=1``, an estimate of the condition number for the final system (at convergence) will be computed and warnings will be issued based on the outcome (see :func:`mssm.src.python.gamm_solvers.est_condition`). Defaults to 1.
         :type check_cond: int,optional
@@ -372,54 +379,69 @@ class GSMM():
         :type n_cores: int,optional
         :param seed: Seed to use for random parameter initialization. Defaults to 0
         :type seed: int,optional
-        :param drop_NA: Whether to drop rows in the **model matrices** corresponding to NAs in the dependent variable vector. Defaults to True.
+        :param drop_NA: Whether to drop rows in the **model matrices** and observations vectors corresponding to NAs in the observation vectors. Set this to False if you want to handle NAs yourself in the likelihood function. Defaults to True.
         :type drop_NA: bool,optional
         :param init_lambda: A set of initial :math:`\lambda` parameters to use by the model. Length of list must match number of parameters to be estimated. Defaults to None
         :type init_lambda: [float],optional
-        :param form_VH: Whether to explicitly form matrix ``V`` - the estimated inverse of the negative Hessian of the penalized likelihood - and ``H`` - the estimate of said Hessian - when using the ``qEFS`` method. If set to False, only ``V`` is returned - as a :class:`scipy.sparse.linalg.LinearOperator` - and available in ``self.lvi``. Additionally, ``self.hessian`` will then be equal to ``None``. Note, that this will break default prediction/confidence interval methods - so do not call them. Defaults to True
+        :param form_VH: Whether to explicitly form matrix ``V`` - the estimated inverse of the negative Hessian of the penalized likelihood - and ``H`` - the estimate of the Hessian of the log-likelihood - when using the ``qEFS`` method. If set to False, only ``V`` is returned - as a :class:`scipy.sparse.linalg.LinearOperator` - and available in ``self.lvi``. Additionally, ``self.hessian`` will then be equal to ``None``. **Note**, that this will break default prediction/confidence interval methods - so do not call them. Defaults to True
         :type form_VH: bool,optional
         :param use_grad: Deprecated.
         :type use_grad: bool,optional
-        :param build_mat: An (optional) list, containing one bool per :class:`mssm.src.python.formula.Formula` in ``self.formulas`` - indicating whether the corresponding model matrix should be built. Useful if multiple formulas specify the same model matrix, in which case only one needs to be built. Defaults to None, which means all model matrices are built.
+        :param build_mat: An (optional) list, containing one bool per :class:`mssm.src.python.formula.Formula` in ``self.formulas`` - indicating whether the corresponding model matrix should be built. Useful if multiple formulas specify the same model matrix, in which case only one needs to be built. Only the matrices actually built are then passed down to the likelihood/gradient/hessian function in ``Xs``. Defaults to None, which means all model matrices are built.
         :type build_mat: [bool], optional
         :param should_keep_drop: Only used when ``method in ["QR/Chol","LU/Chol","Direct/Chol"]``. If set to True, any coefficients that are dropped during fitting - are permanently excluded from all subsequent iterations. If set to False, this is determined anew at every iteration - **costly**! Defaults to True.
         :type should_keep_drop: bool,optional
         :param gamma: Setting this to a value larger than 1 promotes more complex (less smooth) models. Setting this to a value smaller than 1 (but must be > 0) promotes smoother models! Defaults to 1.
         :type gamma: float,optional
-        :param qEFSH: Should the hessian approximation use a symmetric rank 1 update (``qEFSH='SR1'``) that is forced to result in positive definiteness of the approximation or the standard bfgs update (``qEFSH='BFGS'``) . Defaults to 'SR1'.
+        :param qEFSH: Should the hessian approximation use a symmetric rank 1 update (``qEFSH='SR1'``) that is forced to result in positive semi-definiteness of the approximation or the standard bfgs update (``qEFSH='BFGS'``) . Defaults to 'SR1'.
         :type qEFSH: str,optional
         :param overwrite_coef: Whether the initial coefficients passed to the optimization routine should be over-written by the solution obtained for the un-penalized version of the problem when ``method='qEFS'``. Setting this to False will be useful when passing coefficients from a simpler model to initialize a more complex one. Only has an effect when ``qEFS_init_converge=True``. Defaults to True.
         :type overwrite_coef: bool,optional
         :param max_restarts: How often to shrink the coefficient estimate back to a random vector when convergence is reached and when ``method='qEFS'``. The optimizer might get stuck in local minima so it can be helpful to set this to 1-3. What happens is that if we converge, we shrink the coefficients back to a random vector and then continue optimizing once more. Defaults to 0.
         :type max_restarts: int,optional
-        :param qEFS_init_converge: Whether to optimize the un-penalzied version of the model and to use the hessian (and optionally coefficients, if ``overwrite_coef=True``) to initialize the q-EFS solver. Ignored if ``method!='qEFS'``. Defaults to True.
+        :param qEFS_init_converge: Whether to optimize the un-penalzied version of the model and to use the hessian (and optionally coefficients, if ``overwrite_coef=True``) to initialize the q-EFS solver. Ignored if ``method!='qEFS'``. Defaults to False.
         :type qEFS_init_converge: bool,optional
-        :param prefit_grad: Whether to rely on Gradient Descent to improve the initial starting estimate for coefficients. Defaults to False.
+        :param prefit_grad: Whether to rely on Gradient Descent to improve the initial starting estimate for coefficients. Defaults to True.
         :type prefit_grad: bool,optional
-        :param repara: Whether to re-parameterize the model (for every proposed update to the regularization parameters) via the steps outlined in Appendix B of Wood (2011) and suggested by Wood et al., (2016). This greatly increases the stability of the fitting iteration. Defaults to False.
+        :param repara: Whether to re-parameterize the model (for every proposed update to the regularization parameters) via the steps outlined in Appendix B of Wood (2011) and suggested by Wood et al., (2016). This greatly increases the stability of the fitting iteration. Defaults to True if ``method != 'qEFS'`` else False.
         :type repara: bool,optional
-        :param init_bfgs_options: An optional dictionary holding the same key:value pairs that can be passed to ``bfgs_options`` but pased to the optimizer of the un-penalized problem. If this is None, it will be set to a copy of ``bfgs_options``. Defaults to None.
+        :param init_bfgs_options: An optional dictionary holding the same key:value pairs that can be passed to ``bfgs_options`` but pased to the optimizer of the un-penalized problem. If this is None, it will be set to a copy of ``bfgs_options``. Only has an effect when ``qEFS_init_converge=True``. Defaults to None.
         :type init_bfgs_options: dict,optional
-        :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If none are provided, the ``gtol`` argument will be initialized to ``conv_tol``. Note also, that in any case the ``maxiter`` argument is automatically set to ``max_inner``. Defaults to None.
-        :type bfgs_options: key=value,optional
+        :param bfgs_options: An optional dictionary holding arguments that should be passed on to the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If none are provided, the ``gtol`` argument will be initialized to ``conv_tol``. Note also, that in any case the ``maxiter`` argument is automatically set to ``max_inner``. Defaults to None.
+        :type bfgs_options: dict,optional
         :raises ValueError: Will throw an error when ``optimizer`` is not 'Newton'.
         """
 
-        if not bfgs_options:
-            bfgs_options = {"gtol":conv_tol,
-                            "ftol":1e-9,
+        # Initialize remaining arguments to defaults
+        if bfgs_options is None:
+            bfgs_options = {"gtol":1.1*conv_tol,
+                            "ftol":1.1*conv_tol,
                             "maxcor":30,
-                            "maxls":100,
-                            "maxfun":1e7}
+                            "maxls":20,
+                            "maxfun":500}
+        
+        if control_lambda is None:
+            control_lambda = 2 if method != 'qEFS' else 1
+            
+        if min_inner is None:
+            min_inner = max_inner
+
+        if repara is None:
+            repara = True if method != 'qEFS' else False
         
         if init_bfgs_options is None:
             init_bfgs_options = copy.deepcopy(bfgs_options)
 
+        # Some checks
         if not optimizer in ["Newton"]:
             raise ValueError("'optimizer' needs to be set to 'Newton'.")
         
         if self.overall_penalties is None and restart == True:
             raise ValueError("Penalties were not initialized. ``Restart`` must be set to False.")
+
+        if extend_lambda and method == 'qEFS':
+            warnings.warn("Ignoring argument ``extend_lambda``, which is not supported for ``method='qEFS'``.")
+            extend_lambda = False
         
         # Get ys
         ys = []
@@ -960,25 +982,29 @@ class GAMMLSS(GSMM):
     
     ##################################### Fitting #####################################
         
-    def fit(self,max_outer=50,max_inner=200,min_inner=200,conv_tol=1e-7,extend_lambda=True,extension_method_lam="nesterov2",control_lambda=1,restart=False,method="Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),should_keep_drop=True,prefit_grad=False,repara=False,progress_bar=True,n_cores=10,seed=0,init_lambda=None):
+    def fit(self,max_outer=200,max_inner=500,min_inner=None,conv_tol=1e-7,extend_lambda=False,extension_method_lam="nesterov2",control_lambda=2,restart=False,method="QR/Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),should_keep_drop=True,prefit_grad=True,repara=True,progress_bar=True,n_cores=10,seed=0,init_lambda=None):
         """
-        Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
+        Fit the specified model.
+
+        **Note**: Keyword arguments are initialized to maximise stability. For faster configurations (necessary for larger models) see examples below.
 
         :param max_outer: The maximum number of fitting iterations.
         :type max_outer: int,optional
         :param max_inner: The maximum number of fitting iterations to use by the inner Newton step for coefficients.
         :type max_inner: int,optional
-        :param min_inner: The minimum number of fitting iterations to use by the inner Newton step for coefficients.
+        :param min_inner: The minimum number of fitting iterations to use by the inner Newton step for coefficients. By default set to ``max_inner``.
         :type min_inner: int,optional
         :param conv_tol: The relative (change in penalized deviance is compared against ``conv_tol`` * previous penalized deviance) criterion used to determine convergence.
         :type conv_tol: float,optional
-        :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the number of new smoothing penalty proposals necessary. Enabled by default.
+        :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the number of new smoothing penalty proposals necessary for models involving heavily penalized functions. Disabled by default.
         :type extend_lambda: bool,optional
-        :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for whether or not they (approxiately) increase the Laplace approximate restricted maximum likelihood of the model. Setting this to 0 disables control. Setting it to 1 means the step will never be smaller than the original EFS update but extensions will be removed in case the objective was exceeded. Setting it to 2 means that steps will be halved. Set to 1 by default.
+        :param extension_method_lam: **Experimental - do not change!** Which method to use to extend lambda proposals. Set to 'nesterov2' by default.
+        :type extension_method_lam: str,optional
+        :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for whether or not they (approxiately) increase the Laplace approximate restricted maximum likelihood of the model. Setting this to 0 disables control. Setting it to 1 means the step will never be smaller than the original EFS update but extensions will be removed in case the objective was exceeded. Setting it to 2 means that steps will be halved if it fails to increase the approximate REML. Set to 2 by default.
         :type control_lambda: int,optional
         :param restart: Whether fitting should be resumed. Only possible if the same model has previously completed at least one fitting iteration.
         :type restart: bool,optional
-        :param method: Which method to use to solve for the coefficients. The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR/Chol" or "LU/Chol". In that case the coefficients are still obtained via a Cholesky decomposition but a QR/LU decomposition is formed afterwards to check for rank deficiencies and to drop coefficients that cannot be estimated given the current smoothing parameter values. This takes substantially longer. Defaults to "Chol".
+        :param method: Which method to use to solve for the coefficients (and smoothing parameters). "Chol" relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR/Chol" or "LU/Chol". In that case the coefficients are still obtained via a Cholesky decomposition but a QR/LU decomposition is formed afterwards to check for rank deficiencies and to drop coefficients that cannot be estimated given the current smoothing parameter values. This takes substantially longer. Defaults to "QR/Chol".
         :type method: str,optional
         :param check_cond: Whether to obtain an estimate of the condition number for the linear system that is solved. When ``check_cond=0``, no check will be performed. When ``check_cond=1``, an estimate of the condition number for the final system (at convergence) will be computed and warnings will be issued based on the outcome (see :func:`mssm.src.python.gamm_solvers.est_condition`). Defaults to 1.
         :type check_cond: int,optional
@@ -986,9 +1012,9 @@ class GAMMLSS(GSMM):
         :type piv_tol: float,optional
         :param should_keep_drop: Only used when ``method in ["QR/Chol","LU/Chol","Direct/Chol"]``. If set to True, any coefficients that are dropped during fitting - are permanently excluded from all subsequent iterations. If set to False, this is determined anew at every iteration - **costly**! Defaults to True.
         :type should_keep_drop: bool,optional
-        :param prefit_grad: Whether to rely on Gradient Descent to improve the initial starting estimate for coefficients. Defaults to False.
+        :param prefit_grad: Whether to rely on Gradient Descent to improve the initial starting estimate for coefficients. Defaults to True.
         :type prefit_grad: bool,optional
-        :param repara: Whether to re-parameterize the model (for every proposed update to the regularization parameters) via the steps outlined in Appendix B of Wood (2011) and suggested by Wood et al., (2016). This greatly increases the stability of the fitting iteration. Defaults to False.
+        :param repara: Whether to re-parameterize the model (for every proposed update to the regularization parameters) via the steps outlined in Appendix B of Wood (2011) and suggested by Wood et al., (2016). This greatly increases the stability of the fitting iteration. Defaults to True.
         :type repara: bool,optional
         :param progress_bar: Whether progress should be displayed (convergence info and time estimate). Defaults to True.
         :type progress_bar: bool,optional
@@ -1000,6 +1026,11 @@ class GAMMLSS(GSMM):
         :type init_lambda: [float],optional
         """
 
+        # Initialize remaining arguments to defaults
+        if min_inner is None:
+            min_inner = max_inner
+
+        # Some checks
         if self.overall_penalties is None and restart == True:
             raise ValueError("Penalties were not initialized. ``Restart`` must be set to False.")
         
@@ -1357,31 +1388,44 @@ class GAMM(GAMMLSS):
     
     def get_resid(self,type='Pearson'):
         """
-        Returns the residuals :math:`e_i = y_i - \mu_i` for additive models and (by default) the Pearson residuals :math:`w_i^{0.5}*(z_i - \eta_i)` (see Wood, 2017 sections 3.1.5 & 3.1.7) for
+        Get different types of residuals from the estimated model.
+
+        By default (``type='Pearson'``) this returns the residuals :math:`e_i = y_i - \mu_i` for additive models and the pearson/working residuals :math:`w_i^{0.5}*(z_i - \eta_i)` (see Wood, 2017 sections 3.1.5 & 3.1.7) for
         generalized additive models. Here :math:`w_i` are the Fisher scoring weights, :math:`z_i` the pseudo-data point for each observation, and :math:`\eta_i` is the linear prediction (i.e., :math:`g(\mu_i)` - where :math:`g()`
         is the link function) for each observation.
 
-        If ``type= "Deviance"``, the deviance residuals are returned, which are equivalent to :math:`sign(y_i - \mu_i)*D_i^{0.5}`, where :math:`\sum_{i=1,...N} D_i` equals the model deviance (see Wood 2017, section 3.1.7).
+        If ``type= "Deviance"``, the deviance residuals are returned, which are equivalent to :math:`sign(y_i - \mu_i)*D_i^{0.5}`, where :math:`\sum_{i=1,...N} D_i` equals the model deviance (see Wood 2017, section 3.1.7). Additionally,
+        if the model was estimated with ``rho!=None``, ``type="ar1"`` returns the standardized working residuals corrected for lag1 auto-correlation. These are best compared to the standard working residuals.
 
-        Throws an error if called before model was fitted.
+        Throws an error if called before model was fitted, when requesting an unsupported type, or when requesting 'ar1' residuals for a model for which ``model.rho==None``.
 
         References:
 
          - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
     
-        :param type: The type of residual to return for a Generalized model, "Pearson" by default, but can be set to "Deviance" as well. Ignorred for additive models with identity link.
+        :param type: The type of residual to return for a Generalized model, "Pearson" by default, but can be set to "Deviance" and (for some models) to "ar1" as well.
         :type type: str,optional
-        :raises ValueError: Will throw an error when called before the model was fitted/before model penalties were formed.
+        :raises ValueError: Will throw an error when called before the model was fitted/before model penalties were formed, when requesting an unsupported type, or when requesting 'ar1' residuals for a model for which ``model.rho==None``.
         :return: Empirical residual vector
         :rtype: [float]
         """
         if self.res is None or self.preds is None:
             raise ValueError("Model needs to be estimated before evaluating the residuals. Call model.fit()")
         
-        if type == "Pearson" or (isinstance(self.family,Gaussian) == True and isinstance(self.family.link,Identity) == True):
+        if type not in ["Pearson", "Deviance", "ar1", "family"]:
+            raise ValueError("Type must be one of 'Pearson','Deviance', or 'ar1'.")
+        
+        if type == "ar1" and self.rho is None:
+            raise ValueError("ar1 residuals are only available if the model was estimated with ``model.fit(..., rho=<some value>)``.")
+        
+        if type == "Pearson":
             return self.res
-        else:
+        
+        elif type == "ar1":
+            return self.res_ar
+        
+        elif type == "Deviance":
             # Deviance residual requires computing quantity D_i, which is the amount each data-point contributes to
             # overall deviance. Implemented by the family members.
             mu = self.preds[0]
@@ -1440,25 +1484,29 @@ class GAMM(GAMMLSS):
                 
     ##################################### Fitting #####################################
     
-    def fit(self,max_outer=50,max_inner=100,conv_tol=1e-7,extend_lambda=True,control_lambda=True,exclude_lambda=False,extension_method_lam = "nesterov",restart=False,method="Chol",check_cond=1,progress_bar=True,n_cores=10,offset = None,rho=None):
+    def fit(self,max_outer=200,max_inner=None,conv_tol=1e-7,extend_lambda=False,control_lambda=2,exclude_lambda=False,extension_method_lam = "nesterov",restart=False,method="QR",check_cond=1,progress_bar=True,n_cores=10,offset = None,rho=None):
         """
-        Fit the specified model. Additional keyword arguments not listed below should not be modified unless you really know what you are doing.
+        Fit the specified model.
+        
+        **Note**: Keyword arguments are initialized to maximise stability. For faster configurations (necessary for larger models) see examples below.
 
-        :param max_outer: The maximum number of fitting iterations. Defaults to 50.
+        :param max_outer: The maximum number of fitting iterations. Defaults to 200.
         :type max_outer: int,optional
-        :param max_inner: The maximum number of fitting iterations to use by the inner Newton step updating the coefficients for Generalized models. Defaults to 100.
+        :param max_inner: The maximum number of fitting iterations to use by the inner Newton step updating the coefficients for Generalized models. Defaults to 500 for non ar1 models.
         :type max_inner: int,optional
         :param conv_tol: The relative (change in penalized deviance is compared against ``conv_tol`` * previous penalized deviance) criterion used to determine convergence.
         :type conv_tol: float,optional
-        :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the number of new smoothing penalty proposals necessary. Enabled by default.
+        :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the number of new smoothing penalty proposals necessary. Disabled by default.
         :type extend_lambda: bool,optional
-        :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for actually improving the Restricted maximum likelihood of the model. Can lower the number of new smoothing penalty proposals necessary. Enabled by default.
-        :type control_lambda: bool,optional
+        :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for whether or not they (approxiately) increase the Laplace approximate restricted maximum likelihood of the model. Setting this to 0 disables control. Setting it to 1 means the step will never be smaller than the original EFS update but extensions will be removed in case the objective was exceeded. Setting it to 2 means that steps will be halved if it fails to increase the approximate REML. Set to 2 by default.
+        :type control_lambda: int,optional
         :param exclude_lambda: Whether selective lambda terms should be excluded heuristically from updates. Can make each iteration a bit cheaper but is problematic when using additional Kernel penalties on terms. Thus, disabled by default.
         :type exclude_lambda: bool,optional
+        :param extension_method_lam: **Experimental - do not change!** Which method to use to extend lambda proposals. Set to 'nesterov' by default.
+        :type extension_method_lam: str,optional
         :param restart: Whether fitting should be resumed. Only possible if the same model has previously completed at least one fitting iteration.
         :type restart: bool,optional
-        :param method: Which method to use to solve for the coefficients. The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR". In that case a QR decomposition is used - which is first pivoted to maximize sparsity in the resulting decomposition but then also pivots for stability in order to get an estimate of rank defficiency. This takes substantially longer. This argument is ignored if ``len(self.formulas[0].file_paths)>0`` that is, if :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` should be created iteratively. Defaults to "Chol".
+        :param method: Which method to use to solve for the coefficients. ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR". In that case a QR decomposition is used - which is first pivoted to maximize sparsity in the resulting decomposition but then also pivots for stability in order to get an estimate of rank defficiency. This takes substantially longer. This argument is ignored if ``len(self.formulas[0].file_paths)>0`` that is, if :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` should be created iteratively. Defaults to "QR".
         :type method: str,optional
         :param check_cond: Whether to obtain an estimate of the condition number for the linear system that is solved. When ``check_cond=0``, no check will be performed. When ``check_cond=1``, an estimate of the condition number for the final system (at convergence) will be computed and warnings will be issued based on the outcome (see :func:`mssm.src.python.gamm_solvers.est_condition`). When ``check_cond=2``, an estimate of the condition number will be performed for each new system (at each iteration of the algorithm) and an error will be raised if the condition number is estimated as too high given the chosen ``method``. Is ignored, if :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` should be created iteratively. Defaults to 1.
         :type check_cond: int,optional
@@ -1471,13 +1519,22 @@ class GAMM(GAMMLSS):
         :param rho: Optional correlation parameter for an "ar1 residual model". Essentially mimics the behavior of the ``rho`` paramter for the ``bam`` function in ``mgcv``. **Note**, if you want to re-start the ar1 process multiple times (for example because you work with time-series data and have multiple time-series) then you must pass the ``series.id`` argument to the :class:`Formula` used for this model. Defaults to None.
         :type rho: float,optional
         """
+
+        # Initialize remaining arguments to defaults
+        if max_inner is None:
+            if rho is not None:
+                max_inner = 1
+            else:
+                max_inner = 500
+
         # We need to initialize penalties
         if not restart:
             if self.overall_penalties is not None:
-                warnings.warn("Resetting penalties. If you don't want that set ``restart=True``.")
+                warnings.warn("Resetting penalties. If you don't want that, set ``restart=True``.")
             self.overall_penalties = build_penalties(self.formulas[0])
         penalties = self.overall_penalties
-
+        
+        # Some checks
         if penalties is None and restart:
             raise ValueError("Penalties were not initialized. ``Restart`` must be set to False.")
         

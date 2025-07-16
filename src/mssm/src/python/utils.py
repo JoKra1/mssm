@@ -80,7 +80,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
                 "maxfun":1e7}
                         
         model.fit(init_coef=None,method='qEFS',extend_lambda=False,
-                control_lambda=False,max_outer=200,max_inner=500,min_inner=500,
+                control_lambda=0,max_outer=200,max_inner=500,min_inner=500,
                 seed=0,qEFSH='SR1',max_restarts=5,overwrite_coef=False,qEFS_init_converge=False,prefit_grad=True,
                 progress_bar=True,**bfgs_opt)
         
@@ -108,7 +108,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
                 "maxfun":1e7}
                         
         model.fit(init_coef=None,method='qEFS',extend_lambda=False,
-                control_lambda=False,max_outer=200,max_inner=500,min_inner=500,
+                control_lambda=0,max_outer=200,max_inner=500,min_inner=500,
                 seed=0,qEFSH='SR1',max_restarts=0,overwrite_coef=False,qEFS_init_converge=False,prefit_grad=True,
                 progress_bar=True,**bfgs_opt)
 

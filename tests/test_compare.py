@@ -1,6 +1,5 @@
 from mssm.models import *
 from mssm.src.python.compare import compare_CDL
-from mssm.src.python.gamm_solvers import compute_S_emb_pinv_det,cpp_dChol,cpp_chol
 from mssm.src.python.utils import estimateVp,correct_VB,DummyRhoPrior
 import numpy as np
 import os

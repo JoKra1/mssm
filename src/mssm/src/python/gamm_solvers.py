@@ -1046,11 +1046,12 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,coef,
       lam_grad = np.array(lam_grad).reshape(-1,1) 
       check = lam_grad.T @ lam_delta
 
-      # For Generalized models we should not reduce step beyond original EFS update since
-      # criterion maximized is approximate REML. Also, we can probably relax the criterion a
-      # bit, since check will quite often be < 0.
+      # For Generalized models we theoretically should not reduce step beyond original EFS update since
+      # criterion maximized is approximate REML. But we can probably relax the criterion a
+      # bit, since check will quite often be < 0. Additionally, performing step length control after all
+      # can be motivated (see Krause et al., submitted). So if control_lambda > 1 we control anyway.
       check_criterion = 0
-      if family.is_canonical == False: #(isinstance(family,Gaussian) == False) or (isinstance(family.link,Identity) == False):
+      if ((isinstance(family,Gaussian) == False) or (isinstance(family.link,Identity) == False)) and control_lambda < 2:
             
             if o_iter > 0:
                check_criterion = 1e-7*-abs(pen_dev_check)
@@ -1063,7 +1064,7 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,coef,
 
       # Now check whether we have to correct lambda.
       # Because of minimization in Wood (2017) they use a different check (step 7) but idea is the same.
-      if check[0,0] < check_criterion and control_lambda: 
+      if check[0,0] < check_criterion and control_lambda > 0: 
          # Reset extension or cut the step taken in half (for additive models)
          lam_changes = 0
          for lti,lTerm in enumerate(penalties):
@@ -1075,13 +1076,14 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,coef,
                lam_delta[lti][0] = dLam
                lam_changes += 1
 
-            # Otherwise, rely on the strategy by Wood & Fasiolo (2016) to just half the step for canonical models.
-            elif family.is_canonical:
+            # Otherwise, rely on the strategy by Wood & Fasiolo (2016) to just half the step.
+            # For strictly additive models we can always do this. For all others we only do it if control_lambda > 1
+            elif (isinstance(family,Gaussian) and isinstance(family.link,Identity)) or control_lambda == 2:
                   lam_delta[lti] = lam_delta[lti]/2
                   lTerm.lam -= lam_delta[lti][0]
                   lam_changes += 1
          
-         # For non-canonical models or if step becomes extremely small, accept step
+         # If step becomes extremely small, accept step
          if lam_changes == 0 or np.linalg.norm(lam_delta) < 1e-7:
             lam_accepted = True
          
@@ -1098,7 +1100,7 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,coef,
             # Reset PIRLS weights
             yb,Xb,z,Wr = update_PIRLS(y,yb,mu,eta-offset,X,Xb,family,None)
             
-      if check[0,0] >= check_criterion or (control_lambda == False) or lam_accepted:
+      if check[0,0] >= check_criterion or (control_lambda == 0) or lam_accepted:
          # Accept the step and propose a new one as well! (part of step 6 in Wood, 2017; here uses efs from Wood & Fasiolo, 2017 to propose new lambda delta)
          lam_accepted = True
          lam_delta = []
@@ -1131,7 +1133,7 @@ def correct_lambda_step(y,yb,z,Wr,rowsX,colsX,X,Xb,coef,
 
 def solve_gamm_sparse(mu_init,y,X,penalties,col_S,family:Family,
                       maxiter=10,max_inner = 100,pinv="svd",conv_tol=1e-7,
-                      extend_lambda=True,control_lambda=True,
+                      extend_lambda=True,control_lambda=1,
                       exclude_lambda=False,extension_method_lam = "nesterov",
                       form_Linv=True,method="Chol",check_cond=2,progress_bar=False,
                       n_c=10,offset=0,Lrhoi=None):
@@ -1703,7 +1705,7 @@ def keep_eta(formula,coef,nc):
 
 def solve_gamm_sparse2(formula:Formula,penalties,col_S,family:Family,
                        maxiter=10,pinv="svd",conv_tol=1e-7,
-                       extend_lambda=True,control_lambda=True,
+                       extend_lambda=True,control_lambda=1,
                        exclude_lambda=False,extension_method_lam = "nesterov",
                        form_Linv=True,progress_bar=False,n_c=10):
    # Estimates a penalized additive mixed model, following the steps outlined in Wood (2017)
@@ -4012,7 +4014,7 @@ def correct_lambda_step_gen_smooth(family,ys,Xs,S_norm,n_coef,form_n_coef,form_u
                lam_delta[lti] = dLam
                lam_changes += 1
             
-            elif control_lambda == 2:
+            elif control_lambda >= 2:
                # Continue to half step - this is not necessarily because we overshoot the REML
                # (because we only have approximate gradient), but can help preventing that models
                # oscillate around estimates.
@@ -4035,23 +4037,27 @@ def correct_lambda_step_gen_smooth(family,ys,Xs,S_norm,n_coef,form_n_coef,form_u
       fit_info.dropped = None
 
    # For qEFS we check whether new approximation results in worse balance of efs update - then we fall back to previous approximation
+   # control_lambda = 0 -> No checks for qEFS
+   # control_lambda = 1 -> balance check (below)
+   # control_lambda = 2 -> approximate gradient check
+   # control_lambda = 3 -> both checks
    if method == "qEFS":
-      #if outer > 0:
-      total_edf2,term_edfs2, ldetHSs2 = calculate_edf(None,None,__old_opt,smooth_pen_rp,lgdetDs,n_coef,n_c,None,S_emb)
-      diff1 = [np.abs((lgdetDs[lti] - ldetHSs[lti]) - bsbs[lti]) for lti in range(len(smooth_pen_rp))]
-      diff2 = [np.abs((lgdetDs[lti] - ldetHSs2[lti]) - bsbs[lti]) for lti in range(len(smooth_pen_rp))]
-      #print([(lgdetDs[lti] - ldetHSs[lti]) - bsbs[lti] for lti in range(len(smooth_pen_rp))])
-      #print([(lgdetDs[lti] - ldetHSs2[lti]) - bsbs[lti] for lti in range(len(smooth_pen_rp))])
-      #print(np.mean(diff2),np.mean(diff1))
+      if control_lambda in [1,3]:
+         total_edf2,term_edfs2, ldetHSs2 = calculate_edf(None,None,__old_opt,smooth_pen_rp,lgdetDs,n_coef,n_c,None,S_emb)
+         diff1 = [np.abs((lgdetDs[lti] - ldetHSs[lti]) - bsbs[lti]) for lti in range(len(smooth_pen_rp))]
+         diff2 = [np.abs((lgdetDs[lti] - ldetHSs2[lti]) - bsbs[lti]) for lti in range(len(smooth_pen_rp))]
+         #print([(lgdetDs[lti] - ldetHSs[lti]) - bsbs[lti] for lti in range(len(smooth_pen_rp))])
+         #print([(lgdetDs[lti] - ldetHSs2[lti]) - bsbs[lti] for lti in range(len(smooth_pen_rp))])
+         #print(np.mean(diff2),np.mean(diff1))
 
-      if np.mean(diff2) < np.mean(diff1):
-         # Reset approximation to previous one
-         nit = LV.nit
-         LV = copy.deepcopy(__old_opt)
-         LV.nit = nit
-         ldetHSs = ldetHSs2
-         total_edf = total_edf2
-         term_edfs = term_edfs2
+         if np.mean(diff2) < np.mean(diff1):
+            # Reset approximation to previous one
+            nit = LV.nit
+            LV = copy.deepcopy(__old_opt)
+            LV.nit = nit
+            ldetHSs = ldetHSs2
+            total_edf = total_edf2
+            term_edfs = term_edfs2
 
       # Propagate current implicit approximation to hessian of negative llk
       LV.bfgs_options = bfgs_options
