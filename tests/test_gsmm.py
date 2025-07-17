@@ -9,6 +9,7 @@ mssm.src.python.exp_fam.GAUMLSS.init_lambda = init_penalties_tests_gammlss
 mssm.src.python.exp_fam.GAMMALS.init_lambda = init_penalties_tests_gammlss
 mssm.src.python.exp_fam.MULNOMLSS.init_lambda = init_penalties_tests_gammlss
 mssm.src.python.exp_fam.PropHaz.init_lambda = init_penalties_tests_gsmm
+mssm.src.python.utils.GAMLSSGSMMFamily.init_lambda = init_penalties_tests_gsmm
 
 ################################################################## Tests ##################################################################
 
