@@ -1382,7 +1382,7 @@ class GAMM(GAMMLSS):
         if self.info.dropped is not None:
             keep = [cidx for cidx in range(self.hessian.shape[1]) if cidx not in self.info.dropped]
             
-        reml = REML(llk,nH,self.coef,scale,self.overall_penalties,keep)
+        reml = REML(llk,nH,self.coef,scale,self.overall_penalties,keep)[0,0]
         
         return reml
     

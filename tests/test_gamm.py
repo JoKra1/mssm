@@ -217,7 +217,7 @@ class Test_rs_ri:
 
     def test_GAMcoef(self):
         coef, _ = self.model.get_pars()
-        assert np.allclose(coef,np.array([ 9.34823357e+00, -4.12480712e-01, -9.79726654e+00, -8.84147613e+00,
+        assert np.allclose(coef.flatten(),np.array([ 9.34823357e+00, -4.12480712e-01, -9.79726654e+00, -8.84147613e+00,
                                             2.53418688e-02,  3.14635694e-01, -4.06353720e+00,  1.93833167e+00,
                                             2.76734845e-01,  1.23222086e+00, -2.55837222e+00,  4.74284163e+00,
                                             3.98128948e+00, -9.93660084e-01, -3.54564194e+00,  4.29251585e+00,
@@ -306,7 +306,7 @@ class Test_no_pen:
 
     def test_GAMcoef(self):
         coef, _ = self.model.get_pars()
-        assert np.allclose(coef,np.array([  9.09462398,  -0.40030025, -10.08258653,  -8.66437813,
+        assert np.allclose(coef.flatten(),np.array([  9.09462398,  -0.40030025, -10.08258653,  -8.66437813,
                                             0.07117496,   0.29090723])) 
 
     def test_GAMlam(self):
@@ -341,7 +341,7 @@ class Test_te_rs_fact:
 
     def test_GAMcoef(self):
         coef, _ = self.model.get_pars()
-        assert np.allclose(coef,np.array([-8.30300915e-01, -1.62575662e+01,  3.75545293e+00,  3.28335584e+01,
+        assert np.allclose(coef.flatten(),np.array([-8.30300915e-01, -1.62575662e+01,  3.75545293e+00,  3.28335584e+01,
                                             -1.03918612e+02,  3.44105191e+01,  5.27629918e+00,  1.56969059e+01,
                                             1.26673363e+01, -1.00123881e+02,  6.70143258e+01,  3.86562330e+00,
                                             1.95649156e+01,  4.86327309e+00, -7.25159919e+01,  1.30742924e+01,
@@ -426,7 +426,7 @@ class Test_te_rs_fact_QR:
 
     def test_GAMcoef(self):
         coef, _ = self.model.get_pars()
-        assert np.allclose(coef,np.array([-8.30300915e-01, -1.62575662e+01,  3.75545293e+00,  3.28335584e+01,
+        assert np.allclose(coef.flatten(),np.array([-8.30300915e-01, -1.62575662e+01,  3.75545293e+00,  3.28335584e+01,
                                             -1.03918612e+02,  3.44105191e+01,  5.27629918e+00,  1.56969059e+01,
                                             1.26673363e+01, -1.00123881e+02,  6.70143258e+01,  3.86562330e+00,
                                             1.95649156e+01,  4.86327309e+00, -7.25159919e+01,  1.30742924e+01,
@@ -525,7 +525,7 @@ class Test_ti_rs_fact:
 
     def test_GAMcoef(self):
         coef, _ = self.model.get_pars()
-        assert np.allclose(coef,np.array([-9.71704143e-01,  1.54721686e+00,  6.37094590e+00, -1.81024530e+00,
+        assert np.allclose(coef.flatten(),np.array([-9.71704143e-01,  1.54721686e+00,  6.37094590e+00, -1.81024530e+00,
                                             1.49129313e+00,  7.76170446e+00, -1.96237580e+00, -1.36937262e+00,
                                             -9.83761681e+00, -4.32302196e+01,  9.49189307e+00,  8.32820414e+00,
                                             1.03243783e+01,  5.21269242e+00,  6.91971180e+00,  5.49551079e+00,

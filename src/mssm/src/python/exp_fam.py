@@ -1539,7 +1539,7 @@ class Binomial2(GAMLSSFamily):
       :return: A list, holding - for each :math:`\lambda` parameter to be estimated - an initial value.
       :rtype: [float]
       """
-      return [1.1 for _ in range(len(formulas[0].penalties))]
+      return None
 
 class MULNOMLSS(GAMLSSFamily):
    """Family for a Multinomial GAMMLSS model (Rigby & Stasinopoulos, 2005).
