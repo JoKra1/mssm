@@ -1574,17 +1574,51 @@ def estimateVp(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,drop_
     
     if isinstance(family,Family):
         y = model.formulas[0].y_flat[model.formulas[0].NOT_NA_flat]
+
+        if not model.formulas[0].get_lhs().f is None:
+            # Optionally apply function to dep. var. before fitting.
+            y = model.formulas[0].get_lhs().f(y)
+
         X = model.get_mmat()
 
         orig_scale = family.scale
         if family.twopar:
             _,orig_scale = model.get_pars()
     else:
-        if drop_NA:
+        if isinstance(family,GAMLSSFamily):
             y = model.formulas[0].y_flat[model.formulas[0].NOT_NA_flat]
-        else:
-            y = model.formulas[0].y_flat
-        Xs = model.get_mmat(drop_NA=drop_NA)
+
+            if not model.formulas[0].get_lhs().f is None:
+                # Optionally apply function to dep. var. before fitting. Not sure why that would be desirable for this model class...
+                y = model.formulas[0].get_lhs().f(y)
+            
+            Xs = model.get_mmat()
+
+        else: # Need all y vectors in y, i.e., y is actually ys
+            ys = []
+            for fi,form in enumerate(model.formulas):
+                
+                # Repeated y-variable - don't have to pass all of them
+                if fi > 0 and form.get_lhs().variable == model.formulas[0].get_lhs().variable:
+                    ys.append(None)
+                    continue
+
+                # New y-variable
+                if drop_NA:
+                    y = form.y_flat[form.NOT_NA_flat]
+                else:
+                    y = form.y_flat
+
+                # Optionally apply function to dep. var. before fitting. Not sure why that would be desirable for this model class...
+                if not form.get_lhs().f is None:
+                    y = form.get_lhs().f(y)
+                
+                # And collect
+                ys.append(y)
+            
+            y = ys
+            Xs = model.get_mmat(drop_NA=drop_NA)
+
         X = Xs[0]
         orig_scale = 1
         init_coef = copy.deepcopy(model.coef)
@@ -2306,17 +2340,51 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
     
     if isinstance(family,Family):
         y = model.formulas[0].y_flat[model.formulas[0].NOT_NA_flat]
+
+        if not model.formulas[0].get_lhs().f is None:
+            # Optionally apply function to dep. var. before fitting.
+            y = model.formulas[0].get_lhs().f(y)
+
         X = model.get_mmat()
 
         orig_scale = family.scale
         if family.twopar:
             _,orig_scale = model.get_pars()
     else:
-        if drop_NA:
+        if isinstance(family,GAMLSSFamily):
             y = model.formulas[0].y_flat[model.formulas[0].NOT_NA_flat]
-        else:
-            y = model.formulas[0].y_flat
-        Xs = model.get_mmat(drop_NA=drop_NA)
+
+            if not model.formulas[0].get_lhs().f is None:
+                # Optionally apply function to dep. var. before fitting. Not sure why that would be desirable for this model class...
+                y = model.formulas[0].get_lhs().f(y)
+            
+            Xs = model.get_mmat()
+
+        else: # Need all y vectors in y, i.e., y is actually ys
+            ys = []
+            for fi,form in enumerate(model.formulas):
+                
+                # Repeated y-variable - don't have to pass all of them
+                if fi > 0 and form.get_lhs().variable == model.formulas[0].get_lhs().variable:
+                    ys.append(None)
+                    continue
+
+                # New y-variable
+                if drop_NA:
+                    y = form.y_flat[form.NOT_NA_flat]
+                else:
+                    y = form.y_flat
+
+                # Optionally apply function to dep. var. before fitting. Not sure why that would be desirable for this model class...
+                if not form.get_lhs().f is None:
+                    y = form.get_lhs().f(y)
+                
+                # And collect
+                ys.append(y)
+            
+            y = ys
+            Xs = model.get_mmat(drop_NA=drop_NA)
+
         X = Xs[0]
         orig_scale = 1
         init_coef = copy.deepcopy(model.coef)

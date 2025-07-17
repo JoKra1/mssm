@@ -131,3 +131,9 @@ def init_coef_gammals_tests(self, models):
       m_coef,_ = mean_model.get_pars()
       coef = np.concatenate((m_coef.reshape(-1,1),np.ones((models[1].formulas[0].n_coef)).reshape(-1,1)))
       return coef
+
+def init_penalties_tests_gammlss(self, penalties):
+    return [0.01 for _ in range(len(penalties))]
+
+def init_penalties_tests_gsmm(self, penalties):
+    return [0.001 for _ in range(len(penalties))]

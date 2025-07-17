@@ -489,12 +489,12 @@ class GSMM():
         
             # Check for family-wide initialization of lambda values
             if init_lambda is None:
-                init_lambda = self.family.init_lambda(self.formulas)
+                init_lambda = self.family.init_lambda(smooth_pen)
             
-            # Otherwise initialize with provided values or simply with much weaker penalty than for GAMs
+            # Otherwise initialize with provided values or simply with somewhat stronger penalty than for GAMs
             for pen_i in range(len(smooth_pen)):
                 if init_lambda is None:
-                    smooth_pen[pen_i].lam = 0.001
+                    smooth_pen[pen_i].lam = 10 if method != 'qEFS' else 1
                 else:
                     smooth_pen[pen_i].lam = init_lambda[pen_i]
 
@@ -844,7 +844,7 @@ class GAMMLSS(GSMM):
         """
         return super.get_pars()
     
-    def get_mmat(self,use_terms=None,drop_NA=True,par=None):
+    def get_mmat(self,use_terms=None,par=None):
         """
         Returns a list containing exaclty the model matrices used for fitting as a ``scipy.sparse.csc_array``. Will raise an error when fitting was not completed before calling this function.
 
@@ -852,15 +852,13 @@ class GAMMLSS(GSMM):
 
         :param use_terms: Optionally provide indices of terms in the formual that should be created. If this argument is provided columns corresponding to any term not included in this list will be zeroed, defaults to None
         :type use_terms: [int], optional
-        :param drop_NA: Whether rows in the model matrix corresponding to NAs in the dependent variable vector should be dropped, defaults to True
-        :type drop_NA: bool, optional
         :param par: The index corresponding to the parameter of the distribution for which to obtain the model matrix. Setting this to ``None`` means all matrices are returned in a list, defaults to None.
         :type par: int or None, optional
         :raises ValueError: Will throw an error when called before the model was fitted/before model penalties were formed.
         :return: Model matrices :math:`\mathbf{X}` used for fitting - one per parameter of ``self.family`` or a single model matrix for a specific parameter.
         :rtype: [scp.sparse.csc_array] or scp.sparse.csc_array
         """
-        return super().get_mmat(use_terms,drop_NA,par)
+        return super().get_mmat(use_terms,True,par)
 
     def get_llk(self,penalized:bool=True):
         """
@@ -1064,12 +1062,12 @@ class GAMMLSS(GSMM):
         
             # Check for family-wide initialization of lambda values
             if init_lambda is None:
-                init_lambda = self.family.init_lambda(self.formulas)
+                init_lambda = self.family.init_lambda(gamlss_pen)
 
             # Else start with provided values or simply with much weaker penalty than for GAMs
             for pen_i in range(len(gamlss_pen)):
                 if init_lambda is None:
-                    gamlss_pen[pen_i].lam = 0.01
+                    gamlss_pen[pen_i].lam = 10
                 else:
                     gamlss_pen[pen_i].lam = init_lambda[pen_i]
 
@@ -1276,7 +1274,7 @@ class GAMM(GAMMLSS):
         """
         return self.coef,self.scale
 
-    def get_mmat(self,use_terms=None,drop_NA=True):
+    def get_mmat(self,use_terms=None):
         """
         Returns exaclty the model matrix used for fitting as a scipy.sparse.csc_array. Will throw an error when called for a model for which the model
         matrix was never former completely - i.e., when :math:`\mathbf{X}^T\mathbf{X}` was formed iteratively for estimation, by setting the ``file_paths`` argument of the ``Formula`` to
@@ -1286,8 +1284,6 @@ class GAMM(GAMMLSS):
 
         :param use_terms: Optionally provide indices of terms in the formual that should be created. If this argument is provided columns corresponding to any term not included in this list will be zeroed, defaults to None
         :type use_terms: [int], optional
-        :param drop_NA: Whether rows in the model matrix corresponding to NAs in the dependent variable vector should be dropped, defaults to True
-        :type drop_NA: bool, optional
         :raises ValueError: Will throw an error when called before the model was fitted/before model penalties were formed.
         :raises NotImplementedError: Will throw an error when called for a model for which the model matrix was never former completely
         :return: Model matrix :math:`\mathbf{X}` used for fitting.
@@ -1297,7 +1293,7 @@ class GAMM(GAMMLSS):
         if len(self.formulas[0].file_paths) != 0:
             raise NotImplementedError("Cannot return the model-matrix if X.T@X was formed iteratively.")
         
-        return super().get_mmat(use_terms,drop_NA,par=0)
+        return super().get_mmat(use_terms,par=0)
     
     def get_llk(self,penalized:bool=True,ext_scale:float or None=None):
         """

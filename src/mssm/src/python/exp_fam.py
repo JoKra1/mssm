@@ -1303,13 +1303,13 @@ class GAMLSSFamily:
       """
       return None
    
-   def init_lambda(self,formulas):
+   def init_lambda(self,penalties):
       """(Optional) Function to initialize the smoothing parameters of the model.
 
       Can return ``None`` , in which case random initialization will be used.
 
-      :param formulas: A list of :class:`mssm.src.python.formula.Formula`'s provided to a model.
-      :type formulas: [mssm.src.python.formula.Formula]
+      :param penalties: A list of all penalties to be estimated by the model.
+      :type penalties: [mssm.src.python.penalties.LambdaTerm]
       :return: A list, holding - for each :math:`\lambda` parameter to be estimated - an initial value.
       :rtype: [float]
       """
@@ -1529,13 +1529,13 @@ class Binomial2(GAMLSSFamily):
       
       return coef.reshape(-1,1)
    
-   def init_lambda(self,formulas):
+   def init_lambda(self,penalties):
       """Function to initialize the smoothing parameters of the model.
 
       Returns values in line with what is used to initialize GAMM
 
-      :param formulas: A list of :class:`mssm.src.python.formula.Formula`'s provided to a model.
-      :type formulas: [mssm.src.python.formula.Formula]
+      :param penalties: A list of all penalties to be estimated by the model.
+      :type penalties: [mssm.src.python.penalties.LambdaTerm]
       :return: A list, holding - for each :math:`\lambda` parameter to be estimated - an initial value.
       :rtype: [float]
       """
@@ -1874,13 +1874,13 @@ class GSMMFamily:
       """
       return None
    
-   def init_lambda(self,formulas):
+   def init_lambda(self,penalties):
       """(Optional) Function to initialize the smoothing parameters of the model.
 
       Can return ``None`` , in which case random initialization will be used.
 
-      :param formulas: A list of :class:`mssm.src.python.formula.Formula`'s provided to a model.
-      :type formulas: [mssm.src.python.formula.Formula]
+      :param penalties: A list of all penalties to be estimated by the model.
+      :type penalties: [mssm.src.python.penalties.LambdaTerm]
       :return: A list, holding - for each :math:`\lambda` parameter to be estimated - an initial value.
       :rtype: [float]
       """
