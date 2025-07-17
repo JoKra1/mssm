@@ -133,7 +133,6 @@ class GAMLSSGSMMFamily(GSMMFamily):
         """
         y = ys[0]
         gammlss_family = self.llkargs[0]
-        coef = coef.reshape(-1,1)
         split_coef = np.split(coef,coef_split_idx)
         etas = [Xs[ei]@split_coef[ei] for ei in range(len(Xs))]
         mus = [self.links[ei].fi(etas[ei]) for ei in range(len(Xs))]
@@ -150,7 +149,6 @@ class GAMLSSGSMMFamily(GSMMFamily):
         Function to evaluate gradient of GAMM(LSS) model when estimated via GSMM.
         """
         y = ys[0]
-        coef = coef.reshape(-1,1)
         split_coef = np.split(coef,coef_split_idx)
         etas = [Xs[ei]@split_coef[ei] for ei in range(len(Xs))]
         mus = [self.links[ei].fi(etas[ei]) for ei in range(len(Xs))]
@@ -329,7 +327,7 @@ def print_parametric_terms(model,par=0):
         if isinstance(model.family,Family): # GAMM case
             form = model.formulas[0]
 
-            coef = model.coef
+            coef = model.coef.flatten()
             if coef is not None:
                 lvi = model.lvi
                 scale = model.scale
@@ -688,7 +686,7 @@ def approx_smooth_p_values(model,par=0,n_sel=1e5,edf1=True,force_approx=False,se
         if isinstance(model.family,Family): # GAMM case
             form = model.formulas[0]
             X = model.get_mmat()
-            coef = model.coef
+            coef = model.coef.flatten()
             lvi = model.lvi
             scale = model.scale
             term_edf = model.term_edf1 if edf1 else model.term_edf
@@ -1640,11 +1638,11 @@ def estimateVp(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,drop_
             #print(eig,1/eig)
         else:
             # Take PQL approximation instead
-            Vp, Vpr, Ri, Rir, _, _ = compute_Vp_WPS(model.lvi if isinstance(family,Family) else model.lvi,
+            Vp, Vpr, Ri, Rir, _, _ = compute_Vp_WPS(model.lvi,
                                                  model.hessian,
                                                  S_emb,
                                                  model.overall_penalties,
-                                                 model.coef.reshape(-1,1) if isinstance(family,Family) else model.coef.reshape(-1,1),
+                                                 model.coef,
                                                  scale=orig_scale if isinstance(family,Family) else 1)
         
         if grid_type == "JJJ1":
@@ -2331,19 +2329,19 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
             Vp, Vpr, Vr, Vrr, _ = estimateVp(model,n_c=n_c,grid_type="JJJ1",Vp_fidiff=True)
         else:
             # Take PQL approximation instead
-            Vp, Vpr, Vr, Vrr, _, dBetadRhos = compute_Vp_WPS(model.lvi if isinstance(family,Family) else model.lvi,
+            Vp, Vpr, Vr, Vrr, _, dBetadRhos = compute_Vp_WPS(model.lvi,
                                                  model.hessian,
                                                  S_emb,
                                                  model.overall_penalties,
-                                                 model.coef.reshape(-1,1) if isinstance(family,Family) else model.coef.reshape(-1,1),
+                                                 model.coef,
                                                  scale=orig_scale if isinstance(family,Family) else 1)
 
         # Compute approximate WPS (2016) correction
         if grid_type == "JJJ1" or (grid_type == "JJJ3" and only_expected_edf == False):
             if isinstance(family,Family):
-                Vc,Vcc = compute_Vb_corr_WPS(model.lvi,Vpr,Vr,model.hessian,S_emb,model.overall_penalties,model.coef.reshape(-1,1),scale=orig_scale)
+                Vc,Vcc = compute_Vb_corr_WPS(model.lvi,Vpr,Vr,model.hessian,S_emb,model.overall_penalties,model.coef,scale=orig_scale)
             else:
-                Vc,Vcc = compute_Vb_corr_WPS(model.lvi,Vpr,Vr,model.hessian,S_emb,model.overall_penalties,model.coef.reshape(-1,1))
+                Vc,Vcc = compute_Vb_corr_WPS(model.lvi,Vpr,Vr,model.hessian,S_emb,model.overall_penalties,model.coef)
                 
             if isinstance(family,Family):
                 V = Vc + Vcc + ((model.lvi.T@model.lvi)*orig_scale)
@@ -2655,7 +2653,7 @@ def correct_VB(model,nR = 250,grid_type = 'JJJ1',a=1e-7,b=1e7,df=40,n_c=10,form_
                 nH = -1 * H
 
             if verbose:
-                print(f"Recomputed negative Hessian. 2 Norm of coef. difference: {np.linalg.norm(mean_coef-model.coef.reshape(-1,1))}. F. Norm of n. Hessian difference: {scp.sparse.linalg.norm(nH + model.hessian)}")
+                print(f"Recomputed negative Hessian. 2 Norm of coef. difference: {np.linalg.norm(mean_coef-model.coef)}. F. Norm of n. Hessian difference: {scp.sparse.linalg.norm(nH + model.hessian)}")
 
         else:
             mean_coef = None

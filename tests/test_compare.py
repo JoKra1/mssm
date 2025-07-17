@@ -1,10 +1,14 @@
+import mssm
 from mssm.models import *
 from mssm.src.python.compare import compare_CDL
 from mssm.src.python.utils import estimateVp,correct_VB,DummyRhoPrior
 import numpy as np
 import os
 from mssmViz.sim import*
-from .defaults import default_compare_test_kwargs,default_gamm_test_kwargs,default_gammlss_test_kwargs,max_atol,max_rtol
+from .defaults import default_compare_test_kwargs,default_gamm_test_kwargs,default_gammlss_test_kwargs,max_atol,max_rtol,init_coef_gaumlss_tests,init_coef_gammals_tests
+
+mssm.src.python.exp_fam.GAUMLSS.init_coef = init_coef_gaumlss_tests
+mssm.src.python.exp_fam.GAMMALS.init_coef = init_coef_gammals_tests
 
 ################################################################## Tests ##################################################################
 

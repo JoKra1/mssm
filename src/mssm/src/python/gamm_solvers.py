@@ -3,7 +3,7 @@ import scipy as scp
 from .exp_fam import Family,Gaussian,est_scale,GAMLSSFamily,Identity,warnings
 from .penalties import embed_in_S_sparse
 from .formula import build_sparse_matrix_from_formula,setup_cache,clear_cache,pd,Formula,mp,repeat,os,math,tqdm,sys,copy
-from .compact_rep import computeH, computeHSR1, computeV, computeVSR1, compute_t1_shifted_t2_t3
+from .compact_rep import computeH, computeHSR1, computeV, computeVSR1
 from .repara import reparam_model
 from functools import reduce
 from .custom_types import Fit_info
@@ -466,10 +466,10 @@ def calculate_edf(LP,Pr,InvCholXXS,penalties,lgdetDs,colsX,n_c,drop,S_emb):
          # V = V0 - V0@nt1@ (nt2 + nt1.T@V0@nt1)^-1 @ nt1.t@V0
          #
 
-         nt1,nt2,int2,nt3,_ = compute_t1_shifted_t2_t3(s,y,rho,H0,omega,"ByrdSR1" if form == 'SR1' else "Byrd")
-
          # Compute inverse:
          if form != 'SR1':
+            nt1,nt2,int2,nt3 = computeH(s,y,rho,H0,explicit=False)
+
             invt2 = nt2 + nt3@V0@nt1
 
             U,sv_invt2,VT = scp.linalg.svd(invt2,lapack_driver='gesvd')
@@ -480,6 +480,8 @@ def calculate_edf(LP,Pr,InvCholXXS,penalties,lgdetDs,colsX,n_c,drop,S_emb):
             t1 = V0@nt1
             t3 = nt3@V0
          else:
+            nt1, int2, nt3 = computeHSR1(s,y,rho,H0,omega,make_psd=True,explicit=False)
+
             # When using SR1 int2 is potentially singular, so we need a modified Woodbury that accounts for that.
             # This is given by eq. 23 in Henderson & Searle (1981):
             invt2 = np.identity(int2.shape[1]) + int2@nt3@V0@nt1
@@ -3569,7 +3571,7 @@ def update_coef_gen_smooth(family,ys,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,
 
                if form != 'SR1' and len(sks) > 0:
                   # But first dampen for BFGS update - see Nocedal & Wright (2004):
-                  Ht1, Ht2, Ht3 = computeH(sks,yks,rhos,H0,make_psd=False,omega=omega,explicit=False)
+                  Ht1, _, Ht2, Ht3 = computeH(sks,yks,rhos,H0,explicit=False)
                   Bs = H0@sk + Ht1@Ht2@Ht3@sk
                   sBs = sk.T@Bs
                   
@@ -3620,22 +3622,11 @@ def update_coef_gen_smooth(family,ys,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,
 
             if sks.shape[0] > 0:
 
-               # Store update to S and Y in scipy LbfgsInvHess..
-               V_raw = scp.optimize.LbfgsInvHessProduct(sks,yks)
-
-               # And keep that in LV, since this is what we want to return later
-               LV = V_raw
-               LV.nit = opt["nit"]
-               LV.omega = np.min(omegas)
-               LV.method = "qEFS"
-               LV.updates = updates
-               LV.form = form
-
                # Compute updated estimate of inverse of negative hessian of llk (implicitly)
                if form == 'SR1':
-                  t1_llk, t2_llk, t3_llk = computeVSR1(V_raw.sk,V_raw.yk,V_raw.rho,V0,1/omega,make_psd=True,explicit=False) #
+                  t1_llk, t2_llk, t3_llk = computeVSR1(sks,yks,rhos,V0,1/omega,make_psd=True,explicit=False) #
                else:
-                  t1_llk, t2_llk, t3_llk = computeV(V_raw.sk,V_raw.yk,V_raw.rho,V0,explicit=False)
+                  t1_llk, t2_llk, t3_llk = computeV(sks,yks,rhos,V0,explicit=False)
 
                # Can now form penalized gradient and approximate penalized hessian to update penalized
                # coefficients. Important: pass un-penalized hessian here!
@@ -3649,10 +3640,11 @@ def update_coef_gen_smooth(family,ys,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,
                # since nt3=nt1.T, and int2^-1 = nt2 we have:
                #
                # pV = pV0 - pV0@nt1@ (nt2 + nt1.T@pV0@nt1)^-1 @ nt1.t@pV0
-               nt1,nt2,int2,nt3,_ = compute_t1_shifted_t2_t3(V_raw.sk,V_raw.yk,V_raw.rho,H0,omega,"ByrdSR1" if form == 'SR1' else "Byrd")
 
                # Compute inverse:
                if form != 'SR1':
+                  nt1,nt2,int2,nt3 = computeH(sks,yks,rhos,H0,explicit=False)
+
                   invt2 = nt2 + nt3@pV0@nt1
 
                   U,sv_invt2,VT = scp.linalg.svd(invt2,lapack_driver='gesvd')
@@ -3663,6 +3655,8 @@ def update_coef_gen_smooth(family,ys,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,
                   t1 = pV0@nt1
                   t3 = nt3@pV0
                else:
+                  nt1, int2, nt3 = computeHSR1(sks,yks,rhos,H0,omega,make_psd=True,explicit=False)
+
                   # When using SR1 int2 is potentially singular, so we need a modified Woodbury inverse that accounts for that.
                   # This is given by eq. 23 in Henderson & Searle (1981):
                   invt2 = np.identity(int2.shape[1]) + int2@nt3@pV0@nt1
@@ -3788,7 +3782,15 @@ def update_coef_gen_smooth(family,ys,Xs,coef,coef_split_idx,S_emb,S_norm,S_pinv,
          break # end inner loop and immediately optimize lambda again.
 
       inner += 1
-         
+   
+   if method == 'qEFS':
+      # Store update to S and Y in scipy LbfgsInvHess and keep that in LV, since this is what we need later
+      LV = scp.optimize.LbfgsInvHessProduct(sks,yks)
+      LV.nit = opt["nit"]
+      LV.omega = omega#np.min(omegas)
+      LV.method = "qEFS"
+      LV.updates = updates
+      LV.form = form
    
    # Need to fill full_coef at this point and pad LV if we dropped
    if drop is not None:
@@ -4355,7 +4357,7 @@ def solve_generalSmooth_sparse(family,ys,Xs,form_n_coef,form_up_coef,coef,coef_s
             if LV.form == 'SR1':
                H = -1*computeHSR1(LV.sk,LV.yk,LV.rho,scp.sparse.identity(len(coef),format='csc')*LV.omega,omega=LV.omega,make_psd=True,make_pd=True)
             else:
-               H = -1*computeH(LV.sk,LV.yk,LV.rho,scp.sparse.identity(len(coef),format='csc')*LV.omega,omega=LV.omega,make_psd=True)
+               H = -1*computeH(LV.sk,LV.yk,LV.rho,scp.sparse.identity(len(coef),format='csc')*LV.omega)
             
             H = scp.sparse.csc_array(H)
 

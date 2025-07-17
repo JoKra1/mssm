@@ -1,10 +1,14 @@
+import mssm
 from mssm.models import *
 import numpy as np
 import os
 from mssmViz.sim import*
 import io
 from contextlib import redirect_stdout
-from .defaults import default_gammlss_test_kwargs,max_atol,max_rtol
+from .defaults import default_gamm_test_kwargs,default_gammlss_test_kwargs,max_atol,max_rtol,init_coef_gaumlss_tests,init_coef_gammals_tests
+
+mssm.src.python.exp_fam.GAUMLSS.init_coef = init_coef_gaumlss_tests
+mssm.src.python.exp_fam.GAMMALS.init_coef = init_coef_gammals_tests
 
 ################################################################## Tests ##################################################################
 

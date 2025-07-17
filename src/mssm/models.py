@@ -593,7 +593,7 @@ class GSMM():
             coef = np.ndarray.flatten(split_coef[par])
             lvi = self.lvi[:,split_idx]
         else:
-            coef = self.coef
+            coef = self.coef.flatten()
             lvi = self.lvi
 
         # Now sample
@@ -657,7 +657,7 @@ class GSMM():
             coef = np.ndarray.flatten(split_coef[par])
             lvi = self.lvi[:,split_idx]
         else:
-            coef = self.coef
+            coef = self.coef.flatten()
             lvi = self.lvi
         
         # Encode test data
@@ -752,7 +752,7 @@ class GSMM():
             coef = np.ndarray.flatten(split_coef[par])
             lvi = self.lvi[:,split_idx]
         else:
-            coef = self.coef
+            coef = self.coef.flatten()
             lvi = self.lvi
 
         
@@ -1717,7 +1717,7 @@ class GAMM(GAMMLSS):
             
             self.hessian = -1*(XX/scale)
         
-        self.coef = coef
+        self.coef = coef.reshape(-1,1)
         self.scale = scale
         self.preds = [eta]
         self.mus = [self.family.link.fi(eta)]
