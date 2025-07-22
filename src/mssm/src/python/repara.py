@@ -302,7 +302,7 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
             r = len(D[D > max(D)*eps]) # r is known in advance here almost every-time but we need to de-compose anyway..
             
             if r == Q:
-                  break
+               break
             
             # Seperate U into kernel and rank space of Sk
             n = U.shape[1] - r
@@ -395,7 +395,12 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
          for j in range(len(grp_idx)):
             
             Sj_reps[grp_idx[j]].S_J = scp.sparse.csc_array(S_Jrep[j])
-         
+
+         if S_rep is None: # Fix r==Q in first iteration
+            S_rep = SJbar[0]*LJgroup[0]
+            if not X is None:
+               Q_rep = scp.sparse.eye(r,format='csc')
+
          S_reps.append(scp.sparse.csc_array(S_rep))
 
          if not X is None:

@@ -8,7 +8,7 @@ class PenType(Enum):
     IDENTITY = 1
     DIFFERENCE = 2
     DISTANCE = 3
-    REPARAM = 4
+    REPARAM1 = 4 # Approximate Demmler & Reinsch (1975) parameterization for univariate smooths; see section 5.4.2 of Wood (2017)
     NULL = 5
 
 class ConstType(Enum):
@@ -67,8 +67,8 @@ class LambdaTerm:
 @dataclass
 class Reparameterization:
    # Holds all information necessary to transform model matrix & penalty via various re-parameterization strategies as discussed in Wood (2017).
-   X:scp.sparse.csc_array = None
-   cov:np.ndarray = None
+   Srp:scp.sparse.csc_array = None # Transformed penalty
+   Drp:scp.sparse.csc_array = None # Transformed root of penalty
    C:scp.sparse.csc_array= None
    scale:float = None
    IRrp:scp.sparse.csc_array = None

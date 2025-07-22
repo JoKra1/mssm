@@ -1598,16 +1598,6 @@ class GAMM(GAMMLSS):
             
             else:
                 # Build row sets of model matrix in parallel:
-                rpXs = []
-                rpcovs = []
-                for sti in stx:
-                    if terms[sti].should_rp:
-                        for rpi in range(len(terms[sti].RP)):
-                            # Don't need to pass those down to the processes.
-                            rpXs.append(terms[sti].RP[rpi].X)
-                            rpcovs.append(terms[sti].RP[rpi].cov)
-                            terms[sti].RP[rpi].X = None
-                            terms[sti].RP[rpi].cov = None
                 
                 cov_split = np.array_split(cov_flat,self.formulas[0].file_loading_nc,axis=0)
                 with mp.Pool(processes=self.formulas[0].file_loading_nc) as pool:
@@ -1619,18 +1609,6 @@ class GAMM(GAMMLSS):
                                                                            repeat(cov)))
                     
                     model_mat = scp.sparse.vstack(Xs,format='csc')
-                
-                # Re-assign rpXs and covs
-                rpidx = 0
-                for sti in stx:
-                    if terms[sti].should_rp:
-                        for rpi in range(len(terms[sti].RP)):
-                            terms[sti].RP[rpi].X = rpXs[rpidx]
-                            terms[sti].RP[rpi].cov = rpcovs[rpidx]
-                            rpidx += 1
-
-                rpXs = None
-                rpcovs = None
 
             if len(irstx) > 0:
                 # Scipy 1.15.0 does not like indexing via pd.series object, bug?

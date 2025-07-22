@@ -10,7 +10,7 @@ from .terms import GammTerm,i,l,f,irf,ri,rs,fs
 from .penalties import embed_in_S_sparse,embed_in_Sj_sparse
 from .file_loading import read_cov, read_cor_cov_single, read_cov_no_cor ,read_unique,read_dtype,mp,repeat,setup_cache,clear_cache,os
 from .custom_types import PenType,LambdaTerm,Reparameterization,ConstType,Constraint,VarType
-from .matrix_solvers import translate_sparse
+from .matrix_solvers import translate_sparse,eigen_solvers
 import math
 import sys
 
@@ -92,6 +92,8 @@ class Formula():
     :type print_warn: bool,optional
     :param keep_cov: Whether or not the internal encoding structure of all predictor variables should be created when forming :math:`\mathbf{X}^T\mathbf{X}` iteratively instead of forming :math:`\mathbf{X}` directly. Can speed up estimation but increases memory footprint. Defaults to True.
     :type keep_cov: bool,optional
+    :param find_nested: Whether or not to check for nested smooth terms. This only has an effect if you include at least one smooth term with more than two variables. Additionally, this check is often not necessary if you correctly use the ``te`` key-word of smooth terms and ensure that the marginals used to construct ti smooth terms have far fewer basis functions than the "main effect" univariate smooths. Thus, if you know what you're doing and you're working with large models, you might want to disable this (i.e., set to False) because this check can get quite expensive for larger models. Defaults to True.
+    :type find_nested: bool,optional
     :param file_paths: A list of paths to .csv files from which :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` should be created iteratively. Setting this to a non-empty list will prevent fitting X as a whole. ``data`` should then be set to ``None``. Defaults to an empty list.
     :type file_paths: [str],optional
     :param file_loading_nc: How many cores to use to a) accumulate :math:`\mathbf{X}` in parallel (if ``data`` is not ``None`` and ``file_paths`` is an empty list) or b) to accumulate :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` (and :math:`\mathbf{\eta}` during estimation) (if ``data`` is ``None`` and ``file_paths`` is a non-empty list). For case b, this should really be set to the maimum number of cores available. For a this only really speeds up accumulating :math:`\mathbf{X}` if :math:`\mathbf{X}` has many many columns and/or rows. Defaults to 1.
@@ -117,6 +119,7 @@ class Formula():
                  codebook:dict or None=None,
                  print_warn=True,
                  keep_cov = False,
+                 find_nested = True,
                  file_paths = [],
                  file_loading_nc = 1,
                  file_loading_kwargs: dict = {"header":0,"index_col":False}) -> None:
@@ -151,6 +154,7 @@ class Formula():
         self.n_coef = None # Number of total coefficients in formula.
         self.coef_per_term = None # Number of coefficients associated with each term
         self.built_penalties = False
+        self.find_nested = find_nested
         cvi = 0 # Number of variables included in some way as predictors
 
         # Encoding from data frame to series-level dependent values + predictor values (in cov)
@@ -299,9 +303,6 @@ class Formula():
         
         if self.has_irf and (len(self.file_paths) != 0 or self.data is None):
            raise NotImplementedError("Building X.T@X iteratively does not support Impulse Response Terms (i.e., ``irf``) in the formula.")
-
-        # Compute number of coef and coef names
-        self.__get_coef_info()
         
         # Encode data into columns usable by the model
         if len(self.file_paths) == 0 or self.keep_cov:
@@ -343,6 +344,13 @@ class Formula():
             self.__absorb_constraints()
         else:
             self.__absorb_constraints2()
+
+        # Can now check nesting
+        if self.find_nested and len(self.smooth_terms) > 0:
+         self.__fix_nested()
+        
+        # Compute (final) number of coef and coef names
+        self.__get_coef_info()
 
         #print(self.n_coef,len(self.coef_names))
    
@@ -810,8 +818,7 @@ class Formula():
 
          if not sterm.is_identifiable:
             if sterm.should_rp > 0:
-               # Reparameterization of marginals was requested - but can only be evaluated once penalties are
-               # computed, so we need to store X and the covariate used to create it.
+               # Reparameterization of marginals was requested - but no identifiability constraints necessary.
                for vi in range(len(vars)):
                   
                   if len(vars) > 1:
@@ -825,7 +832,7 @@ class Formula():
                                               None,id_nk,min_c=self.var_mins[vars[vi]],
                                               max_c=self.var_maxs[vars[vi]], **sterm.basis_kwargs)
 
-                  sterm.RP.append(Reparameterization(scp.sparse.csc_array(matrix_term_v),var_cov_flat))
+                  sterm.absorb_repara(vi,scp.sparse.csc_array(matrix_term_v),var_cov_flat)
 
             continue
 
@@ -867,8 +874,7 @@ class Formula():
 
          if not sterm.is_identifiable:
             if sterm.should_rp > 0:
-               # Reparameterization of marginals was requested - but can only be evaluated once penalties are
-               # computed, so we need to store X and the covariate used to create it.
+               # Reparameterization of marginals was requested - but no identifiability constraints are needed.
                for vi in range(len(vars)):
                   
                   if len(vars) > 1:
@@ -882,7 +888,7 @@ class Formula():
                                               None,id_nk,min_c=self.var_mins[vars[vi]],
                                               max_c=self.var_maxs[vars[vi]], **sterm.basis_kwargs)
 
-                  sterm.RP.append(Reparameterization(scp.sparse.csc_array(matrix_term_v),var_cov_flat))
+                  sterm.absorb_repara(vi,scp.sparse.csc_array(matrix_term_v),var_cov_flat)
 
             continue
 
@@ -920,8 +926,7 @@ class Formula():
                   sterm.Z.append(Constraint(int(matrix_term_v.shape[1]/2),ConstType.DIFF))
 
             if sterm.should_rp > 0:
-               # Reparameterization of marginals was requested - but can only be evaluated once penalties are
-               # computed, so we need to store X and the covariate used to create it.
+               # Reparameterization of marginals was requested.
 
                if sterm.Z[vi].type == ConstType.QR:
                   XPb = matrix_term_v @ sterm.Z[vi].Z
@@ -934,7 +939,7 @@ class Formula():
                   XPb = np.diff(np.concatenate((matrix_term_v[:,sterm.Z[vi].Z:matrix_term_v.shape[1]],matrix_term_v[:,:sterm.Z[vi].Z]),axis=1))
                   XPb = np.concatenate((XPb[:,XPb.shape[1]-sterm.Z[vi].Z:],XPb[:,:XPb.shape[1]-sterm.Z[vi].Z]),axis=1)
 
-               sterm.RP.append(Reparameterization(scp.sparse.csc_array(XPb),self.cov_flat[self.NOT_NA_flat,var_map[vars[vi]]]))
+               sterm.absorb_repara(vi,scp.sparse.csc_array(XPb),self.cov_flat[self.NOT_NA_flat,var_map[vars[vi]]])
 
             if sterm.te:
                if vi == 0:
@@ -952,6 +957,228 @@ class Formula():
                sterm.Z.append(Constraint(int(matrix_term.shape[1]/2),ConstType.DROP))
             elif term_constraint == ConstType.DIFF:
                sterm.Z.append(Constraint(int(matrix_term.shape[1]/2),ConstType.DIFF))
+   
+    def __fix_nested(self):
+      """Identifies nested terms in the Formula, based on section 5.6.3 of Wood (2017) and what is implemented in the ``gam.side`` function in ``mgcv``.
+
+      Automatically figures out which coefficients have to be dropped from individual smooth terms and assigns the corresponding indices to ``term.drop_coef``.
+      These are then automatically removed from the model matrix and penalty built for the particular term (i.e., when calling ``term.build_matrix`` and ``term.build_penalty``
+      for example via :func:`build_sparse_matrix_from_formula` and :func:`build_penalties`.)
+
+      References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - mgcv gam.side function, see: https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/mgcv.r#L563
+      """
+      sti = self.get_smooth_term_idx()
+      sti = [ti for ti in sti if isinstance(self.terms[ti],fs) == False]
+
+
+      term_var = [self.terms[ti].variables for ti in sti]
+      n_term_var = [len(tvar) for tvar in term_var]
+      max_var = np.max(n_term_var)
+
+      # Check if we have terms with multiple variables
+      if max_var == 1:
+         return
+
+      # Have smooth terms and potentially some nesting. Now need an extended list of smooth terms,
+      # their variable names (taking into account by, binary, and by_cont keywords), and the number of variables
+      # to check more carefully for nesting and to then also do something about it.
+      term_var = [[] for _ in sti]
+      unlist_var = []
+      for tii, ti in enumerate(sti):
+         sterm = self.terms[ti]
+         vars = sterm.variables
+         
+         for var in vars:
+            ext_vars = []
+
+            if sterm.by is not None:
+                  
+                  by_levels = self.factor_levels[sterm.by]
+                  ext_vars.extend([var + "_" + str(lvl) for lvl in by_levels])
+            else:
+                  ext_vars.append(var)
+            
+            if sterm.binary is not None:
+                  ext_vars = [ext_var + "_" + sterm.binary[0] + "_"  + sterm.binary[1] for ext_var in ext_vars]
+            
+            if sterm.by_cont is not None:
+                  ext_vars = [ext_var + "_" + sterm.by_cont for ext_var in ext_vars]
+
+            term_var[tii].extend(ext_vars)
+            unlist_var.extend(ext_vars)
+
+      # Can now safely check for duplicates
+      if len(unlist_var) == len(np.unique(unlist_var)):
+         return
+
+      # Identify nested depenndencies as discussed in section 5.6.3 of Wood (2017)
+
+      # First build model matrices for terms, making sure to create multiple ones per level of by variable
+      # and to account for binary/by_cont keywords.
+      Xs = [[] for _ in sti]
+      n_term_by = []
+      var_map = self.get_var_map()
+      cov_flat = self.cov_flat
+      for tii, ti in enumerate(sti):
+         sterm = self.terms[ti]
+         vars = sterm.variables
+         for vi in range(len(vars)):
+                        
+            if len(vars) > 1:
+                  id_nk = sterm.nk[vi]
+            else:
+                  id_nk = sterm.nk
+            
+            if sterm.is_identifiable and sterm.te == False:
+                  id_nk += 1
+            
+            if len(self.file_paths) == 0:
+                  var_cov_flat = cov_flat[self.NOT_NA_flat,var_map[vars[vi]]]
+            else:
+                  var_cov_flat = read_cov(self.lhs.variable,vars[vi],self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+
+            matrix_term_v = sterm.basis(var_cov_flat,
+                                          None,id_nk,min_c=self.var_mins[vars[vi]],
+                                          max_c=self.var_maxs[vars[vi]], **sterm.basis_kwargs)
+
+            if sterm.te == False:
+                  # Absorb identifiability constraints into marginals
+                  if sterm.is_identifiable:
+                     if sterm.Z[vi].type == ConstType.QR:
+                        matrix_term_v = matrix_term_v @ sterm.Z[vi].Z
+                     elif sterm.Z[vi].type == ConstType.DROP:
+                        matrix_term_v = np.delete(matrix_term_v,sterm.Z[vi].Z,axis=1)
+                     elif sterm.Z[vi].type == ConstType.DIFF:
+                        # Applies difference re-coding for sum-to-zero coefficients.
+                        # Based on smoothCon in mgcv(2017). See constraints.py
+                        # for more details.
+                        matrix_term_v = np.diff(np.concatenate((matrix_term_v[:,sterm.Z[vi].Z:matrix_term_v.shape[1]],matrix_term_v[:,:sterm.Z[vi].Z]),axis=1))
+                        matrix_term_v = np.concatenate((matrix_term_v[:,matrix_term_v.shape[1]-sterm.Z[vi].Z:],matrix_term_v[:,:matrix_term_v.shape[1]-sterm.Z[vi].Z]),axis=1)
+                  
+                  # Absorb reparam into marginal
+                  if sterm.should_rp > 0:
+                     matrix_term_v = matrix_term_v @ sterm.RP[vi].C
+
+            # Prepare te/ti
+            if vi == 0:
+                  matrix_term = matrix_term_v
+            else:
+                  matrix_term = TP_basis_calc(matrix_term,matrix_term_v)
+
+         # Now can handle te - ti and univariate are ready at this point
+         if sterm.te:
+            if sterm.is_identifiable:
+               if sterm.Z[0].type == ConstType.QR:
+                  matrix_term = matrix_term @ sterm.Z[0].Z
+
+               elif sterm.Z[0].type == ConstType.DROP:
+                  matrix_term = np.delete(matrix_term,sterm.Z[0].Z,axis=1)
+
+               elif sterm.Z[0].type == ConstType.DIFF:
+                  matrix_term = np.diff(np.concatenate((matrix_term[:,sterm.Z[0].Z:matrix_term.shape[1]],matrix_term[:,:sterm.Z[0].Z]),axis=1))
+                  matrix_term = np.concatenate((matrix_term[:,matrix_term.shape[1]-sterm.Z[0].Z:],matrix_term[:,:matrix_term.shape[1]-sterm.Z[0].Z]),axis=1)
+
+            # Currently no further reparam for te implemented
+         
+
+         # Now deal with by, binary, or by_cont
+         # Multiply each row of model matrix by value in by_cont
+         if sterm.by_cont is not None:
+            by_cont_cov = cov_flat[self.NOT_NA_flat,var_map[sterm.by_cont]]
+            matrix_term *= by_cont_cov.reshape(-1,1)
+         
+         # Handle optional by keyword
+         n_by = 1
+         if sterm.by is not None:
+            by_cov = cov_flat[self.NOT_NA_flat,var_map[sterm.by]]
+            n_by = len(by_levels)
+            
+            # Split by cov
+            for by_level in range(len(by_levels)):
+                  by_cidx = (by_cov == by_level).astype(int)
+                  Xs[tii].append(matrix_term * by_cidx.reshape(-1,1))
+         
+         # Handle optional binary keyword
+         elif sterm.binary is not None:
+            by_cov = cov_flat[self.NOT_NA_flat,var_map[sterm.binary[0]]]
+            by_cidx = (by_cov == sterm.binary_level).astype(int)
+
+            Xs[tii].append(matrix_term * by_cidx.reshape(-1,1))
+
+         else:
+            Xs[tii].append(matrix_term)
+            
+         n_term_by.append(n_by)
+
+      # At this point we have all the model matrices and can work on actually identifying
+      # nested terms.
+      osize = 2
+      drop = {}
+      while osize <= max_var:
+
+         otis = [ti for ti in range(len(sti)) if n_term_var[ti] == osize]
+         
+         for otii,oti in enumerate(otis):
+
+            for by_idx in range(n_term_by[oti]):
+                  
+                  # Get variables of this term
+                  otis_var = np.array(term_var[oti])
+                  otis_n_var = n_term_var[oti]
+                  otis_n_by = n_term_by[oti]
+
+                  if otis_n_by > 1:
+                     otis_var = otis_var[np.arange(by_idx,otis_n_var*otis_n_by,otis_n_by)]
+
+                  # Now first find all terms with less than osize variables...
+                  itis = []
+                  X1 = []
+                  for ti in range(len(sti)):
+                     if n_term_var[ti] <= (osize-1) and np.any([t_var in otis_var for t_var in term_var[ti]]):
+                        itis.append(ti)
+
+                        X1.append(Xs[ti][by_idx])
+
+                  # and then all previous terms with exactly osize variables
+                  if otii > 0 and len(otis) > 1:
+                     for ti in otis[:otii]:
+                        if np.any([t_var in otis_var for t_var in term_var[ti]]):
+                              itis.append(ti)
+
+                              X1.append(Xs[ti][by_idx])
+                  
+                  # Build combined model matrix
+                  if len(X1) == 0:
+                     continue
+
+                  X1 = np.concatenate(X1,axis=1)
+
+                  if self.has_intercept:
+                     X1 = np.concatenate([np.ones(X1.shape[0]).reshape(-1,1),X1],axis=1)
+
+                  # And figure out identifiability issues
+                  nid,rank = eigen_solvers.id_dependencies(X1,Xs[oti][by_idx],np.pow(np.finfo(float).eps,0.5))
+                  if rank < Xs[oti][by_idx].shape[1]:
+                     
+                     # Delete dropped coef from Xs
+                     Xs[oti][by_idx] = np.delete(Xs[oti][by_idx],nid[rank:],axis=1)
+
+                     # and collect them for later model matrix building
+                     nid += by_idx*len(nid)
+                     
+                     if not sti[oti] in drop:
+                        drop[sti[oti]] = list(np.sort(nid[rank:]))
+                     else:
+                        drop[sti[oti]].extend(np.sort(nid[rank:]))
+
+         osize += 1
+
+      for ti in sti:
+         if ti in drop:
+            self.terms[ti].drop_coef = drop[ti]
+
     
     #### Getters ####
 
@@ -1171,7 +1398,7 @@ def build_penalties(formula):
                   S_j_last = penalties[-1].S_J.toarray()
                   last_pen_rep = penalties[-1].rep_sj
 
-                  is_reparam = penalties[-1].type == PenType.REPARAM # Only for univariate smooths should this be true.
+                  is_reparam1 = penalties[-1].type == PenType.REPARAM1 # Only for univariate smooths should this be true.
 
                   if len(vars) > 1:
                      # Distinguish between TP smooths of multiple variables and
@@ -1200,7 +1427,7 @@ def build_penalties(formula):
                   
                   idk = S_j_last.shape[1]
 
-                  if is_reparam == False:
+                  if is_reparam1 == False:
                      # Based on: Marra & Wood (2011) and: https://rdrr.io/cran/mgcv/man/gam.selection.html
                      # and: https://eric-pedersen.github.io/mgcv-esa-workshop/slides/03-model-selection.pdf
                      s, U =scp.linalg.eigh(S_j_last)
@@ -1222,9 +1449,9 @@ def build_penalties(formula):
                      NULL_D = [[chol_data,chol_rows,chol_cols]]
                   
                   else:
-                     # Under the re-parameterization the last S.shape[1] - S.rank cols/rows correspond to functions in the kernel.
+                     # Under the Demmler & Reinsch (1975) re-parameterization the last S.shape[1] - S.rank cols/rows correspond to functions in the kernel.
                      # Hence we can simply place identity penalties on those to shrink them to zero. In this form we can also readily
-                     # have separate penalties on different null-space functions! This is how mgcv implements factor smooths.
+                     # have separate penalties on different null-space functions! This is how mgcv implements factor smooths as well.
                      NULL_S = []
                      NULL_D = []
 

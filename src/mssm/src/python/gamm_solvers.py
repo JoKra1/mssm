@@ -1428,17 +1428,6 @@ def read_XTX(file,formula,nc):
    var_maxs = formula.get_var_maxs()
    factor_levels = formula.get_factor_levels()
 
-   rpXs = []
-   rpcovs = []
-   for sti in stx:
-      if terms[sti].should_rp:
-         for rpi in range(len(terms[sti].RP)):
-            # Don't need to pass those down to the processes.
-            rpXs.append(terms[sti].RP[rpi].X)
-            rpcovs.append(terms[sti].RP[rpi].cov)
-            terms[sti].RP[rpi].X = None
-            terms[sti].RP[rpi].cov = None
-
    cov = None
 
    # Read file
@@ -1467,18 +1456,6 @@ def read_XTX(file,formula,nc):
    XX = reduce(lambda xx1,xx2: xx1+xx2,XX)
    Xy = reduce(lambda xy1,xy2: xy1+xy2,Xy)
 
-   # Re-assign rpXs and covs
-   rpidx = 0
-   for sti in stx:
-      if terms[sti].should_rp:
-         for rpi in range(len(terms[sti].RP)):
-               terms[sti].RP[rpi].X = rpXs[rpidx]
-               terms[sti].RP[rpi].cov = rpcovs[rpidx]
-               rpidx += 1
-
-   rpXs = None
-   rpcovs = None
-
    return XX,Xy,len(y_flat_file)
 
 def keep_XTX(cov_flat,y_flat,formula,nc,progress_bar):
@@ -1497,17 +1474,6 @@ def keep_XTX(cov_flat,y_flat,formula,nc,progress_bar):
    var_mins = formula.get_var_mins()
    var_maxs = formula.get_var_maxs()
    factor_levels = formula.get_factor_levels()
-
-   rpXs = []
-   rpcovs = []
-   for sti in stx:
-      if terms[sti].should_rp:
-         for rpi in range(len(terms[sti].RP)):
-            # Don't need to pass those down to the processes.
-            rpXs.append(terms[sti].RP[rpi].X)
-            rpcovs.append(terms[sti].RP[rpi].cov)
-            terms[sti].RP[rpi].X = None
-            terms[sti].RP[rpi].cov = None
 
    cov = None
 
@@ -1545,18 +1511,6 @@ def keep_XTX(cov_flat,y_flat,formula,nc,progress_bar):
       else:
          XX += XX0
          Xy += Xy0
-   
-   # Re-assign rpXs and covs
-   rpidx = 0
-   for sti in stx:
-      if terms[sti].should_rp:
-         for rpi in range(len(terms[sti].RP)):
-               terms[sti].RP[rpi].X = rpXs[rpidx]
-               terms[sti].RP[rpi].cov = rpcovs[rpidx]
-               rpidx += 1
-
-   rpXs = None
-   rpcovs = None
 
    return XX,Xy
 
@@ -1588,17 +1542,6 @@ def read_eta(file,formula,coef,nc):
    var_maxs = formula.get_var_maxs()
    factor_levels = formula.get_factor_levels()
 
-   rpXs = []
-   rpcovs = []
-   for sti in stx:
-      if terms[sti].should_rp:
-         for rpi in range(len(terms[sti].RP)):
-            # Don't need to pass those down to the processes.
-            rpXs.append(terms[sti].RP[rpi].X)
-            rpcovs.append(terms[sti].RP[rpi].cov)
-            terms[sti].RP[rpi].X = None
-            terms[sti].RP[rpi].cov = None
-
    cov = None
 
    # Read file
@@ -1626,18 +1569,6 @@ def read_eta(file,formula,coef,nc):
    for eta_file in etas:
       eta.extend(eta_file)
 
-   # Re-assign rpXs and covs
-   rpidx = 0
-   for sti in stx:
-      if terms[sti].should_rp:
-         for rpi in range(len(terms[sti].RP)):
-               terms[sti].RP[rpi].X = rpXs[rpidx]
-               terms[sti].RP[rpi].cov = rpcovs[rpidx]
-               rpidx += 1
-
-   rpXs = None
-   rpcovs = None
-
    return eta
 
 def keep_eta(formula,coef,nc):
@@ -1656,17 +1587,6 @@ def keep_eta(formula,coef,nc):
    var_mins = formula.get_var_mins()
    var_maxs = formula.get_var_maxs()
    factor_levels = formula.get_factor_levels()
-
-   rpXs = []
-   rpcovs = []
-   for sti in stx:
-      if terms[sti].should_rp:
-         for rpi in range(len(terms[sti].RP)):
-            # Don't need to pass those down to the processes.
-            rpXs.append(terms[sti].RP[rpi].X)
-            rpcovs.append(terms[sti].RP[rpi].cov)
-            terms[sti].RP[rpi].X = None
-            terms[sti].RP[rpi].cov = None
 
    cov = None
 
@@ -1689,18 +1609,6 @@ def keep_eta(formula,coef,nc):
 
       for eta_split in etas:
          eta.extend(eta_split)
-   
-   # Re-assign rpXs and covs
-   rpidx = 0
-   for sti in stx:
-      if terms[sti].should_rp:
-         for rpi in range(len(terms[sti].RP)):
-               terms[sti].RP[rpi].X = rpXs[rpidx]
-               terms[sti].RP[rpi].cov = rpcovs[rpidx]
-               rpidx += 1
-
-   rpXs = None
-   rpcovs = None
 
    return eta
 

@@ -10,13 +10,10 @@ from . import smooths
 from . import penalties
 from .custom_types import PenType, LambdaTerm,Constraint,ConstType
 from .repara import reparam
-from .matrix_solvers import translate_sparse
-from .penalties import id_dist_pen,diff_pen, embed_in_S_sparse,embed_in_Sj_sparse,TP_pen
+from .matrix_solvers import translate_sparse,warnings
+from .penalties import id_dist_pen,diff_pen, embed_in_S_sparse,embed_in_Sj_sparse,TP_pen,adjust_pen_drop
 from .smooths import TP_basis_calc
-from .custom_types import TermType,VarType
-
-  
-
+from .custom_types import TermType,VarType,Reparameterization
 
 class GammTerm():
    """Base-class implemented by the terms passed to :class:`mssm.src.python.formula.Formula`.
@@ -258,6 +255,9 @@ class f(GammTerm):
         if te==True and len(variables) == 1:
            raise ValueError("``te`` can only be set to true in case multiple variables are provided via ``variables``.")
         
+        if rp != 0 and penalty is not None and (len(penalty) > len(variables)):
+          raise ValueError("Re-parameterization only supports a single penalty (per maginal).")
+        
         if not binary is None and identifiable:
            # Remove identifiability constrain for
            # binary difference smooths.
@@ -291,7 +291,10 @@ class f(GammTerm):
         self.is_identifiable = identifiable
         self.Z = constraint
         self.should_rp = rp
-        self.RP = []
+        if rp:
+          self.RP = [Reparameterization() for _ in range(len(variables))]
+        else:
+          self.RP = []
         self.basis = basis
         self.basis_kwargs = basis_kwargs
         self.by = by
@@ -300,6 +303,7 @@ class f(GammTerm):
         self.id = id
         self.has_null_penalty = penalize_null
         self.by_cont = by_cont
+        self.drop_coef = None
 
         # Tensor bases can each have different number of basis functions
         if len(variables) == 1 or isinstance(nk,list):
@@ -319,6 +323,71 @@ class f(GammTerm):
            self.name += ")"
         if by_cont is not None:
            self.name += f",by_c={by_cont})"
+
+    def absorb_repara(self,rpidx,X,cov):
+      """Computes all terms necessary to absorb a re-parameterization into the term and penalty matrix.
+
+      :param rpidx: Index to specific reparam. obejct. There must be a 1 to 1 relationship between reparam. objects and the number of marginals required by this smooth (i.e., the number of variables).
+      :type rpidx: int
+      :param X: Design matrix associated with this term.
+      :type X: scipy.sparse.csc_array
+      :param cov: The covariate this term is a function of as a flattened numpy array.
+      :type cov: numpy.array
+      :raises ValueError: If this method is called with ``rpidx`` exceeding the number of this term's RP objects (i.e., when ``rpidx > (len(self.RP) - 1)``) or if ``self.rp`` is equal to a value for which no reparameterisation is implemented.
+      """
+
+      if len(self.RP) == 0:
+        warnings.warn("RP method called for term that should not be re-parameterized. Skipping RP attempt.")
+        return
+      
+      if rpidx > (len(self.RP) - 1):
+        raise ValueError(f"rpidx {rpidx} exceeds the {len(self.RP)} RP objects associated with term.")
+      
+      # Now safe to proceed with building RP object
+      vars = self.variables
+
+      if len(vars) > 1:
+        id_k = self.nk[rpidx]
+      else:
+        id_k = self.nk
+
+      if self.should_rp == 1:
+        # Demmler & Reinsch (1975) re-parameterization was requested - need penalty for this.
+        pen_kwargs = self.pen_kwargs[rpidx]
+        pen = self.penalty[rpidx]
+      
+        # Determine penalty generator
+        constraint = None
+        if pen == PenType.DIFFERENCE:
+          pen_generator = diff_pen
+          if self.is_identifiable:
+                id_k += 1
+                constraint = self.Z[rpidx]
+        else:
+          pen_generator = id_dist_pen
+
+        # Again get penalty elements used by this term.
+        pen_data,pen_rows,pen_cols,_,_,_,rank = pen_generator(id_k,constraint,**pen_kwargs)
+
+        # Make sure nk matches right dimension again
+        if self.is_identifiable:
+            id_k -= 1
+        
+        S_J = scp.sparse.csc_array((pen_data,(pen_rows,pen_cols)),shape=(id_k,id_k))
+
+        # Now can compute the actual re-parameterization
+        C, Srp, Drp, IRrp, rms1, rms2, _ = reparam(X,S_J,cov,QR=False,option=1,scale=True,identity=True)
+
+        self.RP[rpidx].C = C
+        self.RP[rpidx].Srp = Srp # Transformed penalty
+        self.RP[rpidx].Drp = Drp # Transformed root of penalty
+        self.RP[rpidx].IRrp = IRrp
+        self.RP[rpidx].rms1 = rms1
+        self.RP[rpidx].rms2 = rms2
+        self.RP[rpidx].rank = rank
+
+      else:
+        raise ValueError(f"Requested a reparameterisation {self.should_rp} that is not supported")
 
     def build_penalty(self,ti:int,penalties:[LambdaTerm],cur_pen_idx:int,pen:PenType,penid:int,factor_levels:dict,n_coef:int,col_S:int):
       """Builds a penalty matrix associated with this smooth term and returns an updated ``penalties`` list including it.
@@ -378,39 +447,29 @@ class f(GammTerm):
         if self.te == False:
             id_k -= 1
 
-      if self.should_rp > 0:
-        # Re-parameterization was requested
-        S_J = scp.sparse.csc_array((pen_data,(pen_rows,pen_cols)),shape=(id_k,id_k))
+      if self.should_rp == 1:
+        # Demmler & Reinsch (1975) Re-parameterization was requested
 
-        # Re-parameterize
-        # Below will break for multiple penalties on term
+        # Only supported for univariate term, so check
+        if len(vars) > 1:
+          raise ValueError(f"Demmler and Reinsch reparameterisation only supported for univariate smooth terms - but requested for term {ti}.")
+
+        # Find correct transformation index
         if len(vars) > 1:
           rp_idx = penid
         else:
           rp_idx = 0
         
-        
-        #C, Srp, Drp, IRrp, rms1, rms2, rp_rank = reparam(self.RP[rp_idx].X,S_J,self.RP[rp_idx].cov,QR=True,option=self.should_rp,scale=False,identity=False)
-        C, Srp, Drp, IRrp, rms1, rms2, rp_rank = reparam(self.RP[rp_idx].X,S_J,self.RP[rp_idx].cov,QR=False,option=self.should_rp,scale=True,identity=True)
-
-        self.RP[rp_idx].C = C
-        self.RP[rp_idx].IRrp = IRrp
-        self.RP[rp_idx].rms1 = rms1
-        self.RP[rp_idx].rms2 = rms2
-        self.RP[rp_idx].rank = rank
-
-        # Delete un-necessary X and cov references
-        # Will break if we re-initialzie penalties at some point... ToDo
-        #sterm.RP[rp_idx].X = None
-        #sterm.RP[rp_idx].cov = None
+        # Extract transformed penalty + root
+        Srp = self.RP[rp_idx].Srp
+        Drp = self.RP[rp_idx].Drp
 
         # Update penalty and chol factor
         pen_data,pen_rows,pen_cols = translate_sparse(Srp)
         chol_data,chol_rows,chol_cols = translate_sparse(Drp)
 
-        if len(vars) == 1:
-          # Prevent problems with TE penalties later..
-          pen = PenType.REPARAM
+        # Assign reparam type
+        pen = PenType.REPARAM1
 
       # Create lambda term
       lTerm = LambdaTerm(start_index=cur_pen_idx,
@@ -444,19 +503,40 @@ class f(GammTerm):
         if self.te and self.is_identifiable:
           id_k -= 1
 
-      
-      # Embed first penalty - if the term has a by-keyword more are added below.
-      lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,id_k,cur_pen_idx)
-      lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,id_k,cur_pen_idx)
+      # Final penalty matrix
       lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,id_k)
-      
+
       # Compute rank for TP penalty
       if len(vars) > 1:
         D = scp.linalg.eigh(lTerm.S_J.toarray(),eigvals_only=True)
         rank = len(D[D > max(D)*sys.float_info.epsilon**0.7])
+
       lTerm.rank = rank
+
+      # Embed first penalty - if the term has a by-keyword more are added below.
+      if self.drop_coef is None:
+        lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,id_k,cur_pen_idx)
+        lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,id_k,cur_pen_idx)
+        
+      else:
+        # Adjust penalty for dropped coef
+        pen_data_d,pen_rows_d,pen_cols_d,dropped = adjust_pen_drop(pen_data,pen_rows,pen_cols,self.drop_coef)
+
+        lTerm.S_J = embed_in_Sj_sparse(pen_data_d,pen_rows_d,pen_cols_d,None,id_k-dropped)
+
+        # Re-compute root & rank
+        eig, U =scp.linalg.eigh(lTerm.S_J.toarray())
+        rrank = sum([1 for e in eig if e >  np.power(sys.float_info.epsilon,0.7)])
+        rD_J = scp.sparse.csc_array(U@np.diag([np.power(e,0.5) if e > np.power(sys.float_info.epsilon,0.7) else 0 for e in eig]))
+        chol_data_d,chol_rows_d,chol_cols_d = translate_sparse(rD_J)
+
+        # And embed
+        lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data_d,chol_rows_d,chol_cols_d,lTerm.D_J_emb,col_S,id_k-dropped,cur_pen_idx)
+        lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data_d,pen_rows_d,pen_cols_d,lTerm.S_J_emb,col_S,id_k-dropped,cur_pen_idx)
+
+        # Adjust rank for dropped
+        lTerm.rank = rrank
       
-          
       if self.by is not None:
         by_levels = factor_levels[self.by]
           
@@ -467,14 +547,14 @@ class f(GammTerm):
           #for _ in range(pen_iter):
           #    lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,id_k,cur_pen_idx)
           #    lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,id_k,cur_pen_idx)
-          
-          chol_rep = np.tile(chol_data,pen_iter)
-          idx_row_rep = np.repeat(np.arange(pen_iter),len(chol_rows))*id_k
-          idx_col_rep = np.repeat(np.arange(pen_iter),len(chol_cols))*id_k
-          chol_rep_row = np.tile(chol_rows,pen_iter) + idx_row_rep
-          chol_rep_cols = np.tile(chol_cols,pen_iter) + idx_col_rep
-          
-          lTerm.D_J_emb, _ = embed_in_S_sparse(chol_rep,chol_rep_row,chol_rep_cols,lTerm.D_J_emb,col_S,id_k*pen_iter,cur_pen_idx)
+          if self.drop_coef is None:
+            chol_rep = np.tile(chol_data,pen_iter)
+            idx_row_rep = np.repeat(np.arange(pen_iter),len(chol_rows))*id_k
+            idx_col_rep = np.repeat(np.arange(pen_iter),len(chol_cols))*id_k
+            chol_rep_row = np.tile(chol_rows,pen_iter) + idx_row_rep
+            chol_rep_cols = np.tile(chol_cols,pen_iter) + idx_col_rep
+            
+            lTerm.D_J_emb, _ = embed_in_S_sparse(chol_rep,chol_rep_row,chol_rep_cols,lTerm.D_J_emb,col_S,id_k*pen_iter,cur_pen_idx)
 
           pen_rep = np.tile(pen_data,pen_iter)
           idx_row_rep = np.repeat(np.arange(pen_iter),len(pen_rows))*id_k
@@ -482,11 +562,60 @@ class f(GammTerm):
           pen_rep_row = np.tile(pen_rows,pen_iter) + idx_row_rep
           pren_rep_cols = np.tile(pen_cols,pen_iter) + idx_col_rep
 
-          lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_rep,pen_rep_row,pren_rep_cols,lTerm.S_J_emb,col_S,id_k*pen_iter,cur_pen_idx)
+          if self.drop_coef is None:
+            lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_rep,pen_rep_row,pren_rep_cols,lTerm.S_J_emb,col_S,id_k*pen_iter,cur_pen_idx)
+          else:
+            # Adjust penalty for dropped coef
+            pen_data_d,pen_rows_d,pen_cols_d,dropped = adjust_pen_drop(pen_rep,pen_rep_row,pren_rep_cols,self.drop_coef,offset=id_k)
+
+            lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data_d,pen_rows_d,pen_cols_d,lTerm.S_J_emb,col_S,(id_k*pen_iter)-dropped,cur_pen_idx)
+
+            lTerm.S_J = lTerm.S_J_emb[lTerm.start_index:cur_pen_idx,lTerm.start_index:cur_pen_idx]
+
+            ########### Re-compute root & rank blockwise ###########
+            rrank = 0
+            lTerm.D_J_emb = None
+            by_cols = np.arange(id_k*len(by_levels))
+            tmp_pen_idx_by = lTerm.start_index
+            lvl_drop = np.array(self.drop_coef)
+            for by_lvl in range(len(by_levels)):
+              
+              # First pick set of original columns associated with current level.
+              # Then Figure out whether a column needs to be dropped
+              lvl_cols = by_cols[by_lvl*id_k:(by_lvl+1)*id_k]
+              keep_col = ~np.isin(lvl_cols,lvl_drop)
+
+              # Now re-align columns, based on **all coefficients dropped** (i.e., across levels)
+              # To ensure that cols/rows dropped in lTerm.S_J from a previous level are also correctly removed/
+              # accounted for in the alignment.
+              lvl_cols_realign = np.zeros_like(lvl_cols)
+              lvl_cols_realign[:] = lvl_cols
+              for d in lvl_drop:
+                lvl_cols_realign[lvl_cols > d] -= 1
+              
+              # Now drop and select block of lTerm.S_J associated with current by-level
+              lvl_cols_realign = lvl_cols_realign[keep_col]
+              lvl_SJ = lTerm.S_J[lvl_cols_realign,:]
+              lvl_SJ = lvl_SJ[:,lvl_cols_realign]
+
+              # Now compute root & rank for this block and adjust overall rank accordingly.
+              eig, U =scp.linalg.eigh(lvl_SJ.toarray())
+              rrankJ = sum([1 for e in eig if e >  np.power(sys.float_info.epsilon,0.7)])
+              
+              rD_J = scp.sparse.csc_array(U@np.diag([np.power(e,0.5) if e > np.power(sys.float_info.epsilon,0.7) else 0 for e in eig]))
+              chol_data_dJ,chol_rows_dJ,chol_cols_dJ = translate_sparse(rD_J)
+
+              lTerm.D_J_emb, tmp_pen_idx_by = embed_in_S_sparse(chol_data_dJ,chol_rows_dJ,chol_cols_dJ,lTerm.D_J_emb,col_S,lvl_SJ.shape[1],tmp_pen_idx_by)
+              rrank += rrankJ
 
           # For pinv calculation during model fitting.
-          lTerm.rep_sj = pen_iter + 1
-          lTerm.rank = rank * (pen_iter + 1)
+          if self.drop_coef is None:
+            lTerm.rep_sj = pen_iter + 1
+            lTerm.rank = rank * (pen_iter + 1)
+          else:
+            lTerm.rep_sj = 1
+            lTerm.rank = rrank
+
           penalties.append(lTerm)
 
         else:
@@ -496,7 +625,7 @@ class f(GammTerm):
 
           pen_iter = len(by_levels) - 1
 
-          for _ in range(pen_iter):
+          for by_lvl in range(pen_iter):
 
               # Create lambda term
               lTerm = LambdaTerm(start_index=cur_pen_idx,
@@ -504,10 +633,31 @@ class f(GammTerm):
                                            term=ti)
 
               # Embed penalties
-              lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,id_k,cur_pen_idx)
-              lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,id_k,cur_pen_idx)
-              lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,id_k)
               lTerm.rank = rank
+
+              if self.drop_coef is None:
+                lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,id_k,cur_pen_idx)
+                lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,id_k,cur_pen_idx)
+                lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,id_k)
+              else:
+                # Adjust penalty for dropped coef
+                pen_data_d,pen_rows_d,pen_cols_d,dropped = adjust_pen_drop(pen_data,pen_rows,pen_cols,self.drop_coef,offset=(by_lvl+1)*id_k)
+
+                lTerm.S_J = embed_in_Sj_sparse(pen_data_d,pen_rows_d,pen_cols_d,lTerm.S_J,id_k-dropped)
+
+                # Re-compute root & rank
+                eig, U =scp.linalg.eigh(lTerm.S_J.toarray())
+                rrank = sum([1 for e in eig if e >  np.power(sys.float_info.epsilon,0.7)])
+                rD_J = scp.sparse.csc_array(U@np.diag([np.power(e,0.5) if e > np.power(sys.float_info.epsilon,0.7) else 0 for e in eig]))
+                chol_data_d,chol_rows_d,chol_cols_d = translate_sparse(rD_J)
+                
+                # And embed
+                lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data_d,chol_rows_d,chol_cols_d,lTerm.D_J_emb,col_S,id_k-dropped,cur_pen_idx)
+                lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data_d,pen_rows_d,pen_cols_d,lTerm.S_J_emb,col_S,id_k-dropped,cur_pen_idx)
+
+                # Adjust rank for dropped
+                lTerm.rank = rrank
+              
               penalties.append(lTerm)
 
       else:
@@ -562,6 +712,10 @@ class f(GammTerm):
       if self.by is not None:
         by_levels = factor_levels[self.by]
         n_coef *= len(by_levels)
+
+      # Adjust for dropped coef.
+      if self.drop_coef is not None:
+        n_coef -= len(self.drop_coef)
           
       # Calculate smooth term for corresponding covariate
 
@@ -631,24 +785,31 @@ class f(GammTerm):
         by_cov = cov_flat[:,var_map[self.by]]
         
         # Split by cov and update rows with elements in columns
+        m_coli_by = 0
         for by_level in range(len(by_levels)):
           by_cidx = by_cov == by_level
           for m_coli in range(m_cols):
-              term_ridx.append(ridx[by_cidx,])
+              if self.drop_coef is None or m_coli_by not in self.drop_coef:
+                term_ridx.append(ridx[by_cidx,])
+              m_coli_by += 1
       
       # Handle optional binary keyword
       elif self.binary is not None:
-        term_ridx = []
 
         by_cov = cov_flat[:,var_map[self.binary[0]]]
         by_cidx = by_cov == self.binary_level
 
-        for m_coli in range(m_cols):
-          term_ridx.append(ridx[by_cidx,])
+        if self.drop_coef is None:
+          term_ridx = [ridx[by_cidx,] for _ in range(m_cols)]
+        else:
+          term_ridx = [ridx[by_cidx,] for m_coli in range(m_cols) if m_coli not in self.drop_coef]
 
       # No by or binary just use rows/cols as they are
       else:
-        term_ridx = [ridx[:] for _ in range(m_cols)]
+        if self.drop_coef is None:
+          term_ridx = [ridx[:] for _ in range(m_cols)]
+        else:
+          term_ridx = [ridx[:] for m_coli in range(m_cols) if m_coli not in self.drop_coef]
 
       f_cols = len(term_ridx)
 
@@ -714,6 +875,13 @@ class f(GammTerm):
           
       else:
           coef_names.extend([f"f_{var_label}_{ink}" for ink in range(term_n_coef)])
+      
+      # Adjust for drop
+      if self.drop_coef is not None:
+        n_coef -= len(self.drop_coef)
+        n_idx = np.arange(len(coef_names))
+        keep = ~np.isin(n_idx,self.drop_coef)
+        coef_names = [coef_names[ni] for ni in n_idx[keep]]
       
       # Check if term is penalized - if not we need to return the correct number of unpenalized coefficients
       n_nopen = 0

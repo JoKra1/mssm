@@ -2,8 +2,9 @@
 #include <pybind11/eigen.h>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
-#include<Eigen/Sparse>
+#include <Eigen/Sparse>
 #include <Eigen/Dense>
+#include <Eigen/Householder>
 #include <iostream>
 #include <vector>
 #include <memory>
@@ -754,6 +755,65 @@ Eigen::SparseMatrix<double,0,long long int> backsolve_tr(long long int Arows, lo
     return C;
 }
 
+std::tuple<VectorXi64,long long int> id_dependencies(const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &X1,
+                                                                     const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &X2,
+                                                                     double tol)
+            {
+                /*
+                Identify linear dependencies between matrices X1 and X2, based on section 5.6.3 in Wood (2017) and
+                the fixDependence function in mgcv, see: https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/mgcv.r#L501
+                */
+
+                size_t X1cols = X1.cols();
+
+                // Need QR decomposition of X1
+                Eigen::HouseholderQR<Eigen::MatrixXd> qr1(X1);
+                Eigen::MatrixXd R1 = qr1.matrixQR().triangularView<Eigen::Upper>();
+
+                // Need to check for zero blocks in R2 later on - mgcv uses first diagonal element on R1 as an indication of a "healthy" element to threshold, so we do the same
+                double thresh = abs(R1(0,0))*tol;
+                
+                // B = Q1.T@X2
+                Eigen::MatrixXd B(X2);
+                B.applyOnTheLeft(qr1.householderQ().adjoint());
+
+                // Extract lower block
+                B = B(Eigen::seq(X1cols,Eigen::last),Eigen::all);
+                
+                // Apply second QR decomposition, now with pivoting
+                Eigen::ColPivHouseholderQR<Eigen::MatrixXd> qr2(B);
+                
+                // Extract pivot and rank estimate
+                VectorXi64 piv = qr2.colsPermutation().indices().cast<long long int>();
+                
+                // Now check for zero block in lower right corner of R2.
+                // Make sure that any previous rank determination by Eigen is aknolwedged.
+                long long int r = qr2.rank();
+                Eigen::MatrixXd R2 = qr2.matrixR().topLeftCorner(r,r).triangularView<Eigen::Upper>();
+                
+                double mb;
+                while (r > 0)
+                {
+                    // The check of the mean absolute value of the sub-block is performed by mgcv, so we use the same here.
+                    // see: https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/mgcv.r#L526
+                    mb = R2(Eigen::seq(r-1,Eigen::last),
+                            Eigen::seq(r-1,Eigen::last)).array().abs().mean();
+
+                    // mean absolute block value too large to hint at zero block -> get out
+                    if (mb >= thresh)
+                    {
+                        break;
+                    }
+                    
+                    // Lower rank by 1
+                    r--;
+                    
+                }
+
+                return std::make_tuple(piv,r);
+
+            }
+
 PYBIND11_MODULE(eigen_solvers, m) {
     m.doc() = "cpp solvers for GAMM, GAMMLSS, and GSMM estimation";
     m.def("chol", &chol, "Compute cholesky factor L of A");
@@ -771,4 +831,5 @@ PYBIND11_MODULE(eigen_solvers, m) {
     m.def("solve_coefXX", &solve_coefXX, "Solve additive model coefficients, but with XX + S and Xy pre-computed.");
     m.def("solve_tr",&solve_tr,"Solve A*B = C, where A is lower triangular.");
     m.def("backsolve_tr",&backsolve_tr,"Solve A*B = C, where A is upper triangular.");
+    m.def("id_dependencies",&id_dependencies,"Identify linear dependencies between matrices X1 and X2.");
 }

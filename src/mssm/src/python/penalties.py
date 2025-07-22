@@ -7,6 +7,51 @@ import copy
 
 ##################################### Penalty functions #####################################
 
+def adjust_pen_drop(dat,rows,cols,drop,offset=0):
+   """Adjusts penalty matrix (represented via ``dat``, ``rows``, and ``cols``) by dropping rows and columns indicated by ``drop``.
+
+   Optionally, ``offset`` is added to the elements in ``rows`` and ``cols``, which is useful when indices in ``drop`` do not start at zero.
+
+   :param dat: List of elements in penalty matrix.
+   :type dat: [float]
+   :param rows: List of row indices of penalty matrix.
+   :type rows: [int]
+   :param cols: List of column indices of penalty matrix.
+   :type cols: [int]
+   :param drop: Rows and columns to drop from penalty matrix. Might actually contain indices corresponding to ``rows + offset`` and ``cols + offset``, which can be corrected for via the ``offset`` argument.
+   :type drop: [int]
+   :param offset: An optional offset to add to ``rows`` and ``cols`` to adjust for the indexing in ``drop``, defaults to 0
+   :type offset: int, optional
+   :return: A tuple with 4 elements: the data, rows, and cols of the adjusted penalty matrix excluding dropped elements and the number of excluded elements.
+   :rtype: ([float],[int],[int],int)
+   """
+   rows = np.array(rows)
+   cols = np.array(cols)
+   dat = np.array(dat)
+
+   drop_idx = np.isin(drop,cols + offset)
+   dropped = np.sum(drop_idx)
+   drop = np.array(drop)[drop_idx]
+   
+   keep_col = ~np.isin(cols + offset,drop)
+   keep_row = ~np.isin(rows + offset,drop)
+
+   keep = keep_col & keep_row
+
+   # Now adjust cols & rows
+   rows_realign = np.zeros_like(rows)
+   cols_realign = np.zeros_like(cols)
+
+   rows_realign[:] = rows
+   cols_realign[:] = cols
+
+   for d in drop:
+      rows_realign[rows + offset > d] -= 1
+      cols_realign[cols + offset > d] -= 1
+   
+   # Now return
+   return list(dat[keep]),list(rows_realign[keep]),list(cols_realign[keep]),dropped
+
 def embed_in_S_sparse(pen_data,pen_rows,pen_cols,S_emb,S_col,SJ_col,cIndex):
    """Embed a term-specific penalty matrix (provided as elements, row and col indices) into the across-term penalty matrix (see Wood, 2017) """
 

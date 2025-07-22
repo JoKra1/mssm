@@ -175,7 +175,7 @@ class Test_GAMM:
                                f(["time","x"],by="cond",constraint=ConstType.QR), # three-way interaction
                                fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
                         data=dat,
-                        print_warn=False)
+                        print_warn=False,find_nested=False)
         
     model = GAMM(formula,Gaussian())
 
