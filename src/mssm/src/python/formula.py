@@ -1388,91 +1388,124 @@ def build_penalties(formula):
                   if not sterm.approx_deriv is None:
                      penalties[-1].clust_series = formula.discretize[sti]["clust_series"]
                      penalties[-1].clust_weights = formula.discretize[sti]["clust_weights"]
-
+               
+               # Optionally include a Null-space penalty - an extra penalty on the
+               # function space not regularized by the penalty we just created:
                if sterm.has_null_penalty:
 
+                  is_reparam1 = False
                   n_pen = len(penalties)
-                  # Optionally include a Null-space penalty - an extra penalty on the
-                  # function space not regularized by the penalty we just created:
 
-                  S_j_last = penalties[-1].S_J.toarray()
-                  last_pen_rep = penalties[-1].rep_sj
-
-                  is_reparam1 = penalties[-1].type == PenType.REPARAM1 # Only for univariate smooths should this be true.
-
+                  # Below we distinguish between TP smooths of multiple variables and single variable smooths.
+                  # For TP smooths Marra & Wood (2011) suggest to first sum over the penalties for individual
+                  # variables and then computing the null-space for that summed penalty.
                   if len(vars) > 1:
-                     # Distinguish between TP smooths of multiple variables and
-                     # single variable smooths. For TP smooths Marra & Wood (2011) suggest to first
-                     # sum over the penalties for individual variables and then computing the null-space
-                     # for that summed penalty.
 
-                     # First sum over the first len(vars) penalties that were recently added. If there
-                     # are more then these are identical - just corresponding to different by levels.
-                     # Therefore, last_pen_rep also does not have to be updated.
+                     # For multivariate smooths, we need to chek for the possibility of separate penalties
+                     # for different bylevels. These might not be identical - in case different coefficients might have been dropped
+                     # for each level. Thus we need to keep track of a list of sums; one sum per by-level
+                     # and compute the null-space penalty separately per penalty in those lists.
+                     if (sterm.drop_coef) is not None and (sterm.by is not None) and (sterm.id is None):
+                        
+                        if penid == 0:
+                           S_j_TP_last = [penalties[-(pidx+1)].S_J.toarray() for pidx in range(len(by_levels)-1,-1,-1)]
+                        else:
+                           new_TP_last = [penalties[-(pidx+1)].S_J.toarray() for pidx in range(len(by_levels)-1,-1,-1)]
+                           S_j_TP_last = [S_j_TP_last[pidx] + new_TP_last[pidx] for pidx in range(len(new_TP_last))]
 
-                     if penid == 0:
-                        S_j_TP_last =  S_j_last
+                     # Here all potential penalties belonging to different bylevels are equivalent. Or we have no bylevels. OR we have an id.
+                     # Any of those means that penalties from different variables are equivalent and we can just maintain a single penalty sum.
                      else:
-                        S_j_TP_last +=  S_j_last
+                        S_j_last = penalties[-1].S_J.toarray()
+
+                        if penid == 0:
+                           S_j_TP_last =  [S_j_last]
+                        else:
+                           S_j_TP_last[0] +=  S_j_last
                      
+                     # Keep track of penalties added for tensor smooths, note that (n_pen - prev_n_pen) will be > 1 for by level smooths
                      TP_last_n += (n_pen - prev_n_pen)
 
-                     if penid < (len(sterm.penalty) - 1):
+                     if penid < (len(sterm.penalty) - 1): # Not done yet - more penalties to build
                         continue
 
-                     # In the end update the number of new penalties based on the number of variables
-                     # involed in the TP.
+                     # This holds the final list of penalty sums
                      S_j_last = S_j_TP_last
-                     n_pen = prev_n_pen + int(TP_last_n / len(vars))
                   
-                  idk = S_j_last.shape[1]
+                     # In the end, update the number of new penalties based on the number of variables
+                     # involed for TPs
+                     added_pen = int(TP_last_n / len(vars))
+                     
+                  else:
+                     # check for Demmler & Reinsch reparameterization for univariate smooths
+                     S_j_last = [penalties[-1].S_J.toarray()]
+                     is_reparam1 = penalties[-1].type == PenType.REPARAM1 # Only for univariate smooths should this be true.
+                     added_pen = n_pen - prev_n_pen
 
+                  # Number of coefficients depends on which type S_j_last is: list with multiple elements or not?
+                  if len(S_j_last) == 1:
+                     idk = [S_j_last[0].shape[1]]
+                     last_pen_rep = penalties[-1].rep_sj # Might have repetition in case of id keyword
+                  else:
+                     idk = [SJ.shape[1] for SJ in S_j_last]
+                     last_pen_rep = 1 # No repetition for independent by-level penalties!
+                  
+                  # Now compute the desired Null-space penalties
+
+                  NULL_DIMs = [] # Rank of Nullspace-penalty
+                  NULL_idks = [] # Dimension of penalty
+                  NULL_S = [] # Nullspace penalty in [dat,row,col]
+                  NULL_D = [] # Root of Nullspace penalty in [dat, row, col]
+                  
                   if is_reparam1 == False:
                      # Based on: Marra & Wood (2011) and: https://rdrr.io/cran/mgcv/man/gam.selection.html
                      # and: https://eric-pedersen.github.io/mgcv-esa-workshop/slides/03-model-selection.pdf
-                     s, U =scp.linalg.eigh(S_j_last)
-                     DNULL = U[:,s <= 1e-7]
-                     NULL_DIM = DNULL.shape[1] # Null-space dimension
-                     DNULL = DNULL.reshape(S_j_last.shape[1],-1)
 
-                     SNULL = DNULL @ DNULL.T
+                     for sji,S_ji_last in enumerate(S_j_last):
+                        s, U =scp.linalg.eigh(S_ji_last)
+                        DNULL = U[:,s <= 1e-7]
+                        NULL_DIM = DNULL.shape[1] # Null-space dimension
+                        DNULL = DNULL.reshape(S_ji_last.shape[1],-1)
 
-                     SNULL = scp.sparse.csc_array(SNULL)
-                     DNULL = scp.sparse.csc_array(DNULL)
-                     
+                        SNULL = DNULL @ DNULL.T
 
-                     # Data in S and D is in canonical format, for competability this is translated to data, rows, columns
-                     pen_data,pen_rows,pen_cols = translate_sparse(SNULL)
-                     chol_data,chol_rows,chol_cols = translate_sparse(DNULL)
-                     NULL_rep = 1
-                     NULL_S = [[pen_data,pen_rows,pen_cols]]
-                     NULL_D = [[chol_data,chol_rows,chol_cols]]
-                  
+                        SNULL = scp.sparse.csc_array(SNULL)
+                        DNULL = scp.sparse.csc_array(DNULL)
+                        
+
+                        # Data in S and D is in canonical format, for competability this is translated to data, rows, columns
+                        pen_data,pen_rows,pen_cols = translate_sparse(SNULL)
+                        chol_data,chol_rows,chol_cols = translate_sparse(DNULL)
+
+                        NULL_S.append([pen_data,pen_rows,pen_cols])
+                        NULL_D.append([chol_data,chol_rows,chol_cols])
+                        NULL_DIMs.append(NULL_DIM)
+                        NULL_idks.append(idk[sji])
+
                   else:
                      # Under the Demmler & Reinsch (1975) re-parameterization the last S.shape[1] - S.rank cols/rows correspond to functions in the kernel.
                      # Hence we can simply place identity penalties on those to shrink them to zero. In this form we can also readily
                      # have separate penalties on different null-space functions! This is how mgcv implements factor smooths as well.
-                     NULL_S = []
-                     NULL_D = []
 
-                     NULL_DIM = S_j_last.shape[1] - sterm.RP[0].rank # Null-space dimension
+                     # Can only happen to univariate smooth, so indexing S_j_last is safe here.
+
+                     NULL_DIM = S_j_last[0].shape[1] - sterm.RP[0].rank # Null-space dimension
                      
-                     for nci in range(S_j_last.shape[1] - NULL_DIM, S_j_last.shape[1]):
+                     for nci in range(S_j_last[0].shape[1] - NULL_DIM, S_j_last[0].shape[1]):
                         
                         NULL_S.append([[1],[nci],[nci]])
                         NULL_D.append([[1],[nci],[nci]])
+                        NULL_DIMs.append(1)
+                        NULL_idks.append(idk[0])
                      
-                     NULL_rep = NULL_DIM
-
-                  for nri in range(NULL_rep):
-
-                     nri_rank = NULL_DIM
-                     if NULL_rep > 1:
-                        nri_rank = 1
-
+                  # Now iterate over Null-space penalties
+                  for nri in range(len(NULL_DIMs)):
+                     
+                     # Get current Nullspace penalty
+                     nri_rank = NULL_DIMs[nri]
                      pen_data,pen_rows,pen_cols = NULL_S[nri]
                      chol_data,chol_rows,chol_cols = NULL_D[nri]
-                     
+                     idk = NULL_idks[nri]
 
                      cur_pen_idx = prev_pen_idx
 
@@ -1480,60 +1513,67 @@ def build_penalties(formula):
                                           type = PenType.NULL,
                                           term = sti)
                      
-                     # Embed first penalty - if the term has a by-keyword more are added below.
+                     # Embed first penalty
                      lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,idk,cur_pen_idx)
                      lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,idk,cur_pen_idx)
                      lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,idk)
                      lTerm.rank = nri_rank
-                     
-                     # Single penalty added - but could involve by keyword
-                     if (n_pen - prev_n_pen) == 1:
-                        
-                        # Handle any By-keyword
-                        if last_pen_rep > 1:
-                           pen_iter = last_pen_rep - 1
-                           #for _ in range(pen_iter):
-                           #   lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,idk,cur_pen_idx)
-                           #   lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,idk,cur_pen_idx)
-                           
-                           chol_rep = np.tile(chol_data,pen_iter)
-                           idx_row_rep = np.repeat(np.arange(pen_iter),len(chol_rows))*idk
-                           idx_col_rep = np.repeat(np.arange(pen_iter),len(chol_cols))*idk
-                           chol_rep_row = np.tile(chol_rows,pen_iter) + idx_row_rep
-                           chol_rep_cols = np.tile(chol_cols,pen_iter) + idx_col_rep
-                           
-                           lTerm.D_J_emb, _ = embed_in_S_sparse(chol_rep,chol_rep_row,chol_rep_cols,lTerm.D_J_emb,col_S,idk*pen_iter,cur_pen_idx)
 
-                           pen_rep = np.tile(pen_data,pen_iter)
-                           idx_row_rep = np.repeat(np.arange(pen_iter),len(pen_rows))*idk
-                           idx_col_rep = np.repeat(np.arange(pen_iter),len(pen_cols))*idk
-                           pen_rep_row = np.tile(pen_rows,pen_iter) + idx_row_rep
-                           pren_rep_cols = np.tile(pen_cols,pen_iter) + idx_col_rep
-
-                           lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_rep,pen_rep_row,pren_rep_cols,lTerm.S_J_emb,col_S,idk*pen_iter,cur_pen_idx)
-                           
-                           lTerm.rep_sj = last_pen_rep
-
-                        # In any case, term can be appended here.
-                        lTerm.rank = nri_rank*last_pen_rep
+                     # Update prev_pen_idx for split by penalties and append current one
+                     if len(S_j_last) > 1:
                         penalties.append(lTerm)
+                        prev_pen_idx = cur_pen_idx
+                     
+                     # Handle equal penalties per by-level with id keyword
                      else:
-                        # Independent penalties via by
-                        # Append penalty for first level
-                        penalties.append(lTerm)
+                        # Single penalty added - but could involve by keyword
+                        if (added_pen) == 1:
+                           
+                           # Handle any By-keyword
+                           if last_pen_rep > 1:
+                              pen_iter = last_pen_rep - 1
+                              #for _ in range(pen_iter):
+                              #   lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,idk,cur_pen_idx)
+                              #   lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,idk,cur_pen_idx)
+                              
+                              chol_rep = np.tile(chol_data,pen_iter)
+                              idx_row_rep = np.repeat(np.arange(pen_iter),len(chol_rows))*idk
+                              idx_col_rep = np.repeat(np.arange(pen_iter),len(chol_cols))*idk
+                              chol_rep_row = np.tile(chol_rows,pen_iter) + idx_row_rep
+                              chol_rep_cols = np.tile(chol_cols,pen_iter) + idx_col_rep
+                              
+                              lTerm.D_J_emb, _ = embed_in_S_sparse(chol_rep,chol_rep_row,chol_rep_cols,lTerm.D_J_emb,col_S,idk*pen_iter,cur_pen_idx)
 
-                        # And add the penalties again for the remaining levels as separate terms
-                        for _ in range((n_pen - prev_n_pen) - 1):
-                           lTerm = LambdaTerm(start_index=cur_pen_idx,
-                                          type = PenType.NULL,
-                                          term = sti)
-                     
-                           # Embed penalties
-                           lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,idk,cur_pen_idx)
-                           lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,idk,cur_pen_idx)
-                           lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,idk)
-                           lTerm.rank = nri_rank
+                              pen_rep = np.tile(pen_data,pen_iter)
+                              idx_row_rep = np.repeat(np.arange(pen_iter),len(pen_rows))*idk
+                              idx_col_rep = np.repeat(np.arange(pen_iter),len(pen_cols))*idk
+                              pen_rep_row = np.tile(pen_rows,pen_iter) + idx_row_rep
+                              pren_rep_cols = np.tile(pen_cols,pen_iter) + idx_col_rep
+
+                              lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_rep,pen_rep_row,pren_rep_cols,lTerm.S_J_emb,col_S,idk*pen_iter,cur_pen_idx)
+                              
+                              lTerm.rep_sj = last_pen_rep
+
+                           # In any case, term can be appended here.
+                           lTerm.rank = nri_rank*last_pen_rep
                            penalties.append(lTerm)
+                        else:
+                           # Independent penalties via by
+                           # Append penalty for first level
+                           penalties.append(lTerm)
+
+                           # And add the penalties again for the remaining levels as separate terms
+                           for _ in range((added_pen) - 1):
+                              lTerm = LambdaTerm(start_index=cur_pen_idx,
+                                             type = PenType.NULL,
+                                             term = sti)
+                        
+                              # Embed penalties
+                              lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,idk,cur_pen_idx)
+                              lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,idk,cur_pen_idx)
+                              lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,idk)
+                              lTerm.rank = nri_rank
+                              penalties.append(lTerm)
 
          # Keep track of previous penalty starting index
          prev_pen_idx = cur_pen_idx

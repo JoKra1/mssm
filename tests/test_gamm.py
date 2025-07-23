@@ -229,7 +229,7 @@ class Test_NUll_3:
     model.fit(**default_gamm_test_kwargs)
 
     def test_GAMedf(self):
-        assert round(self.model.edf,ndigits=2) == 151.46 
+        assert round(self.model.edf,ndigits=2) == 151.47
 
     def test_GAMsigma(self):
         _, sigma = self.model.get_pars()
@@ -237,7 +237,7 @@ class Test_NUll_3:
 
     def test_GAMreml(self):
         reml = self.model.get_reml()
-        assert round(reml,ndigits=3) == -134748.718 
+        assert round(reml,ndigits=3) == -134748.719
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
