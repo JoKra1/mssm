@@ -126,6 +126,163 @@ class Test_NUll_penalty_reparam:
         assert round(llk,ndigits=1) == -134265.0
 
 
+class Test_NUll_1:
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+
+    # mssm requires that the data-type for variables used as factors is 'O'=object
+    dat = dat.astype({'series': 'O',
+                    'cond':'O',
+                    'sub':'O',
+                    'series':'O'})
+
+    # Add Null-penalties to univariate by-term and tensor by-term
+    formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
+                        terms=[i(), # The intercept, a
+                                l(["cond"]), # For cond='b'
+                                f(["time"],by="cond",constraint=ConstType.QR,penalize_null=True), # to-way interaction between time and cond; one smooth over time per cond level
+                                f(["x"],by="cond",constraint=ConstType.QR,penalize_null=False), # to-way interaction between x and cond; one smooth over x per cond level
+                                f(["time","x"],by="cond",constraint=ConstType.QR,penalize_null=True), # three-way interaction
+                                fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
+                        data=dat,
+                        print_warn=False,find_nested=False)
+        
+    model = GAMM(formula,Gaussian())
+
+    model.fit(**default_gamm_test_kwargs)
+
+    def test_GAMedf(self):
+        assert round(self.model.edf,ndigits=2) == 151.46 
+
+    def test_GAMsigma(self):
+        _, sigma = self.model.get_pars()
+        assert round(sigma,ndigits=3) == 577.199 
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        assert round(reml,ndigits=3) == -134748.718 
+
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        assert round(llk,ndigits=1) == -134265.0
+
+class Test_NUll_2:
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+
+    # mssm requires that the data-type for variables used as factors is 'O'=object
+    dat = dat.astype({'series': 'O',
+                    'cond':'O',
+                    'sub':'O',
+                    'series':'O'})
+
+    # Add Null-penalties to univariate by-term and tensor by-term
+    formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
+                        terms=[i(), # The intercept, a
+                                l(["cond"]), # For cond='b'
+                                f(["time"],by="cond",constraint=ConstType.QR,penalize_null=True), # to-way interaction between time and cond; one smooth over time per cond level
+                                f(["x"],by="cond",constraint=ConstType.QR,penalize_null=False), # to-way interaction between x and cond; one smooth over x per cond level
+                                f(["time","x"],by="cond",constraint=ConstType.QR,penalize_null=True,id=1), # three-way interaction
+                                fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
+                        data=dat,
+                        print_warn=False,find_nested=False)
+        
+    model = GAMM(formula,Gaussian())
+
+    model.fit(**default_gamm_test_kwargs)
+
+    def test_GAMedf(self):
+        assert round(self.model.edf,ndigits=2) == 151.46 
+
+    def test_GAMsigma(self):
+        _, sigma = self.model.get_pars()
+        assert round(sigma,ndigits=3) == 577.199 
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        assert round(reml,ndigits=3) == -134748.718 
+
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        assert round(llk,ndigits=1) == -134265.0
+
+class Test_NUll_3:
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+
+    # mssm requires that the data-type for variables used as factors is 'O'=object
+    dat = dat.astype({'series': 'O',
+                    'cond':'O',
+                    'sub':'O',
+                    'series':'O'})
+
+    # Add Null-penalties to univariate by-term and tensor by-term
+    formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
+                        terms=[i(), # The intercept, a
+                                l(["cond"]), # For cond='b'
+                                f(["time"],by="cond",constraint=ConstType.QR,penalize_null=True), # to-way interaction between time and cond; one smooth over time per cond level
+                                f(["x"],by="cond",constraint=ConstType.QR,penalize_null=False), # to-way interaction between x and cond; one smooth over x per cond level
+                                f(["time","x"],by="cond",constraint=ConstType.QR,penalize_null=True), # three-way interaction
+                                fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
+                        data=dat,
+                        print_warn=False,find_nested=True)
+        
+    model = GAMM(formula,Gaussian())
+
+    model.fit(**default_gamm_test_kwargs)
+
+    def test_GAMedf(self):
+        assert round(self.model.edf,ndigits=2) == 151.46 
+
+    def test_GAMsigma(self):
+        _, sigma = self.model.get_pars()
+        assert round(sigma,ndigits=3) == 577.199 
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        assert round(reml,ndigits=3) == -134748.718 
+
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        assert round(llk,ndigits=1) == -134265.0
+
+class Test_NUll_4:
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+
+    # mssm requires that the data-type for variables used as factors is 'O'=object
+    dat = dat.astype({'series': 'O',
+                    'cond':'O',
+                    'sub':'O',
+                    'series':'O'})
+
+    # Add Null-penalties to univariate by-term and tensor by-term
+    formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
+                        terms=[i(), # The intercept, a
+                                l(["cond"]), # For cond='b'
+                                f(["time"],by="cond",constraint=ConstType.QR,penalize_null=True), # to-way interaction between time and cond; one smooth over time per cond level
+                                f(["x"],by="cond",constraint=ConstType.QR,penalize_null=False), # to-way interaction between x and cond; one smooth over x per cond level
+                                f(["time","x"],by="cond",constraint=ConstType.QR,penalize_null=True,id=1), # three-way interaction
+                                fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
+                        data=dat,
+                        print_warn=False,find_nested=True)
+        
+    model = GAMM(formula,Gaussian())
+
+    model.fit(**default_gamm_test_kwargs)
+
+    def test_GAMedf(self):
+        assert round(self.model.edf,ndigits=2) == 151.46 
+
+    def test_GAMsigma(self):
+        _, sigma = self.model.get_pars()
+        assert round(sigma,ndigits=3) == 577.199 
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        assert round(reml,ndigits=3) == -134748.718 
+
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        assert round(llk,ndigits=1) == -134265.0
+
+
 class Test_BIG_GAMM:
 
     file_paths = [f'https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat_cond_{cond}.csv' for cond in ["a","b"]]
