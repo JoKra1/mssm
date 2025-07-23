@@ -174,6 +174,11 @@ class Formula():
         # Perform input checks first for LHS/Dependent variable.
         if len(self.file_paths) == 0 and self.lhs.variable not in self.data.columns:
             raise IndexError(f"Column '{self.lhs.variable}' does not exist in Dataframe.")
+        
+        if len(self.file_paths) != 0 and self.keep_cov == False and self.find_nested:
+           if print_warn:
+               warnings.warn("``find_nested=True`` is not supported when iteratively building the model matrix and not keeping the encoded data (i.e., when ``keep_cov=False``). Setting ``find_nested=False``")
+           self.find_nested = False
 
         # Now some checks on the terms - some problems might only be caught later when the 
         # penalties are built.
@@ -1034,10 +1039,7 @@ class Formula():
             if sterm.is_identifiable and sterm.te == False:
                   id_nk += 1
             
-            if len(self.file_paths) == 0:
-                  var_cov_flat = cov_flat[self.NOT_NA_flat,var_map[vars[vi]]]
-            else:
-                  var_cov_flat = read_cov(self.lhs.variable,vars[vi],self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
+            var_cov_flat = cov_flat[self.NOT_NA_flat,var_map[vars[vi]]]
 
             matrix_term_v = sterm.basis(var_cov_flat,
                                           None,id_nk,min_c=self.var_mins[vars[vi]],
