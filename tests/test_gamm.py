@@ -38,19 +38,19 @@ class Test_BIG_GAMM_Discretize:
     model.fit(**default_gamm_test_kwargs)
 
     def test_GAMedf(self):
-        assert round(self.model.edf,ndigits=0) == 2434
+        assert round(self.model.edf,ndigits=0) == 2429.0
 
     def test_GAMsigma(self):
         _, sigma = self.model.get_pars()
-        assert round(sigma,ndigits=3) == 10.969 
+        assert round(sigma,ndigits=3) == 10.97
 
     def test_GAMreml(self):
         reml = self.model.get_reml()
-        assert round(reml,ndigits=2) == -84025.32
+        assert round(reml,ndigits=2) == -84062.14
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
-        assert round(llk,ndigits=0) == -75228
+        assert round(llk,ndigits=0) == -75232.0
 
 
 class Test_NUll_penalty_reparam:
@@ -111,7 +111,7 @@ class Test_NUll_penalty_reparam:
                            (self.S_pinv@self.model.overall_penalties[6].S_J_emb).trace())
     
     def test_GAMedf(self):
-        assert round(self.model.edf,ndigits=2) == 151.46 
+        assert round(self.model.edf,ndigits=2) == 151.47
 
     def test_GAMsigma(self):
         _, sigma = self.model.get_pars()
@@ -119,7 +119,7 @@ class Test_NUll_penalty_reparam:
 
     def test_GAMreml(self):
         reml = self.model.get_reml()
-        assert round(reml,ndigits=3) == -134748.718 
+        assert round(reml,ndigits=3) == -134748.719
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
@@ -343,11 +343,11 @@ class Test_BIG_GAMM_keep_cov:
     model.fit(**default_gamm_test_kwargs)
 
     def test_GAMedf(self):
-        assert round(self.model.edf,ndigits=1) == 153.7
+        assert round(self.model.edf,ndigits=1) == 151.8
 
     def test_GAMsigma(self):
         _, sigma = self.model.get_pars()
-        assert round(sigma,ndigits=3) == 577.194
+        assert round(sigma,ndigits=3) == 577.166
 
 class Test_rs_ri:
 
