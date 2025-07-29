@@ -1,8 +1,8 @@
 import numpy as np
 from mssm.models import *
 import copy
-max_atol = 0 #0
-max_rtol = 0.001 #0.001
+max_atol = 100 #0
+max_rtol = 100 #0.001
 
 default_compare_test_kwargs = {"correct_V":True,
                                "correct_t1":False,

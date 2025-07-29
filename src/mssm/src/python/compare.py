@@ -9,23 +9,23 @@ from collections.abc import Callable
 def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
                 model2:GAMM | GAMMLSS | GSMM,
                 correct_V:bool=True,
-                correct_t1:bool=False,
+                correct_t1:bool|None=None,
                 perform_GLRT:bool=False,
                 nR:int=250,
-                n_c:int=10,
+                n_c:int=1,
                 alpha:int=0.05,
-                grid:str='JJJ1',
+                grid:str|None=None,
                 a:float=1e-7,b:float=1e7,df:int=40,
                 verbose:bool=False,
                 drop_NA:bool=True,
                 method:str="Chol",
                 seed:int|None=None,
-                only_expected_edf:bool=False,
+                only_expected_edf:bool|None=None,
                 Vp_fidiff:bool=False,
-                use_importance_weights:bool=True,
+                use_importance_weights:bool|None=None,
                 prior:Callable|None=None,
-                recompute_H:bool=False,
-                compute_Vcc:bool=True,
+                recompute_H:bool|None=None,
+                compute_Vcc:bool|None=None,
                 bfgs_options:dict={}) -> dict:
     
     """ Computes the AIC difference and (optionally) performs an approximate GLRT on twice the difference in unpenalized likelihood between models ``model1`` and ``model2`` (see Wood et al., 2016).
@@ -138,23 +138,23 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
      - ``anova.gam`` function from ``mgcv``, see: https://www.rdocumentation.org/packages/mgcv/versions/1.9-1/topics/anova.gam
 
     :param model1: GAMM, GAMMLSS, or GSMM 1.
-    :type model1: GAMM or GAMMLSS or GSMM
+    :type model1: GAMM | GAMMLSS | GSMM
     :param model2: GAMM, GAMMLSS, or GSMM 2.
-    :type model2: GAMM or GAMMLSS or GSMM
+    :type model2: GAMM | GAMMLSS | GSMM
     :param correct_V: Whether or not to correct for smoothness uncertainty. Defaults to True
     :type correct_V: bool, optional
-    :param correct_t1: Whether or not to also correct the smoothness bias corrected edf for smoothness uncertainty. Defaults to True.
-    :type correct_t1: bool, optional
+    :param correct_t1: Whether or not to also correct the smoothness bias corrected edf for smoothness uncertainty. Defaults to None - meaning that ``mssm`` will select an appropriate value.
+    :type correct_t1: bool | None, optional
     :param perform_GLRT: Whether to perform both a GLRT and to compute the AIC or to only compute the AIC. Defaults to True.
     :type perform_GLRT: bool, optional
     :param nR: In case ``grid!="JJJ1"``, ``nR`` samples/reml scores are generated/computed to numerically evaluate the expectations necessary for the uncertainty correction, defaults to 250
     :type nR: int, optional
-    :param n_c: Number of cores to use during parallel parts of the correction, defaults to 10
+    :param n_c: Number of cores to use during parallel parts of the correction, defaults to 1
     :type n_c: int, optional
     :param alpha: alpha level of the GLRT. Defaults to 0.05
     :type alpha: float, optional
-    :param grid: How to compute the smoothness uncertainty correction, defaults to 'JJJ1'
-    :type grid: str, optional
+    :param grid: How to compute the smoothness uncertainty correction, defaults to None - meaning that ``mssm`` will select an appropriate value.
+    :type grid: str | None, optional
     :param a: Any of the :math:`\\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{\\rho}|y \\sim N(log(\\hat{\\boldsymbol{\\rho}}),\\mathbf{V}_{\\boldsymbol{\\rho}})` used to sample ``nR`` candidates) which are smaller than this are set to this value as well, defaults to 1e-7 the minimum possible estimate
     :type a: float, optional
     :param b: Any of the :math:`\\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{\\rho}|y \\sim N(log(\\hat{\\boldsymbol{\\rho}}),\\mathbf{V}_{\\boldsymbol{\\rho}})` used to sample ``nR`` candidates) which are larger than this are set to this value as well, defaults to 1e7 the maximum possible estimate
@@ -169,18 +169,18 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
     :type method: str,optional
     :param seed: Seed to use for random parts of the correction. Defaults to None
     :type seed: int,optional
-    :param only_expected_edf: Whether to compute edf. by explicitly forming covariance matrix (``only_expected_edf=False``) or not. The latter is much more efficient for sparse models at the cost of access to the covariance matrix and the ability to compute an upper bound on the smoothness uncertainty corrected edf. Only makes sense when ``grid_type!='JJJ1'``. Defaults to False
-    :type only_expected_edf: bool,optional
+    :param only_expected_edf: Whether to compute edf. by explicitly forming covariance matrix (``only_expected_edf=False``) or not. The latter is much more efficient for sparse models at the cost of access to the covariance matrix and the ability to compute an upper bound on the smoothness uncertainty corrected edf. Only makes sense when ``grid_type!='JJJ1'``. Defaults to None - meaning that ``mssm`` will select an appropriate value.
+    :type only_expected_edf: bool|None, optional
     :param Vp_fidiff: Whether to rely on a finite difference approximation to compute :math:`\\mathbf{V}_{\\boldsymbol{\\rho}}` or on a PQL approximation. The latter is exact for Gaussian and canonical GAMs and far cheaper if many penalties are to be estimated. Defaults to False (PQL approximation)
     :type Vp_fidiff: bool,optional
-    :param use_importance_weights: Whether to rely importance weights to compute the numerical integration when ``grid_type != 'JJJ1'`` or on the log-densities of :math:`\\mathbf{V}_{\\boldsymbol{\\rho}}` - the latter assumes that the unconditional posterior is normal. Defaults to True (Importance weights are used)
-    :type use_importance_weights: bool,optional
+    :param use_importance_weights: Whether to rely importance weights to compute the numerical integration when ``grid_type != 'JJJ1'`` or on the log-densities of :math:`\\mathbf{V}_{\\boldsymbol{\\rho}}` - the latter assumes that the unconditional posterior is normal. Defaults to None - meaning that ``mssm`` will select an appropriate value.
+    :type use_importance_weights: bool | None,optional
     :param prior: An (optional) instance of an arbitrary class that has a ``.logpdf()`` method to compute the prior log density of a sampled candidate. If this is set to ``None``, the prior is assumed to coincide with the proposal distribution, simplifying the importance weight computation. Ignored when ``use_importance_weights=False``. Defaults to None
     :type prior: any, optional
-    :param recompute_H: Whether or not to re-compute the Hessian of the log-likelihood at an estimate of the mean of the Bayesian posterior :math:`\\boldsymbol{\\beta}|y` before computing the (uncertainty/bias corrected) edf. Defaults to False
-    :type recompute_H: bool, optional
-    :param compute_Vcc: Whether to compute the second correction term when `grid='JJJ1'` (or when computing the lower-bound for the remaining grids) or only the first one. In contrast to the second one, the first correction term is substantially cheaper to compute - so setting this to False for larger models will speed up the correction considerably. Defaults to True
-    :type compute_Vcc: bool, optional
+    :param recompute_H: Whether or not to re-compute the Hessian of the log-likelihood at an estimate of the mean of the Bayesian posterior :math:`\\boldsymbol{\\beta}|y` before computing the (uncertainty/bias corrected) edf. Defaults to None - meaning that ``mssm`` will select an appropriate value.
+    :type recompute_H: bool | None, optional
+    :param compute_Vcc: Whether to compute the second correction term when `grid='JJJ1'` (or when computing the lower-bound for the remaining grids) or only the first one. In contrast to the second one, the first correction term is substantially cheaper to compute - so setting this to False for larger models will speed up the correction considerably. Defaults to None - meaning that ``mssm`` will select an appropriate value.
+    :type compute_Vcc: bool | None, optional
     :param bfgs_options: An optional dictionary holding arguments that should be passed on to the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If none are provided, the ``gtol`` argument will be initialized to ``conv_tol``. Note also, that in any case the ``maxiter`` argument is automatically set to ``max_inner``. Defaults to None.
     :type bfgs_options: dict,optional
     :raises ValueError: If both models are from different families.
@@ -188,6 +188,59 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
     :return: A dictionary with outcomes of all tests. Key ``H1`` will be a bool indicating whether Null hypothesis was rejected or not, ``p`` will be the p-value, ``test_stat`` will be the test statistic used, ``Res. DOF`` will be the degrees of freedom used by the test, ``aic1`` and ``aic2`` will be the aic scores for both models.
     :rtype: dict
     """
+
+    # Fill in automatic arguments:
+
+    # Should correct edf for smoothing bias when computing GLRT (see Wood, 2017)
+    if correct_t1 is None:
+        if perform_GLRT:
+            correct_t1 = True
+        else:
+            correct_t1 = False
+    
+    # Strictly Gaussian or lack of cores or many coef -> grid = 'JJJ1'
+    # Strictly Gaussian, many cores, many coef -> grid = 'JJJ2'
+    # Rest: grid = 'JJJ3'
+    if grid is None:
+        if isinstance(model1.family,Gaussian) and isinstance(model1.family.link,Identity):
+            grid = 'JJJ1'
+
+            if len(model1.coef) > 2000 and n_c > 5 and perform_GLRT == False:
+                grid = 'JJJ2'
+
+        elif (n_c <= 5) or (len(model1.coef) > 2000):
+            grid = 'JJJ1'
+        
+        else:
+            grid = 'JJJ3'
+    
+    # Handle very big additive models
+    if only_expected_edf is None:
+        if grid == 'JJJ2' and len(model1.coef) > 4000 and perform_GLRT == False:
+            only_expected_edf = True
+        else:
+            only_expected_edf = False
+    
+    # Handle big models
+    if compute_Vcc is None:
+        if len(model1.coef) > 2000:
+            compute_Vcc = False
+        else:
+            compute_Vcc = True
+
+    # Integration weights should be based on REML score for all but strictly additive models
+    if use_importance_weights is None:
+        if isinstance(model1.family,Gaussian) and isinstance(model1.family.link,Identity):
+            use_importance_weights = False
+        else:
+            use_importance_weights = True
+
+    # Re-compute hessian based on posterior samples for all but strictly additive models
+    if recompute_H is None:
+        if grid == 'JJJ1' or (isinstance(model1.family,Gaussian) and isinstance(model1.family.link,Identity)):
+            recompute_H = False
+        else:
+            recompute_H = True
 
     if type(model1.family) != type(model2.family):
         raise ValueError("Both models should be estimated using the same family.")
