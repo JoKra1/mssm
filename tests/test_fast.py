@@ -56,7 +56,7 @@ class Test_GAM_TE:
     formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
                         terms=[i(), # The intercept, a
                                l(["cond"]), # Offset for cond='b'
-                               f(["time","x"],by="cond",te=True)], # one smooth surface over time and x - f(time,x) - per level of cond: three-way interaction!
+                               f(["time","x"],by="cond",te=True,nk=9)], # one smooth surface over time and x - f(time,x) - per level of cond: three-way interaction!
                         data=dat,
                         print_warn=False)
         
@@ -94,8 +94,8 @@ class Test_GAM_TE_BINARY:
     
     formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
                         terms=[i(), # The intercept, a
-                               f(["time","x"],te=True), # one smooth surface over time and x - f(time,x) - for the reference level = cond == b
-                               f(["time","x"],te=True,binary=["cond","a"])], # another smooth surface over time and x - f(time,x) - representing the difference from the other surface when cond==a
+                               f(["time","x"],te=True,nk=9), # one smooth surface over time and x - f(time,x) - for the reference level = cond == b
+                               f(["time","x"],te=True,binary=["cond","a"],nk=9)], # another smooth surface over time and x - f(time,x) - representing the difference from the other surface when cond==a
                         data=dat,
                         print_warn=False)
         
@@ -172,7 +172,7 @@ class Test_GAMM:
                                l(["cond"]), # For cond='b'
                                f(["time"],by="cond",constraint=ConstType.QR), # to-way interaction between time and cond; one smooth over time per cond level
                                f(["x"],by="cond",constraint=ConstType.QR), # to-way interaction between x and cond; one smooth over x per cond level
-                               f(["time","x"],by="cond",constraint=ConstType.QR), # three-way interaction
+                               f(["time","x"],by="cond",constraint=ConstType.QR,nk=9), # three-way interaction
                                fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
                         data=dat,
                         print_warn=False,find_nested=False)

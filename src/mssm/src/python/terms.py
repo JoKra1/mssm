@@ -8,12 +8,11 @@ import scipy as scp
 from itertools import repeat
 from . import smooths
 from . import penalties
-from .custom_types import PenType, LambdaTerm,Constraint,ConstType
+from .custom_types import PenType, LambdaTerm,Constraint,ConstType,TermType,VarType,Reparameterization
 from .repara import reparam
 from .matrix_solvers import translate_sparse,warnings
 from .penalties import id_dist_pen,diff_pen, embed_in_S_sparse,embed_in_Sj_sparse,TP_pen,adjust_pen_drop
 from .smooths import TP_basis_calc
-from .custom_types import TermType,VarType,Reparameterization
 
 class GammTerm():
    """Base-class implemented by the terms passed to :class:`mssm.src.python.formula.Formula`.
@@ -43,17 +42,19 @@ class GammTerm():
         self.pen_kwargs = pen_kwargs
         self.name = None
 
-   def build_penalty(self,penalties:[LambdaTerm],cur_pen_idx:int,*args,**kwargs):
+   def build_penalty(self,penalties:list[LambdaTerm],cur_pen_idx:int,*args,**kwargs) -> tuple[list[LambdaTerm],int]:
       """Builds a penalty matrix associated with this term and returns an updated ``penalties`` list including it.
 
       This method is implemented by most implementations of the :class:`GammTerm` class.
-      Two arguments need to be returned: the updated ``penalties`` list including the new penalty implemented as a :class:`mssm.src.python.LambdaTerm` and the updated ``cur_pen_idx``.
+      Two arguments need to be returned: the updated ``penalties`` list including the new penalty implemented as a :class:`LambdaTerm` and the updated ``cur_pen_idx``.
       The latter simply needs to be incremented for every penalty added to ``penalties``.
 
       :param penalties: List of previosly created penalties.
-      :type penalties: [mssm.src.python.LambdaTerm]
+      :type penalties: [LambdaTerm]
       :param cur_pen_idx: Index of the last element in ``penalties``.
       :type cur_pen_idx: int
+      :return: Updated ``penalties`` list including the new penalty implemented as a :class:`LambdaTerm` and the updated ``cur_pen_idx``
+      :rtype: tuple[list[LambdaTerm],int]
       """
       return penalties, cur_pen_idx
    
@@ -77,7 +78,7 @@ class i(GammTerm):
     An intercept/offset term. In a model
     
     .. math::
-       \mu_i = a + f(x_i)
+       \\mu_i = a + f(x_i)
        
     it reflects :math:`a`.
 
@@ -87,7 +88,7 @@ class i(GammTerm):
         super().__init__(["1"], TermType.LINEAR, False, [], [])
         self.name = "Intercept"
     
-    def build_matrix(self, ci, ti, ridx, use_only):
+    def build_matrix(self, ci:int, ti:int, ridx:np.ndarray, use_only:list[int]) -> tuple[list[float],list[int],list[int],int]:
       """Builds the design/term/model matrix for an intercept term.
 
       :param ci: Current column index.
@@ -95,9 +96,11 @@ class i(GammTerm):
       :param ti: Index corresponding to the position the current term (i.e., self) takes on in the list of terms of the Formula.
       :type ti: int
       :param ridx: Array of non NAN rows in the data.
-      :type ridx: numpy.array
+      :type ridx: np.ndarray
       :param use_only: A list holding term indices for which the matrix should be formed. For terms not included in this list a zero matrix will be returned. Can be set to ``None`` so that no terms are excluded.
       :type use_only: [int]
+      :return: matrix data, matrix row indices, matrix column indices, added columns
+      :rtype: tuple[list[float],list[int],list[int],int]
       """
       n_y = len(ridx)
       offset = np.ones(n_y)
@@ -107,8 +110,11 @@ class i(GammTerm):
       
       return [], [], [], 1
     
-    def get_coef_info(self):
+    def get_coef_info(self) -> tuple[int,int,list[str]]:
       """Returns the total number of coefficients associated with this term, the number of unpenalized coefficients associated with this term, and a list with names for each of the coefficients associated with this term.
+
+      :return: Number of coefficients associated with term, number of un-penalized coefficients associated with term, coef names
+      :rtype: tuple[int,int,list[str]]
       """
       return 1, 1, ["Intercept"]
        
@@ -120,7 +126,7 @@ class f(GammTerm):
     
     .. math::
 
-      \mu_i = a + f(x_i)
+      \\mu_i = a + f(x_i)
    
     For example, the model below in ``mgcv``:
 
@@ -139,13 +145,13 @@ class f(GammTerm):
      
     .. math::
 
-      \mu_i = a + f(x_i) + f(z_i) + f(x_i,z_i)
+      \\mu_i = a + f(x_i) + f(z_i) + f(x_i,z_i)
     
     or in model:
     
     .. math::
 
-      \mu_i = a + f(x_i,z_i)
+      \\mu_i = a + f(x_i,z_i)
 
     The first behavior is achieved by setting ``te=False``. In that case it is necessary
     to add 'main effect' ``f`` terms for :math:`x` and :math:`y`. In other words, the behavior then mimicks
@@ -216,7 +222,7 @@ class f(GammTerm):
     :type rp: int, optional
     :param constraint: What kind of identifiability constraints should be absorbed by the terms (if they are to be identifiable). Either QR-based constraints (default, well-behaved), by means of column-dropping (no infill, not so well-behaved), or by means of difference re-coding (little infill, not so well behaved either).
     :type constraint: mssm.src.constraints.ConstType, optional
-    :param identifiable: Whether or not the constant should be removed from the space of functions this term can fit. Achieved by enforcing that :math:`\mathbf{1}^T \mathbf{X} = 0` (:math:`\mathbf{X}` here is the spline matrix computed for the observed data; see Wood, 2017 for details). Necessary in most cases to keep the model identifiable.
+    :param identifiable: Whether or not the constant should be removed from the space of functions this term can fit. Achieved by enforcing that :math:`\\mathbf{1}^T \\mathbf{X} = 0` (:math:`\\mathbf{X}` here is the spline matrix computed for the observed data; see Wood, 2017 for details). Necessary in most cases to keep the model identifiable.
     :type identifiable: bool, optional
     :param basis: The basis functions to use to construct the spline matrix. By default a B-spline basis (Eilers & Marx, 2010) implemented in :func:`mssm.src.smooths.B_spline_basis`.
     :type basis: Callable, optional
@@ -235,9 +241,9 @@ class f(GammTerm):
     def __init__(self,variables:list,
                 by:str=None,
                 by_cont:str=None,
-                binary:list[str,str] or None = None,
+                binary:tuple[str,str] | None = None,
                 id:int=None,
-                nk:int or list[int] = 9,
+                nk:int | list[int] = None,
                 te: bool = False,
                 rp:int = 0,
                 constraint:ConstType=ConstType.QR,
@@ -246,8 +252,8 @@ class f(GammTerm):
                 basis_kwargs:dict={},
                 is_penalized:bool = True,
                 penalize_null:bool = False,
-                penalty:list[PenType] or None = None,
-                pen_kwargs:list[dict] or None = None) -> None:
+                penalty:list[PenType] | None = None,
+                pen_kwargs:list[dict] | None = None) -> None:
         
         if not binary is None and not by is None:
            raise ValueError("Binary smooths cannot also have a by-keyword.")
@@ -257,6 +263,16 @@ class f(GammTerm):
         
         if rp != 0 and penalty is not None and (len(penalty) > len(variables)):
           raise ValueError("Re-parameterization only supports a single penalty (per maginal).")
+        
+        if nk is None:
+          # Set mgcv-like defaults
+          if len(variables) == 1:
+            nk = 9
+          else:
+            if te:
+              nk = 5
+            else:
+              nk = 4
         
         if not binary is None and identifiable:
            # Remove identifiability constrain for
@@ -332,7 +348,7 @@ class f(GammTerm):
       :param X: Design matrix associated with this term.
       :type X: scipy.sparse.csc_array
       :param cov: The covariate this term is a function of as a flattened numpy array.
-      :type cov: numpy.array
+      :type cov: np.ndarray
       :raises ValueError: If this method is called with ``rpidx`` exceeding the number of this term's RP objects (i.e., when ``rpidx > (len(self.RP) - 1)``) or if ``self.rp`` is equal to a value for which no reparameterisation is implemented.
       """
 
@@ -389,17 +405,17 @@ class f(GammTerm):
       else:
         raise ValueError(f"Requested a reparameterisation {self.should_rp} that is not supported")
 
-    def build_penalty(self,ti:int,penalties:[LambdaTerm],cur_pen_idx:int,pen:PenType,penid:int,factor_levels:dict,n_coef:int,col_S:int):
+    def build_penalty(self,ti:int,penalties:list[LambdaTerm],cur_pen_idx:int,pen:PenType,penid:int,factor_levels:dict,n_coef:int,col_S:int) -> tuple[list[LambdaTerm],int]:
       """Builds a penalty matrix associated with this smooth term and returns an updated ``penalties`` list including it.
 
       This method is implemented by most implementations of the :class:`GammTerm` class.
-      Two arguments need to be returned: the updated ``penalties`` list including the new penalty implemented as a :class:`mssm.src.python.LambdaTerm` and the updated ``cur_pen_idx``.
+      Two arguments need to be returned: the updated ``penalties`` list including the new penalty implemented as a :class:`LambdaTerm` and the updated ``cur_pen_idx``.
       The latter simply needs to be incremented for every penalty added to ``penalties``.
 
       :param ti: Index corresponding to the position the current term (i.e., self) takes on in the list of terms of the Formula.
       :type ti: int
       :param penalties: List of previosly created penalties.
-      :type penalties: [mssm.src.python.LambdaTerm]
+      :type penalties: [LambdaTerm]
       :param cur_pen_idx: Index of the last element in ``penalties``.
       :type cur_pen_idx: int
       :param pen: Type of the penalty to be created. Depends on the specific term.
@@ -412,6 +428,8 @@ class f(GammTerm):
       :type n_coef: int
       :param col_S: Number of columns of the total penalty matrix.
       :type col_S: int
+      :return: Updated ``penalties`` list including the new penalties implemented as a :class:`LambdaTerm` and the updated ``cur_pen_idx``
+      :rtype: tuple[list[LambdaTerm],int]
       """
       # We again have to deal with potential identifiable constraints!
       # Then we again act as if n_k was n_k+1 for difference penalties
@@ -665,7 +683,7 @@ class f(GammTerm):
 
       return penalties,cur_pen_idx
     
-    def build_matrix(self,ci:int,ti:int,var_map:dict,var_mins:dict,var_maxs:dict,factor_levels:dict,ridx:[int],cov_flat:[[int]],use_only:[int],tol:int=0):
+    def build_matrix(self,ci:int,ti:int,var_map:dict,var_mins:dict,var_maxs:dict,factor_levels:dict,ridx:list[int],cov_flat:np.ndarray,use_only:list[int],tol:int=0) -> tuple[list[float],list[int],list[int],int]:
       """Builds the design/term/model matrix for this smooth term.
 
       References:
@@ -684,13 +702,15 @@ class f(GammTerm):
       :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
       :type factor_levels: dict
       :param ridx: Array of non NAN rows in the data.
-      :type ridx: numpy.array
+      :type ridx: np.ndarray
       :param cov_flat: An array, containing all (encoded, in case of categorical predictors) values on each predictor (each columns of ``cov_flat`` corresponds to a different predictor) variable included in any of the terms in order of the data-frame passed to the Formula.
-      :type cov_flat: numpy.array
+      :type cov_flat: np.ndarray
       :param use_only: A list holding term indices for which the matrix should be formed. For terms not included in this list a zero matrix will be returned. Can be set to ``None`` so that no terms are excluded.
       :type use_only: [int]
       :param tol: A tolerance that can be used to prune the term matrix from values close to zero rather than absolutely zero. Defaults to strictly zero.
       :type tol: int, optional
+      :return: matrix data, matrix row indices, matrix column indices, added columns
+      :rtype: tuple[list[float],list[int],list[int],int]
       """
       vars = self.variables
       term_ridx = []
@@ -833,11 +853,13 @@ class f(GammTerm):
       
       return new_elements,new_rows,new_cols,new_ci
   
-    def get_coef_info(self, factor_levels:dict):
+    def get_coef_info(self, factor_levels:dict) -> tuple[int,int,list[str]]:
       """Returns the total number of coefficients associated with this smooth term, the number of unpenalized coefficients associated with this smooth term, and a list with names for each of the coefficients associated with this smooth term.
 
       :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
       :type factor_levels: dict
+      :return: Number of coefficients associated with term, number of un-penalized coefficients associated with term, coef names
+      :rtype: tuple[int,int,list[str]]
       """
       coef_names = []
 
@@ -957,6 +979,8 @@ class fs(f):
     :type basis: Callable, optional
     :param basis_kwargs: A list containing one or multiple dictionaries specifying how the basis should be computed. For the B-spline basis the following arguments (with default values) are available: ``convolve``=``False``, ``min_c``=``None``, ``max_c``=``None``, ``deg``=``3``. See :func:`mssm.src.smooths.B_spline_basis` for details.
     :type basis_kwargs: dict, optional
+    :param by_cont: A string corresponding to a numerical variable in ``data`` passed to ``Formula``. The model matrix for the estimated smooth term will be multiplied by the column of this variable. Can be used as an alternative to estimate separate random smooth terms per level of another factor (wich is also possible with `by_subgroup`).
+    :type by_cont: str, optional
     :param by_subgroup: List including a factor variable and specific level of said variable. Allows for separate penalties as described above.
     :type by_subgroup: [str,str], optional
     :param approx_deriv: Dict holding important info for the clustering algorithm. Structure: ``{"no_disc":[str],"excl":[str],"split_by":[str],"restarts":int}``
@@ -969,14 +993,15 @@ class fs(f):
                 nk: int = 9,
                 m: int = 1,
                 rp:int = 1,
-                by_subgroup:[str,str]or None = None,
-                approx_deriv:dict or None = None,
+                by_cont:str|None = None,
+                by_subgroup:tuple[str,str] | None = None,
+                approx_deriv:dict | None = None,
                 basis: Callable = smooths.B_spline_basis,
                 basis_kwargs: dict = {}):
 
       penalty = [PenType.DIFFERENCE]
       pen_kwargs = [{"m":m}]
-      super().__init__(variables, rf, None, None, 99, nk+1, False, rp, ConstType.QR, False,
+      super().__init__(variables, rf, by_cont, None, 99, nk+1, False, rp, ConstType.QR, False,
                        basis, basis_kwargs,
                        True, True, penalty, pen_kwargs)
       
@@ -987,17 +1012,17 @@ class fs(f):
 
          self.name +=  ": " + self.by_subgroup[1]
     
-   def build_penalty(self,ti:int,penalties:[LambdaTerm],cur_pen_idx:int,pen:PenType,penid:int,factor_levels:dict,n_coef:int,col_S:int):
+   def build_penalty(self,ti:int,penalties:list[LambdaTerm],cur_pen_idx:int,pen:PenType,penid:int,factor_levels:dict,n_coef:int,col_S:int) -> tuple[list[LambdaTerm],int]:
       """Builds a penalty matrix associated with this factor smooth term and returns an updated ``penalties`` list including it.
 
       This method is implemented by most implementations of the :class:`GammTerm` class.
-      Two arguments need to be returned: the updated ``penalties`` list including the new penalty implemented as a :class:`mssm.src.python.LambdaTerm` and the updated ``cur_pen_idx``.
+      Two arguments need to be returned: the updated ``penalties`` list including the new penalty implemented as a :class:`LambdaTerm` and the updated ``cur_pen_idx``.
       The latter simply needs to be incremented for every penalty added to ``penalties``.
 
       :param ti: Index corresponding to the position the current term (i.e., self) takes on in the list of terms of the Formula.
       :type ti: int
       :param penalties: List of previosly created penalties.
-      :type penalties: [mssm.src.python.LambdaTerm]
+      :type penalties: [LambdaTerm]
       :param cur_pen_idx: Index of the last element in ``penalties``.
       :type cur_pen_idx: int
       :param pen: Type of the penalty to be created. Depends on the specific term.
@@ -1010,10 +1035,12 @@ class fs(f):
       :type n_coef: int
       :param col_S: Number of columns of the total penalty matrix.
       :type col_S: int
+      :return: Updated ``penalties`` list including the new penalties implemented as a :class:`LambdaTerm` and the updated ``cur_pen_idx``
+      :rtype: tuple[list[LambdaTerm],int]
       """
       return super().build_penalty(ti, penalties, cur_pen_idx, pen, penid, factor_levels, n_coef, col_S)
    
-   def build_matrix(self,ci:int,ti:int,var_map:dict,var_mins:dict,var_maxs:dict,factor_levels:dict,ridx:[int],cov_flat:[[int]],use_only:[int],tol:int=0):
+   def build_matrix(self,ci:int,ti:int,var_map:dict,var_mins:dict,var_maxs:dict,factor_levels:dict,ridx:np.ndarray,cov_flat:np.ndarray,use_only:list[int],tol:int=0) -> tuple[list[float],list[int],list[int],int]:
       """Builds the design/term/model matrix for this factor smooth term.
 
       References:
@@ -1032,97 +1059,27 @@ class fs(f):
       :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
       :type factor_levels: dict
       :param ridx: Array of non NAN rows in the data.
-      :type ridx: numpy.array
+      :type ridx: np.ndarray
       :param cov_flat: An array, containing all (encoded, in case of categorical predictors) values on each predictor (each columns of ``cov_flat`` corresponds to a different predictor) variable included in any of the terms in order of the data-frame passed to the Formula.
-      :type cov_flat: numpy.array
+      :type cov_flat: np.ndarray
       :param use_only: A list holding term indices for which the matrix should be formed. For terms not included in this list a zero matrix will be returned. Can be set to ``None`` so that no terms are excluded.
       :type use_only: [int]
       :param tol: A tolerance that can be used to prune the term matrix from values close to zero rather than absolutely zero. Defaults to strictly zero.
       :type tol: int, optional
+      :return: matrix data, matrix row indices, matrix column indices, added columns
+      :rtype: tuple[list[float],list[int],list[int],int]
       """
       return super().build_matrix(ci, ti, var_map, var_mins, var_maxs, factor_levels, ridx, cov_flat, use_only, tol)
 
-   def get_coef_info(self, factor_levels:dict):
+   def get_coef_info(self, factor_levels:dict) -> tuple[int,int,list[str]]:
       """Returns the total number of coefficients associated with this factor smooth term, the number of unpenalized coefficients associated with this factor smooth term, and a list with names for each of the coefficients associated with this factor smooth term.
 
       :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
       :type factor_levels: dict
+      :return: Number of coefficients associated with term, number of un-penalized coefficients associated with term, coef names
+      :rtype: tuple[int,int,list[str]]
       """
       return super().get_coef_info(factor_levels)
-   
-
-def build_ir_smooth_series(irsterm,s_cov,s_event,vars,var_map,var_mins,var_maxs,by_levels):
-      """Function to build the impulse response martrix for a single time-series.
-
-      :param irsterm: _description_
-      :type irsterm: _type_
-      :param s_cov: _description_
-      :type s_cov: _type_
-      :param s_event: _description_
-      :type s_event: _type_
-      :param vars: _description_
-      :type vars: _type_
-      :param var_map: _description_
-      :type var_map: _type_
-      :param var_mins: _description_
-      :type var_mins: _type_
-      :param var_maxs: _description_
-      :type var_maxs: _type_
-      :param by_levels: _description_
-      :type by_levels: _type_
-      :raises ValueError: _description_
-      :return: _description_
-      :rtype: _type_
-      """
-      for vi in range(len(vars)):
-
-        if len(vars) > 1:
-          id_nk = irsterm.nk[vi]
-        else:
-          id_nk = irsterm.nk
-
-        # Create matrix for event corresponding to term.
-        # ToDo: For Multivariate case, the matrix term needs to be build iteratively for
-        # every level of the multivariate factor to make sure that the convolution operation
-        # works as intended. The splitting can happen later via by.
-        basis_kwargs_v = irsterm.basis_kwargs[vi]
-
-        if "max_c" in basis_kwargs_v and "min_c" in basis_kwargs_v:
-          matrix_term_v = irsterm.basis(s_cov[:,var_map[vars[vi]]],s_event, id_nk, **basis_kwargs_v)
-        else:
-          matrix_term_v = irsterm.basis(s_cov[:,var_map[vars[vi]]],s_event, id_nk,min_c=var_mins[vars[vi]],max_c=var_maxs[vars[vi]], **basis_kwargs_v)
-
-        if vi == 0:
-          matrix_term = matrix_term_v
-        else:
-          matrix_term = TP_basis_calc(matrix_term,matrix_term_v)
-      
-      
-      m_rows,m_cols = matrix_term.shape
-
-      # Handle optional by keyword
-      if irsterm.by is not None:
-          
-        by_matrix_term = np.zeros((m_rows,m_cols*len(by_levels)),dtype=float)
-
-        by_cov = s_cov[:,var_map[irsterm.by]]
-
-        # ToDo: For MV case this check will be true.
-        if len(np.unique(by_cov)) > 1:
-          raise ValueError(f"By-variable {irsterm.by} has varying levels on series level. This should not be the case.")
-        
-        # Fill the by matrix blocks.
-        cByIndex = 0
-        for by_level in range(len(by_levels)):
-          if by_level == by_cov[0]:
-              by_matrix_term[:,cByIndex:cByIndex+m_cols] = matrix_term
-          cByIndex += m_cols # Update column range associated with current level.
-        
-        final_term = by_matrix_term
-      else:
-        final_term = matrix_term
-      
-      return final_term
         
 class irf(GammTerm):
     """A simple impulse response term, designed to correct for events with overlapping responses in multi-level time-series modeling.
@@ -1192,16 +1149,16 @@ class irf(GammTerm):
        :type pen_kwargs: list[dict], optional      
        """
     
-    def __init__(self,variables:[str],
-                event_onset:[int],
+    def __init__(self,variables:list[str],
+                event_onset:list[int],
                 basis_kwargs:list[dict],
                 by:str=None,
                 id:int=None,
                 nk:int=10,
                 basis:Callable=smooths.B_spline_basis,
                 is_penalized:bool = True,
-                penalty:list[PenType] or None = None,
-                pen_kwargs:list[dict] or None = None) -> None:
+                penalty:list[PenType] | None = None,
+                pen_kwargs:list[dict] | None = None) -> None:
         
         # Default penalty setup
         if penalty is None:
@@ -1241,17 +1198,17 @@ class irf(GammTerm):
         if by is not None:
            self.name += f",by={by})"
   
-    def build_penalty(self,ti:int,penalties:[LambdaTerm],cur_pen_idx:int,pen:PenType,penid:int,factor_levels:dict,n_coef:int,col_S:int):
+    def build_penalty(self,ti:int,penalties:list[LambdaTerm],cur_pen_idx:int,pen:PenType,penid:int,factor_levels:dict,n_coef:int,col_S:int) -> tuple[list[LambdaTerm],int]:
       """Builds a penalty matrix associated with this impulse response smooth term and returns an updated ``penalties`` list including it.
 
       This method is implemented by most implementations of the :class:`GammTerm` class.
-      Two arguments need to be returned: the updated ``penalties`` list including the new penalty implemented as a :class:`mssm.src.python.LambdaTerm` and the updated ``cur_pen_idx``.
+      Two arguments need to be returned: the updated ``penalties`` list including the new penalty implemented as a :class:`LambdaTerm` and the updated ``cur_pen_idx``.
       The latter simply needs to be incremented for every penalty added to ``penalties``.
 
       :param ti: Index corresponding to the position the current term (i.e., self) takes on in the list of terms of the Formula.
       :type ti: int
       :param penalties: List of previosly created penalties.
-      :type penalties: [mssm.src.python.LambdaTerm]
+      :type penalties: [LambdaTerm]
       :param cur_pen_idx: Index of the last element in ``penalties``.
       :type cur_pen_idx: int
       :param pen: Type of the penalty to be created. Depends on the specific term.
@@ -1264,6 +1221,8 @@ class irf(GammTerm):
       :type n_coef: int
       :param col_S: Number of columns of the total penalty matrix.
       :type col_S: int
+      :return: Updated ``penalties`` list including the new penalties implemented as a :class:`LambdaTerm` and the updated ``cur_pen_idx``
+      :rtype: tuple[list[LambdaTerm],int]
       """
       vars = self.variables
 
@@ -1350,7 +1309,7 @@ class irf(GammTerm):
       
       return penalties,cur_pen_idx
    
-    def build_matrix(self,ci:int,ti:int,var_map:dict,var_mins:dict,var_maxs:dict,factor_levels:dict,ridx:[int],cov:[[int]],use_only:[int],pool,tol:int=0):
+    def build_matrix(self,ci:int,ti:int,var_map:dict,var_mins:dict,var_maxs:dict,factor_levels:dict,ridx:np.ndarray,cov:list[np.ndarray],use_only:list[int],pool,tol:int=0) -> tuple[list[float],list[int],list[int],int]:
       """Builds the design/term/model matrix associated with this impulse response smooth term and returns it represented as a list of values, a list of row indices, and a list of column indices.
 
       This method is implemented by every implementation of the :class:`GammTerm` class.
@@ -1370,15 +1329,17 @@ class irf(GammTerm):
       :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
       :type factor_levels: dict
       :param ridx: Array of non NAN rows in the data.
-      :type ridx: numpy.array
+      :type ridx: np.ndarray
       :param cov: A list containing a separate array per time-series included in the data and indicated to the formula. The array contains, for the particular time-seriers, all (encoded, in case of categorical predictors) values on each predictor (each columns of the array corresponds to a different predictor) variable included in any of the terms in order of the data-frame passed to the Formula.
-      :type cov: [numpy.array]
+      :type cov: [np.ndarray]
       :param use_only: A list holding term indices for which the matrix should be formed. For terms not included in this list a zero matrix will be returned. Can be set to ``None`` so that no terms are excluded.
       :type use_only: [int]
       :param pool: A multiprocessing pool for parallel matrix construction parts
       :type pool: Any
       :param tol: A tolerance that can be used to prune the term matrix from values close to zero but not absolutely zero. Defaults to strictly zero.
       :type tol: int, optional
+      :return: matrix data, matrix row indices, matrix column indices, added columns
+      :rtype: tuple[list[float],list[int],list[int],int]
       """
       vars = self.variables
       term_elements = []
@@ -1403,7 +1364,7 @@ class irf(GammTerm):
       if pool is None:
         for s_cov,s_event in zip(cov,self.event_onset):
           
-          final_term = build_ir_smooth_series(self,s_cov,s_event,vars,var_map,var_mins,var_maxs,by_levels)
+          final_term = build_ir_smooth_series(self,s_cov,s_event,var_map,var_mins,var_maxs,by_levels)
 
           m_rows,m_cols = final_term.shape
 
@@ -1434,7 +1395,7 @@ class irf(GammTerm):
 
       else:
           
-        args = zip(repeat(self),cov,self.event_onset,repeat(vars),repeat(var_map),repeat(var_mins),repeat(var_maxs),repeat(by_levels))
+        args = zip(repeat(self),cov,self.event_onset,repeat(var_map),repeat(var_mins),repeat(var_maxs),repeat(by_levels))
           
         final_terms = pool.starmap(build_ir_smooth_series,args)
         final_term = np.vstack(final_terms)
@@ -1452,13 +1413,15 @@ class irf(GammTerm):
       
       return new_elements,new_rows,new_cols,new_ci
 
-    def get_coef_info(self,ti:int,factor_levels:dict):
+    def get_coef_info(self,ti:int,factor_levels:dict) -> tuple[int,int,list[str]]:
       """Returns the total number of coefficients associated with this impulse response smooth term, the number of unpenalized coefficients associated with this term, and a list with names for each of the coefficients associated with this term.
 
       :param ti: Index corresponding to the position the current term (i.e., self) takes on in the list of terms of the Formula.
       :type ti: int
       :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
       :type factor_levels: dict
+      :return: Number of coefficients associated with term, number of un-penalized coefficients associated with term, coef names
+      :rtype: tuple[int,int,list[str]]
       """
       # Calculate Coef names for impulse response terms
       vars = self.variables
@@ -1490,12 +1453,630 @@ class irf(GammTerm):
 
       return n_coef, n_nopen, coef_names
 
+def build_ir_smooth_series(irsterm:irf,s_cov:np.ndarray,s_event:int,var_map:dict,var_mins:dict,var_maxs:dict,by_levels:np.ndarray|None) -> np.ndarray:
+      """Function to build the impulse response martrix for a single time-series.
 
-def build_linear_term(lTerm,has_intercept:bool,ci:int,ti:int,var_map:dict,var_types:dict,factor_levels:dict,ridx:[int],cov_flat:[[int]],use_only:[int]):
+      :param irsterm: Impulse response smooth term
+      :type irsterm: irf
+      :param s_cov: covariate array associated with ``irsterm``
+      :type s_cov: np.ndarray
+      :param s_event: Onset of impulse response function
+      :type s_event: int
+      :param var_map: Var map dictionary. Keys are variables in the data, values their column index in the encoded predictor matrix.
+      :type var_map: dict
+      :param var_mins: Var mins dictionary. Keys are variables in the data, values are either the minimum value the variable takes on for continuous variables or ``None`` for categorical variables.
+      :type var_mins: dict
+      :param var_maxs: Var maxs dictionary. Keys are variables in the data, values are either the maximum value the variable takes on in for continuous variables or ``None`` for categorical variables.
+      :type var_maxs: dict
+      :param by_levels: Numpy array holding the levels of the factor associated with the ``irsterm`` term (via ``irsterm.by``) or None
+      :type by_levels: np.ndarray | None
+      :return: The term matrix associated with the particular event at ``s_event``
+      :rtype: np.ndarray
+      """
+      vars = irsterm.variables
+      for vi in range(len(vars)):
+
+        if len(vars) > 1:
+          id_nk = irsterm.nk[vi]
+        else:
+          id_nk = irsterm.nk
+
+        # Create matrix for event corresponding to term.
+        # ToDo: For Multivariate case, the matrix term needs to be build iteratively for
+        # every level of the multivariate factor to make sure that the convolution operation
+        # works as intended. The splitting can happen later via by.
+        basis_kwargs_v = irsterm.basis_kwargs[vi]
+
+        if "max_c" in basis_kwargs_v and "min_c" in basis_kwargs_v:
+          matrix_term_v = irsterm.basis(s_cov[:,var_map[vars[vi]]],s_event, id_nk, **basis_kwargs_v)
+        else:
+          matrix_term_v = irsterm.basis(s_cov[:,var_map[vars[vi]]],s_event, id_nk,min_c=var_mins[vars[vi]],max_c=var_maxs[vars[vi]], **basis_kwargs_v)
+
+        if vi == 0:
+          matrix_term = matrix_term_v
+        else:
+          matrix_term = TP_basis_calc(matrix_term,matrix_term_v)
+      
+      
+      m_rows,m_cols = matrix_term.shape
+
+      # Handle optional by keyword
+      if irsterm.by is not None:
+          
+        by_matrix_term = np.zeros((m_rows,m_cols*len(by_levels)),dtype=float)
+
+        by_cov = s_cov[:,var_map[irsterm.by]]
+
+        # ToDo: For MV case this check will be true.
+        if len(np.unique(by_cov)) > 1:
+          raise ValueError(f"By-variable {irsterm.by} has varying levels on series level. This should not be the case.")
+        
+        # Fill the by matrix blocks.
+        cByIndex = 0
+        for by_level in range(len(by_levels)):
+          if by_level == by_cov[0]:
+              by_matrix_term[:,cByIndex:cByIndex+m_cols] = matrix_term
+          cByIndex += m_cols # Update column range associated with current level.
+        
+        final_term = by_matrix_term
+      else:
+        final_term = matrix_term
+      
+      return final_term
+
+class ri(GammTerm):
+    """
+    Adds a random intercept for the factor ``variable`` to the model. The random intercepts :math:`b_i` are assumed
+    to be i.i.d :math:`b_i \\sim N(0,\\sigma_b)` i.e., normally distributed around zero - the simplest random effect supported by ``mssm``.
+
+    Thus, this term achieves exactly what is achieved in ``mgcv`` by adding the term::
+
+      s(variable,bs="re")
+    
+    The ``variable`` needs to identify a factor-variable in the data (i.e., the .dtype of the variable has to be equal to 'O'). If you want to
+    add more complex random effects to the model (e.g., random slopes for continuous variable "x" per level of factor ``variable``) use the :class:`rs` class.
+
+    :param variable: The name (string) of a factor variable. For every level of this factor a random intercept will be estimated. The random intercepts are assumed to follow a normal distribution centered around zero.
+    :type variable: str
+    """
+    def __init__(self,
+                 variable:str) -> None:
+        
+        # Initialization
+        super().__init__([variable], TermType.RANDINT, True, [PenType.IDENTITY], [{}])
+
+        # Term name
+        self.name = f"ri({variable})"
+
+    def build_penalty(self,ti:int,penalties:list[LambdaTerm],cur_pen_idx:int,factor_levels:dict,col_S:int) -> tuple[list[LambdaTerm],int]:
+      """Builds a penalty matrix associated with this random intercept term and returns an updated ``penalties`` list including it.
+
+      This method is implemented by most implementations of the :class:`GammTerm` class.
+      Two arguments need to be returned: the updated ``penalties`` list including the new penalty implemented as a :class:`LambdaTerm` and the updated ``cur_pen_idx``.
+      The latter simply needs to be incremented for every penalty added to ``penalties``.
+
+      :param ti: Index corresponding to the position the current term (i.e., self) takes on in the list of terms of the Formula.
+      :type ti: int
+      :param penalties: List of previosly created penalties.
+      :type penalties: [LambdaTerm]
+      :param cur_pen_idx: Index of the last element in ``penalties``.
+      :type cur_pen_idx: int
+      :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
+      :type factor_levels: dict
+      :param col_S: Number of columns of the total penalty matrix.
+      :type col_S: int
+      :return: Updated ``penalties`` list including the new penalties implemented as a :class:`LambdaTerm` and the updated ``cur_pen_idx``
+      :rtype: tuple[list[LambdaTerm],int]
+      """
+      vars = self.variables
+      idk = len(factor_levels[vars[0]])
+
+      pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = id_dist_pen(idk,None)
+
+      lTerm = LambdaTerm(start_index=cur_pen_idx,
+                                   type = PenType.IDENTITY,
+                                   term = ti)
+      
+      lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,idk,cur_pen_idx)
+      lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,idk,cur_pen_idx)
+      lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,idk)
+      lTerm.rank = rank
+      penalties.append(lTerm)
+
+      return penalties, cur_pen_idx
+   
+    def build_matrix(self,ci:int,ti:int,var_map:dict,factor_levels:dict,ridx:np.ndarray,cov_flat:np.ndarray,use_only:list[int]) -> tuple[list[float],list[int],list[int],int]:
+      """Builds the design/term/model matrix associated with this random intercept term and returns it represented as a list of values, a list of row indices, and a list of column indices.
+
+      This method is implemented by every implementation of the :class:`GammTerm` class.
+      The returned lists can then be used to create a sparse matrix for this term. Also returns an updated ``ci`` column index, reflecting how many additional columns would be added
+      to the total model matrix.
+
+      :param ci: Current column index.
+      :type ci: int
+      :param ti: Index corresponding to the position the current term (i.e., self) takes on in the list of terms of the Formula.
+      :type ti: int
+      :param var_map: Var map dictionary. Keys are variables in the data, values their column index in the encoded predictor matrix.
+      :type var_map: dict
+      :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
+      :type factor_levels: dict
+      :param ridx: Array of non NAN rows in the data.
+      :type ridx: np.ndarray
+      :param cov_flat: An array, containing all (encoded, in case of categorical predictors) values on each predictor (each columns of ``cov_flat`` corresponds to a different predictor) variable included in any of the terms in order of the data-frame passed to the Formula.
+      :type cov_flat: np.ndarray
+      :param use_only: A list holding term indices for which the matrix should be formed. For terms not included in this list a zero matrix will be returned. Can be set to ``None`` so that no terms are excluded.
+      :type use_only: [int]
+      :return: matrix data, matrix row indices, matrix column indices, added columns
+      :rtype: tuple[list[float],list[int],list[int],int]
+      """
+      vars = self.variables
+      n_y = len(ridx)
+      offset = np.ones(n_y)
+      by_cov = cov_flat[:,var_map[vars[0]]]
+
+      new_elements = []
+      new_rows = []
+      new_cols = []
+      new_ci = 0
+
+      for fl in range(len(factor_levels[vars[0]])):
+        fl_idx = by_cov == fl
+        if use_only is None or ti in use_only:
+          new_elements.extend(offset[fl_idx])
+          new_rows.extend(ridx[fl_idx])
+          new_cols.extend([ci for _ in range(len(offset[fl_idx]))])
+        new_ci += 1
+        ci += 1
+
+      return new_elements,new_rows,new_cols,new_ci
+
+    def get_coef_info(self,factor_levels:dict,coding_factors:dict) -> tuple[int,int,list[str]]:
+      """Returns the total number of coefficients associated with this random intercept term, the number of unpenalized coefficients associated with this term, and a list with names for each of the coefficients associated with this term.
+
+      :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
+      :type factor_levels: dict
+      :param coding_factors: Factor coding dictionary. Keys are factor variables in the data, values are dictionaries, where the keys correspond to the encoded levels (int) of the factor and the values to their levels (str).
+      :type coding_factors: dict
+      :return: Number of coefficients associated with term, number of un-penalized coefficients associated with term, coef names
+      :rtype: tuple[int,int,list[str]]
+      """
+      vars = self.variables
+      by_code_factors = coding_factors[vars[0]]
+      n_coef = 0
+      coef_names = []
+
+      for fl in range(len(factor_levels[vars[0]])):
+        coef_names.append(f"ri_{vars[0]}_{by_code_factors[fl]}")
+        n_coef += 1
+
+      return n_coef, 0, coef_names
+
+class l(GammTerm):
+    """
+    Adds a parametric (linear) term to the model formula. The model :math:`\\mu_i = a + b*x_i` can for example be achieved
+    by adding ``[i(), l(['x'])]`` to the ``term`` argument of a ``Formula``. The coefficient :math:`b` estimated for
+    the term will then correspond to the slope of :math:`x`. This class can also be used to add predictors for
+    categorical variables. If the formula includes an intercept, binary coding will be utilized to
+    add reference-level adjustment coefficients for the remaining k-1 levels of any additional factor variable.
+
+    If more than one variable is included in ``variables`` the model will only add the the len(``variables``)-interaction
+    to the model! Lower order interactions and main effects will not be included by default (see :func:`li` function instead, which
+    automatically includes all lower-order interactions and main effects).
+
+    Example: The interaction effect of factor variable "cond", with two levels "1" and "2", and acontinuous variable "x"
+    on the dependent variable "y" are of interest. To estimate such a model, the following formula can be used::
+
+      formula = Formula(lhs("y"),terms=[i(),l(["cond"]),l(["x"]),l(["cond","x"])])
+   
+    This formula will estimate the following model:
+
+    .. math::
+
+      \\mu_i = a + b_1*c_i + b_2*x_i + b_3*c_i*x_i
+
+    Here, :math:`c` is a binary predictor variable created so that it is 1 if "cond"=2 else 0 and :math:`b_3` is the coefficient that is added
+    because ``l(["cond","x"])`` is included in the terms (i.e., the interaction effect).
+
+    To get a model with only main effects for "cond" and "x", the following formula could be used::
+
+      formula = Formula(lhs("y"),terms=[i(),l(["cond"]),l(["x"])])
+
+    This formula will estimate:
+
+    .. math::
+    
+      \\mu_i = a + b_1*c_i + b_2*x_i
+
+    :param variables: A list of the variables (strings) for which linear predictors should be included
+    :type variables: [str]
+    """
+    def __init__(self,
+                 variables:list) -> None:
+        
+        # Initialization
+        super().__init__(variables, TermType.LINEAR, False, [], [])
+
+        # Term name
+        self.name = f"l({variables})"
+   
+    def build_matrix(self,has_intercept:bool,ci:int,ti:int,var_map:dict,var_types:dict,factor_levels:dict,ridx:np.ndarray,cov_flat:np.ndarray,use_only:list[int]) -> tuple[list[float],list[int],list[int],int]:
+      """Builds the design/term/model matrix associated with this linear term and returns it represented as a list of values, a list of row indices, and a list of column indices.
+
+      This method is implemented by every implementation of the :class:`GammTerm` class.
+      The returned lists can then be used to create a sparse matrix for this term. Also returns an updated ``ci`` column index, reflecting how many additional columns would be added
+      to the total model matrix.
+
+      :param has_intercept: Whether or not the formula of which this term is part includes an intercept term.
+      :type has_intercept: bool
+      :param ci: Current column index.
+      :type ci: int
+      :param ti: Index corresponding to the position the current term (i.e., self) takes on in the list of terms of the Formula.
+      :type ti: int
+      :param var_map: Var map dictionary. Keys are variables in the data, values their column index in the encoded predictor matrix.
+      :type var_map: dict
+      :param var_types: Var types dictionary. Keys are variables in the data, values are either ``VarType.NUMERIC`` for continuous variables or ``VarType.FACTOR`` for categorical variables.
+      :type var_types: dict
+      :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
+      :type factor_levels: dict
+      :param ridx: Array of non NAN rows in the data.
+      :type ridx: np.ndarray
+      :param cov_flat: An array, containing all (encoded, in case of categorical predictors) values on each predictor (each columns of ``cov_flat`` corresponds to a different predictor) variable included in any of the terms in order of the data-frame passed to the Formula.
+      :type cov_flat: np.ndarray
+      :param use_only: A list holding term indices for which the matrix should be formed. For terms not included in this list a zero matrix will be returned. Can be set to ``None`` so that no terms are excluded.
+      :type use_only: [int]
+      :return: matrix data, matrix row indices, matrix column indices, added columns
+      :rtype: tuple[list[float],list[int],list[int],int]
+      """
+      return build_linear_term(self,has_intercept,ci,ti,var_map,var_types,factor_levels,ridx,cov_flat,use_only)
+
+    def get_coef_info(self,has_intercept:bool,var_types:dict,factor_levels:dict,coding_factors:dict) -> tuple[int,int,list[str]]:
+      """Returns the total number of coefficients associated with this linear term, the number of unpenalized coefficients associated with this term, and a list with names for each of the coefficients associated with this term.
+
+      :param has_intercept: Whether or not the formula of which this term is part includes an intercept term.
+      :type has_intercept: bool
+      :param var_types: Var types dictionary. Keys are variables in the data, values are either ``VarType.NUMERIC`` for continuous variables or ``VarType.FACTOR`` for categorical variables.
+      :type var_types: dict
+      :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
+      :type factor_levels: dict
+      :param coding_factors: Factor coding dictionary. Keys are factor variables in the data, values are dictionaries, where the keys correspond to the encoded levels (int) of the factor and the values to their levels (str).
+      :type coding_factors: dict
+      :return: Number of coefficients associated with term, number of un-penalized coefficients associated with term, coef names
+      :rtype: tuple[int,int,list[str]]
+      """
+      return get_linear_coef_info(self,has_intercept,var_types,factor_levels,coding_factors)
+
+def li(variables:list[str]):
+   """
+    Behaves like the :class:`l` class but automatically includes all lower-order interactions and main effects.
+
+    Example: The interaction effect of factor variable "cond", with two levels "1" and "2", and acontinuous variable "x"
+    on the dependent variable "y" are of interest. To estimate such a model, the following formula can be used::
+
+      formula = Formula(lhs("y"),terms=[i(),*li(["cond","x"])])
+
+    Note, the use of the ``*`` operator to unpack the individual terms returned from li!
+   
+    This formula will still (see :class:`l`) estimate the following model:
+    
+    .. math::
+
+      \\mu = a + b_1*c_i + b_2*x_i + b_3*c_i*x_i
+
+    with: :math:`c` corresponding to a binary predictor variable created so that it is 1 if "cond"=2 else 0.
+
+    To get a model with only main effects for "cond" and "x" :class:`li` **cannot be used** and :class:`l` needs to be used instead::
+
+      formula = Formula(lhs("y"),terms=[i(),l(["cond"]),l(["x"])])
+
+    This formula will estimate:
+
+    .. math::
+    
+      \\mu_i = a + b_1*c_i + b_2*x_i
+
+    :param variables: A list of the variables (strings) for which linear predictors should be included
+    :type variables: list[str]
+    """
+   
+   # Create len(variables)-way interaction, all lower
+   # order interactions and main effects (order=1)
+   full_order = []
+   for order in range(1,len(variables)+1):
+      full_order.extend(combinations(variables,order))
+   
+   order_terms = [l(list(term)) for term in full_order]
+
+   return order_terms
+
+class rs(GammTerm):
+    """
+    Adds random slopes for the effects of ``variables`` for each level of the
+    random factor ``rf``. The type of random slope created depends on the content of ``variables``.
+    
+    If ``len(variables)==1``, and the string in ``variables`` identifies a categorical variable in the data, then
+    a random offset adjustment (for every level of the categorical variable, so without binary coding!) will be
+    estimated for every level of the random factor ``rf``.
+
+    Example: The factor variable "cond", with two levels "1" and "2" is assumed to have a general effect on the DV "y".
+    However, data was collected from multiple subjects (random factor ``rf`` = "subject") and it is reasonable to assume
+    that the effect of "cond" is slightly different for every subject (it is also assumed that all subjects took part
+    in both conditions identified by "cond"). A model that accounts for this is estimated via::
+
+      formula = Formula(lhs("y"),terms=[i(),l(["cond"]),rs(["cond"],rf="subject")])
+   
+    This formula will estimate the following model:
+
+    .. math::
+
+      \\mu = a + b_1*c_i + a_{j(i),cc(i)}
+
+    Here, :math:`c` is again a binary predictor variable created so that it is 1 if "cond"=2 for observation i else 0, :math:`cc(i)` indexes the level of "cond" at observation :math:`i`,
+    :math:`j(i)` indexes the level of "subject" at observation :math:`i`, and :math:`a_{j,cc(i)}` identifies the random offset estimated for subject :math:`j` at the level of "cond"
+    indicated by :math:`cc(i)`. The :math:`a_{j,cc(i)}` are assumed to be i.i.d :math:`\\sim N(0,\\sigma_a)`. Note that the fixed effect sturcture uses binary coding but the random effect structure does not!
+    
+    Hence, ``rs(["cond"],rf="subject")`` in ``mssm`` corresponds to adding the term below to a ``mgcv`` model::
+
+      s(cond,subject,bs="re")
+   
+    If all the strings in ``variables`` identify continuous variables in the data, then a random slope for the
+    len(``variables``)-way interaction (will simplify to a slope for a single continuous variable if len(``variables``) == 1)
+    will be estimated for every level of the random factor ``rf``.
+
+    Example: The continuous variable "x" is assumed to have a general effect on the DV "y".
+    However, data was collected from multiple subjects (random factor ``rf`` ="subject") and it is reasonable to assume
+    that the effect of "x" is slightly different for every subject. A model that accounts for this is estimated via::
+
+      formula = Formula(lhs("y"),terms=[i(),l(["x"]),rs(["x"],rf="subject")])
+   
+    This formula will estimate the following model:
+
+    .. math::
+      
+      \\mu = a + b*x_i + b_{j(i)} * x_i
+    
+    Where, :math:`j(i)` again indexes the level of "subject" at observation :math:`i`, :math:`b_j(i)` identifies the random slope (the subject-specific slope adjustment for :math:`b`)
+    for variable "x" estimated for subject :math:`j` and the :math:`b_{j(i)}` are again assumed to be i.i.d from a **single** :math:`\\sim N(0,\\sigma_b)`
+   
+    Note, lower-order interaction slopes (as well as main effects) are **not pulled in by default**! Consider the following formula::
+
+      formula = Formula(lhs("y"),terms=[i(),*li(["x","z"]),rs(["x","z"],rf="subject")])
+   
+    with another continuous variable "z". This corresponds to the model:
+
+    .. math::
+      
+      \\mu = a + b_1*x_i + b_2*z_i + b_3*x_i*z_i + b_{j(i)}*x_i*z_i
+
+    With :math:`j(i)` again indexing the level of "subject" at observation i, :math:`b_{j(i)}` identifying the random slope (the subject-specific slope adjustment for :math:`b_3`) for the interaction of
+    variables :math:`x` and :math:`z` estimated for subject :math:`j`. The :math:`b_{j(i)}` are again assumed to be i.i.d from a **single** :math:`\\sim N(0,\\sigma_b)`.
+    
+    To add random slopes for the main effects of either :math:`x` or :math:`z` as well as an additional random intercept, additional :class:`rs`
+    and a :class:`ri` terms would have to be added to the formula::
+
+      formula = Formula(lhs("y"),terms=[i(),*li(["x","z"]),
+                                       ri("subject"),
+                                       rs(["x"],rf="subject"),
+                                       rs(["z"],rf="subject"),
+                                       rs(["x","z"],rf="subject")])
+
+    If ``len(variables) > 1`` and at least one string in ``variables`` identifies a categorical variable in the data then random slopes for the
+    len(``variables``)-way interaction will be estimated for every level of the random factor ``rf``. Separate distribution parameters (the :math:`\\sigma` of
+    the Normal) will be estimated for every level of the resulting interaction.
+
+    Example: The continuous variable "x" and the factor variable "cond", with two levels "1" and "2" are assumed to have a general interaction effect
+    on the DV "y". However, data was collected from multiple subjects (random factor ``rf`` ="subject") and it is reasonable to assume
+    that their interaction effect is slightly different for every subject. A model that accounts for this is estimated via::
+
+      formula = Formula(lhs("y"),terms=[i(),*li(["x","cond"]),rs(["x","cond"],rf="subject")])
+
+    This formula will estimate the following model:
+
+    .. math::
+      
+      \\mu = a + b_1*c_i + b_2*x_i + b_3*x_i*c_i + b_{j(i),cc(i)}*x_i
+    
+    With, :math:`c` corresponding to a binary predictor variable created so that it is 1 if "cond"=2 for observation :math:`i` else 0, :math:`cc(i)` corresponds to the level of "cond" at observation :math:`i`,
+    :math:`j(i)` corresponds to the level of "subject" at observation :math:`i`, and :math:`b_{j(i),cc(i)}` identifies the random slope for variable :math:`x` at "cond" = :math:`cc(i)` estimated for subject :math:`j`.
+    That is: the :math:`b_{j,cc(i)}` where :math:`cc(i)=1` are assumed to be i.i.d realizations from normal distribution :math:`N(0,\\sigma_{b_1})` and the :math:`b_{j,cc(i)}` where :math:`cc(i)=2` are assumed to be
+    i.i.d realizations from a **separate normal distribution** :math:`N(0,\\sigma_{b_2})`.
+
+    Hence, adding ``rs(["x","cond"],rf="subject")`` to a ``mssm`` model, is equivalent to adding the term below to a ``mgcv`` model::
+
+      s(x,subject,by=cond,bs="re")
+
+    Correlations between random effects cannot be taken into account by means of parameters (this is possible for example in ``lme4``).
+
+    :param variables: A list of variables. Can point to continuous and categorical variables.
+    :type variables: [str]
+    :param rf: A factor variable. Identifies the random factor in the data.
+    :type rf: str
+    """
+    def __init__(self,
+                 variables:list[str],
+                 rf:str) -> None:
+        
+        # Initialization
+        super().__init__(variables, TermType.RANDSLOPE, True, [PenType.IDENTITY], [{}])
+        self.var_coef = None
+        self.by = rf
+        self.by_cont = None
+
+        # Term name
+        self.name = f"rs({variables},{rf})"
+    
+    def build_penalty(self,ti:int,penalties:list[LambdaTerm],cur_pen_idx:int,factor_levels:dict,col_S:int) -> tuple[list[LambdaTerm],int]:
+      """Builds a penalty matrix associated with this random slope term and returns an updated ``penalties`` list including it.
+
+      This method is implemented by most implementations of the :class:`GammTerm` class.
+      Two arguments need to be returned: the updated ``penalties`` list including the new penalty implemented as a :class:`LambdaTerm` and the updated ``cur_pen_idx``.
+      The latter simply needs to be incremented for every penalty added to ``penalties``.
+
+      :param ti: Index corresponding to the position the current term (i.e., self) takes on in the list of terms of the Formula.
+      :type ti: int
+      :param penalties: List of previosly created penalties.
+      :type penalties: [LambdaTerm]
+      :param cur_pen_idx: Index of the last element in ``penalties``.
+      :type cur_pen_idx: int
+      :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
+      :type factor_levels: dict
+      :param col_S: Number of columns of the total penalty matrix.
+      :type col_S: int
+      :return: Updated ``penalties`` list including the new penalties implemented as a :class:`LambdaTerm` and the updated ``cur_pen_idx``
+      :rtype: tuple[list[LambdaTerm],int]
+      """
+      vars = self.variables
+
+      if self.var_coef is None:
+            raise ValueError("Number of coefficients for random slope were not initialized.")
+      
+      if len(vars) > 1 and self.var_coef > 1:
+        # Separate penalties for interactions involving at least one categorical factor.
+        # In that case, a separate penalty will describe the random coefficients for the random factor (rterm.by)
+        # per level of the (interaction of) categorical factor(s) involved in the interaction.
+        # For interactions involving only continuous variables this condition will be false and a single
+        # penalty will be estimated.
+        idk = len(factor_levels[self.by])
+        pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = id_dist_pen(idk,None)
+        for _ in range(self.var_coef):
+          lTerm = LambdaTerm(start_index=cur_pen_idx,
+                                       type = PenType.IDENTITY,
+                                       term = ti)
+    
+          lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,idk,cur_pen_idx)
+          lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,idk,cur_pen_idx)
+          lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,idk)
+          lTerm.rank = rank
+          penalties.append(lTerm)
+
+      else:
+        # Single penalty for random coefficients of a single variable (categorical or continuous) or an
+        # interaction of only continuous variables.
+        idk = len(factor_levels[self.by])*self.var_coef
+        pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = id_dist_pen(idk,None)
+
+
+        lTerm = LambdaTerm(start_index=cur_pen_idx,
+                                     type = PenType.IDENTITY,
+                                     term=ti)
+    
+        lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,idk,cur_pen_idx)
+        lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,idk,cur_pen_idx)
+        lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,idk)
+        lTerm.rank = rank
+        penalties.append(lTerm)
+
+      return penalties, cur_pen_idx
+   
+    def build_matrix(self,ci:int,ti:int,var_map:dict,var_types:dict,factor_levels:dict,ridx:np.ndarray,cov_flat:np.ndarray,use_only:list[int]) -> tuple[list[float],list[int],list[int],int]:
+      """Builds the design/term/model matrix associated with this random slope term and returns it represented as a list of values, a list of row indices, and a list of column indices.
+
+      This method is implemented by every implementation of the :class:`GammTerm` class.
+      The returned lists can then be used to create a sparse matrix for this term. Also returns an updated ``ci`` column index, reflecting how many additional columns would be added
+      to the total model matrix.
+
+      :param ci: Current column index.
+      :type ci: int
+      :param ti: Index corresponding to the position the current term (i.e., self) takes on in the list of terms of the Formula.
+      :type ti: int
+      :param var_map: Var map dictionary. Keys are variables in the data, values their column index in the encoded predictor matrix.
+      :type var_map: dict
+      :param var_types: Var types dictionary. Keys are variables in the data, values are either ``VarType.NUMERIC`` for continuous variables or ``VarType.FACTOR`` for categorical variables.
+      :type var_types: dict
+      :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
+      :type factor_levels: dict
+      :param ridx: Array of non NAN rows in the data.
+      :type ridx: np.ndarray
+      :param cov_flat: An array, containing all (encoded, in case of categorical predictors) values on each predictor (each columns of ``cov_flat`` corresponds to a different predictor) variable included in any of the terms in order of the data-frame passed to the Formula.
+      :type cov_flat: np.ndarray
+      :param use_only: A list holding term indices for which the matrix should be formed. For terms not included in this list a zero matrix will be returned. Can be set to ``None`` so that no terms are excluded.
+      :type use_only: [int]
+      :return: matrix data, matrix row indices, matrix column indices, added columns
+      :rtype: tuple[list[float],list[int],list[int],int]
+      """
+      by_cov = cov_flat[:,var_map[self.by]]
+      by_levels = factor_levels[self.by]
+      old_ci = ci
+
+      # First get all columns for all linear predictors associated with this
+      # term - might involve interactions!
+      lin_elements,\
+      lin_rows,\
+      lin_cols,\
+      lin_ci = build_linear_term(self,False,ci,ti,var_map,
+                                 var_types,factor_levels,
+                                 ridx,cov_flat,None)
+      
+      # Need to cast to np.array for indexing
+      lin_elements = np.array(lin_elements)
+      lin_rows = np.array(lin_rows)
+      lin_cols = np.array(lin_cols)
+
+      new_elements = []
+      new_rows = []
+      new_cols = []
+      new_ci = 0
+      
+      # For every column
+      for coef_i in range(lin_ci): 
+          # Collect the coefficinet column and row index
+          inter_i = lin_elements[lin_cols == old_ci]
+          rdx_i = lin_rows[lin_cols == old_ci]
+          # split the column over len(by_levels) columns for every level of the random factor
+          for fl in range(len(by_levels)): 
+            # First check which of the remaining rows correspond to current level of random factor
+            fl_idx = by_cov == fl
+            # Then adjust to the rows actually present in the interaction column
+            fl_idx = fl_idx[rdx_i]
+            # Now collect
+            if use_only is None or ti in use_only:
+                new_elements.extend(inter_i[fl_idx])
+                new_rows.extend(rdx_i[fl_idx])
+                new_cols.extend([ci for _ in range(len(inter_i[fl_idx]))])
+            new_ci += 1
+            ci += 1
+          old_ci += 1
+
+      # Matrix returned here holds for every linear coefficient one column for every level of the random
+      # factor. So: coef1_1, coef_1_2, coef1_3, ... coef_n_1, coef_n,2, coef_n_3
+
+      return new_elements,new_rows,new_cols,new_ci
+
+    def get_coef_info(self,var_types:dict,factor_levels:dict,coding_factors:dict) -> tuple[int,int,list[str]]:
+      """Returns the total number of coefficients associated with this random slope term, the number of unpenalized coefficients associated with this term, and a list with names for each of the coefficients associated with this term.
+
+      :param var_types: Var types dictionary. Keys are variables in the data, values are either ``VarType.NUMERIC`` for continuous variables or ``VarType.FACTOR`` for categorical variables.
+      :type var_types: dict
+      :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
+      :type factor_levels: dict
+      :param coding_factors: Factor coding dictionary. Keys are factor variables in the data, values are dictionaries, where the keys correspond to the encoded levels (int) of the factor and the values to their levels (str).
+      :type coding_factors: dict
+      :return: Number of coefficients associated with term, number of un-penalized coefficients associated with term, coef names
+      :rtype: tuple[int,int,list[str]]
+      """
+      t_total_coef,\
+      _,\
+      t_coef_names = get_linear_coef_info(self,False,
+                                var_types,
+                                factor_levels,
+                                coding_factors)
+
+      self.var_coef = t_total_coef # We need t_total_coef penalties for this term later.
+      by_code_factors = coding_factors[self.by]
+      by_code_levels = factor_levels[self.by]
+      
+      rf_coef_names = []
+      for cname in t_coef_names:
+        rf_coef_names.extend([f"{cname}_{by_code_factors[fl]}" for fl in range(len(by_code_levels))])
+      
+      t_ncoef = len(rf_coef_names)
+
+      return t_ncoef,0,rf_coef_names
+
+def build_linear_term(lTerm:l|rs,has_intercept:bool,ci:int,ti:int,var_map:dict,var_types:dict,factor_levels:dict,ridx:np.ndarray,cov_flat:np.ndarray,use_only:list[int]) -> tuple[list[float],list[int],list[int],int]:
   """Builds the design/term/model matrix associated with a linear/random term and returns it represented as a list of values, a list of row indices, and a list of column indices.
 
   :param lTerm: Linear or random slope term
-  :type LTerm: l or rs
+  :type LTerm: l | rs
   :param has_intercept: Whether or not the formula of which this term is part includes an intercept term.
   :type has_intercept: bool
   :param ci: Current column index.
@@ -1509,11 +2090,13 @@ def build_linear_term(lTerm,has_intercept:bool,ci:int,ti:int,var_map:dict,var_ty
   :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
   :type factor_levels: dict
   :param ridx: Array of non NAN rows in the data.
-  :type ridx: numpy.array
+  :type ridx: np.ndarray
   :param cov_flat: An array, containing all (encoded, in case of categorical predictors) values on each predictor (each columns of ``cov_flat`` corresponds to a different predictor) variable included in any of the terms in order of the data-frame passed to the Formula.
-  :type cov_flat: numpy.array
+  :type cov_flat: np.ndarray
   :param use_only: A list holding term indices for which the matrix should be formed. For terms not included in this list a zero matrix will be returned. Can be set to ``None`` so that no terms are excluded.
   :type use_only: [int]
+  :return: matrix data, matrix row indices, matrix column indices, added columns
+  :rtype: tuple[list[float],list[int],list[int],int]
   """
   new_elements = []
   new_rows = []
@@ -1602,11 +2185,11 @@ def build_linear_term(lTerm,has_intercept:bool,ci:int,ti:int,var_map:dict,var_ty
   
   return new_elements,new_rows,new_cols,new_ci
 
-def get_linear_coef_info(lTerm,has_intercept:bool,var_types:dict,factor_levels:dict,coding_factors:dict):
+def get_linear_coef_info(lTerm:l | rs,has_intercept:bool,var_types:dict,factor_levels:dict,coding_factors:dict) -> tuple[int,int,list[str]]:
   """Returns the total number of coefficients associated with a linear or random term, the number of unpenalized coefficients associated with a linear or random and a list with names for each of the coefficients associated with a linear or random.
 
   :param lTerm: Linear or random slope term
-  :type LTerm: l or rs
+  :type LTerm: l | rs
   :param has_intercept: Whether or not the formula of which this term is part includes an intercept term.
   :type has_intercept: bool
   :param var_types: Var types dictionary. Keys are variables in the data, values are either ``VarType.NUMERIC`` for continuous variables or ``VarType.FACTOR`` for categorical variables.
@@ -1615,6 +2198,8 @@ def get_linear_coef_info(lTerm,has_intercept:bool,var_types:dict,factor_levels:d
   :type factor_levels: dict
   :param coding_factors: Factor coding dictionary. Keys are factor variables in the data, values are dictionaries, where the keys correspond to the encoded levels (int) of the factor and the values to their levels (str).
   :type coding_factors: dict
+  :return: Number of coefficients associated with term, number of un-penalized coefficients associated with term, coef names
+  :rtype: tuple[int,int,list[str]]
   """
   unpenalized_coef = 0
   coef_names = []
@@ -1677,535 +2262,3 @@ def get_linear_coef_info(lTerm,has_intercept:bool,var_types:dict,factor_levels:d
       total_coef += 1
 
   return total_coef,unpenalized_coef,coef_names
-
-class l(GammTerm):
-    """
-    Adds a parametric (linear) term to the model formula. The model :math:`\mu_i = a + b*x_i` can for example be achieved
-    by adding ``[i(), l(['x'])]`` to the ``term`` argument of a ``Formula``. The coefficient :math:`b` estimated for
-    the term will then correspond to the slope of :math:`x`. This class can also be used to add predictors for
-    categorical variables. If the formula includes an intercept, binary coding will be utilized to
-    add reference-level adjustment coefficients for the remaining k-1 levels of any additional factor variable.
-
-    If more than one variable is included in ``variables`` the model will only add the the len(``variables``)-interaction
-    to the model! Lower order interactions and main effects will not be included by default (see :func:`li` function instead, which
-    automatically includes all lower-order interactions and main effects).
-
-    Example: The interaction effect of factor variable "cond", with two levels "1" and "2", and acontinuous variable "x"
-    on the dependent variable "y" are of interest. To estimate such a model, the following formula can be used::
-
-      formula = Formula(lhs("y"),terms=[i(),l(["cond"]),l(["x"]),l(["cond","x"])])
-   
-    This formula will estimate the following model:
-
-    .. math::
-
-      \mu_i = a + b_1*c_i + b_2*x_i + b_3*c_i*x_i
-
-    Here, :math:`c` is a binary predictor variable created so that it is 1 if "cond"=2 else 0 and :math:`b_3` is the coefficient that is added
-    because ``l(["cond","x"])`` is included in the terms (i.e., the interaction effect).
-
-    To get a model with only main effects for "cond" and "x", the following formula could be used::
-
-      formula = Formula(lhs("y"),terms=[i(),l(["cond"]),l(["x"])])
-
-    This formula will estimate:
-
-    .. math::
-    
-      \mu_i = a + b_1*c_i + b_2*x_i
-
-    :param variables: A list of the variables (strings) for which linear predictors should be included
-    :type variables: [str]
-    """
-    def __init__(self,
-                 variables:list) -> None:
-        
-        # Initialization
-        super().__init__(variables, TermType.LINEAR, False, [], [])
-
-        # Term name
-        self.name = f"l({variables})"
-   
-    def build_matrix(self,has_intercept:bool,ci:int,ti:int,var_map:dict,var_types:dict,factor_levels:dict,ridx:[int],cov_flat:[[int]],use_only:[int]):
-      """Builds the design/term/model matrix associated with this linear term and returns it represented as a list of values, a list of row indices, and a list of column indices.
-
-      This method is implemented by every implementation of the :class:`GammTerm` class.
-      The returned lists can then be used to create a sparse matrix for this term. Also returns an updated ``ci`` column index, reflecting how many additional columns would be added
-      to the total model matrix.
-
-      :param has_intercept: Whether or not the formula of which this term is part includes an intercept term.
-      :type has_intercept: bool
-      :param ci: Current column index.
-      :type ci: int
-      :param ti: Index corresponding to the position the current term (i.e., self) takes on in the list of terms of the Formula.
-      :type ti: int
-      :param var_map: Var map dictionary. Keys are variables in the data, values their column index in the encoded predictor matrix.
-      :type var_map: dict
-      :param var_types: Var types dictionary. Keys are variables in the data, values are either ``VarType.NUMERIC`` for continuous variables or ``VarType.FACTOR`` for categorical variables.
-      :type var_types: dict
-      :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
-      :type factor_levels: dict
-      :param ridx: Array of non NAN rows in the data.
-      :type ridx: numpy.array
-      :param cov_flat: An array, containing all (encoded, in case of categorical predictors) values on each predictor (each columns of ``cov_flat`` corresponds to a different predictor) variable included in any of the terms in order of the data-frame passed to the Formula.
-      :type cov_flat: numpy.array
-      :param use_only: A list holding term indices for which the matrix should be formed. For terms not included in this list a zero matrix will be returned. Can be set to ``None`` so that no terms are excluded.
-      :type use_only: [int]
-      """
-      return build_linear_term(self,has_intercept,ci,ti,var_map,var_types,factor_levels,ridx,cov_flat,use_only)
-
-    def get_coef_info(self,has_intercept:bool,var_types:dict,factor_levels:dict,coding_factors:dict):
-      """Returns the total number of coefficients associated with this linear term, the number of unpenalized coefficients associated with this term, and a list with names for each of the coefficients associated with this term.
-
-      :param has_intercept: Whether or not the formula of which this term is part includes an intercept term.
-      :type has_intercept: bool
-      :param var_types: Var types dictionary. Keys are variables in the data, values are either ``VarType.NUMERIC`` for continuous variables or ``VarType.FACTOR`` for categorical variables.
-      :type var_types: dict
-      :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
-      :type factor_levels: dict
-      :param coding_factors: Factor coding dictionary. Keys are factor variables in the data, values are dictionaries, where the keys correspond to the encoded levels (int) of the factor and the values to their levels (str).
-      :type coding_factors: dict
-      """
-      return get_linear_coef_info(self,has_intercept,var_types,factor_levels,coding_factors)
-
-def li(variables:list[str]):
-   """
-    Behaves like the :class:`l` class but automatically includes all lower-order interactions and main effects.
-
-    Example: The interaction effect of factor variable "cond", with two levels "1" and "2", and acontinuous variable "x"
-    on the dependent variable "y" are of interest. To estimate such a model, the following formula can be used::
-
-      formula = Formula(lhs("y"),terms=[i(),*li(["cond","x"])])
-
-    Note, the use of the ``*`` operator to unpack the individual terms returned from li!
-   
-    This formula will still (see :class:`l`) estimate the following model:
-    
-    .. math::
-
-      \mu = a + b_1*c_i + b_2*x_i + b_3*c_i*x_i
-
-    with: :math:`c` corresponding to a binary predictor variable created so that it is 1 if "cond"=2 else 0.
-
-    To get a model with only main effects for "cond" and "x" :class:`li` **cannot be used** and :class:`l` needs to be used instead::
-
-      formula = Formula(lhs("y"),terms=[i(),l(["cond"]),l(["x"])])
-
-    This formula will estimate:
-
-    .. math::
-    
-      \mu_i = a + b_1*c_i + b_2*x_i
-
-    :param variables: A list of the variables (strings) for which linear predictors should be included
-    :type variables: list[str]
-    """
-   
-   # Create len(variables)-way interaction, all lower
-   # order interactions and main effects (order=1)
-   full_order = []
-   for order in range(1,len(variables)+1):
-      full_order.extend(combinations(variables,order))
-   
-   order_terms = [l(list(term)) for term in full_order]
-
-   return order_terms
-
-class ri(GammTerm):
-    """
-    Adds a random intercept for the factor ``variable`` to the model. The random intercepts :math:`b_i` are assumed
-    to be i.i.d :math:`b_i \sim N(0,\sigma_b)` i.e., normally distributed around zero - the simplest random effect supported by ``mssm``.
-
-    Thus, this term achieves exactly what is achieved in ``mgcv`` by adding the term::
-
-      s(variable,bs="re")
-    
-    The ``variable`` needs to identify a factor-variable in the data (i.e., the .dtype of the variable has to be equal to 'O'). If you want to
-    add more complex random effects to the model (e.g., random slopes for continuous variable "x" per level of factor ``variable``) use the :class:`rs` class.
-
-    :param variable: The name (string) of a factor variable. For every level of this factor a random intercept will be estimated. The random intercepts are assumed to follow a normal distribution centered around zero.
-    :type variable: str
-    """
-    def __init__(self,
-                 variable:str) -> None:
-        
-        # Initialization
-        super().__init__([variable], TermType.RANDINT, True, [PenType.IDENTITY], [{}])
-
-        # Term name
-        self.name = f"ri({variable})"
-
-    def build_penalty(self,ti:int,penalties:[LambdaTerm],cur_pen_idx:int,factor_levels:dict,col_S:int):
-      """Builds a penalty matrix associated with this random intercept term and returns an updated ``penalties`` list including it.
-
-      This method is implemented by most implementations of the :class:`GammTerm` class.
-      Two arguments need to be returned: the updated ``penalties`` list including the new penalty implemented as a :class:`mssm.src.python.LambdaTerm` and the updated ``cur_pen_idx``.
-      The latter simply needs to be incremented for every penalty added to ``penalties``.
-
-      :param ti: Index corresponding to the position the current term (i.e., self) takes on in the list of terms of the Formula.
-      :type ti: int
-      :param penalties: List of previosly created penalties.
-      :type penalties: [mssm.src.python.LambdaTerm]
-      :param cur_pen_idx: Index of the last element in ``penalties``.
-      :type cur_pen_idx: int
-      :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
-      :type factor_levels: dict
-      :param col_S: Number of columns of the total penalty matrix.
-      :type col_S: int
-      """
-      vars = self.variables
-      idk = len(factor_levels[vars[0]])
-
-      pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = id_dist_pen(idk,None)
-
-      lTerm = LambdaTerm(start_index=cur_pen_idx,
-                                   type = PenType.IDENTITY,
-                                   term = ti)
-      
-      lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,idk,cur_pen_idx)
-      lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,idk,cur_pen_idx)
-      lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,idk)
-      lTerm.rank = rank
-      penalties.append(lTerm)
-
-      return penalties, cur_pen_idx
-   
-    def build_matrix(self,ci:int,ti:int,var_map:dict,factor_levels:dict,ridx:[int],cov_flat:[[int]],use_only:[int]):
-      """Builds the design/term/model matrix associated with this random intercept term and returns it represented as a list of values, a list of row indices, and a list of column indices.
-
-      This method is implemented by every implementation of the :class:`GammTerm` class.
-      The returned lists can then be used to create a sparse matrix for this term. Also returns an updated ``ci`` column index, reflecting how many additional columns would be added
-      to the total model matrix.
-
-      :param ci: Current column index.
-      :type ci: int
-      :param ti: Index corresponding to the position the current term (i.e., self) takes on in the list of terms of the Formula.
-      :type ti: int
-      :param var_map: Var map dictionary. Keys are variables in the data, values their column index in the encoded predictor matrix.
-      :type var_map: dict
-      :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
-      :type factor_levels: dict
-      :param ridx: Array of non NAN rows in the data.
-      :type ridx: numpy.array
-      :param cov_flat: An array, containing all (encoded, in case of categorical predictors) values on each predictor (each columns of ``cov_flat`` corresponds to a different predictor) variable included in any of the terms in order of the data-frame passed to the Formula.
-      :type cov_flat: numpy.array
-      :param use_only: A list holding term indices for which the matrix should be formed. For terms not included in this list a zero matrix will be returned. Can be set to ``None`` so that no terms are excluded.
-      :type use_only: [int]
-      """
-      vars = self.variables
-      n_y = len(ridx)
-      offset = np.ones(n_y)
-      by_cov = cov_flat[:,var_map[vars[0]]]
-
-      new_elements = []
-      new_rows = []
-      new_cols = []
-      new_ci = 0
-
-      for fl in range(len(factor_levels[vars[0]])):
-        fl_idx = by_cov == fl
-        if use_only is None or ti in use_only:
-          new_elements.extend(offset[fl_idx])
-          new_rows.extend(ridx[fl_idx])
-          new_cols.extend([ci for _ in range(len(offset[fl_idx]))])
-        new_ci += 1
-        ci += 1
-
-      return new_elements,new_rows,new_cols,new_ci
-
-    def get_coef_info(self,factor_levels:dict,coding_factors:dict):
-      """Returns the total number of coefficients associated with this random intercept term, the number of unpenalized coefficients associated with this term, and a list with names for each of the coefficients associated with this term.
-
-      :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
-      :type factor_levels: dict
-      :param coding_factors: Factor coding dictionary. Keys are factor variables in the data, values are dictionaries, where the keys correspond to the encoded levels (int) of the factor and the values to their levels (str).
-      :type coding_factors: dict
-      """
-      vars = self.variables
-      by_code_factors = coding_factors[vars[0]]
-      n_coef = 0
-      coef_names = []
-
-      for fl in range(len(factor_levels[vars[0]])):
-        coef_names.append(f"ri_{vars[0]}_{by_code_factors[fl]}")
-        n_coef += 1
-
-      return n_coef, 0, coef_names
-
-class rs(GammTerm):
-    """
-    Adds random slopes for the effects of ``variables`` for each level of the
-    random factor ``rf``. The type of random slope created depends on the content of ``variables``.
-    
-    If ``len(variables)==1``, and the string in ``variables`` identifies a categorical variable in the data, then
-    a random offset adjustment (for every level of the categorical variable, so without binary coding!) will be
-    estimated for every level of the random factor ``rf``.
-
-    Example: The factor variable "cond", with two levels "1" and "2" is assumed to have a general effect on the DV "y".
-    However, data was collected from multiple subjects (random factor ``rf`` = "subject") and it is reasonable to assume
-    that the effect of "cond" is slightly different for every subject (it is also assumed that all subjects took part
-    in both conditions identified by "cond"). A model that accounts for this is estimated via::
-
-      formula = Formula(lhs("y"),terms=[i(),l(["cond"]),rs(["cond"],rf="subject")])
-   
-    This formula will estimate the following model:
-
-    .. math::
-
-      \mu = a + b_1*c_i + a_{j(i),cc(i)}
-
-    Here, :math:`c` is again a binary predictor variable created so that it is 1 if "cond"=2 for observation i else 0, :math:`cc(i)` indexes the level of "cond" at observation :math:`i`,
-    :math:`j(i)` indexes the level of "subject" at observation :math:`i`, and :math:`a_{j,cc(i)}` identifies the random offset estimated for subject :math:`j` at the level of "cond"
-    indicated by :math:`cc(i)`. The :math:`a_{j,cc(i)}` are assumed to be i.i.d :math:`\sim N(0,\sigma_a)`. Note that the fixed effect sturcture uses binary coding but the random effect structure does not!
-    
-    Hence, ``rs(["cond"],rf="subject")`` in ``mssm`` corresponds to adding the term below to a ``mgcv`` model::
-
-      s(cond,subject,bs="re")
-   
-    If all the strings in ``variables`` identify continuous variables in the data, then a random slope for the
-    len(``variables``)-way interaction (will simplify to a slope for a single continuous variable if len(``variables``) == 1)
-    will be estimated for every level of the random factor ``rf``.
-
-    Example: The continuous variable "x" is assumed to have a general effect on the DV "y".
-    However, data was collected from multiple subjects (random factor ``rf`` ="subject") and it is reasonable to assume
-    that the effect of "x" is slightly different for every subject. A model that accounts for this is estimated via::
-
-      formula = Formula(lhs("y"),terms=[i(),l(["x"]),rs(["x"],rf="subject")])
-   
-    This formula will estimate the following model:
-
-    .. math::
-      
-      \mu = a + b*x_i + b_{j(i)} * x_i
-    
-    Where, :math:`j(i)` again indexes the level of "subject" at observation :math:`i`, :math:`b_j(i)` identifies the random slope (the subject-specific slope adjustment for :math:`b`)
-    for variable "x" estimated for subject :math:`j` and the :math:`b_{j(i)}` are again assumed to be i.i.d from a **single** :math:`\sim N(0,\sigma_b)`
-   
-    Note, lower-order interaction slopes (as well as main effects) are **not pulled in by default**! Consider the following formula::
-
-      formula = Formula(lhs("y"),terms=[i(),*li(["x","z"]),rs(["x","z"],rf="subject")])
-   
-    with another continuous variable "z". This corresponds to the model:
-
-    .. math::
-      
-      \mu = a + b_1*x_i + b_2*z_i + b_3*x_i*z_i + b_{j(i)}*x_i*z_i
-
-    With :math:`j(i)` again indexing the level of "subject" at observation i, :math:`b_{j(i)}` identifying the random slope (the subject-specific slope adjustment for :math:`b_3`) for the interaction of
-    variables :math:`x` and :math:`z` estimated for subject :math:`j`. The :math:`b_{j(i)}` are again assumed to be i.i.d from a **single** :math:`\sim N(0,\sigma_b)`.
-    
-    To add random slopes for the main effects of either :math:`x` or :math:`z` as well as an additional random intercept, additional :class:`rs`
-    and a :class:`ri` terms would have to be added to the formula::
-
-      formula = Formula(lhs("y"),terms=[i(),*li(["x","z"]),
-                                       ri("subject"),
-                                       rs(["x"],rf="subject"),
-                                       rs(["z"],rf="subject"),
-                                       rs(["x","z"],rf="subject")])
-
-    If ``len(variables) > 1`` and at least one string in ``variables`` identifies a categorical variable in the data then random slopes for the
-    len(``variables``)-way interaction will be estimated for every level of the random factor ``rf``. Separate distribution parameters (the :math:`\sigma` of
-    the Normal) will be estimated for every level of the resulting interaction.
-
-    Example: The continuous variable "x" and the factor variable "cond", with two levels "1" and "2" are assumed to have a general interaction effect
-    on the DV "y". However, data was collected from multiple subjects (random factor ``rf`` ="subject") and it is reasonable to assume
-    that their interaction effect is slightly different for every subject. A model that accounts for this is estimated via::
-
-      formula = Formula(lhs("y"),terms=[i(),*li(["x","cond"]),rs(["x","cond"],rf="subject")])
-
-    This formula will estimate the following model:
-
-    .. math::
-      
-      \mu = a + b_1*c_i + b_2*x_i + b_3*x_i*c_i + b_{j(i),cc(i)}*x_i
-    
-    With, :math:`c` corresponding to a binary predictor variable created so that it is 1 if "cond"=2 for observation :math:`i` else 0, :math:`cc(i)` corresponds to the level of "cond" at observation :math:`i`,
-    :math:`j(i)` corresponds to the level of "subject" at observation :math:`i`, and :math:`b_{j(i),cc(i)}` identifies the random slope for variable :math:`x` at "cond" = :math:`cc(i)` estimated for subject :math:`j`.
-    That is: the :math:`b_{j,cc(i)}` where :math:`cc(i)=1` are assumed to be i.i.d realizations from normal distribution :math:`N(0,\sigma_{b_1})` and the :math:`b_{j,cc(i)}` where :math:`cc(i)=2` are assumed to be
-    i.i.d realizations from a **separate normal distribution** :math:`N(0,\sigma_{b_2})`.
-
-    Hence, adding ``rs(["x","cond"],rf="subject")`` to a ``mssm`` model, is equivalent to adding the term below to a ``mgcv`` model::
-
-      s(x,subject,by=cond,bs="re")
-
-    Correlations between random effects cannot be taken into account by means of parameters (this is possible for example in ``lme4``).
-
-    :param variables: A list of variables. Can point to continuous and categorical variables.
-    :type variables: [str]
-    :param rf: A factor variable. Identifies the random factor in the data.
-    :type rf: str
-    """
-    def __init__(self,
-                 variables:list[str],
-                 rf:str) -> None:
-        
-        # Initialization
-        super().__init__(variables, TermType.RANDSLOPE, True, [PenType.IDENTITY], [{}])
-        self.var_coef = None
-        self.by = rf
-        self.by_cont = None
-
-        # Term name
-        self.name = f"rs({variables},{rf})"
-    
-    def build_penalty(self,ti:int,penalties:[LambdaTerm],cur_pen_idx:int,factor_levels:dict,col_S:int):
-      """Builds a penalty matrix associated with this random slope term and returns an updated ``penalties`` list including it.
-
-      This method is implemented by most implementations of the :class:`GammTerm` class.
-      Two arguments need to be returned: the updated ``penalties`` list including the new penalty implemented as a :class:`mssm.src.python.LambdaTerm` and the updated ``cur_pen_idx``.
-      The latter simply needs to be incremented for every penalty added to ``penalties``.
-
-      :param ti: Index corresponding to the position the current term (i.e., self) takes on in the list of terms of the Formula.
-      :type ti: int
-      :param penalties: List of previosly created penalties.
-      :type penalties: [mssm.src.python.LambdaTerm]
-      :param cur_pen_idx: Index of the last element in ``penalties``.
-      :type cur_pen_idx: int
-      :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
-      :type factor_levels: dict
-      :param col_S: Number of columns of the total penalty matrix.
-      :type col_S: int
-      """
-      vars = self.variables
-
-      if self.var_coef is None:
-            raise ValueError("Number of coefficients for random slope were not initialized.")
-      
-      if len(vars) > 1 and self.var_coef > 1:
-        # Separate penalties for interactions involving at least one categorical factor.
-        # In that case, a separate penalty will describe the random coefficients for the random factor (rterm.by)
-        # per level of the (interaction of) categorical factor(s) involved in the interaction.
-        # For interactions involving only continuous variables this condition will be false and a single
-        # penalty will be estimated.
-        idk = len(factor_levels[self.by])
-        pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = id_dist_pen(idk,None)
-        for _ in range(self.var_coef):
-          lTerm = LambdaTerm(start_index=cur_pen_idx,
-                                       type = PenType.IDENTITY,
-                                       term = ti)
-    
-          lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,idk,cur_pen_idx)
-          lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,idk,cur_pen_idx)
-          lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,idk)
-          lTerm.rank = rank
-          penalties.append(lTerm)
-
-      else:
-        # Single penalty for random coefficients of a single variable (categorical or continuous) or an
-        # interaction of only continuous variables.
-        idk = len(factor_levels[self.by])*self.var_coef
-        pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = id_dist_pen(idk,None)
-
-
-        lTerm = LambdaTerm(start_index=cur_pen_idx,
-                                     type = PenType.IDENTITY,
-                                     term=ti)
-    
-        lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,idk,cur_pen_idx)
-        lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,idk,cur_pen_idx)
-        lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,idk)
-        lTerm.rank = rank
-        penalties.append(lTerm)
-
-      return penalties, cur_pen_idx
-   
-    def build_matrix(self,ci:int,ti:int,var_map:dict,var_types:dict,factor_levels:dict,ridx:[int],cov_flat:[[int]],use_only:[int]):
-      """Builds the design/term/model matrix associated with this random slope term and returns it represented as a list of values, a list of row indices, and a list of column indices.
-
-      This method is implemented by every implementation of the :class:`GammTerm` class.
-      The returned lists can then be used to create a sparse matrix for this term. Also returns an updated ``ci`` column index, reflecting how many additional columns would be added
-      to the total model matrix.
-
-      :param ci: Current column index.
-      :type ci: int
-      :param ti: Index corresponding to the position the current term (i.e., self) takes on in the list of terms of the Formula.
-      :type ti: int
-      :param var_map: Var map dictionary. Keys are variables in the data, values their column index in the encoded predictor matrix.
-      :type var_map: dict
-      :param var_types: Var types dictionary. Keys are variables in the data, values are either ``VarType.NUMERIC`` for continuous variables or ``VarType.FACTOR`` for categorical variables.
-      :type var_types: dict
-      :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
-      :type factor_levels: dict
-      :param ridx: Array of non NAN rows in the data.
-      :type ridx: numpy.array
-      :param cov_flat: An array, containing all (encoded, in case of categorical predictors) values on each predictor (each columns of ``cov_flat`` corresponds to a different predictor) variable included in any of the terms in order of the data-frame passed to the Formula.
-      :type cov_flat: numpy.array
-      :param use_only: A list holding term indices for which the matrix should be formed. For terms not included in this list a zero matrix will be returned. Can be set to ``None`` so that no terms are excluded.
-      :type use_only: [int]
-      """
-      by_cov = cov_flat[:,var_map[self.by]]
-      by_levels = factor_levels[self.by]
-      old_ci = ci
-
-      # First get all columns for all linear predictors associated with this
-      # term - might involve interactions!
-      lin_elements,\
-      lin_rows,\
-      lin_cols,\
-      lin_ci = build_linear_term(self,False,ci,ti,var_map,
-                                 var_types,factor_levels,
-                                 ridx,cov_flat,None)
-      
-      # Need to cast to np.array for indexing
-      lin_elements = np.array(lin_elements)
-      lin_rows = np.array(lin_rows)
-      lin_cols = np.array(lin_cols)
-
-      new_elements = []
-      new_rows = []
-      new_cols = []
-      new_ci = 0
-      
-      # For every column
-      for coef_i in range(lin_ci): 
-          # Collect the coefficinet column and row index
-          inter_i = lin_elements[lin_cols == old_ci]
-          rdx_i = lin_rows[lin_cols == old_ci]
-          # split the column over len(by_levels) columns for every level of the random factor
-          for fl in range(len(by_levels)): 
-            # First check which of the remaining rows correspond to current level of random factor
-            fl_idx = by_cov == fl
-            # Then adjust to the rows actually present in the interaction column
-            fl_idx = fl_idx[rdx_i]
-            # Now collect
-            if use_only is None or ti in use_only:
-                new_elements.extend(inter_i[fl_idx])
-                new_rows.extend(rdx_i[fl_idx])
-                new_cols.extend([ci for _ in range(len(inter_i[fl_idx]))])
-            new_ci += 1
-            ci += 1
-          old_ci += 1
-
-      # Matrix returned here holds for every linear coefficient one column for every level of the random
-      # factor. So: coef1_1, coef_1_2, coef1_3, ... coef_n_1, coef_n,2, coef_n_3
-
-      return new_elements,new_rows,new_cols,new_ci
-
-    def get_coef_info(self,var_types:dict,factor_levels:dict,coding_factors:dict):
-      """Returns the total number of coefficients associated with this random slope term, the number of unpenalized coefficients associated with this term, and a list with names for each of the coefficients associated with this term.
-
-      :param var_types: Var types dictionary. Keys are variables in the data, values are either ``VarType.NUMERIC`` for continuous variables or ``VarType.FACTOR`` for categorical variables.
-      :type var_types: dict
-      :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
-      :type factor_levels: dict
-      :param coding_factors: Factor coding dictionary. Keys are factor variables in the data, values are dictionaries, where the keys correspond to the encoded levels (int) of the factor and the values to their levels (str).
-      :type coding_factors: dict
-      """
-      t_total_coef,\
-      _,\
-      t_coef_names = get_linear_coef_info(self,False,
-                                var_types,
-                                factor_levels,
-                                coding_factors)
-
-      self.var_coef = t_total_coef # We need t_total_coef penalties for this term later.
-      by_code_factors = coding_factors[self.by]
-      by_code_levels = factor_levels[self.by]
-      
-      rf_coef_names = []
-      for cname in t_coef_names:
-        rf_coef_names.extend([f"{cname}_{by_code_factors[fl]}" for fl in range(len(by_code_levels))])
-      
-      t_ncoef = len(rf_coef_names)
-
-      return t_ncoef,0,rf_coef_names

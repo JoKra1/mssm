@@ -4,24 +4,26 @@ import scipy as scp
 
 ################################################ Compact Representations of quasi-Newton updates for L-qEFS update ################################################
 
-def computeH(s,y,rho,H0,explicit=True):
-   """Computes (explicitly or implicitly) the quasi-Newton approximation to the negative Hessian of the (penalized) likelihood :math:`\mathbf{H}` (:math:`\mathcal{H}`) from the L-BFGS-B optimizer info.
+def computeH(s:np.ndarray,y:np.ndarray,rho:np.ndarray,H0:scp.sparse.csc_array,explicit:bool=True)  -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray,]:
+   """Computes (explicitly or implicitly) the quasi-Newton approximation to the negative Hessian of the (penalized) likelihood :math:`\\mathbf{H}` (:math:`\\mathcal{H}`) from the L-BFGS-B optimizer info.
 
    Relies on equations 2.16 in Byrd, Nocdeal & Schnabel (1992).
 
    References:
     - Byrd, R. H., Nocedal, J., & Schnabel, R. B. (1994). Representations of quasi-Newton matrices and their use in limited memory methods. Mathematical Programming, 63(1), 129–156. https://doi.org/10.1007/BF01582063
 
-   :param s: numpy.array of shape (m,p), where p is the number of coefficients, holding the first set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
-   :type s: numpy.array
-   :param y: numpy.array of shape (m,p), where p is the number of coefficients, holding the second set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
-   :type y: numpy.array
+   :param s: np.ndarray of shape (m,p), where p is the number of coefficients, holding the first set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
+   :type s: np.ndarray
+   :param y: np.ndarray of shape (m,p), where p is the number of coefficients, holding the second set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
+   :type y: np.ndarray
    :param rho: flattened numpy.array of shape (m,), holding element-wise ```1/y.T@s`` from Byrd, Nocdeal & Schnabel (1992).
-   :type rho: numpy.array
+   :type rho: np.ndarray
    :param H0: Initial estimate for the hessian of the negative (penalized) likelihood. Here some multiple of the identity (multiplied by ``omega``).
    :type H0: scipy.sparse.csc_array
    :param explicit: Whether or not to return the approximate matrix explicitly or implicitly in form of four update matrices.
    :type explicit: bool
+   :return: H, either as np.ndarray (``explicit=='True'``) or represented implicitly via four update vectors (also np.ndarrays)
+   :rtype: np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
    """
    # Number of updates?
    m = len(y)
@@ -119,24 +121,26 @@ def computeH(s,y,rho,H0,explicit=True):
    
    return H
 
-def computeV(s,y,rho,V0,explicit=True):
-   """Computes (explicitly or implicitly) the quasi-Newton approximation to the inverse of the negative Hessian of the (penalized) likelihood :math:`\mathcal{I}` (:math:`\mathbf{V}`) from the L-BFGS-B optimizer info.
+def computeV(s:np.ndarray,y:np.ndarray,rho:np.ndarray,V0:scp.sparse.csc_array,explicit:bool=True) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
+   """Computes (explicitly or implicitly) the quasi-Newton approximation to the inverse of the negative Hessian of the (penalized) likelihood :math:`\\mathcal{I}` (:math:`\\mathbf{V}`) from the L-BFGS-B optimizer info.
 
    Relies on equations 2.16 and 3.13 in Byrd, Nocdeal & Schnabel (1992).
 
    References:
     - Byrd, R. H., Nocedal, J., & Schnabel, R. B. (1994). Representations of quasi-Newton matrices and their use in limited memory methods. Mathematical Programming, 63(1), 129–156. https://doi.org/10.1007/BF01582063
 
-   :param s: numpy.array of shape (m,p), where p is the number of coefficients, holding the first set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
-   :type s: numpy.array
-   :param y: numpy.array of shape (m,p), where p is the number of coefficients, holding the second set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
-   :type y: numpy.array
+   :param s: np.ndarray of shape (m,p), where p is the number of coefficients, holding the first set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
+   :type s: np.ndarray
+   :param y: np.ndarray of shape (m,p), where p is the number of coefficients, holding the second set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
+   :type y: np.ndarray
    :param rho: flattened numpy.array of shape (m,), holding element-wise ```1/y.T@s`` from Byrd, Nocdeal & Schnabel (1992).
-   :type rho: numpy.array
+   :type rho: np.ndarray
    :param V0: Initial estimate for the inverse of the hessian of the negative (penalized) likelihood. Here some multiple of the identity (multiplied by ``omega``).
    :type V0: scipy.sparse.csc_array
    :param explicit: Whether or not to return the approximate matrix explicitly or implicitly in form of three update matrices.
    :type explicit: bool
+   :return: V, either as np.ndarray (``explicit=='True'``) or represented implicitly via three update vectors (also np.ndarrays)
+   :rtype: np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]
    """
    m = len(y)
    # First form S,Y, and D
@@ -176,8 +180,8 @@ def computeV(s,y,rho,V0,explicit=True):
    else:
       return t1, t2, t3
    
-def computeVSR1(s,y,rho,V0,omega=1,make_psd=False,explicit=True):
-   """Computes (explicitly or implicitly) the symmetric rank one (SR1) approximation of the inverse of the negative Hessian of the (penalized) likelihood :math:`\mathcal{I}` (:math:`\mathbf{V}`).
+def computeVSR1(s:np.ndarray,y:np.ndarray,rho:np.ndarray,V0:scp.sparse.csc_array,omega:float=1,make_psd:bool=False,explicit:bool=True) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
+   """Computes (explicitly or implicitly) the symmetric rank one (SR1) approximation of the inverse of the negative Hessian of the (penalized) likelihood :math:`\\mathcal{I}` (:math:`\\mathbf{V}`).
 
    Relies on equations 2.16 and 3.13 in Byrd, Nocdeal & Schnabel (1992). Can ensure positive (semi) definiteness of the approximation via an eigen decomposition as shown by Burdakov et al. (2017). This is enforced via the ``make_psd`` argument.
 
@@ -185,12 +189,12 @@ def computeVSR1(s,y,rho,V0,omega=1,make_psd=False,explicit=True):
     - Burdakov, O., Gong, L., Zikrin, S., & Yuan, Y. (2017). On efficiently combining limited-memory and trust-region techniques. Mathematical Programming Computation, 9(1), 101–134. https://doi.org/10.1007/s12532-016-0109-7
     - Byrd, R. H., Nocedal, J., & Schnabel, R. B. (1994). Representations of quasi-Newton matrices and their use in limited memory methods. Mathematical Programming, 63(1), 129–156. https://doi.org/10.1007/BF01582063
 
-   :param s: numpy.array of shape (m,p), where p is the number of coefficients, holding the first set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
-   :type s: numpy.array
-   :param y: numpy.array of shape (m,p), where p is the number of coefficients, holding the second set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
-   :type y: numpy.array
+   :param s: np.ndarray of shape (m,p), where p is the number of coefficients, holding the first set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
+   :type s: np.ndarray
+   :param y: np.ndarray of shape (m,p), where p is the number of coefficients, holding the second set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
+   :type y: np.ndarray
    :param rho: flattened numpy.array of shape (m,), holding element-wise ```1/y.T@s`` from Byrd, Nocdeal & Schnabel (1992).
-   :type rho: numpy.array
+   :type rho: np.ndarray
    :param V0: Initial estimate for the inverse of the hessian of the negative (penalized) likelihood. Here some multiple of the identity (multiplied by ``omega``).
    :type V0: scipy.sparse.csc_array
    :param omega: Multiple of the identity matrix used as initial estimate.
@@ -199,6 +203,8 @@ def computeVSR1(s,y,rho,V0,omega=1,make_psd=False,explicit=True):
    :type make_psd: bool, optional
    :param explicit: Whether or not to return the approximate matrix explicitly or implicitly in form of three update matrices.
    :type explicit: bool
+   :return: V, either as np.ndarray (``explicit=='True'``) or represented implicitly via three update vectors (also np.ndarrays)
+   :rtype: np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]
    """
    m = len(y)
    # First form S,Y, and D
@@ -268,8 +274,8 @@ def computeVSR1(s,y,rho,V0,omega=1,make_psd=False,explicit=True):
    else:
       return t1, t2, t3
    
-def computeHSR1(s,y,rho,H0,omega=1,make_psd=False,make_pd=False,explicit=True):
-   """Computes, (explicitly or implicitly) the symmetric rank one (SR1) approximation of the negative Hessian of the (penalized) likelihood :math:`\mathbf{H}` (:math:`\mathcal{H}`).
+def computeHSR1(s:np.ndarray,y:np.ndarray,rho:np.ndarray,H0:scp.sparse.csc_array,omega:float=1,make_psd:bool=False,make_pd:bool=False,explicit:bool=True) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
+   """Computes, (explicitly or implicitly) the symmetric rank one (SR1) approximation of the negative Hessian of the (penalized) likelihood :math:`\\mathbf{H}` (:math:`\\mathcal{H}`).
 
    Relies on equations 2.16 and 3.13 in Byrd, Nocdeal & Schnabel (1992). Can ensure positive (semi) definiteness of the approximation via an eigen decomposition as shown by Burdakov et al. (2017). This is enforced via the ``make_psd`` and ``make_pd`` arguments.
 
@@ -277,12 +283,12 @@ def computeHSR1(s,y,rho,H0,omega=1,make_psd=False,make_pd=False,explicit=True):
     - Burdakov, O., Gong, L., Zikrin, S., & Yuan, Y. (2017). On efficiently combining limited-memory and trust-region techniques. Mathematical Programming Computation, 9(1), 101–134. https://doi.org/10.1007/s12532-016-0109-7
     - Byrd, R. H., Nocedal, J., & Schnabel, R. B. (1994). Representations of quasi-Newton matrices and their use in limited memory methods. Mathematical Programming, 63(1), 129–156. https://doi.org/10.1007/BF01582063
 
-   :param s: numpy.array of shape (m,p), where p is the number of coefficients, holding the first set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
-   :type s: numpy.array
-   :param y: numpy.array of shape (m,p), where p is the number of coefficients, holding the second set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
-   :type y: numpy.array
+   :param s: np.ndarray of shape (m,p), where p is the number of coefficients, holding the first set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
+   :type s: np.ndarray
+   :param y: np.ndarray of shape (m,p), where p is the number of coefficients, holding the second set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
+   :type y: np.ndarray
    :param rho: flattened numpy.array of shape (m,), holding element-wise ```1/y.T@s`` from Byrd, Nocdeal & Schnabel (1992).
-   :type rho: numpy.array
+   :type rho: np.ndarray
    :param H0: Initial estimate for the hessian of the negative (penalized) likelihood. Here some multiple of the identity (multiplied by ``omega``).
    :type H0: scipy.sparse.csc_array
    :param omega: Multiple of the identity matrix used as initial estimate.
@@ -293,6 +299,8 @@ def computeHSR1(s,y,rho,H0,omega=1,make_psd=False,make_pd=False,explicit=True):
    :type make_pd: bool, optional
    :param explicit: Whether or not to return the approximate matrix explicitly or implicitly in form of three update matrices.
    :type explicit: bool
+   :return: H, either as np.ndarray (``explicit=='True'``) or represented implicitly via three update vectors (also np.ndarrays)
+   :rtype: np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]
    """
    m = len(y)
    # First form S,Y, and D

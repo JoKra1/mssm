@@ -72,6 +72,8 @@ Eigen::MatrixXd computeV2(const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen
                 {
                     /*
                     Computes second term of the smoothing penalty uncertainty correction proposed by Wood, S. N., Pya, N., Saefken, B., (2016). Smoothing Parameter and Model Selection for General Smooth Models
+
+                    **Note**: The arrays in dRdRhos **must** be in column-major (Fortran) order!
                     */
 
                     Eigen::MatrixXd Vcc = Eigen::MatrixXd::Zero(Hcols,Hcols);

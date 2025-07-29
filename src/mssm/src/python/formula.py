@@ -18,9 +18,9 @@ class lhs():
     """
     The Left-hand side of a regression equation.
 
-    Parameters:
+    See the :class:`Formula` class for examples.
 
-    :param variable: The dependent variable. Can point to continuous and categorical variables.
+    :param variable: The name of the dependent/response variable in the dataframe passed to a :class:`Formula`. Can point to continuous and categorical variables. For :class:`mssm..models.GSMM` models, the variable can also be set to any placeholder variable in the data, since not every :class:`Formula` will be associated with a particular response variable.
     :type variable: str
     :param f: A function that will be applied to the ``variable`` before fitting. For example: np.log(). By default no function is applied to the ``variable``.
     :type f: Callable, optional
@@ -29,7 +29,31 @@ class lhs():
         self.variable = variable
         self.f=f
 
-def compute_constraint_single_MP(sterm,vars,lhs_var,file,var_mins,var_maxs,file_loading_kwargs):
+def _compute_constraint_single_MP(sterm:f,vars:list[str],lhs_var:str,file:str,var_mins:dict,var_maxs:dict,file_loading_kwargs:dict) -> np.ndarray:
+   """Internal function to compute QR identifiability constraint based on reading model matrix data from file
+
+   Wood (2017) has an overview over identifiability constraintsfor smooth terms.
+
+   References:
+      - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+   :param sterm: Smooth term to make identifiable
+   :type sterm: f
+   :param vars: List of variables
+   :type vars: list[str]
+   :param lhs_var: name of dependent variable
+   :type lhs_var: str
+   :param file: file name
+   :type file: str
+   :param var_mins: Dictionary holding covariate minimums
+   :type var_mins: dict
+   :param var_maxs: Dictionary holding covariate maximums
+   :type var_maxs: dict
+   :param file_loading_kwargs: Any optional file loading key-word arguments.
+   :type file_loading_kwargs: dict
+   :return: Constraint vector ``C``
+   :rtype: np.ndarray
+   """
 
    C = 0
 
@@ -78,50 +102,121 @@ class Formula():
     **Note:** The class implements multiple ``get_*`` functions to access attributes stored in instance variables. The get functions always return a copy of the
     instance variable and the results are thus safe to manipulate.
 
+    Examples::
+
+      from mssm.models import *
+      from mssmViz.sim import *
+
+      from mssm.src.python.formula import build_penalties,build_model_matrix
+
+      # Get some data and formula
+      Binomdat = sim3(10000,0.1,family=Binomial(),seed=20)
+      formula = Formula(lhs("y"),[i(),f(["x0"]),f(["x1"]),f(["x2"]),f(["x3"])],data=Binomdat)
+
+      # Now with a tensor smooth
+      formula = Formula(lhs("y"),[i(),f(["x0","x1"],te=True),f(["x2"]),f(["x3"])],data=Binomdat)
+
+      # Now with a tensor smooth anova style
+      formula = Formula(lhs("y"),[i(),f(["x0"]),f(["x1"]),f(["x0","x1"]),f(["x2"]),f(["x3"])],data=Binomdat)
+
+
+      ######## Stream data from file and set up custom codebook #########
+
+      file_paths = [f'https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat_cond_{cond}.csv' for cond in ["a","b"]]
+
+      # Set up specific coding for factor 'cond'
+      codebook = {'cond':{'a': 0, 'b': 1}}
+
+      formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
+                        terms=[i(), # The intercept, a
+                                 l(["cond"]), # For cond='b'
+                                 f(["time"],by="cond"), # to-way interaction between time and cond; one smooth over time per cond level
+                                 f(["x"],by="cond"), # to-way interaction between x and cond; one smooth over x per cond level
+                                 f(["time","x"],by="cond"), # three-way interaction
+                                 fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
+                        data=None, # No data frame!
+                        file_paths=file_paths, # Just a list with paths to files.
+                        print_warn=False,
+                        codebook=codebook)
+
+      # Alternative:
+      formula = Formula(lhs=lhs("y"),
+                              terms=[i(),
+                                    l(["cond"]),
+                                    f(["time"],by="cond"),
+                                    f(["x"],by="cond"),
+                                    f(["time","x"],by="cond"),
+                                    fs(["time"],rf="sub")],
+                              data=None,
+                              file_paths=file_paths,
+                              print_warn=False,
+                              keep_cov=True, # Keep encoded data structure in memory
+                              codebook=codebook)
+
+      ########## preparing for ar1 model (with resets per time-series) and data type requirements ##########
+
+      dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+
+      # mssm requires that the data-type for variables used as factors is 'O'=object
+      dat = dat.astype({'series': 'O',
+                        'cond':'O',
+                        'sub':'O',
+                        'series':'O'})
+
+      formula = Formula(lhs=lhs("y"),
+                        terms=[i(),
+                                 l(["cond"]),
+                                 f(["time"],by="cond"),
+                                 f(["x"],by="cond"),
+                                 f(["time","x"],by="cond")],
+                        data=dat,
+                        print_warn=False,
+                        series_id='series') # 'series' variable identifies individual time-series
+
     :param lhs: The lhs object defining the dependent variable.
     :type variable: lhs
     :param terms: A list of the terms which should be added to the model. See :py:mod:`mssm.src.python.terms` for info on which terms can be added.
     :type terms: [GammTerm]
     :param data: A pandas dataframe (with header!) of the data which should be used to estimate the model. The variable specified for ``lhs`` as well as all variables included for a ``term`` in ``terms`` need to be present in the data, otherwise the call to Formula will throw an error.
     :type data: pd.DataFrame or None
-    :param series_id: A string identifying the individual experimental units. Usually a unique trial identifier. Only necessary if approximate derivative computations are to be utilized for random smooth terms.
+    :param series_id: A string identifying the individual experimental units. Usually a unique trial identifier. Only necessary if approximate derivative computations are to be utilized for random smooth terms or if you need to estimate an 'ar1' model for multiple time-series data.
     :type series_id: str, optional
     :param codebook: Codebook - keys should correspond to factor variable names specified in terms. Values should again be a ``dict``, with keys for each of K levels of the factor and value corresponding to an integer in {0,K}.
     :type codebook: dict or None
     :param print_warn: Whether warnings should be printed. Useful when fitting models from terminal. Defaults to True.
     :type print_warn: bool,optional
-    :param keep_cov: Whether or not the internal encoding structure of all predictor variables should be created when forming :math:`\mathbf{X}^T\mathbf{X}` iteratively instead of forming :math:`\mathbf{X}` directly. Can speed up estimation but increases memory footprint. Defaults to True.
+    :param keep_cov: Whether or not the internal encoding structure of all predictor variables should be created when forming :math:`\\mathbf{X}^T\\mathbf{X}` iteratively instead of forming :math:`\\mathbf{X}` directly. Can speed up estimation but increases memory footprint. Defaults to True.
     :type keep_cov: bool,optional
     :param find_nested: Whether or not to check for nested smooth terms. This only has an effect if you include at least one smooth term with more than two variables. Additionally, this check is often not necessary if you correctly use the ``te`` key-word of smooth terms and ensure that the marginals used to construct ti smooth terms have far fewer basis functions than the "main effect" univariate smooths. Thus, if you know what you're doing and you're working with large models, you might want to disable this (i.e., set to False) because this check can get quite expensive for larger models. Defaults to True.
     :type find_nested: bool,optional
-    :param file_paths: A list of paths to .csv files from which :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` should be created iteratively. Setting this to a non-empty list will prevent fitting X as a whole. ``data`` should then be set to ``None``. Defaults to an empty list.
+    :param file_paths: A list of paths to .csv files from which :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}` should be created iteratively. Setting this to a non-empty list will prevent fitting X as a whole. ``data`` should then be set to ``None``. Defaults to an empty list.
     :type file_paths: [str],optional
-    :param file_loading_nc: How many cores to use to a) accumulate :math:`\mathbf{X}` in parallel (if ``data`` is not ``None`` and ``file_paths`` is an empty list) or b) to accumulate :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` (and :math:`\mathbf{\eta}` during estimation) (if ``data`` is ``None`` and ``file_paths`` is a non-empty list). For case b, this should really be set to the maimum number of cores available. For a this only really speeds up accumulating :math:`\mathbf{X}` if :math:`\mathbf{X}` has many many columns and/or rows. Defaults to 1.
+    :param file_loading_nc: How many cores to use to a) accumulate :math:`\\mathbf{X}` in parallel (if ``data`` is not ``None`` and ``file_paths`` is an empty list) or b) to accumulate :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}` (and :math:`\\mathbf{\\eta}` during estimation) (if ``data`` is ``None`` and ``file_paths`` is a non-empty list). For case b, this should really be set to the maimum number of cores available. For a this only really speeds up accumulating :math:`\\mathbf{X}` if :math:`\\mathbf{X}` has many many columns and/or rows. Defaults to 1.
     :type file_loading_nc: int,optional
-    :param file_loading_kwargs: Any key-word arguments to pass to pandas.read_csv when :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` should be created iteratively (if ``data`` is ``None`` and ``file_paths`` is a non-empty list). Defaults to ``{"header":0,"index_col":False}``.
+    :param file_loading_kwargs: Any key-word arguments to pass to pandas.read_csv when :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}` should be created iteratively (if ``data`` is ``None`` and ``file_paths`` is a non-empty list). Defaults to ``{"header":0,"index_col":False}``.
     :type file_loading_kwargs: dict,optional
     :ivar lhs lhs: The left-hand side object of the regression formula passed to the constructor. Initialized at construction.
     :ivar [GammTerm] terms: The list of terms passed to the constructor. Initialized at construction.
-    :ivar pandas.DataFrame data: The dataframe passed to the constructor. Initialized at construction.
+    :ivar pd.DataFrame data: The dataframe passed to the constructor. Initialized at construction.
     :ivar [int] coef_per_term: A list containing the number of coefficients corresponding to each term included in ``terms``. Initialized at construction.
     :ivar [str] coef_names: A list containing a named identifier (e.g., "Intercept") for each coefficient estimated by the model. Initialized at construction.
     :ivar int n_coef: The number of coefficients estimated by the model in total. Initialized at construction.
     :ivar int unpenalized_coef: The number of un-penalized coefficients estimated by the model. Initialized at construction.
-    :ivar [float] or None y_flat: An array, containing all values on the dependent variable (i.e., specified by ``lhs.variable``) in order of the data-frame passed to ``data``. This variable will be initialized at construction but only if ``file_paths=None``, i.e., in case :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` are **not** created iteratively.
-    :ivar [float] or None cov_flat: An array, containing all (encoded, in case of categorical predictors) values on each predictor (each columns of ``cov_flat`` corresponds to a different predictor) variable included in any of the ``terms`` in order of the data-frame passed to ``data``. This variable will be initialized at construction but only if ``file_paths=None``, i.e., in case :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` are **not** created iteratively.
-    :ivar [bool] or None NOT_NA_flat: An array, containing an indication for each value on the dependent variable (i.e., specified by ``lhs.variable``) whether the corresponding value is not a number ("NA") or not. In order of the data-frame passed to ``data``. This variable will be initialized at construction but only if ``file_paths=None``, i.e., in case :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` are **not** created iteratively.
+    :ivar np.ndarray or None y_flat: An array, containing all values on the dependent variable (i.e., specified by ``lhs.variable``) in order of the data-frame passed to ``data``. This variable will be initialized at construction but only if ``file_paths=None``, i.e., in case :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}` are **not** created iteratively.
+    :ivar np.ndarray or None cov_flat: An array, containing all (encoded, in case of categorical predictors) values on each predictor (each columns of ``cov_flat`` corresponds to a different predictor) variable included in any of the ``terms`` in order of the data-frame passed to ``data``. This variable will be initialized at construction but only if ``file_paths=None``, i.e., in case :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}` are **not** created iteratively.
+    :ivar np.ndarray or None NOT_NA_flat: An array, containing an indication (as bool) for each value on the dependent variable (i.e., specified by ``lhs.variable``) whether the corresponding value is not a number ("NA") or not. In order of the data-frame passed to ``data``. This variable will be initialized at construction but only if ``file_paths=None``, i.e., in case :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}` are **not** created iteratively.
     """
     def __init__(self,
                  lhs:lhs,
-                 terms:[GammTerm],
+                 terms:list[GammTerm],
                  data:pd.DataFrame,
-                 series_id:str or None=None,
-                 codebook:dict or None=None,
-                 print_warn=True,
-                 keep_cov = False,
-                 find_nested = True,
-                 file_paths = [],
-                 file_loading_nc = 1,
+                 series_id:str | None=None,
+                 codebook:dict | None=None,
+                 print_warn:bool=True,
+                 keep_cov:bool = False,
+                 find_nested:bool = True,
+                 file_paths:list[str] = [],
+                 file_loading_nc:int = 1,
                  file_loading_kwargs: dict = {"header":0,"index_col":False}) -> None:
         
         self.lhs = lhs
@@ -141,33 +236,32 @@ class Formula():
         self.var_mins = {}
         self.var_maxs = {}
         self.subgroup_variables = []
-        self.term_names = []
-        self.linear_terms = []
-        self.smooth_terms = []
-        self.ir_smooth_terms = []
-        self.random_terms = []
+        self.term_names:list[str] = []
+        self.linear_terms:list[int] = []
+        self.smooth_terms:list[int] = []
+        self.ir_smooth_terms:list[int] = []
+        self.random_terms:list[int] = []
         self.has_intercept = False
         self.has_irf = False
         self.n_irf = 0
-        self.unpenalized_coef = None
-        self.coef_names = None
-        self.n_coef = None # Number of total coefficients in formula.
-        self.coef_per_term = None # Number of coefficients associated with each term
+        self.unpenalized_coef:int|None = None
+        self.coef_names:list[str]|None = None
+        self.n_coef:int|None = None # Number of total coefficients in formula.
+        self.coef_per_term:list[int]|None = None # Number of coefficients associated with each term
         self.built_penalties = False
         self.find_nested = find_nested
         cvi = 0 # Number of variables included in some way as predictors
 
         # Encoding from data frame to series-level dependent values + predictor values (in cov)
         # sid holds series end indices for quick splitting.
-        self.y_flat = None
-        self.cov_flat = None
-        self.NOT_NA_flat = None
-        self.y = None
-        self.cov = None
-        self.NOT_NA = None
-        self.sid = None
-        # Penalties
-        self.penalties = None
+        self.y_flat:np.ndarray|None = None
+        self.cov_flat:np.ndarray|None = None
+        self.NOT_NA_flat:np.ndarray|None = None
+        self.y:list[np.ndarray]|None = None
+        self.cov:list[np.ndarray]|None = None
+        self.NOT_NA:list[np.ndarray]|None = None
+        self.sid:np.ndarray|None = None
+
         # Discretization?
         self.discretize = {}
         
@@ -359,7 +453,22 @@ class Formula():
 
         #print(self.n_coef,len(self.coef_names))
    
-    def __encode_var(self,var,vartype,cvi,codebook,by_subgroup=None):
+    def __encode_var(self,var:str,vartype:np.dtype,cvi:int,codebook:dict,by_subgroup:tuple[str,str]|None=None) -> int:
+      """Internal function that does bookkeeping on variables, encoding them into the ``codebook``.
+
+      :param var: name of variable
+      :type var: str
+      :param vartype: type of variable
+      :type vartype: np.dtype
+      :param cvi: variable index
+      :type cvi: int
+      :param codebook: codebook dictionary
+      :type codebook: dict
+      :param by_subgroup: Either None or a tuple with two strings: first corresponding to a factor, second to a level fo that factor, defaults to None
+      :type by_subgroup: tuple[str,str] | None, optional
+      :return: Updated cvi
+      :rtype: int
+      """
       # Store information for all variables once.
       if not by_subgroup is None:
          _org_var = var
@@ -418,8 +527,8 @@ class Formula():
 
       return cvi
   
-    def __get_coef_info(self):
-      """Get's information about the number of coefficients from each term + the names of these coefficients. Some terms also provide info here about the number of unpenalized coefficients that come with the term.
+    def __get_coef_info(self) -> None:
+      """Get's information about the number of coefficients from each term + the names of these coefficients. Terms also provide info here about the number of unpenalized coefficients that come with the term.
       """
       var_types = self.var_types
       factor_levels = self.factor_levels
@@ -502,7 +611,7 @@ class Formula():
          self.n_coef += t_total_coef
          self.unpenalized_coef += t_unpenalized_coef
             
-    def encode_data(self,data,prediction=False):
+    def encode_data(self,data:pd.DataFrame,prediction:bool=False) -> tuple[np.ndarray|None,np.ndarray,np.ndarray|None,list[np.ndarray]|None,list[np.ndarray]|None,list[np.ndarray]|None,np.ndarray|None]:
       """
       Encodes ``data``, which needs to be a ``pd.DataFrame`` and by default (if ``prediction==False``) builds an index
       of which rows in ``data`` are NA in the column of the dependent variable described by ``self.lhs``.
@@ -512,7 +621,7 @@ class Formula():
       :param prediction: Whether or not a NA index and a column for the dependent variable should be generated.
       :type prediction: bool, optional
       :return: A tuple with 7 (optional) entries: the dependent variable described by ``self.lhs``, the encoded predictor variables as a (N,k) array (number of rows matches the number of rows of the first entry returned, the number of columns matches the number of k variables present in the formula), an indication for each row whether the dependent variable described by ``self.lhs`` is NA, like the first entry but split into a list of lists by ``self.series_id``, like the second entry but split into a list of lists by ``self.series_id``, ike the third entry but split into a list of lists by ``self.series_id``, start and end points for the splits used to split the previous three elements (identifying the start and end point of every level of ``self.series_id``).
-      :rtype: (numpy.array or None, numpy.array or None, numpy.array or None, [numpy.array] or None, [numpy.array] or None, [numpy.array] or None, numpy.array or None)
+      :rtype: (np.ndarray|None, np.ndarray, np.ndarray|None, list[np.ndarray]|None, list[np.ndarray]|None, list[np.ndarray]|None, np.ndarray|None)
       """
       # Build NA index
       if prediction:
@@ -524,7 +633,7 @@ class Formula():
             y_flat = read_cov_no_cor(self.lhs.variable,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
             NAs_flat = np.isnan(y_flat) == False
          else:
-            NAs_flat = np.isnan(data[self.lhs.variable]) == False
+            NAs_flat = np.isnan(data[self.lhs.variable].values) == False
 
       if not data is None:
          if not prediction and data.shape[0] != data[NAs_flat].shape[0] and self.print_warn:
@@ -609,7 +718,14 @@ class Formula():
 
       return y_flat,cov_flat,NAs_flat,y,cov,NAs,sid
     
-    def __discretize(self,sti):
+    def __discretize(self,sti:int) -> np.ndarray:
+      """Internal function to discretize covariates.
+
+      :param sti: Smooth term index pointing to smooth holding a discretization dict
+      :type sti: int
+      :return: np.ndarray holding discretized covariate values of the data set required by ``self.discretize[sti]``.
+      :rtype: np.ndarray
+      """
       dig_cov_flat = np.zeros_like(self.cov_flat)
       var_types = self.var_types
       var_map = self.get_var_map()
@@ -640,7 +756,16 @@ class Formula():
       return dig_cov_flat[:,collected]
 
     
-    def __split_discretize(self,dig_cov_flat_all,sti):
+    def __split_discretize(self,dig_cov_flat_all:np.ndarray,sti:int) -> tuple[list[np.ndarray],list[np.ndarray]]:
+      """Internal function to split dscretized covariate objects.
+
+      :param dig_cov_flat_all: np.ndarray holding discretized covariate values of the data set required by ``self.discretize[sti]``.
+      :type dig_cov_flat_all: np.ndarray
+      :param sti: Smooth term index pointing to smooth holding a discretization dict
+      :type sti: int
+      :return: tuple holding two lists of np.ndarray. First list has split discretized covariate objects per series, second has series id
+      :rtype: tuple[list[np.ndarray],list[np.ndarray]]
+      """
       var_map = self.get_var_map()
       factor_codings = self.factor_codings
 
@@ -698,7 +823,18 @@ class Formula():
 
       return dig_cov_flats, fact_series
     
-    def __cluster_discretize(self,dig_cov_flats, fact_series, sti):
+    def __cluster_discretize(self,dig_cov_flats:list[np.ndarray], fact_series:list[np.ndarray], sti:int) -> None:
+      """Internal function that clusters on the discretized covariate objects.
+
+      Takes input from :func:`__split_discretize`. Sets ``self.discretize[sti]["clust_series"]`` and ``self.discretize[sti]["clust_weights"]``.
+
+      :param dig_cov_flats: split discretized covariate objects per series
+      :type dig_cov_flats: list[np.ndarray]
+      :param fact_series: series id array per series
+      :type fact_series: list[np.ndarray]
+      :param sti: Smooth term index pointing to smooth holding a discretization dict
+      :type sti: int
+      """
       best_series = None
       best_weights = None
       best_error = None
@@ -814,7 +950,17 @@ class Formula():
       self.discretize[sti]["clust_series"] = best_series
       self.discretize[sti]["clust_weights"] = best_weights
 
-    def __absorb_constraints2(self):
+    def __absorb_constraints2(self) -> None:
+      """Internal function to absorb identifiability constraints when data is read from file.
+
+      Wood (2017) has an overview over identifiability constraints and different reparameterizations for smooth terms.
+
+      References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :raises ValueError: When re-parameterization is requested for identifiable terms.
+      :raises NotImplementedError: When a constraint type other than ``QR`` is requested.
+      """
       
       for sti in self.get_smooth_term_idx():
 
@@ -850,7 +996,7 @@ class Formula():
          if term_constraint == ConstType.QR:
 
             with mp.Pool(processes=10) as pool:
-               C = pool.starmap(compute_constraint_single_MP,zip(repeat(sterm),repeat(vars),
+               C = pool.starmap(_compute_constraint_single_MP,zip(repeat(sterm),repeat(vars),
                                                                  repeat(self.lhs.variable),
                                                                  self.file_paths,
                                                                  repeat(self.var_mins),
@@ -869,7 +1015,14 @@ class Formula():
          else:
             raise NotImplementedError("Only QR constraints are currently supported when files are loaded in to build X.T@X incrementally.")
 
-    def __absorb_constraints(self):
+    def __absorb_constraints(self) -> None:
+      """Internal function to absorb identifiability constraints and apply selected reparameterizations to individual smooth terms.
+
+      Wood (2017) has an overview over identifiability constraints and different reparameterizations for smooth terms.
+
+      References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+      """
       var_map = self.get_var_map()
 
       for sti in self.get_smooth_term_idx():
@@ -963,8 +1116,8 @@ class Formula():
             elif term_constraint == ConstType.DIFF:
                sterm.Z.append(Constraint(int(matrix_term.shape[1]/2),ConstType.DIFF))
    
-    def __fix_nested(self):
-      """Identifies nested terms in the Formula, based on section 5.6.3 of Wood (2017) and what is implemented in the ``gam.side`` function in ``mgcv``.
+    def __fix_nested(self) -> None:
+      """Internal function that identifies nested terms in the Formula, based on section 5.6.3 of Wood (2017) and what is implemented in the ``gam.side`` function in ``mgcv``.
 
       Automatically figures out which coefficients have to be dropped from individual smooth terms and assigns the corresponding indices to ``term.drop_coef``.
       These are then automatically removed from the model matrix and penalty built for the particular term (i.e., when calling ``term.build_matrix`` and ``term.build_penalty``
@@ -1094,6 +1247,7 @@ class Formula():
          # Handle optional by keyword
          n_by = 1
          if sterm.by is not None:
+            by_levels = self.factor_levels[sterm.by]
             by_cov = cov_flat[self.NOT_NA_flat,var_map[sterm.by]]
             n_by = len(by_levels)
             
@@ -1224,7 +1378,7 @@ class Formula():
        """Get a copy of the var maxs dictionary. Keys are variables in the data, values are either the maximum value the variable takes on in ``self.data`` for continuous variables or ``None`` for categorical variables."""
        return copy.deepcopy(self.var_maxs)
     
-    def get_var_mins_maxs(self) -> (dict,dict):
+    def get_var_mins_maxs(self) -> tuple[dict,dict]:
        """Get a tuple containing copies of both the mins and maxs directory. See ``self.get_var_mins`` and ``self.get_var_maxs``."""
        return (copy.deepcopy(self.var_mins),copy.deepcopy(self.var_maxs))
     
@@ -1248,15 +1402,11 @@ class Formula():
        """Get the number of coefficients that are implied by the formula."""
        return self.n_coef
     
-    def get_penalties(self) -> list:
-       """Get a copy of the penalties implied by the formula. Will be None if the penalties have not been initizlized yet."""
-       return copy.deepcopy(self.penalties)
-    
-    def get_depvar(self) -> list:
+    def get_depvar(self) -> np.ndarray:
        """Get a copy of the encoded dependent variable (defined via ``self.lhs``)."""
        return copy.deepcopy(self.y_flat)
     
-    def get_notNA(self) -> list:
+    def get_notNA(self) -> np.ndarray:
        """Get a copy of the encoded 'not a NA' vector for the dependent variable (defined via ``self.lhs``)."""
        return copy.deepcopy(self.NOT_NA_flat)
     
@@ -1268,7 +1418,7 @@ class Formula():
        """Does this formula include impulse response terms or not."""
        return self.has_irf
     
-    def get_term_names(self) -> list:
+    def get_term_names(self) -> list[str]:
        """Returns a copy of the list with the names of the terms specified for this formula."""
        return copy.deepcopy(self.term_names)
    
@@ -1276,8 +1426,34 @@ class Formula():
        """Returns a copy of sub-group variables for factor smooths."""
        return copy.deepcopy(self.subgroup_variables)
     
-def build_penalties(formula):
-      """Builds the penalties required by ``formula.terms``."""
+def build_penalties(formula) -> list[LambdaTerm]:
+      """Function to build all penalty matrices required by a :class:`Formula`.
+
+      The function is called whenever it is needed, but the example below shows you how to use it in case you want to extract the penalties directly.
+
+      Examples::
+
+         from mssm.models import *
+         from mssmViz.sim import *
+         from mssm.src.python.formula import build_penalties
+
+         # Get some data and formula
+         Binomdat = sim3(10000,0.1,family=Binomial(),seed=20)
+         formula = Formula(lhs("y"),[i(),f(["x0"]),f(["x1"]),f(["x2"]),f(["x3"])],data=Binomdat)
+
+         # Now extract the penalties
+         penalties = build_penalties(formula)
+
+         print(penalties)
+
+      :param formula: A Formula
+      :type formula: Formula
+      :raises KeyError: If an un-penalized irf term is included in the formula after penalized terms.
+      :raises KeyError:  If an un-penalized smooth term is included in the formula after penalized terms.
+      :raises ValueError: If no start index has been defined by the formula. For testing only.
+      :return: A list of all penalties (encoded as :class:`LambdaTerm`) required by the formula
+      :rtype: list[LambdaTerm]
+      """
 
       col_S = formula.n_coef
       factor_levels = formula.factor_levels
@@ -1598,10 +1774,50 @@ def build_sparse_matrix_from_formula(terms:list[GammTerm],has_intercept:bool,
                                      var_types:dict,var_map:dict,
                                      var_mins:dict,var_maxs:dict,
                                      factor_levels:dict,cov_flat:np.ndarray,
-                                     cov:np.ndarray,pool=None,use_only:list[int]=None,
-                                     tol:float=0):
-   
-   """Builds the entire model-matrix specified by a formula."""
+                                     cov:np.ndarray|None,pool:mp.pool.Pool|None=None,use_only:list[int]|None=None,
+                                     tol:float=0) -> scp.sparse.csc_array:
+   """Build model matrix from formula properties.
+
+   This function is used internally to construct model matrices from :class:`Formula` objects. For greater convenience see the
+   :func:`build_model_matrix` function.
+
+   **Important**, make sure to only ever call this when ``formula.built_penalties==True`` - see the :func:`build_model_matrix` function description.
+
+   :param terms: List of terms of a :class:`Formula` 
+   :type terms: list[GammTerm]
+   :param has_intercept: Indicator of whether the Formula has an intercept or not
+   :type has_intercept: bool
+   :param ltx: Linear term indices
+   :type ltx: list[int]
+   :param irstx: Impulse response function term indices
+   :type irstx: list[int]
+   :param stx: Smooth term indices
+   :type stx: list[int]
+   :param rtx: Random term indices
+   :type rtx: list[int]
+   :param var_types: Dictionary holding variable types
+   :type var_types: dict
+   :param var_map: Dictionary mapping variable names to column indices in the encoded data
+   :type var_map: dict
+   :param var_mins: Dictionary with variable minimums 
+   :type var_mins: dict
+   :param var_maxs: Dictionary with variable maximums 
+   :type var_maxs: dict
+   :param factor_levels: Dictionary with levels associated with each factor
+   :type factor_levels: dict
+   :param cov_flat: Encoded data
+   :type cov_flat: np.ndarray
+   :param cov: Encoded data split by levels of the factor in ``Formula.series_id``
+   :type cov: np.ndarray | None, optional
+   :param pool: An instance of a multiprocessing pool, defaults to None
+   :type pool: mp.pool.Pool | None, optional
+   :param use_only: A list of indices corresponding to which terms should actually be built. If ``None``, then all terms are build. Terms not built are set to zero columns, defaults to None
+   :type use_only: list[int] | None, optional
+   :param tol: Optional tolerance. Absolute values in the model matrix smaller than this are set to actual zeroes, defaults to 0
+   :type tol: float, optional
+   :return: The model matrix implied by a :class:`Formula`  and ``cov_flat``.
+   :rtype: scp.sparse.csc_array
+   """
    n_y = cov_flat.shape[0]
    elements = []
    rows = []
@@ -1696,5 +1912,82 @@ def build_sparse_matrix_from_formula(terms:list[GammTerm],has_intercept:bool,
       ci += new_ci
 
    mat = scp.sparse.csc_array((elements,(rows,cols)),shape=(n_y,ci))
+
+   return mat
+
+def build_model_matrix(formula:Formula,pool:mp.pool.Pool|None=None,use_only:list[int]|None=None,tol:float=0) -> scp.sparse.csc_array:
+   """Function to build the model matrix implied by ``formula``.
+
+   **Important:** A small selection of smooth terms, requires that the penalty matrices are built at least once before the model matrix can be build.
+   For this reason, you generally must call ``build_penalties(formula)`` before calling ``build_model_matrix(formula)`` (interally, mssm checks whether
+   ``formula.built_penalties==True``.). See the example below.
+
+   Examples::
+
+      from mssm.models import *
+      from mssmViz.sim import *
+      from mssmViz.plot import *
+      import matplotlib.pyplot as plt
+
+      from mssm.src.python.formula import build_penalties,build_model_matrix
+
+      # Get some data and formula
+      Binomdat = sim3(10000,0.1,family=Binomial(),seed=20)
+      formula = Formula(lhs("y"),[i(),f(["x0"]),f(["x1"]),f(["x2"]),f(["x3"])],data=Binomdat)
+
+      # First extract the penalties
+      penalties = build_penalties(formula)
+
+      # Then the model matrix:
+      X = build_model_matrix(formula)
+
+   :param formula: A Formula
+   :type formula: Formula
+   :param pool: An instance of a multiprocessing pool, defaults to None
+   :type pool: mp.pool.Pool | None, optional
+   :param use_only: A list of indices corresponding to which terms should actually be built. If ``None``, then all terms are build. Terms not built are set to zero columns, defaults to None
+   :type use_only: list[int] | None, optional
+   :param tol: Optional tolerance. Absolute values in the model matrix smaller than this are set to actual zeroes, defaults to 0
+   :type tol: float, optional
+   :raises ValueError: If ``formula.built_penalties == False`` - i.e., it is required that ``build_penalties(formula)`` was called before calling ``build_model_matrix(formula)``.
+   :raises NotImplementedError: If the ``formula`` was set up to read data from file, rather than from a pd.Dataframe.
+   :return: The model matrix implied by a :class:`Formula`  and ``cov_flat``.
+   :rtype: scp.sparse.csc_array
+   """
+
+   if formula.built_penalties == False:
+      raise ValueError("You must call ``build_penalties(formula)`` once before calling ``build_model_matrix(formula)``.")
+
+   if len(formula.file_paths) != 0:
+      raise NotImplementedError("Cannot return the model-matrix if data was read directly from file, rather than provided as a pd.DataFrame.")
+
+   # Get all the objects from formula required
+   terms = formula.terms
+   has_intercept = formula.has_intercept
+   ltx = formula.get_linear_term_idx()
+   irstx = formula.get_ir_smooth_term_idx()
+   stx = formula.get_smooth_term_idx()
+   rtx = formula.get_random_term_idx()
+   var_types = formula.get_var_types()
+   var_map = formula.get_var_map()
+   var_mins = formula.get_var_mins()
+   var_maxs = formula.get_var_maxs()
+   factor_levels = formula.get_factor_levels()
+
+   cov_flat = formula.cov_flat[formula.NOT_NA_flat]
+            
+   if len(irstx) > 0:
+         cov_flat = formula.cov_flat # Need to drop NA rows **after** building!
+         cov = formula.cov
+   else:
+         cov = None
+
+   mat = build_sparse_matrix_from_formula(terms,has_intercept,
+                                          ltx,irstx,stx,rtx,var_types,var_map,
+                                          var_mins,var_maxs,factor_levels,
+                                          cov_flat,cov,pool,use_only,tol)
+   
+   if len(irstx) > 0:
+      mat = mat[formula.NOT_NA_flat,:]
 
    return mat

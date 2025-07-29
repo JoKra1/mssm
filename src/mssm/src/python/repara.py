@@ -7,21 +7,20 @@ from .custom_types import LambdaTerm
 import copy
 import sys
 
-def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
-   """
-   Options 1 - 3 are natural reparameterization discussed in Wood (2017; 5.4.2)
-   with different strategies for the QR computation of :math:`\mathbf{X}`. Option 4 helps with stabilizing the REML computation
+def reparam(X:scp.sparse.csc_array|None,S:list[LambdaTerm],cov:np.ndarray|None,option:int=1,n_bins:int=30,QR:bool=False,identity:bool=False,scale:bool=False) -> tuple:
+   """Options 1 - 3 are natural reparameterization discussed in Wood (2017; 5.4.2)
+   with different strategies for the QR computation of :math:`\\mathbf{X}`. Option 4 helps with stabilizing the REML computation
    and is from Appendix B of Wood (2011) and section 6.2.7 in Wood (2017):
 
-      1. Form complete matrix :math:`\mathbf{X}` based on entire covariate.
-      2. Form matrix :math:`\mathbf{X}` only based on unique covariate values.
-      3. Form matrix :math:`\mathbf{X}` on a sample of values making up covariate. Covariate
+      1. Form complete matrix :math:`\\mathbf{X}` based on entire covariate.
+      2. Form matrix :math:`\\mathbf{X}` only based on unique covariate values.
+      3. Form matrix :math:`\\mathbf{X}` on a sample of values making up covariate. Covariate
          is split up into ``n_bins`` equally wide bins. The number of covariate values
          per bin is then calculated. Subsequently, the ratio relative to minimum bin size is
          computed and each ratio is rounded to the nearest integer. Then ``ratio`` samples
          are obtained from each bin. That way, imbalance in the covariate is approximately preserved when
          forming the QR.
-      4. Transform term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` based on Appendix B of Wood (2011) and section 6.2.7 in Wood (2017)
+      4. Transform term-specific :math:`\\mathbf{S}_{\\boldsymbol{\\lambda}}` based on Appendix B of Wood (2011) and section 6.2.7 in Wood (2017)
          so that they are full-rank and their log-determinant can be computed safely. In that case, only ``S`` needs
          to be provided and has to be a list holding the penalties to be transformed. If the transformation is to be applied to
          model matrices, coefficients, hessian, and covariance matrices X should be set to something other than ``None`` (does not matter what, can
@@ -30,20 +29,20 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
    
    For Options 1-3:
 
-      If ``QR==True`` then :math:`\mathbf{X}` is decomposed into :math:`\mathbf{Q}\mathbf{R}` directly via QR decomposition. Alternatively, we first
-      form :math:`\mathbf{X}^T\mathbf{X}` and then compute the cholesky :math:`\mathbf{L}` of this product - note that :math:`\mathbf{L}^T = \mathbf{R}`. Overall the latter
-      strategy is much faster (in particular if ``option==1``), but the increased loss of precision in :math:`\mathbf{L}^T = \mathbf{R}` might not be ok for some.
+      If ``QR==True`` then :math:`\\mathbf{X}` is decomposed into :math:`\\mathbf{Q}\\mathbf{R}` directly via QR decomposition. Alternatively, we first
+      form :math:`\\mathbf{X}^T\\mathbf{X}` and then compute the cholesky :math:`\\mathbf{L}` of this product - note that :math:`\\mathbf{L}^T = \\mathbf{R}`. Overall the latter
+      strategy is much faster (in particular if ``option==1``), but the increased loss of precision in :math:`\\mathbf{L}^T = \\mathbf{R}` might not be ok for some.
 
-      After transformation S only contains elements on it's diagonal and :math:`\mathbf{X}` the transformed functions. As discussed
-      in Wood (2017), the transformed functions are decreasingly flexible - so the elements on :math:`\mathbf{S}` diagonal become smaller
-      and eventually zero, for elements that are in the kernel of the original :math:`\mathbf{S}` (un-penalized == not flexible).
+      After transformation S only contains elements on it's diagonal and :math:`\\mathbf{X}` the transformed functions. As discussed
+      in Wood (2017), the transformed functions are decreasingly flexible - so the elements on :math:`\\mathbf{S}` diagonal become smaller
+      and eventually zero, for elements that are in the kernel of the original :math:`\\mathbf{S}` (un-penalized == not flexible).
 
-      For a similar transformation (based solely on :math:`\mathbf{S}`), Wood et al. (2013) show how to further reduce the diagonally
-      transformed :math:`\mathbf{S}` to an even simpler identity penalty. As discussed also in Wood (2017) the same behavior of decreasing
-      flexibility if all entries on the diagonal of :math:`\mathbf{S}` are 1 can only be maintained if the transformed functions are
+      For a similar transformation (based solely on :math:`\\mathbf{S}`), Wood et al. (2013) show how to further reduce the diagonally
+      transformed :math:`\\mathbf{S}` to an even simpler identity penalty. As discussed also in Wood (2017) the same behavior of decreasing
+      flexibility if all entries on the diagonal of :math:`\\mathbf{S}` are 1 can only be maintained if the transformed functions are
       multiplied by a weight related to their wiggliness. Specifically, more flexible functions need to become smaller in
       amplitude - so that for the same level of penalization they are removed earlier than less flexible ones. To achieve this
-      Wood further post-multiply the transformed matrix :math:`\mathbf{X}'` with a matrix that contains on it's diagonal the reciprocal of the
+      Wood further post-multiply the transformed matrix :math:`\\mathbf{X}'` with a matrix that contains on it's diagonal the reciprocal of the
       square root of the transformed penalty matrix (and 1s in the last cells corresponding to the kernel). This is done here
       if ``identity=True``.
 
@@ -52,18 +51,18 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
 
    For Option 4:
 
-      Option 4 enforces re-parameterization of term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` based on section Wood (2011) and section 6.2.7 in Wood (2017).
+      Option 4 enforces re-parameterization of term-specific :math:`\\mathbf{S}_{\\boldsymbol{\\lambda}}` based on section Wood (2011) and section 6.2.7 in Wood (2017).
       In ``mssm`` multiple penalties can be placed on individual terms (i.e., tensor terms, random smooths, Kernel penalty) but
-      it is not always the case that the term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` - i.e., the sum over all those individual penalties multiplied with
-      their :math:`\lambda` parameters, is of full rank. If we need to form the inverse of the term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` this is problematic.
-      It is also problematic, as discussed by Wood (2011), if the different :math:`\lambda` are all of different magnitude in which case forming
-      the term-specific :math:`log(|\mathbf{S}_{\\boldsymbol{\lambda}}|+)` becomes numerically difficult.
+      it is not always the case that the term-specific :math:`\\mathbf{S}_{\\boldsymbol{\\lambda}}` - i.e., the sum over all those individual penalties multiplied with
+      their :math:`\\lambda` parameters, is of full rank. If we need to form the inverse of the term-specific :math:`\\mathbf{S}_{\\boldsymbol{\\lambda}}` this is problematic.
+      It is also problematic, as discussed by Wood (2011), if the different :math:`\\lambda` are all of different magnitude in which case forming
+      the term-specific :math:`log(|\\mathbf{S}_{\\boldsymbol{\\lambda}}|+)` becomes numerically difficult.
 
       The re-parameterization implemented by option 4, based on Appendix B in Wood (2011), solves these issues. After this re-parameterization a
-      term-specific :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` has been formed that is full rank. And :math:`log(|\mathbf{S}_{\\boldsymbol{\lambda}}|)` - no longer just a generalized determinant - can be
+      term-specific :math:`\\mathbf{S}_{\\boldsymbol{\\lambda}}` has been formed that is full rank. And :math:`log(|\\mathbf{S}_{\\boldsymbol{\\lambda}}|)` - no longer just a generalized determinant - can be
       computed without running into numerical problems.
 
-      The strategy by Wood (2011) could be applied to form an overall - not just term-specific - :math:`\mathbf{S}_{\\boldsymbol{\lambda}}` with these properties. However, this
+      The strategy by Wood (2011) could be applied to form an overall - not just term-specific - :math:`\\mathbf{S}_{\\boldsymbol{\\lambda}}` with these properties. However, this
       does not work for general smooth models as defined by Wood et al. (2016). Hence, mssm opts for the blockwise strategy.
       However, in ``mssm`` penalties currently cannot overlap, so this is not necessary at the moment.
 
@@ -73,6 +72,25 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
       - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
       - mgcv source code (accessed 2024). smooth.R file, nat.param function.
+
+   :param X: Model/Term matrix or None
+   :type X: scp.sparse.csc_array | None
+   :param S: List of penalties
+   :type S: list[LambdaTerm]
+   :param cov: covariate array associated with a specific term or None
+   :type cov: np.ndarray | None
+   :param option: Which re-parameterization to compute, defaults to 1
+   :type option: int, optional
+   :param n_bins: Number of bins to use as part of option 3, defaults to 30
+   :type n_bins: int, optional
+   :param QR: Whether to rely on a QR decomposition or not (then a Cholesky is used) as part of options 1-3, defaults to False
+   :type QR: bool, optional
+   :param identity: Whether the penalty matrix should be transformed to identity as part of options 1-3, defaults to False
+   :type identity: bool, optional
+   :param scale: Whether the penalty matrix and term matrix should be scaled as part of options 1-3, defaults to False
+   :type scale: bool, optional
+   :return: Return object content depends on ``option`` but will usually hold informations to apply/undo the required re-parameterization as well as already re-parameterized objects.
+   :rtype: tuple
    """
 
    if option < 4:
@@ -181,7 +199,7 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
       return C, Srp, Drp, IRrp, rms1, rms2, rank
    
    elif option == 4:
-      # Reparameterize S_\lambda for safe REML evaluation - based on section 6.2.7 in Wood (2017) and Appendix B of Wood (2011).
+      # Reparameterize S_\\lambda for safe REML evaluation - based on section 6.2.7 in Wood (2017) and Appendix B of Wood (2011).
       # S needs to be list holding penalties.
 
       # We first sort S into term-specific groups of penalties
@@ -229,9 +247,9 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
       for pen in S:
          Sj_reps.append(LambdaTerm(S_J=copy.deepcopy(pen.S_J),rep_sj=pen.rep_sj,lam=pen.lam,type=pen.type,rank=pen.rank,term=pen.term,start_index=pen.start_index,dist_param=pen.dist_param))
 
-      S_reps = [] # Term specific S_\lambda
+      S_reps = [] # Term specific S_\\lambda
       eps = sys.float_info.epsilon**0.7
-      Mp = Sj_reps[0].start_index # Number of un-penalized dimensions (Kernel space dimension of total S_\lambda; Wood, 2011)
+      Mp = Sj_reps[0].start_index # Number of un-penalized dimensions (Kernel space dimension of total S_\\lambda; Wood, 2011)
       for grp_idx,SJgroup,LJgroup in zip(SJ_term_idx,SJs,ljs):
 
          for rpidx in range(len(SJgroup)):
@@ -416,7 +434,7 @@ def reparam(X,S,cov,option=1,n_bins=30,QR=False,identity=False,scale=False):
    else:
       raise NotImplementedError(f"Requested option {option} for reparameterization is not implemented.")
    
-def reparam_model(dist_coef, dist_up_coef, coef, split_coef_idx, Xs, penalties, form_inverse=True, form_root=True, form_balanced=True, n_c=1):
+def reparam_model(dist_coef:list[int], dist_up_coef:list[int], coef:np.ndarray, split_coef_idx:list[int], Xs:list[scp.sparse.csc_array], penalties:list[LambdaTerm], form_inverse:bool=True, form_root:bool=True, form_balanced:bool=True, n_c:int=1) -> tuple[np.ndarray, list[scp.sparse.csc_array], list[LambdaTerm], scp.sparse.csc_array, scp.sparse.csc_array | None, scp.sparse.csc_array | None, scp.sparse.csc_array | None, scp.sparse.csc_array, list[scp.sparse.csc_array]]:
     """Relies on the transformation strategy from Appendix B of Wood (2011) to re-parameterize the model.
 
     Coefficients, model matrices, and penalties are all transformed. The transformation is applied to each term separately as explained by
@@ -434,7 +452,7 @@ def reparam_model(dist_coef, dist_up_coef, coef, split_coef_idx, Xs, penalties, 
     :param split_coef_idx: List with indices to split ``coef`` vector into separate versions per linear predictor.
     :type split_coef_idx: [int]
     :param Xs: List of model matrices obtained for example via ``model.get_mmat()``.
-    :type Xs: [scipy.sparse.csc_array]
+    :type Xs: [scp.sparse.csc_array]
     :param penalties: List of penalties for model.
     :type penalties: [LambdaTerm]
     :param form_inverse: Whether or not an inverse of the transformed penalty matrices should be formed. Useful for computing the EFS update, defaults to True
@@ -446,9 +464,8 @@ def reparam_model(dist_coef, dist_up_coef, coef, split_coef_idx, Xs, penalties, 
     :param n_c: Number of cores to use to ocmpute the inverse when ``form_inverse=True``, defaults to 1
     :type n_c: int, optional
     :raises ValueError: Raises a value error if one of the inverse computations fails. 
-    :return: A tuple with 9 elements: the re-parameterized coefficient vector, a list with the re-parameterized model matrices, a list of the penalties after re-parameterization, the total re-parameterized penalty matrix, optionally the balanced version of the former, optionally a root of the re-parameterized total penalty matrix, optionally the inverse of the re-parameterized total penalty matrix, the transformation matrix ``Q`` so that ``Q.T@S_emb@Q = S_emb_rp`` where ``S_emb`` and ``S_emb_rp`` are the total penalty matrix before and after re-parameterization, a list of transformation matrices ``QD`` so that ``XD@QD=XD_rp`` where ``XD`` and XD_rp`` are the model matrix of the Dth linear predictor before and after re-parameterization.
-    coef_rp,Xs_rp,Sj_reps,S_emb_rp,S_norm_rp,S_root_rp,S_inv_rp,Q_emb,Qs
-    :rtype: (numpy.array, [scipy.sparse.csc_array], [Lambdaterm], scp.sparse.csc_array, scp.sparse.csc_array or None, scp.sparse.csc_array or None, scp.sparse.csc_array or None, scp.sparse.csc_array, [scp.sparse.csc_array])
+    :return: A tuple with 9 elements: the re-parameterized coefficient vector, a list with the re-parameterized model matrices, a list of the penalties after re-parameterization, the total re-parameterized penalty matrix, optionally the balanced version of the former, optionally a root of the re-parameterized total penalty matrix, optionally the inverse of the re-parameterized total penalty matrix, the transformation matrix ``Q`` so that ``Q.T@S_emb@Q = S_emb_rp`` where ``S_emb`` and ``S_emb_rp`` are the total penalty matrix before and after re-parameterization, a list of transformation matrices ``QD`` so that ``XD@QD=XD_rp`` where ``XD`` and ``XD_rp`` are the model matrix of the Dth linear predictor before and after re-parameterization.
+    :rtype: tuple[np.ndarray, list[scp.sparse.csc_array], list[LambdaTerm], scp.sparse.csc_array, scp.sparse.csc_array | None, scp.sparse.csc_array | None, scp.sparse.csc_array | None, scp.sparse.csc_array, list[scp.sparse.csc_array]]
     """
 
     # Apply reparam from Wood (2011) Appendix B

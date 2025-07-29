@@ -22,7 +22,8 @@ default_compare_test_kwargs = {"correct_V":True,
                                "Vp_fidiff":False,
                                "use_importance_weights":True,
                                "prior":None,
-                               "recompute_H":False}
+                               "recompute_H":False,
+                               "compute_Vcc":True}
 
 default_gamm_test_kwargs = {"max_outer":50,
                             "max_inner":100,

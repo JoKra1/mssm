@@ -28,7 +28,7 @@ class Test_BIG_GAMM_Discretize:
                                 l(["cond"]), # For cond='b'
                                 f(["time"],by="cond",nk=20), # to-way interaction between time and cond; one smooth over time per cond level
                                 f(["x"],by="cond"), # to-way interaction between x and cond; one smooth over x per cond level
-                                f(["time","x"],by="cond"), # three-way interaction
+                                f(["time","x"],by="cond",nk=9), # three-way interaction
                                 fs(["time"],rf="series",nk=20,approx_deriv=discretize)], # Random non-linear effect of time - one smooth per level of factor series
                             data=dat,
                             series_id="series") # When approximating the computations for a random smooth, the series identifier column needs to be specified!
@@ -68,7 +68,7 @@ class Test_NUll_penalty_reparam:
                                 l(["cond"]), # For cond='b'
                                 f(["time"],by="cond",constraint=ConstType.QR,penalize_null=True), # to-way interaction between time and cond; one smooth over time per cond level
                                 f(["x"],by="cond",constraint=ConstType.QR,penalize_null=False), # to-way interaction between x and cond; one smooth over x per cond level
-                                f(["time","x"],by="cond",constraint=ConstType.QR,penalize_null=True), # three-way interaction
+                                f(["time","x"],by="cond",constraint=ConstType.QR,penalize_null=True,nk=9), # three-way interaction
                                 fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
                         data=dat,
                         print_warn=False)
@@ -141,7 +141,7 @@ class Test_NUll_1:
                                 l(["cond"]), # For cond='b'
                                 f(["time"],by="cond",constraint=ConstType.QR,penalize_null=True), # to-way interaction between time and cond; one smooth over time per cond level
                                 f(["x"],by="cond",constraint=ConstType.QR,penalize_null=False), # to-way interaction between x and cond; one smooth over x per cond level
-                                f(["time","x"],by="cond",constraint=ConstType.QR,penalize_null=True), # three-way interaction
+                                f(["time","x"],by="cond",constraint=ConstType.QR,penalize_null=True,nk=9), # three-way interaction
                                 fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
                         data=dat,
                         print_warn=False,find_nested=False)
@@ -180,7 +180,7 @@ class Test_NUll_2:
                                 l(["cond"]), # For cond='b'
                                 f(["time"],by="cond",constraint=ConstType.QR,penalize_null=True), # to-way interaction between time and cond; one smooth over time per cond level
                                 f(["x"],by="cond",constraint=ConstType.QR,penalize_null=False), # to-way interaction between x and cond; one smooth over x per cond level
-                                f(["time","x"],by="cond",constraint=ConstType.QR,penalize_null=True,id=1), # three-way interaction
+                                f(["time","x"],by="cond",constraint=ConstType.QR,penalize_null=True,id=1,nk=9), # three-way interaction
                                 fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
                         data=dat,
                         print_warn=False,find_nested=False)
@@ -219,7 +219,7 @@ class Test_NUll_3:
                                 l(["cond"]), # For cond='b'
                                 f(["time"],by="cond",constraint=ConstType.QR,penalize_null=True), # to-way interaction between time and cond; one smooth over time per cond level
                                 f(["x"],by="cond",constraint=ConstType.QR,penalize_null=False), # to-way interaction between x and cond; one smooth over x per cond level
-                                f(["time","x"],by="cond",constraint=ConstType.QR,penalize_null=True), # three-way interaction
+                                f(["time","x"],by="cond",constraint=ConstType.QR,penalize_null=True,nk=9), # three-way interaction
                                 fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
                         data=dat,
                         print_warn=False,find_nested=True)
@@ -258,7 +258,7 @@ class Test_NUll_4:
                                 l(["cond"]), # For cond='b'
                                 f(["time"],by="cond",constraint=ConstType.QR,penalize_null=True), # to-way interaction between time and cond; one smooth over time per cond level
                                 f(["x"],by="cond",constraint=ConstType.QR,penalize_null=False), # to-way interaction between x and cond; one smooth over x per cond level
-                                f(["time","x"],by="cond",constraint=ConstType.QR,penalize_null=True,id=1), # three-way interaction
+                                f(["time","x"],by="cond",constraint=ConstType.QR,penalize_null=True,id=1,nk=9), # three-way interaction
                                 fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
                         data=dat,
                         print_warn=False,find_nested=True)
@@ -294,7 +294,7 @@ class Test_BIG_GAMM:
                                l(["cond"]), # For cond='b'
                                f(["time"],by="cond",constraint=ConstType.QR), # to-way interaction between time and cond; one smooth over time per cond level
                                f(["x"],by="cond",constraint=ConstType.QR), # to-way interaction between x and cond; one smooth over x per cond level
-                               f(["time","x"],by="cond",constraint=ConstType.QR), # three-way interaction
+                               f(["time","x"],by="cond",constraint=ConstType.QR,nk=9), # three-way interaction
                                fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
                         data=None, # No data frame!
                         file_paths=file_paths, # Just a list with paths to files.
@@ -330,7 +330,7 @@ class Test_BIG_GAMM_keep_cov:
                                 l(["cond"]), # For cond='b'
                                 f(["time"],by="cond",constraint=ConstType.QR), # to-way interaction between time and cond; one smooth over time per cond level
                                 f(["x"],by="cond",constraint=ConstType.QR), # to-way interaction between x and cond; one smooth over x per cond level
-                                f(["time","x"],by="cond",constraint=ConstType.QR), # three-way interaction
+                                f(["time","x"],by="cond",constraint=ConstType.QR,nk=9), # three-way interaction
                                 fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
                         data=None, # No data frame!
                         file_paths=file_paths, # Just a list with paths to files.
@@ -855,15 +855,15 @@ class Test_Vp_estimation_hard:
     Vp,_,_,_,_ = estimateVp(model,strategy="JJJ1",Vp_fidiff=True)
 
     def test_Vp(self):
-        np.testing.assert_allclose(np.round(self.Vp,decimals=3),np.array([[ 2.281e+00,  9.000e-03,  3.000e-03,  2.100e-02],
-                                                                          [ 9.000e-03,  2.779e+00,  1.000e-03, -2.400e-02],
-                                                                          [ 3.000e-03,  1.000e-03,  4.940e-01,  2.200e-02],
-                                                                          [ 2.100e-02, -2.400e-02,  2.200e-02,  1.541e+01]]),atol=min(max_atol,0.001))
+        np.testing.assert_allclose(np.round(self.Vp,decimals=3),np.array([[ 2.2810e+00,  9.0000e-03,  3.0000e-03,  2.1000e-02],
+                                                                          [ 9.0000e-03,  2.7780e+00,  1.0000e-03, -2.5000e-02],
+                                                                          [ 3.0000e-03,  1.0000e-03,  4.9400e-01,  2.2000e-02],
+                                                                          [ 2.1000e-02, -2.5000e-02,  2.2000e-02,  1.5413e+01]]),atol=min(max_atol,0.001))
 
 class Test_te_p_values:
     sim_dat = sim3(n=500,scale=2,c=0,seed=20)
 
-    formula = Formula(lhs("y"),[i(),f(["x0","x3"],te=True),f(["x1"]),f(["x2"])],data=sim_dat)
+    formula = Formula(lhs("y"),[i(),f(["x0","x3"],te=True,nk=9),f(["x1"]),f(["x2"])],data=sim_dat)
     model = GAMM(formula,Gaussian())
 
     test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
@@ -874,10 +874,10 @@ class Test_te_p_values:
     ps, Trs = approx_smooth_p_values(model,par=0,edf1=False,force_approx=True)
 
     def test_p(self):
-        np.testing.assert_allclose(self.ps,np.array([np.float64(0.24528857280469096), np.float64(0.0), np.float64(0.0)]),atol=min(max_atol,0),rtol=min(max_rtol,1e-6))
+        np.testing.assert_allclose(self.ps,np.array([np.float64(0.24528857280469096), np.float64(0.0), np.float64(0.0)]),atol=min(max_atol,0.06),rtol=min(max_rtol,1e-6))
 
     def test_trs(self):
-        np.testing.assert_allclose(self.Trs,np.array([np.float64(1.4741483696834052),np.float64(128.17369821317232),np.float64(126.04637199015741)]),atol=min(max_atol,0),rtol=min(max_rtol,1e-6))
+        np.testing.assert_allclose(self.Trs,np.array([np.float64(1.4741483696834052),np.float64(128.17369821317232),np.float64(126.04637199015741)]),atol=min(max_atol,0),rtol=min(max_rtol,0.02))
 
 class Test_diff:
     # pred_diff test

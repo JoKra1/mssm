@@ -8,15 +8,20 @@ from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 from .src.python.penalties import embed_shared_penalties
 from .src.python.utils import sample_MVN,REML,adjust_CI,print_smooth_terms,print_parametric_terms,approx_smooth_p_values,compute_bias_corrected_edf,GAMLSSGSMMFamily,computeAr1Chol
-from .src.python.custom_types import VarType,ConstType,Constraint,PenType,LambdaTerm
+from .src.python.custom_types import VarType,ConstType,Constraint,PenType,LambdaTerm,Fit_info
 
 ##################################### GSMM class #####################################
 
 class GSMM():
     """
-    Class to fit General Smooth/Mixed Models (see Wood, Pya, & Säfken; 2016). Estimation is possible via exact Newton method for coefficients of via L-qEFS update (see Krause et al., in preparation and example below).
+    Class to fit General Smooth/Mixed Models (see Wood, Pya, & Säfken; 2016). Estimation is possible via exact Newton method for coefficients of via L-qEFS update (see Krause et al., (submitted) and example below).
 
-    Example::
+    Examples::
+
+        from mssm.models import *
+        from mssmViz.sim import *
+        from mssmViz.plot import *
+        import matplotlib.pyplot as plt
 
         class NUMDIFFGENSMOOTHFamily(GSMMFamily):
             # Implementation of the ``GSMMFamily`` class that uses finite differencing to obtain the
@@ -28,33 +33,28 @@ class GSMM():
             #    - Nocedal & Wright (2006). Numerical Optimization. Springer New York.
             
 
-            def __init__(self, pars: int, links:[Link], llkfun:Callable, *llkargs) -> None:
-                super().__init__(pars, links, *llkargs)
-                self.llkfun = llkfun
+            def __init__(self, pars: int, links:[Link]) -> None:
+                super().__init__(pars, links)
             
-            def llk(self, coef, coef_split_idx, y, Xs):
-                return self.llkfun(coef, coef_split_idx, self.links, y, Xs,*self.llkargs)
+            def llk(self, coef, coef_split_idx, ys, Xs):
+                # Likelihood for a Gaussian GAM(LSS) - implemented so
+                # that the model can be estimated using the general smooth code.
+                y = ys[0]
+                split_coef = np.split(coef,coef_split_idx)
+                eta_mu = Xs[0]@split_coef[0]
+                eta_sd = Xs[1]@split_coef[1]
+                
+                mu_mu = self.links[0].fi(eta_mu)
+                mu_sd = self.links[1].fi(eta_sd)
 
-        def llk_gamm_fun(coef,coef_split_idx,links,y,Xs):
-            # Likelihood for a Gaussian GAM(LSS) - implemented so
-            # that the model can be estimated using the general smooth code.
-
-            coef = coef.reshape(-1,1)
-            split_coef = np.split(coef,coef_split_idx)
-            eta_mu = Xs[0]@split_coef[0]
-            eta_sd = Xs[1]@split_coef[1]
-            
-            mu_mu = links[0].fi(eta_mu)
-            mu_sd = links[1].fi(eta_sd)
-            
-            family = GAUMLSS([Identity(),LOG()])
-            llk = family.llk(y,mu_mu,mu_sd)
-            return llk
+                family = GAUMLSS(self.links)
+                llk = family.llk(y,mu_mu,mu_sd)
+                return llk
 
         # Simulate 500 data points
         sim_dat = sim3(500,2,c=1,seed=0,family=Gaussian(),binom_offset = 0, correlate=False)
 
-        # We need to model the mean: \mu_i
+        # We need to model the mean: \\mu_i
         formula_m = Formula(lhs("y"),
                             [i(),f(["x0"]),f(["x1"]),f(["x2"]),f(["x3"])],
                             data=sim_dat)
@@ -66,10 +66,10 @@ class GSMM():
 
         # Collect both formulas
         formulas = [formula_m,formula_sd]
-        links = [Identity(),LOG()]
+        links = [Identity(),LOGb(-0.001)]
 
         # Now define the general family + model and fit!
-        gsmm_fam = GAMLSSGENSMOOTHFamily(2,links,llk_gamm_fun,GAUMLSS(links))
+        gsmm_fam = NUMDIFFGENSMOOTHFamily(2,links)
         model = GSMM(formulas=formulas,family=gsmm_fam)
 
         # Fit with SR1
@@ -79,11 +79,14 @@ class GSMM():
                 "maxls":200,
                 "maxfun":1e7}
                         
-        model.fit(init_coef=None,method='qEFS',extend_lambda=False,
-                control_lambda=False,max_outer=200,max_inner=500,min_inner=500,
-                seed=0,qEFSH='SR1',max_restarts=0,overwrite_coef=False,
-                qEFS_init_converge=False,prefit_grad=True,
-                progress_bar=True,bfgs_options=bfgs_opt)
+        model.fit(method='qEFS',bfgs_options=bfgs_opt)
+
+        # Extract all coef
+        coef = model.coef
+
+        # Now split them to get separate lists per parameter of the log-likelihood (here mean and scale)
+        # split_coef[0] then holds the coef associated with the first parameter (here the mean) and so on
+        split_coef = np.split(coef,model.coef_split_idx)
 
 
     References:
@@ -92,47 +95,53 @@ class GSMM():
      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
      - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
      - Nocedal & Wright (2006). Numerical Optimization. Springer New York.
-    
+     - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient Estimation and Selection of Large Multi-Level Statistical Models. https://doi.org/10.48550/arXiv.2506.13132
     
     :param formulas: A list of formulas, one per parameter of the likelihood that is to be modeled as a smooth model
     :type formulas: [Formula]
     :param family: A GSMMFamily family.
     :type family: GSMMFamily
-    :ivar [[float]] preds: The linear predictors for every parameter of ``family`` evaluated for each observation in the training data. Initialized with ``None``.
-    :ivar [[float]] mus: The predicted means for every parameter of ``family`` evaluated for each observation in the training data. Initialized with ``None``.
-    :ivar float edf: The model estimated degrees of freedom as a float. Initialized with ``None``.
-    :ivar [float] term_edf: The estimated degrees of freedom per smooth term. Initialized with ``None``.
-    :ivar scipy.sparse.csc_array or scipy.sparse.linalg.LinearOperator lvi: Either the inverse of the Cholesky factor of the conditional model coefficient covariance matrix - or (in case the ``L-BFGS-B`` optimizer was used and ``form_VH`` was set to False when calling ``model.fit()``) a :class:`scipy.sparse.linalg.LinearOperator` of the covariance matrix **not the root**. Initialized with ``None``.
-    :ivar float penalty: The total penalty applied to the model deviance after fitting as a float. Initialized with ``None``.
-    :ivar [int] coef:  Contains all coefficients estimated for the model. Initialized with ``None``.
-    :ivar [int] coef_split_idx: The index at which to split the overall coefficient vector into separate lists - one per parameter of ``family``. Initialized after fitting!
+    :ivar [Formula] formulas: The list of formulas passed to the constructor.
+    :ivar scp.sparse.csc_array | None lvi: The inverse of the Cholesky factor of the conditional model coefficient covariance matrix - or None, in case the ``L-BFGS-B`` optimizer was used and ``form_VH`` was set to False when calling ``model.fit()``. Initialized with ``None``.
+    :ivar scp.sparse.linalg.LinearOperator lvi_linop: A :class:`scipy.sparse.linalg.LinearOperator` of the conditional model coefficient covariance matrix (**not the root**) - or None. Only available in case the ``L-BFGS-B`` optimizer was used and ``form_VH`` was set to False when calling ``model.fit()``.
+    :ivar np.ndarray coef:  Contains all coefficients estimated for the model. Shape of the array is (-1,1). Initialized with ``None``.
+    :ivar [[float]] preds: The linear predictors for every parameter of ``family`` evaluated for each observation in the training data (after removing NaNs). Initialized with ``None``.
+    :ivar [[float]] mus: The predicted means for every parameter of ``family`` evaluated for each observation in the training data (after removing NaNs). Initialized with ``None``.
     :ivar scp.sparse.csc_array hessian:  Estimated hessian of the log-likelihood (will correspond to ``hessian - diag*eps`` if ``self.info.eps > 0`` after fitting). Initialized with ``None``.
+    :ivar float edf: The model estimated degrees of freedom as a float. Initialized with ``None``.
+    :ivar float edf1: The model estimated degrees of freedom as a float corrected for smoothness bias. Set by the :func:`approx_smooth_p_values` function, the first time it is called. Initialized with ``None``.
+    :ivar [float] term_edf: The estimated degrees of freedom per smooth term. Initialized with ``None``.
+    :ivar [float] term_edf1: The estimated degrees of freedom per smooth term corrected for smoothness bias. Set by the :func:`approx_smooth_p_values` function, the first time it is called. Initialized with ``None``.
+    :ivar float penalty: The total penalty applied to the model deviance after fitting as a float. Initialized with ``None``.
+    :ivar [int] coef_split_idx: The index at which to split the overall coefficient vector into separate lists - one per parameter of ``family``. See the examples. Initialized after fitting!
     :ivar [LambdaTerm] overall_penalties:  Contains all penalties estimated for the model. Initialized with ``None``.
     :ivar Fit_info info: A :class:`Fit_info` instance, with information about convergence (speed) of the model.
     """
 
-    def __init__(self, formulas: [Formula], family: GSMMFamily):
+    def __init__(self, formulas: list[Formula], family: GSMMFamily):
         
         self.family = family
-        self.formulas = formulas
-        self.lvi = None
-        self.coef = None
-        self.preds = None # Linear predictors
-        self.mus = None # Estimated parameters of log-likelihood
-        self.hessian = None
+        self.formulas:list[Formula] = formulas
+        self.lvi:scp.sparse.csc_array = None
+        self.lvi_linop:scp.sparse.linalg.LinearOperator = None
+        self.coef:np.ndarray = None
+        self.preds:list[np.ndarray] = None # Linear predictors
+        self.mus:list[np.ndarray] = None # Estimated parameters of log-likelihood
+        self.hessian:scp.sparse.csc_array = None
         self.scale = 1
 
-        self.edf = None
-        self.edf1 = None
-        self.term_edf = None
-        self.term_edf1 = None
+        self.edf:float = None
+        self.edf1:float = None
+        self.term_edf:list[float] = None
+        self.term_edf1:list[float] = None
 
         self.penalty = 0
-        self.overall_penalties = None
+        self.overall_penalties:list[LambdaTerm] = None
+        self.info:Fit_info = None
     
     ##################################### Getters #####################################
     
-    def get_pars(self):
+    def get_pars(self) -> np.ndarray:
         """
         Returns a list containing all coefficients estimated for the model. Use ``self.coef_split_idx`` to split the vector into separate subsets per parameter of the log-likelihood.
 
@@ -143,7 +152,7 @@ class GSMM():
         """
         return self.coef
     
-    def get_mmat(self,use_terms=None,drop_NA=True,par=None):
+    def get_mmat(self,use_terms:list[int]|None=None,drop_NA:bool=True,par:int|None=None) -> list[scp.sparse.csc_array] | scp.sparse.csc_array:
         """
         By default, returns a list containing exactly the model matrices used for fitting as a ``scipy.sparse.csc_array``. Will raise an error when fitting was not completed before calling this function.
 
@@ -157,7 +166,7 @@ class GSMM():
         :param par: The index corresponding to the parameter of the log-likelihood for which to obtain the model matrix. Setting this to ``None`` means all matrices are returned in a list, defaults to None.
         :type par: int or None, optional
         :raises ValueError: Will throw an error when called before the model was fitted/before model penalties were formed.
-        :return: Model matrices :math:`\mathbf{X}` used for fitting - one per parameter of ``self.family`` or a single model matrix for a specific parameter.
+        :return: Model matrices :math:`\\mathbf{X}` used for fitting - one per parameter of ``self.family`` or a single model matrix for a specific parameter.
         :rtype: [scp.sparse.csc_array] or scp.sparse.csc_array
         """
 
@@ -210,7 +219,7 @@ class GSMM():
         else:
             return mmat
     
-    def get_llk(self,penalized:bool=True,drop_NA=True):
+    def get_llk(self,penalized:bool=True,drop_NA:bool=True) -> float | None:
         """
         Get the (penalized) log-likelihood of the estimated model (float or None) given the trainings data.
         
@@ -257,7 +266,7 @@ class GSMM():
 
         return None
 
-    def get_reml(self,drop_NA=True):
+    def get_reml(self,drop_NA:bool=True) -> float:
         """
         Get's the Laplcae approximate REML (Restrcited Maximum Likelihood) score for the estimated lambda values (see Wood, 2011).
 
@@ -312,7 +321,7 @@ class GSMM():
             print(f"\nDistribution parameter: {formi + 1}\n")
             print_parametric_terms(self,par=formi)
     
-    def print_smooth_terms(self, pen_cutoff=0.2, p_values=False, edf1 = True):
+    def print_smooth_terms(self, pen_cutoff:float=0.2, p_values:bool=False, edf1:bool=True):
         """Prints the name of the smooth terms included in the model. After fitting, the estimated degrees of freedom per term are printed as well.
         Smooth terms with edf. < ``pen_cutoff`` will be highlighted. This only makes sense when extra Kernel penalties are placed on smooth terms to enable
         penalizing them to a constant zero. In that case edf. < ``pen_cutoff`` can then be taken as evidence that the smooth has all but notationally disappeared
@@ -341,14 +350,22 @@ class GSMM():
     
     ##################################### Fitting #####################################
     
-    def fit(self,init_coef=None,max_outer=200,max_inner=500,min_inner=None,conv_tol=1e-7,extend_lambda=False,extension_method_lam="nesterov2",control_lambda=None,restart=False,optimizer="Newton",method="QR/Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),progress_bar=True,n_cores=10,seed=0,drop_NA=True,init_lambda=None,form_VH=True,use_grad=False,build_mat=None,should_keep_drop=True,gamma=1,qEFSH='SR1',overwrite_coef=True,max_restarts=0,qEFS_init_converge=False,prefit_grad=True,repara=None,init_bfgs_options=None,bfgs_options=None):
+    def fit(self,init_coef:np.ndarray|None=None,max_outer:int=200,max_inner:int=500,min_inner:int|None=None,
+            conv_tol:float=1e-7,extend_lambda:bool=False,extension_method_lam:str="nesterov2",
+            control_lambda:int|None=None,restart:bool=False,optimizer:str="Newton",method:str="QR/Chol",
+            check_cond:int=1,piv_tol:float=np.power(np.finfo(float).eps,0.04),progress_bar:bool=True,
+            n_cores:int=10,seed:int=0,drop_NA:bool=True,init_lambda:list[float]|None=None,form_VH:bool=True,
+            use_grad:bool=False,build_mat:list[bool]|None=None,should_keep_drop:bool=True,gamma:float=1,
+            qEFSH:str='SR1',overwrite_coef:bool=True,max_restarts:int=0,qEFS_init_converge:bool=False,
+            prefit_grad:bool=True,repara:bool=None,init_bfgs_options:dict|None=None,
+            bfgs_options:dict|None=None):
         """
         Fit the specified model.
 
         **Note**: Keyword arguments are initialized to maximise stability. For faster configurations (necessary for larger models) see examples below.
         
         :param init_coef: An initial estimate for the coefficients. Must be a numpy array of shape (-1,1). Defaults to None.
-        :type init_coef: numpy.array,optional
+        :type init_coef: np.ndarray,optional
         :param max_outer: The maximum number of fitting iterations.
         :type max_outer: int,optional
         :param max_inner: The maximum number of fitting iterations to use by the inner Newton step for coefficients.
@@ -381,7 +398,7 @@ class GSMM():
         :type seed: int,optional
         :param drop_NA: Whether to drop rows in the **model matrices** and observations vectors corresponding to NAs in the observation vectors. Set this to False if you want to handle NAs yourself in the likelihood function. Defaults to True.
         :type drop_NA: bool,optional
-        :param init_lambda: A set of initial :math:`\lambda` parameters to use by the model. Length of list must match number of parameters to be estimated. Defaults to None
+        :param init_lambda: A set of initial :math:`\\lambda` parameters to use by the model. Length of list must match number of parameters to be estimated. Defaults to None
         :type init_lambda: [float],optional
         :param form_VH: Whether to explicitly form matrix ``V`` - the estimated inverse of the negative Hessian of the penalized likelihood - and ``H`` - the estimate of the Hessian of the log-likelihood - when using the ``qEFS`` method. If set to False, only ``V`` is returned - as a :class:`scipy.sparse.linalg.LinearOperator` - and available in ``self.lvi``. Additionally, ``self.hessian`` will then be equal to ``None``. **Note**, that this will break default prediction/confidence interval methods - so do not call them. Defaults to True
         :type form_VH: bool,optional
@@ -531,7 +548,7 @@ class GSMM():
                 coef_split_idx[coef_i] += coef_split_idx[coef_i-1]
         
         # Now fit model
-        coef,H,LV,total_edf,term_edfs,penalty,smooth_pen,fit_info = solve_generalSmooth_sparse(self.family,ys,Xs,form_n_coef,form_up_coef,coef,coef_split_idx,smooth_pen,
+        coef,H,LV,LV_linop,total_edf,term_edfs,penalty,smooth_pen,fit_info = solve_generalSmooth_sparse(self.family,ys,Xs,form_n_coef,form_up_coef,coef,coef_split_idx,smooth_pen,
                                                                                     max_outer,max_inner,min_inner,conv_tol,extend_lambda,extension_method_lam,
                                                                                     control_lambda,optimizer,method,check_cond,piv_tol,repara,should_keep_drop,form_VH,
                                                                                     use_grad,gamma,qEFSH,overwrite_coef,max_restarts,qEFS_init_converge,prefit_grad,
@@ -544,6 +561,7 @@ class GSMM():
         self.penalty = penalty
         self.coef_split_idx = coef_split_idx
         self.lvi = LV
+        self.lvi_linop = LV_linop
         self.hessian = H
         if fit_info.eps > 0: # Make sure -H + S_emb is invertible
             warnings.warn(f"model.info.eps > 0 ({np.round(fit_info.eps,decimals=2)}). Perturbing Hessian of log-likelihood to ensure that negative Hessian of penalized log-likelihood is invertible.")
@@ -558,14 +576,14 @@ class GSMM():
     
     ##################################### Prediction #####################################
 
-    def sample_post(self, n_ps, use_post=None, deviations=False, seed=None, par=0):
+    def sample_post(self, n_ps:int, use_post:list[int]|None=None, deviations:bool=False, seed:int|None=None, par:int=0) -> np.ndarray:
         """
-        Obtain ``n_ps`` samples from posterior :math:`[\\boldsymbol{\\beta}_m - \hat{\\boldsymbol{\\beta}}_m] | \mathbf{y},\\boldsymbol{\lambda} \sim N(0,\mathbf{V})`,
-        where :math:`\mathbf{V}=[-\mathbf{H} + \mathbf{S}_{\lambda}]^{-1}` (see Wood et al., 2016; Wood 2017, section 6.10), :math:`\\boldsymbol{\\beta}_m` is the set of
-        coefficients in the model of parameter :math:`m` of the log-likelihood (see argument ``par``), and :math:`\mathbf{H}` is the hessian of
+        Obtain ``n_ps`` samples from posterior :math:`[\\boldsymbol{\\beta}_m - \\hat{\\boldsymbol{\\beta}}_m] | \\mathbf{y},\\boldsymbol{\\lambda} \\sim N(0,\\mathbf{V})`,
+        where :math:`\\mathbf{V}=[-\\mathbf{H} + \\mathbf{S}_{\\lambda}]^{-1}` (see Wood et al., 2016; Wood 2017, section 6.10), :math:`\\boldsymbol{\\beta}_m` is the set of
+        coefficients in the model of parameter :math:`m` of the log-likelihood (see argument ``par``), and :math:`\\mathbf{H}` is the hessian of
         the log-likelihood (Wood et al., 2016;). To obtain samples for :math:`\\boldsymbol{\\beta}_m`, set ``deviations`` to false.
 
-        see :func:`sample_MVN` for more details.
+        see :func:`sample_MVN` for more details and the :func:`GAMMLSS.sample_post` function for code examples.
 
         References:
 
@@ -576,14 +594,14 @@ class GSMM():
         :type n_ps: int,optional
         :param use_post: The indices corresponding to coefficients for which to actually obtain samples. **Note**: an index of 0 indexes the first coefficient in the model of parameter ``par``, that is indices have to correspond to columns in the parameter-specific model matrix. By default all coefficients are sampled.
         :type use_post: [int],optional
-        :param deviations: Whether to return samples of **deviations** from the estimated coefficients (i.e., :math:`\\boldsymbol{\\beta} - \hat{\\boldsymbol{\\beta}}`) or actual samples of coefficients (i.e., :math:`\\boldsymbol{\\beta}`), defaults to False
+        :param deviations: Whether to return samples of **deviations** from the estimated coefficients (i.e., :math:`\\boldsymbol{\\beta} - \\hat{\\boldsymbol{\\beta}}`) or actual samples of coefficients (i.e., :math:`\\boldsymbol{\\beta}`), defaults to False
         :type deviations: bool,optional
         :param seed: A seed to use for the sampling, defaults to None
         :type seed: int,optional
         :param par: The index corresponding to the parameter of the log-likelihood for which samples are to be obtained for the coefficients, defaults to 0.
         :type par: int, optional
-        :returns: An np.array of dimension ``[len(use_post),n_ps]`` containing the posterior samples. If ``use_post is None``, ``len(use_post)`` will match the number of coefficients associated with parameter ``par`` of the log-likelihood instead. Can simply be post-multiplied with (the subset of columns indicated by ``use_post`` of) the model matrix :math:`\mathbf{X}^m` associated with the parameter :math:`m` of the log-likelihood to generate posterior **sample curves**.
-        :rtype: [float]
+        :returns: An np.ndarray of dimension ``[len(use_post),n_ps]`` containing the posterior samples. If ``use_post is None``, ``len(use_post)`` will match the number of coefficients associated with parameter ``par`` of the log-likelihood instead. Can simply be post-multiplied with (the subset of columns indicated by ``use_post`` of) the model matrix :math:`\\mathbf{X}^m` associated with the parameter :math:`m` of the log-likelihood to generate posterior **sample curves**.
+        :rtype: np.ndarray
         """
         
         # Extract coef and cols of lvi associated with par
@@ -604,12 +622,13 @@ class GSMM():
 
         return post
 
-    def predict(self, use_terms, n_dat, alpha=0.05, ci=False, whole_interval=False, n_ps=10000, seed=None, par=0):
+    def predict(self, use_terms:list[int]|None, n_dat:pd.DataFrame, alpha:float=0.05, ci:bool=False, whole_interval:bool=False, n_ps:int=10000, seed:int|None=None, par:int=0) -> tuple[np.ndarray,scp.sparse.csc_array,np.ndarray|None]:
         """
         Make a prediction using the fitted model for new data ``n_dat`` using only the terms indexed by ``use_terms`` and for parameter ``par`` of the log-likelihood.
 
         Importantly, predictions and standard errors are always returned on the scale of the linear predictor.
 
+        See the :func:`GAMMLSS.predict` function for code examples.
 
         References:
          - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
@@ -633,7 +652,7 @@ class GSMM():
         :type par: int, optional
         :raises ValueError: An error is raised in case the standard error is to be computed for a Multinomial GAMMLSS model, which is currently not supported.
         :return: A tuple with 3 entries. The first entry is the prediction ``pred`` based on the new data ``n_dat``. The second entry is the model matrix built for ``n_dat`` that was post-multiplied with the model coefficients to obtain ``pred``. The third entry is ``None`` if ``ci``==``False`` else the standard error ``se`` in the prediction.
-        :rtype: (np.array,scp.sparse.csc_array,np.array or None)
+        :rtype: (np.ndarray,scp.sparse.csc_array,np.ndarray or None)
         """
 
         # Extract desired formula and perform some checks
@@ -706,12 +725,14 @@ class GSMM():
 
         return pred,predi_mat,None
     
-    def predict_diff(self, dat1, dat2, use_terms, alpha=0.05, whole_interval=False, n_ps=10000, seed=None, par=0):
+    def predict_diff(self, dat1:pd.DataFrame, dat2:pd.DataFrame, use_terms:list[int]|None, alpha:float=0.05, whole_interval:bool=False, n_ps:int=10000, seed:int|None=None, par:int=0) -> tuple[np.ndarray,np.ndarray]:
         """
         Get the difference in the predictions for two datasets and for parameter ``par`` of the log-likelihood. Useful to compare a smooth estimated for
         one level of a factor to the smooth estimated for another level of a factor. In that case, ``dat1`` and ``dat2`` should only differ in the level of
         said factor. Importantly, predictions and standard errors are again always returned on the scale of the linear predictor - 
         see the :func:`predict` method for details.
+
+        See the :func:`GAMMLSS.predict_diff` function for code examples.
 
         References:
 
@@ -737,7 +758,7 @@ class GSMM():
         :type par: int, optional
         :raises ValueError: An error is raised in case the predicted difference is to be computed for a Multinomial GAMMLSS model, which is currently not supported.
         :return: A tuple with 2 entries. The first entry is the predicted difference (between the two data sets ``dat1`` & ``dat2``) ``diff``. The second entry is the standard error ``se`` of the predicted difference. The difference CI is then [``diff`` - ``se``, ``diff`` + ``se``]
-        :rtype: (np.array,np.array)
+        :rtype: (np.ndarray,np.ndarray)
         """
         
         _,pmat1,_ = self.predict(use_terms,dat1,par=par)
@@ -778,17 +799,22 @@ class GAMMLSS(GSMM):
     """
     Class to fit Generalized Additive Mixed Models of Location Scale and Shape (see Rigby & Stasinopoulos, 2005).
 
-    Example::
+    Examples::
+
+        from mssm.models import *
+        from mssmViz.sim import *
+        from mssmViz.plot import *
+        import matplotlib.pyplot as plt
 
         # Simulate 500 data points
         GAUMLSSDat = sim6(500,seed=20)
 
-        # We need to model the mean: \mu_i = \\alpha + f(x0)
+        # We need to model the mean: \\mu_i = \\alpha + f(x0)
         formula_m = Formula(lhs("y"),
                             [i(),f(["x0"],nk=10)],
                             data=GAUMLSSDat)
 
-        # and the standard deviation as well: log(\sigma_i) = \\alpha + f(x0)
+        # and the standard deviation as well: log(\\sigma_i) = \\alpha + f(x0)
         formula_sd = Formula(lhs("y"),
                             [i(),f(["x0"],nk=10)],
                             data=GAUMLSSDat)
@@ -804,6 +830,24 @@ class GAMMLSS(GSMM):
         model = GAMMLSS(formulas,family)
         model.fit()
 
+        # Get total coef vector & split them
+        coef = model.coef
+        split_coef = np.split(coef,model.coef_split_idx)
+
+        # Get coef associated with the mean
+        coef_m = split_coef[0]
+        # and with the scale parameter
+        coef_s = split_coef[1]
+
+        # Similarly, `preds` holds linear predictions for m & s
+        pred_m = model.preds[0]
+        pred_s = model.preds[1]
+
+        # While `mu` holds the estimated fitted parameters
+        # (i.e., `preds` after applying the inverse of the link function of each parameter)
+        mu_m = model.mus[0]
+        mu_s = model.mus[1]
+
     References:
      - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
      - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
@@ -815,25 +859,29 @@ class GAMMLSS(GSMM):
     :type formulas: [Formula]
     :param family: A :class:`GAMLSSFamily`. Currently :class:`GAUMLSS`, :class:`MULNOMLSS`, and :class:`GAMMALS` are supported.
     :type family: GAMLSSFamily
-    :ivar [[float]] preds: The linear predictors for every parameter of ``family`` evaluated for each observation in the training data. Initialized with ``None``.
-    :ivar [[float]] mus: The predicted means for every parameter of ``family`` evaluated for each observation in the training data. Initialized with ``None``.
-    :ivar float edf: The model estimated degrees of freedom as a float. Initialized with ``None``.
-    :ivar [float] term_edf: The estimated degrees of freedom per smooth term. Initialized with ``None``.
-    :ivar scipy.sparse.csc_array lvi: The inverse of the Cholesky factor of the conditional model coefficient covariance matrix. Initialized with ``None``.
-    :ivar float penalty: The total penalty applied to the model deviance after fitting as a float. Initialized with ``None``.
-    :ivar [int] coef: Contains all coefficients estimated for the model. Initialized with ``None``.
-    :ivar [int] coef_split_idx: The index at which to split the overall coefficient vector into separate lists - one per parameter of ``family``. Initialized after fitting!
+    :ivar [Formula] formulas: The list of formulas passed to the constructor.
+    :ivar scp.sparse.csc_array lvi: The inverse of the Cholesky factor of the conditional model coefficient covariance matrix. Initialized with ``None``.
+    :ivar np.ndarray coef:  Contains all coefficients estimated for the model. Shape of the array is (-1,1). Initialized with ``None``.
+    :ivar [[float]] preds: The linear predictors for every parameter of ``family`` evaluated for each observation in the training data (after removing NaNs). Initialized with ``None``.
+    :ivar [[float]] mus: The predicted means for every parameter of ``family`` evaluated for each observation in the training data (after removing NaNs). Initialized with ``None``.
     :ivar scp.sparse.csc_array hessian:  Estimated hessian of the log-likelihood (will correspond to ``hessian - diag*eps`` if ``self.info.eps > 0`` after fitting). Initialized with ``None``.
+    :ivar float edf: The model estimated degrees of freedom as a float. Initialized with ``None``.
+    :ivar float edf1: The model estimated degrees of freedom as a float corrected for smoothness bias. Set by the :func:`approx_smooth_p_values` function, the first time it is called. Initialized with ``None``.
+    :ivar [float] term_edf: The estimated degrees of freedom per smooth term. Initialized with ``None``.
+    :ivar [float] term_edf1: The estimated degrees of freedom per smooth term corrected for smoothness bias. Set by the :func:`approx_smooth_p_values` function, the first time it is called. Initialized with ``None``.
+    :ivar float penalty: The total penalty applied to the model deviance after fitting as a float. Initialized with ``None``.
+    :ivar [int] coef_split_idx: The index at which to split the overall coefficient vector into separate lists - one per parameter of ``family``. See the examples. Initialized after fitting!
     :ivar [LambdaTerm] overall_penalties:  Contains all penalties estimated for the model. Initialized with ``None``.
     :ivar Fit_info info: A :class:`Fit_info` instance, with information about convergence (speed) of the model.
+    :ivar np.ndarray res: The working residuals of the model (If applicable). Initialized with ``None``.
     """
     def __init__(self, formulas: [Formula], family: GAMLSSFamily):
         super().__init__(formulas, family)
-        self.res = None
+        self.res:np.ndarray = None
     
     ##################################### Getters #####################################
     
-    def get_pars(self):
+    def get_pars(self) -> np.ndarray:
         """
         Returns a list containing all coefficients estimated for the model. Use ``self.coef_split_idx`` to split the vector into separate subsets per distribution parameter.
 
@@ -844,23 +892,24 @@ class GAMMLSS(GSMM):
         """
         return super.get_pars()
     
-    def get_mmat(self,use_terms=None,par=None):
+    def get_mmat(self,use_terms:list[int]|None=None,par:int|None=None) -> list[scp.sparse.csc_array]|scp.sparse.csc_array:
         """
         Returns a list containing exaclty the model matrices used for fitting as a ``scipy.sparse.csc_array``. Will raise an error when fitting was not completed before calling this function.
 
-        Optionally, all columns not corresponding to terms for which the indices are provided via ``use_terms`` can be zeroed.
+        Optionally, the model matrix associated with a specific parameter of the log-likelihood can be obtained by setting ``par`` to the desired index, instead of ``None``.
+        Additionally, all columns not corresponding to terms for which the indices are provided via ``use_terms`` can optionally be zeroed.
 
         :param use_terms: Optionally provide indices of terms in the formual that should be created. If this argument is provided columns corresponding to any term not included in this list will be zeroed, defaults to None
         :type use_terms: [int], optional
         :param par: The index corresponding to the parameter of the distribution for which to obtain the model matrix. Setting this to ``None`` means all matrices are returned in a list, defaults to None.
         :type par: int or None, optional
         :raises ValueError: Will throw an error when called before the model was fitted/before model penalties were formed.
-        :return: Model matrices :math:`\mathbf{X}` used for fitting - one per parameter of ``self.family`` or a single model matrix for a specific parameter.
+        :return: Model matrices :math:`\\mathbf{X}` used for fitting - one per parameter of ``self.family`` or a single model matrix for a specific parameter.
         :rtype: [scp.sparse.csc_array] or scp.sparse.csc_array
         """
         return super().get_mmat(use_terms,True,par)
 
-    def get_llk(self,penalized:bool=True):
+    def get_llk(self,penalized:bool=True) -> float|None:
         """
         Get the (penalized) log-likelihood of the estimated model (float or None) given the trainings data.
         
@@ -886,7 +935,7 @@ class GAMMLSS(GSMM):
 
         return None
                         
-    def get_reml(self):
+    def get_reml(self) -> float:
         """
         Get's the Laplcae approximate REML (Restrcited Maximum Likelihood) score for the estimated lambda values (see Wood, 2011).
 
@@ -912,7 +961,7 @@ class GAMMLSS(GSMM):
         reml = REML(llk,-1*self.hessian,self.coef,1,self.overall_penalties,keep)[0,0]
         return reml
     
-    def get_resid(self):
+    def get_resid(self) -> np.ndarray:
         """ Returns standarized residuals for GAMMLSS models (Rigby & Stasinopoulos, 2005).
 
         The computation of the residual vector will differ a lot between different GAMMLSS models and is thus implemented
@@ -927,9 +976,9 @@ class GAMMLSS(GSMM):
 
         :raises NotImplementedError: An error is raised in case the residuals are to be computed for a Multinomial GAMMLSS model, which is currently not supported.
         :raises ValueError: An error is raised in case the residuals are requested before the model has been fit.
-        :return: A list of standardized residuals that should be :math:`\sim N(0,1)` if the model is correct.
+        :return: A np.ndarray of standardized residuals that should be :math:`\\sim N(0,1)` if the model is correct.
         :return: Empirical residual vector
-        :rtype: [float]
+        :rtype: np.ndarray
         """
 
         if self.coef is None or self.hessian is None:
@@ -959,7 +1008,7 @@ class GAMMLSS(GSMM):
         """
         super().print_parametric_terms()
     
-    def print_smooth_terms(self, pen_cutoff=0.2, p_values=False, edf1 = True):
+    def print_smooth_terms(self, pen_cutoff:float=0.2, p_values:bool=False, edf1:bool = True):
         """Prints the name of the smooth terms included in the model. After fitting, the estimated degrees of freedom per term are printed as well.
         Smooth terms with edf. < ``pen_cutoff`` will be highlighted. This only makes sense when extra Kernel penalties are placed on smooth terms to enable
         penalizing them to a constant zero. In that case edf. < ``pen_cutoff`` can then be taken as evidence that the smooth has all but notationally disappeared
@@ -980,11 +1029,48 @@ class GAMMLSS(GSMM):
     
     ##################################### Fitting #####################################
         
-    def fit(self,max_outer=200,max_inner=500,min_inner=None,conv_tol=1e-7,extend_lambda=False,extension_method_lam="nesterov2",control_lambda=2,restart=False,method="QR/Chol",check_cond=1,piv_tol=np.power(np.finfo(float).eps,0.04),should_keep_drop=True,prefit_grad=True,repara=True,progress_bar=True,n_cores=10,seed=0,init_lambda=None):
+    def fit(self,max_outer:int=200,max_inner:int=500,min_inner:int|None=None,conv_tol:float=1e-7,extend_lambda:bool=False,
+            extension_method_lam:str="nesterov2",control_lambda:int=2,restart:bool=False,method:str="QR/Chol",check_cond:int=1,
+            piv_tol:float=np.power(np.finfo(float).eps,0.04),should_keep_drop:bool=True,prefit_grad:bool=True,repara:bool=True,
+            progress_bar:bool=True,n_cores:int=10,seed:int=0,init_lambda:list[float]|None=None):
         """
         Fit the specified model.
 
-        **Note**: Keyword arguments are initialized to maximise stability. For faster configurations (necessary for larger models) see examples below.
+        **Note**: Keyword arguments are initialized to maximise stability. For faster estimation set ``method='Chol'``.
+
+        Examples::
+
+            from mssm.models import *
+            from mssmViz.sim import *
+            from mssmViz.plot import *
+            import matplotlib.pyplot as plt
+
+            # Simulate 500 data points
+            GAUMLSSDat = sim6(500,seed=20)
+
+            # We need to model the mean: \\mu_i = \\alpha + f(x0)
+            formula_m = Formula(lhs("y"),
+                                [i(),f(["x0"],nk=10)],
+                                data=GAUMLSSDat)
+
+            # and the standard deviation as well: log(\\sigma_i) = \\alpha + f(x0)
+            formula_sd = Formula(lhs("y"),
+                                [i(),f(["x0"],nk=10)],
+                                data=GAUMLSSDat)
+
+            # Collect both formulas
+            formulas = [formula_m,formula_sd]
+
+            # Create Gaussian GAMMLSS family with identity link for mean
+            # and log link for sigma
+            family = GAUMLSS([Identity(),LOG()])
+
+            # Now define the model and fit!
+            model = GAMMLSS(formulas,family)
+            model.fit()
+
+            # Now fit again via Cholesky
+            model.fit(method="Chol")
 
         :param max_outer: The maximum number of fitting iterations.
         :type max_outer: int,optional
@@ -1020,7 +1106,7 @@ class GAMMLSS(GSMM):
         :type n_cores: int,optional
         :param seed: Seed to use for random parameter initialization. Defaults to 0
         :type seed: int,optional
-        :param init_lambda: A set of initial :math:`\lambda` parameters to use by the model. Length of list must match number of parameters to be estimated. Defaults to None
+        :param init_lambda: A set of initial :math:`\\lambda` parameters to use by the model. Length of list must match number of parameters to be estimated. Defaults to None
         :type init_lambda: [float],optional
         """
 
@@ -1111,52 +1197,157 @@ class GAMMLSS(GSMM):
     
     ##################################### Prediction #####################################
     
-    def sample_post(self, n_ps, use_post=None, deviations=False, seed=None, par=0):
+    def sample_post(self, n_ps:int, use_post:list[int]|None=None, deviations:bool=False, seed:int|None=None, par:int=0) -> np.ndarray:
         """
-        Obtain ``n_ps`` samples from posterior :math:`[\\boldsymbol{\\beta}_m - \hat{\\boldsymbol{\\beta}}_m] | \mathbf{y},\\boldsymbol{\lambda} \sim N(0,\mathbf{V})`,
-        where :math:`\mathbf{V}=[-\mathbf{H} + \mathbf{S}_{\lambda}]^{-1}` (see Wood et al., 2016; Wood 2017, section 6.10), :math:`\\boldsymbol{\\beta}_m` is the set of
-        coefficients in the model of parameter :math:`m` of the distribution (see argument ``par``), and :math:`\mathbf{H}` is the hessian of
+        Obtain ``n_ps`` samples from posterior :math:`[\\boldsymbol{\\beta}_m - \\hat{\\boldsymbol{\\beta}}_m] | \\mathbf{y},\\boldsymbol{\\lambda} \\sim N(0,\\mathbf{V})`,
+        where :math:`\\mathbf{V}=[-\\mathbf{H} + \\mathbf{S}_{\\lambda}]^{-1}` (see Wood et al., 2016; Wood 2017, section 6.10), :math:`\\boldsymbol{\\beta}_m` is the set of
+        coefficients in the model of parameter :math:`m` of the distribution (see argument ``par``), and :math:`\\mathbf{H}` is the hessian of
         the log-likelihood (Wood et al., 2016;). To obtain samples for :math:`\\boldsymbol{\\beta}`, set ``deviations`` to false.
 
         see :func:`sample_MVN` for more details.
 
-        References:
+        Examples::
 
+            from mssm.models import *
+            from mssmViz.sim import *
+            from mssmViz.plot import *
+            import matplotlib.pyplot as plt
+
+            # Simulate 500 data points
+            GAUMLSSDat = sim6(500,seed=20)
+
+            # We need to model the mean: \\mu_i = \\alpha + f(x0)
+            formula_m = Formula(lhs("y"),
+                                [i(),f(["x0"],nk=10)],
+                                data=GAUMLSSDat)
+
+            # and the standard deviation as well: log(\\sigma_i) = \\alpha + f(x0)
+            formula_sd = Formula(lhs("y"),
+                                [i(),f(["x0"],nk=10)],
+                                data=GAUMLSSDat)
+
+            # Collect both formulas
+            formulas = [formula_m,formula_sd]
+
+            # Create Gaussian GAMMLSS family with identity link for mean
+            # and log link for sigma
+            family = GAUMLSS([Identity(),LOG()])
+
+            # Now fit
+            model = GAMMLSS(formulas,family)
+            model.fit()
+
+            new_dat = pd.DataFrame({"x0":np.linspace(0,1,30)})
+
+            # Now obtain the estimate for `f(["x0"],nk=10)` and the model matrix corresponding to it!
+            # Note, that we set `use_terms = [1]` - so all columns in X_f not belonging to `f(["x0"],nk=10)`
+            # (e.g., the first one, belonging to the offset) are zeroed.
+            mu_f,X_f,_ = model.predict([1],new_dat,ci=True)
+
+            # Now we can sample from the posterior of `f(["x0"],nk=10)` in the model of the mean:
+            post = model.sample_post(10000,None,deviations=False,seed=0,par=0)
+
+            # Since we set deviations to false post has coefficient samples and can simply be post-multiplied to
+            # get samples of `f(["x0"],nk=10)` 
+            post_f = X_f @ post
+
+            # Plot the estimated effect and 50 posterior samples
+            plt.plot(new_dat["x0"],mu_f,color="black",linewidth=2)
+
+            for sidx in range(50):
+                plt.plot(new_dat["x0"],post_f[:,sidx],alpha=0.2)
+
+            plt.show()
+
+            # In this case, we are not interested in the offset, so we can omit it during the sampling step (i.e., to not sample coefficients
+            # for it):
+
+            # `use_post` identifies only coefficients related to `f(["x0"],nk=10)`
+            use_post = X_f.sum(axis=0) != 0
+            use_post = np.arange(0,X_f.shape[1])[use_post]
+            print(use_post)
+
+            # `use_post` can now be passed to `sample_post`:
+            post2 = model.sample_post(10000,use_post,deviations=False,seed=0,par=0)
+
+            # Importantly, post2 now has a different shape - which we have to take into account when multiplying.
+            post_f2 = X_f[:,use_post] @ post2
+
+            plt.plot(new_dat["x0"],mu_f,color="black",linewidth=2)
+
+            for sidx in range(50):
+                plt.plot(new_dat["x0"],post_f2[:,sidx],alpha=0.2)
+
+            plt.show()
+
+        References:
          - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
          - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
         :param n_ps: Number of samples to obtain from posterior.
         :type n_ps: int,optional
-        :param use_post: The indices corresponding to coefficients for which to actually obtain samples. By default all coefficients are sampled.
+        :param use_post: The indices corresponding to coefficients for which to actually obtain samples. **Note**: an index of 0 indexes the first coefficient in the model of parameter ``par``, that is indices have to correspond to columns in the parameter-specific model matrix. By default all coefficients are sampled.
         :type use_post: [int],optional
-        :param deviations: Whether to return samples of **deviations** from the estimated coefficients (i.e., :math:`\\boldsymbol{\\beta} - \hat{\\boldsymbol{\\beta}}`) or actual samples of coefficients (i.e., :math:`\\boldsymbol{\\beta}`), defaults to False
+        :param deviations: Whether to return samples of **deviations** from the estimated coefficients (i.e., :math:`\\boldsymbol{\\beta} - \\hat{\\boldsymbol{\\beta}}`) or actual samples of coefficients (i.e., :math:`\\boldsymbol{\\beta}`), defaults to False
         :type deviations: bool,optional
         :param seed: A seed to use for the sampling, defaults to None
         :type seed: int,optional
         :param par: The index corresponding to the distribution parameter for which to make the prediction (e.g., 0 = mean)
         :type par: int
-        :returns: An np.array of dimension ``[len(use_post),n_ps]`` containing the posterior samples. Can simply be post-multiplied with model matrix :math:`\mathbf{X}` to generate posterior **sample curves**.
-        :rtype: [float]
+        :returns: An np.ndarray of dimension ``[len(use_post),n_ps]`` containing the posterior samples. Can simply be post-multiplied with model matrix :math:`\\mathbf{X}` to generate posterior **sample curves**.
+        :rtype: np.ndarray
         """
         return super().sample_post(n_ps,use_post,deviations,seed,par)
 
-    def predict(self, use_terms, n_dat, alpha=0.05, ci=False, whole_interval=False, n_ps=10000, seed=None, par=0):
+    def predict(self, use_terms:list[int]|None, n_dat:pd.DataFrame, alpha:float=0.05, ci:bool=False, whole_interval:bool=False, n_ps:int=10000, seed:int|None=None, par:int=0) -> tuple[np.ndarray,scp.sparse.csc_array,np.ndarray|None]:
         """
         Make a prediction using the fitted model for new data ``n_dat`` using only the terms indexed by ``use_terms`` and for distribution parameter ``par``.
 
         Importantly, predictions and standard errors are always returned on the scale of the linear predictor. For the Gaussian GAMMLSS model, the 
-        predictions for the standard deviation will thus reflect the log of the standard deviation. To get the predictions on the standard deviation scale,
-        one can apply the inverse log-link function to the predictions and the CI-bounds on the scale of the respective linear predictor.::
+        predictions for the standard deviation will for example usually (i.e., for the default link choices) reflect the log of the standard deviation.
+        To get the predictions on the standard deviation scale, one could then apply the inverse log-link function to the predictions and the CI-bounds
+        on the scale of the respective linear predictor. See the examples below.
 
-            model = GAMMLSS(formulas,GAUMLSS([Identity(),LOG()])) # Fit a Gaussian GAMMLSS model
+        Examples::
+
+            # Simulate 500 data points
+            GAUMLSSDat = sim6(500,seed=20)
+
+            # We need to model the mean: \\mu_i = \\alpha + f(x0)
+            formula_m = Formula(lhs("y"),
+                                [i(),f(["x0"],nk=10)],
+                                data=GAUMLSSDat)
+
+            # and the standard deviation as well: log(\\sigma_i) = \\alpha + f(x0)
+            formula_sd = Formula(lhs("y"),
+                                [i(),f(["x0"],nk=10)],
+                                data=GAUMLSSDat)
+
+            # Collect both formulas
+            formulas = [formula_m,formula_sd]
+
+            # Create Gaussian GAMMLSS family with identity link for mean
+            # and log link for sigma
+            family = GAUMLSS([Identity(),LOG()])
+
+            # Now fit
+            model = GAMMLSS(formulas,family)
             model.fit()
+
+            new_dat = pd.DataFrame({"x0":np.linspace(0,1,30)})
+
             # Mean predictions don't have to be transformed since the Identity link is used for this predictor.
-            mu_mean,_,b_mean = model.predict(0,None,new_dat,ci=True)
+            mu_mean,_,b_mean = model.predict(None,new_dat,ci=True)
+
+            # These can be used for confidence intervals:
             mean_upper_CI = mu_mean + b_mean
             mean_lower_CI = mu_mean - b_mean
+
             # Standard deviation predictions do have to be transformed - by default they are on the log-scale.
-            eta_sd,_,b_sd = model.predict(1,None,new_dat,ci=True)
+            eta_sd,_,b_sd = model.predict(None,new_dat,ci=True,par=1)
             mu_sd = model.family.links[1].fi(eta_sd) # Index to `links` is 1 because the sd is the second parameter!
+
+            # These can be used for approximate confidence intervals:
             sd_upper_CI = model.family.links[1].fi(eta_sd + b_sd)
             sd_lower_CI = model.family.links[1].fi(eta_sd - b_sd)
 
@@ -1183,16 +1374,60 @@ class GAMMLSS(GSMM):
         :type par: int, optional
         :raises ValueError: An error is raised in case the standard error is to be computed for a Multinomial GAMMLSS model, which is currently not supported.
         :return: A tuple with 3 entries. The first entry is the prediction ``pred`` based on the new data ``n_dat``. The second entry is the model matrix built for ``n_dat`` that was post-multiplied with the model coefficients to obtain ``pred``. The third entry is ``None`` if ``ci``==``False`` else the standard error ``se`` in the prediction.
-        :rtype: (np.array,scp.sparse.csc_array,np.array or None)
+        :rtype: (np.ndarray,scp.sparse.csc_array,np.ndarray or None)
         """
         return super().predict(use_terms,n_dat,alpha,ci,whole_interval,n_ps,seed,par)
     
-    def predict_diff(self, dat1, dat2, use_terms, alpha=0.05, whole_interval=False, n_ps=10000, seed=None, par=0):
+    def predict_diff(self, dat1:pd.DataFrame, dat2:pd.DataFrame, use_terms:list[int]|None, alpha:float=0.05, whole_interval:bool=False, n_ps:int=10000, seed:int|None=None, par:int=0) -> tuple[np.ndarray,np.ndarray]:
         """
         Get the difference in the predictions for two datasets and for distribution parameter ``par``. Useful to compare a smooth estimated for
         one level of a factor to the smooth estimated for another level of a factor. In that case, ``dat1`` and
         ``dat2`` should only differ in the level of said factor. Importantly, predictions and standard errors are again always returned on the scale of the linear predictor - 
         see the :func:`predict` method for details.
+
+        Examples::
+
+            from mssm.models import *
+            from mssmViz.sim import *
+            from mssmViz.plot import *
+            import matplotlib.pyplot as plt
+
+            # Simulate 500 data points
+            GAUMLSSDat = sim9(500,1,seed=20)
+
+            # We include a tensor smooth in the model of the mean
+            formula_m = Formula(lhs("y"),
+                                [i(),f(["x0","x1"],te=True)],
+                                data=GAUMLSSDat)
+
+            # The model of the standard deviation remains the same
+            formula_sd = Formula(lhs("y"),
+                                [i(),f(["x0"])],
+                                data=GAUMLSSDat)
+
+            # Collect both formulas
+            formulas = [formula_m,formula_sd]
+
+            # Create Gaussian GAMMLSS family with identity link for mean
+            # and log link for sigma
+            family = GAUMLSS([Identity(),LOG()])
+
+            # Now fit
+            model = GAMMLSS(formulas,family)
+            model.fit()
+
+            # Now we want to know whether the effect of x0 is different for two values of x1:
+            new_dat1 = pd.DataFrame({"x0":np.linspace(0,1,30),
+                                    "x1":[0.25 for _ in range(30)]})
+
+            new_dat2 = pd.DataFrame({"x0":np.linspace(0,1,30),
+                                    "x1":[0.75 for _ in range(30)]})
+
+            # Now we can get the predicted difference of the effect of x0 for the two values of x1:
+            pred_diff,se = model.predict_diff(new_dat1,new_dat2,use_terms=[1],par=0)
+
+            # mssmViz also has a convenience function to visualize it:
+            plot_diff(new_dat1,new_dat2,["x0"],model,use=[1],response_scale=False)
 
         References:
          - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
@@ -1217,7 +1452,7 @@ class GAMMLSS(GSMM):
         :type par: int, optional
         :raises ValueError: An error is raised in case the predicted difference is to be computed for a Multinomial GAMMLSS model, which is currently not supported.
         :return: A tuple with 2 entries. The first entry is the predicted difference (between the two data sets ``dat1`` & ``dat2``) ``diff``. The second entry is the standard error ``se`` of the predicted difference. The difference CI is then [``diff`` - ``se``, ``diff`` + ``se``]
-        :rtype: (np.array,np.array)
+        :rtype: (np.ndarray,np.ndarray)
         """
         return super().predict_diff(dat1,dat2,use_terms,alpha,whole_interval,n_ps,seed,par)
     
@@ -1225,6 +1460,52 @@ class GAMMLSS(GSMM):
 
 class GAMM(GAMMLSS):
     """Class to fit Generalized Additive Mixed Models.
+
+    Examples::
+
+        from mssm.models import *
+        from mssmViz.sim import *
+        from mssmViz.plot import *
+        import matplotlib.pyplot as plt
+
+        #### Binomial model example ####
+        Binomdat = sim3(10000,0.1,family=Binomial(),seed=20)
+
+        formula = Formula(lhs("y"),[i(),f(["x0"]),f(["x1"]),f(["x2"]),f(["x3"])],data=Binomdat)
+
+        # By default, the Binomial family assumes binary data and uses the logit link.
+        # Count data is also possible though - see the `Binomial` family.
+        model = GAMM(formula,Binomial())
+        model.fit()
+
+        # Plot estimated effects on scale of the log-odds
+        plot(model)
+
+        #### Gaussian model with tensor smooth and p-values ####
+        sim_dat = sim3(n=500,scale=2,c=0,seed=20)
+
+        formula = Formula(lhs("y"),[i(),f(["x0","x3"],te=True,nk=9),f(["x1"]),f(["x2"])],data=sim_dat)
+        model = GAMM(formula,Gaussian())
+
+        model.fit()
+        model.print_smooth_terms(p_values=True)
+
+
+        #### Standard linear (mixed) models are also possible ####
+        # *li() with three variables: three-way interaction
+        sim_dat,_ = sim1(100,random_seed=100)
+
+        # Specify formula with three-way linear interaction and random intercept term
+        formula = Formula(lhs("y"),[i(),*li(["fact","x","time"]),ri("sub")],data=sim_dat)
+
+        # ... and model
+        model = GAMM(formula,Gaussian())
+
+        # then fit
+        model.fit()
+
+        # get estimates for linear terms
+        model.print_parametric_terms()
 
     References:
      - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
@@ -1235,17 +1516,25 @@ class GAMM(GAMMLSS):
     :type formula: Formula
     :param family: A distribution implementing the :class:`Family` class. Currently :class:`Gaussian`, :class:`Gamma`, and :class:`Binomial` are implemented.
     :type family: Family
-    :ivar [[float]] pred: The linear predictor for the training data. Inner list (i.e., the linear predictor of the mean) is of the same dimension as ``self.formulas[0].__lhs`` after excluding nans. Initialized with ``None``.
-    :ivar [[float]] mus: The predicted mean evaluated for each observation in the training data. Inner list (i.e., the linear predictor of the mean) is of the same dimension as ``self.formulas[0].__lhs`` after excluding nans. Initialized with ``None``.
-    :ivar [float] res: The working residuals for the training data. Of the same dimension as ``self.formulas[0].__lhs``.Initialized with ``None``.
-    :ivar float edf: The model estimated degrees of freedom as a float. Initialized with ``None``.
+    :ivar [Formula] formulas: A list including the formula passed to the constructor.
+    :ivar scp.sparse.csc_array lvi: The inverse of the Cholesky factor of the conditional model coefficient covariance matrix. Initialized with ``None``.
+    :ivar np.ndarray coef:  Contains all coefficients estimated for the model. Shape of the array is (-1,1). Initialized with ``None``.
+    :ivar [[float]] preds: The first index corresponds to the linear predictors for the mean of the family evaluated for each observation in the training data (after removing NaNs). Initialized with ``None``.
+    :ivar [[float]] mus: The first index corresponds to the estimated value of the mean of the family evaluated for each observation in the training data (after removing NaNs). Initialized with ``None``.
+    :ivar scp.sparse.csc_array hessian: Estimated hessian of the log-likelihood used during fitting - will be the expected hessian for non-canonical models. Initialized with ``None``.
+     :ivar float edf: The model estimated degrees of freedom as a float. Initialized with ``None``.
+    :ivar float edf1: The model estimated degrees of freedom as a float corrected for smoothness bias. Set by the :func:`approx_smooth_p_values` function, the first time it is called. Initialized with ``None``.
     :ivar [float] term_edf: The estimated degrees of freedom per smooth term. Initialized with ``None``.
-    :ivar scipy.sparse.csc_array lvi: The inverse of the Cholesky factor of the conditional model coefficient covariance matrix. Initialized with ``None``.
+    :ivar [float] term_edf1: The estimated degrees of freedom per smooth term corrected for smoothness bias. Set by the :func:`approx_smooth_p_values` function, the first time it is called. Initialized with ``None``.
     :ivar float penalty: The total penalty applied to the model deviance after fitting as a float. Initialized with ``None``.
     :ivar [LambdaTerm] overall_penalties:  Contains all penalties estimated for the model. Initialized with ``None``.
-    :ivar scipy.sparse.csc_array hessian: Estimated hessian of the log-likelihood used during fitting - will be the expected hessian for non-canonical models. Initialized with ``None``.
-    :ivar scipy.sparse.csc_array hessian_obs: Observed hessian of the log-likelihood at final coefficient estimate. Not updated for strictly additive models (i.e., Gaussian with identity link). Initialized with ``None``.
     :ivar Fit_info info: A :class:`Fit_info` instance, with information about convergence (speed) of the model.
+    :ivar np.ndarray res: The working residuals of the model (If applicable). Initialized with ``None``.
+    :ivar scp.sparse.csc_array Wr: For generalized models a diagonal matrix holding the root of the Fisher weights at convergence. Initialized with ``None``.
+    :ivar scp.sparse.csc_array WN: For generalized models a diagonal matrix holding the Newton weights at convergence. Initialized with ``None``.
+    :ivar scp.sparse.csc_array hessian_obs: Observed hessian of the log-likelihood at final coefficient estimate. Not updated for strictly additive models (i.e., Gaussian with identity link). Initialized with ``None``.
+    :ivar float rho: Optional auto-correlation at lag 1 parameter used during estimation. Initialized with ``None``.
+    :ivar np.ndarray res_ar: Holding the working residuals of the model corrected for any auto-correlation parameter used during estimation. Initialized with ``None``.
     """
 
     def __init__(self,
@@ -1263,21 +1552,21 @@ class GAMM(GAMMLSS):
 
     ##################################### Getters #####################################
 
-    def get_pars(self):
+    def get_pars(self) -> tuple[np.ndarray|None,float|None]:
         """
-        Returns a tuple. The first entry is a np.array with all estimated coefficients. The second entry is the estimated scale parameter.
+        Returns a tuple. The first entry is a np.ndarray with all estimated coefficients. The second entry is the estimated scale parameter.
         
         Will instead return ``(None,None)`` if called before fitting.
 
         :return: Model coefficients and scale parameter that were estimated
-        :rtype: (np.array,float) or (None, None)
+        :rtype: (np.ndarray,float) or (None, None)
         """
         return self.coef,self.scale
 
-    def get_mmat(self,use_terms=None):
+    def get_mmat(self,use_terms:list[int]|None=None) -> scp.sparse.csc_array:
         """
         Returns exaclty the model matrix used for fitting as a scipy.sparse.csc_array. Will throw an error when called for a model for which the model
-        matrix was never former completely - i.e., when :math:`\mathbf{X}^T\mathbf{X}` was formed iteratively for estimation, by setting the ``file_paths`` argument of the ``Formula`` to
+        matrix was never former completely - i.e., when :math:`\\mathbf{X}^T\\mathbf{X}` was formed iteratively for estimation, by setting the ``file_paths`` argument of the ``Formula`` to
         a non-empty list.
         
         Optionally, all columns not corresponding to terms for which the indices are provided via ``use_terms`` can be zeroed.
@@ -1286,7 +1575,7 @@ class GAMM(GAMMLSS):
         :type use_terms: [int], optional
         :raises ValueError: Will throw an error when called before the model was fitted/before model penalties were formed.
         :raises NotImplementedError: Will throw an error when called for a model for which the model matrix was never former completely
-        :return: Model matrix :math:`\mathbf{X}` used for fitting.
+        :return: Model matrix :math:`\\mathbf{X}` used for fitting.
         :rtype: scp.sparse.csc_array
         """
         
@@ -1295,7 +1584,7 @@ class GAMM(GAMMLSS):
         
         return super().get_mmat(use_terms,par=0)
     
-    def get_llk(self,penalized:bool=True,ext_scale:float or None=None):
+    def get_llk(self,penalized:bool=True,ext_scale:float|None=None) -> float|None:
         """
         Get the (penalized) log-likelihood of the estimated model (float or None) given the trainings data. LLK can optionally be evaluated for an external scale parameter ``ext_scale``.
         
@@ -1345,7 +1634,7 @@ class GAMM(GAMMLSS):
                 return self.family.llk(y,mu) - pen
         return None
 
-    def get_reml(self):
+    def get_reml(self) -> float:
         """
         Get's the (Laplace approximate) REML (Restricted Maximum Likelihood) score (as a float) for the estimated lambda values (see Wood, 2011).
 
@@ -1382,15 +1671,15 @@ class GAMM(GAMMLSS):
         
         return reml
     
-    def get_resid(self,type='Pearson'):
+    def get_resid(self,type:str='Pearson') -> np.ndarray:
         """
         Get different types of residuals from the estimated model.
 
-        By default (``type='Pearson'``) this returns the residuals :math:`e_i = y_i - \mu_i` for additive models and the pearson/working residuals :math:`w_i^{0.5}*(z_i - \eta_i)` (see Wood, 2017 sections 3.1.5 & 3.1.7) for
-        generalized additive models. Here :math:`w_i` are the Fisher scoring weights, :math:`z_i` the pseudo-data point for each observation, and :math:`\eta_i` is the linear prediction (i.e., :math:`g(\mu_i)` - where :math:`g()`
+        By default (``type='Pearson'``) this returns the residuals :math:`e_i = y_i - \\mu_i` for additive models and the pearson/working residuals :math:`w_i^{0.5}*(z_i - \\eta_i)` (see Wood, 2017 sections 3.1.5 & 3.1.7) for
+        generalized additive models. Here :math:`w_i` are the Fisher scoring weights, :math:`z_i` the pseudo-data point for each observation, and :math:`\\eta_i` is the linear prediction (i.e., :math:`g(\\mu_i)` - where :math:`g()`
         is the link function) for each observation.
 
-        If ``type= "Deviance"``, the deviance residuals are returned, which are equivalent to :math:`sign(y_i - \mu_i)*D_i^{0.5}`, where :math:`\sum_{i=1,...N} D_i` equals the model deviance (see Wood 2017, section 3.1.7). Additionally,
+        If ``type= "Deviance"``, the deviance residuals are returned, which are equivalent to :math:`sign(y_i - \\mu_i)*D_i^{0.5}`, where :math:`\\sum_{i=1,...N} D_i` equals the model deviance (see Wood 2017, section 3.1.7). Additionally,
         if the model was estimated with ``rho!=None``, ``type="ar1"`` returns the standardized working residuals corrected for lag1 auto-correlation. These are best compared to the standard working residuals.
 
         Throws an error if called before model was fitted, when requesting an unsupported type, or when requesting 'ar1' residuals for a model for which ``model.rho==None``.
@@ -1403,8 +1692,8 @@ class GAMM(GAMMLSS):
         :param type: The type of residual to return for a Generalized model, "Pearson" by default, but can be set to "Deviance" and (for some models) to "ar1" as well.
         :type type: str,optional
         :raises ValueError: Will throw an error when called before the model was fitted/before model penalties were formed, when requesting an unsupported type, or when requesting 'ar1' residuals for a model for which ``model.rho==None``.
-        :return: Empirical residual vector
-        :rtype: [float]
+        :return: Empirical residual vector in a numpy array
+        :rtype: np.ndarray
         """
         if self.res is None or self.preds is None:
             raise ValueError("Model needs to be estimated before evaluating the residuals. Call model.fit()")
@@ -1454,7 +1743,7 @@ class GAMM(GAMMLSS):
         """
         print_parametric_terms(self)
     
-    def print_smooth_terms(self, pen_cutoff=0.2, p_values=False, edf1= True):
+    def print_smooth_terms(self, pen_cutoff:float=0.2, p_values:bool=False, edf1:bool=True):
         """Prints the name of the smooth terms included in the model. After fitting, the estimated degrees of freedom per term are printed as well.
         Smooth terms with edf. < ``pen_cutoff`` will be highlighted. This only makes sense when extra Kernel penalties are placed on smooth terms to enable
         penalizing them to a constant zero. In that case edf. < ``pen_cutoff`` can then be taken as evidence that the smooth has all but notationally disappeared
@@ -1480,11 +1769,85 @@ class GAMM(GAMMLSS):
                 
     ##################################### Fitting #####################################
     
-    def fit(self,max_outer=200,max_inner=None,conv_tol=1e-7,extend_lambda=False,control_lambda=2,exclude_lambda=False,extension_method_lam = "nesterov",restart=False,method="QR",check_cond=1,progress_bar=True,n_cores=10,offset = None,rho=None):
+    def fit(self,max_outer:int=200,max_inner:int=None,conv_tol:float=1e-7,extend_lambda:bool=False,control_lambda:int=2,exclude_lambda:bool=False,
+            extension_method_lam:str = "nesterov",restart:bool=False,method:str="QR",check_cond:int=1,progress_bar:bool=True,n_cores:int=10,
+            offset:float|np.ndarray|None = None,rho:float|None=None):
         """
         Fit the specified model.
         
-        **Note**: Keyword arguments are initialized to maximise stability. For faster configurations (necessary for larger models) see examples below.
+        **Note**: Keyword arguments are initialized to maximise stability. For faster configurations (necessary for larger models) see the 'Big model' example below.
+
+        Examples::
+
+            from mssm.models import *
+            from mssmViz.sim import *
+            from mssmViz.plot import *
+
+            ########## Big Model ##########
+            dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+
+            # mssm requires that the data-type for variables used as factors is 'O'=object
+            dat = dat.astype({'series': 'O',
+                            'cond':'O',
+                            'sub':'O',
+                            'series':'O'})
+
+            formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
+                                terms=[i(), # The intercept, a
+                                        l(["cond"]), # For cond='b'
+                                        f(["time"],by="cond",constraint=ConstType.QR), # to-way interaction between time and cond; one smooth over time per cond level
+                                        f(["x"],by="cond",constraint=ConstType.QR), # to-way interaction between x and cond; one smooth over x per cond level
+                                        f(["time","x"],by="cond",constraint=ConstType.QR,nk=9), # three-way interaction
+                                        fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
+                                data=dat,
+                                print_warn=False,find_nested=False)
+                
+            model = GAMM(formula,Gaussian())
+
+            # To speed up estimation, use the following key-word arguments:
+            model.fit(method="Chol",max_inner=1) # max_inner only matters for Generalized models (i.e., non-Gaussian) - but for those will often be much faster
+
+            ########## ar1 model (without resets per time-series) ##########
+            formula = Formula(lhs=lhs("y"),
+                                terms=[i(),
+                                        l(["cond"]),
+                                        f(["time"],by="cond"),
+                                        f(["x"],by="cond"),
+                                        f(["time","x"],by="cond")],
+                                data=dat,
+                                print_warn=False,
+                                series_id=None) # No series identifier passed to formula -> ar1 model does not reset!
+
+            model = GAMM(formula,Gaussian())
+
+            model.fit(rho=0.99)
+
+            # Visualize the un-corrected residuals:
+            plot_val(model,resid_type="Pearson")
+
+            # And the corrected residuals:
+            plot_val(model,resid_type="ar1")
+
+            ########## ar1 model (with resets per time-series) ##########
+            formula = Formula(lhs=lhs("y"),
+                                terms=[i(),
+                                        l(["cond"]),
+                                        f(["time"],by="cond"),
+                                        f(["x"],by="cond"),
+                                        f(["time","x"],by="cond")],
+                                data=dat,
+                                print_warn=False,
+                                series_id='series') # 'series' variable identifies individual time-series -> ar1 model resets per series!
+
+            model = GAMM(formula,Gaussian())
+
+            model.fit(rho=0.99)
+
+            # Visualize the un-corrected residuals:
+            plot_val(model,resid_type="Pearson")
+
+            # And the corrected residuals:
+            plot_val(model,resid_type="ar1")
 
         :param max_outer: The maximum number of fitting iterations. Defaults to 200.
         :type max_outer: int,optional
@@ -1502,16 +1865,16 @@ class GAMM(GAMMLSS):
         :type extension_method_lam: str,optional
         :param restart: Whether fitting should be resumed. Only possible if the same model has previously completed at least one fitting iteration.
         :type restart: bool,optional
-        :param method: Which method to use to solve for the coefficients. ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR". In that case a QR decomposition is used - which is first pivoted to maximize sparsity in the resulting decomposition but then also pivots for stability in order to get an estimate of rank defficiency. This takes substantially longer. This argument is ignored if ``len(self.formulas[0].file_paths)>0`` that is, if :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` should be created iteratively. Defaults to "QR".
+        :param method: Which method to use to solve for the coefficients. ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR". In that case a QR decomposition is used - which is first pivoted to maximize sparsity in the resulting decomposition but then also pivots for stability in order to get an estimate of rank defficiency. This takes substantially longer. This argument is ignored if ``len(self.formulas[0].file_paths)>0`` that is, if :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}` should be created iteratively. Defaults to "QR".
         :type method: str,optional
-        :param check_cond: Whether to obtain an estimate of the condition number for the linear system that is solved. When ``check_cond=0``, no check will be performed. When ``check_cond=1``, an estimate of the condition number for the final system (at convergence) will be computed and warnings will be issued based on the outcome (see :func:`mssm.src.python.gamm_solvers.est_condition`). When ``check_cond=2``, an estimate of the condition number will be performed for each new system (at each iteration of the algorithm) and an error will be raised if the condition number is estimated as too high given the chosen ``method``. Is ignored, if :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` should be created iteratively. Defaults to 1.
+        :param check_cond: Whether to obtain an estimate of the condition number for the linear system that is solved. When ``check_cond=0``, no check will be performed. When ``check_cond=1``, an estimate of the condition number for the final system (at convergence) will be computed and warnings will be issued based on the outcome (see :func:`mssm.src.python.gamm_solvers.est_condition`). When ``check_cond=2``, an estimate of the condition number will be performed for each new system (at each iteration of the algorithm) and an error will be raised if the condition number is estimated as too high given the chosen ``method``. Is ignored, if :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}` should be created iteratively. Defaults to 1.
         :type check_cond: int,optional
         :param progress_bar: Whether progress should be displayed (convergence info and time estimate). Defaults to True.
         :type progress_bar: bool,optional
         :param n_cores: Number of cores to use during parts of the estimation that can be done in parallel. Defaults to 10.
         :type n_cores: int,optional
-        :param offset: Mimics the behavior of the ``offset`` argument for ``gam`` in ``mgcv`` in R. If a value is provided here (can either be a float or a ``numpy.array`` of shape (-1,1) - if it is an array, then the first dimension has to match the number of observations in the data. NANs present in the dependent variable will be excluded from the offset vector.) then it is consistently added to the linear predictor during estimation. It will **not** be used by any other function of the :class:`GAMM` class (e.g., for prediction). This argument is ignored if ``len(self.formulas[0].file_paths)>0`` that is, if :math:`\mathbf{X}^T\mathbf{X}` and :math:`\mathbf{X}^T\mathbf{y}` should be created iteratively. Defaults to None.
-        :type offset: float or [float],optional
+        :param offset: Mimics the behavior of the ``offset`` argument for ``gam`` in ``mgcv`` in R. If a value is provided here (can either be a float or a numpy.array of shape (-1,1) - if it is an array, then the first dimension has to match the number of observations in the data. NANs present in the dependent variable will be excluded from the offset vector.) then it is consistently added to the linear predictor during estimation. It will **not** be used by any other function of the :class:`GAMM` class (e.g., for prediction). This argument is ignored if ``len(self.formulas[0].file_paths)>0`` that is, if :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}` should be created iteratively. Defaults to None.
+        :type offset: float or np.ndarray,optional
         :param rho: Optional correlation parameter for an "ar1 residual model". Essentially mimics the behavior of the ``rho`` paramter for the ``bam`` function in ``mgcv``. **Note**, if you want to re-start the ar1 process multiple times (for example because you work with time-series data and have multiple time-series) then you must pass the ``series.id`` argument to the :class:`Formula` used for this model. Defaults to None.
         :type rho: float,optional
         """
@@ -1611,9 +1974,7 @@ class GAMM(GAMMLSS):
                     model_mat = scp.sparse.vstack(Xs,format='csc')
 
             if len(irstx) > 0:
-                # Scipy 1.15.0 does not like indexing via pd.series object, bug?
-                # anyway, getting values first is fine.
-                model_mat = model_mat[self.formulas[0].NOT_NA_flat.values,:]
+                model_mat = model_mat[self.formulas[0].NOT_NA_flat,:]
 
             # Get initial estimate of mu based on family:
             init_mu_flat = self.family.init_mu(y_flat)
@@ -1704,50 +2065,112 @@ class GAMM(GAMMLSS):
     
     ##################################### Prediction #####################################
 
-    def sample_post(self,n_ps,use_post=None,deviations=False,seed=None,par=0):
+    def sample_post(self,n_ps:int,use_post:list[int]|None=None,deviations:bool=False,seed:int|None=None,par:int=0) -> np.ndarray:
         """
-        Obtain ``n_ps`` samples from posterior :math:`[\\boldsymbol{\\beta} - \hat{\\boldsymbol{\\beta}}] | \mathbf{y},\\boldsymbol{\lambda} \sim N(0,\mathbf{V})`,
-        where V is :math:`[\mathbf{X}^T\mathbf{X} + \mathbf{S}_{\lambda}]^{-1}*/\phi` (see Wood, 2017; section 6.10). To obtain samples for :math:`\\boldsymbol{\\beta}`,
+        Obtain ``n_ps`` samples from posterior :math:`[\\boldsymbol{\\beta} - \\hat{\\boldsymbol{\\beta}}] | \\mathbf{y},\\boldsymbol{\\lambda} \\sim N(0,\\mathbf{V})`,
+        where V is :math:`[\\mathbf{X}^T\\mathbf{X} + \\mathbf{S}_{\\lambda}]^{-1}*/\\phi` (see Wood, 2017; section 6.10). To obtain samples for :math:`\\boldsymbol{\\beta}`,
         set ``deviations`` to false.
 
         see :func:`sample_MVN` for more details.
 
-        References:
+        Examples::
 
+            from mssm.models import *
+            from mssmViz.sim import *
+            from mssmViz.plot import *
+            import matplotlib.pyplot as plt
+
+            # Fit a Gamma Gam
+            Gammadat = sim3(500,2,family=Gamma(),seed=0)
+
+            formula = Formula(lhs("y"),[i(),f(["x0"]),f(["x1"]),f(["x2"]),f(["x3"])],data=Gammadat)
+
+            # By default, the Gamma family assumes that the model predictions match log(\\mu_i), i.e., a log-link is used.
+            model = GAMM(formula,Gamma())
+            model.fit()
+
+            # Now get model matrix for a couple of example covariates
+            new_dat = pd.DataFrame({"x0":np.linspace(0,1,30),
+                                    "x1":np.linspace(0,1,30),
+                                    "x2":np.linspace(0,1,30),
+                                    "x3":np.linspace(0,1,30)})
+
+            f0,X_f,ci = model.predict([1],new_dat,ci=True)
+
+            # Get `use_post` to only identify coefficients related to `f(["x0"])` - that way we can efficiently sample the
+            # posterior only for `f(["x0"])`. If you want to sample all coefficients, simply set `use_post=None`.
+            use_post = X_f.sum(axis=0) != 0
+            use_post = np.arange(0,X_f.shape[1])[use_post]
+            print(use_post)
+
+            # `use_post` can now be passed to `sample_post`:
+            post = model.sample_post(10000,use_post,deviations=False,seed=0,par=0)
+
+            # Since we set deviations to false post has coefficient samples and can simply be post-multiplied to
+            # get samples of `f(["x0"])` - importantly, post has a different shape than X_f, so we need to account for that
+            post_f = X_f[:,use_post] @ post
+
+            # Note: samples are also on scale of linear predictor!
+            plt.plot(new_dat["x0"],f0,color="black",linewidth=2)
+
+            for sidx in range(50):
+                plt.plot(new_dat["x0"],post_f[:,sidx],alpha=0.2)
+
+            plt.show()
+
+
+        References:
          - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
         :param n_ps: Number of samples to obtain from posterior.
         :type n_ps: int,optional
         :param use_post: The indices corresponding to coefficients for which to actually obtain samples. By default all coefficients are sampled.
         :type use_post: [int],optional
-        :param deviations: Whether to return samples of **deviations** from the estimated coefficients (i.e., :math:`\\boldsymbol{\\beta} - \hat{\\boldsymbol{\\beta}}`) or actual samples of coefficients (i.e., :math:`\\boldsymbol{\\beta}`), defaults to False
+        :param deviations: Whether to return samples of **deviations** from the estimated coefficients (i.e., :math:`\\boldsymbol{\\beta} - \\hat{\\boldsymbol{\\beta}}`) or actual samples of coefficients (i.e., :math:`\\boldsymbol{\\beta}`), defaults to False
         :type deviations: bool,optional
         :param seed: A seed to use for the sampling, defaults to None
         :type seed: int,optional
-        :returns: An np.array of dimension ``[len(use_post),n_ps]`` containing the posterior samples. Can simply be post-multiplied with model matrix :math:`\mathbf{X}` to generate posterior **sample curves/predictions**.
-        :rtype: [float]
+        :returns: An np.ndarray of dimension ``[len(use_post),n_ps]`` containing the posterior samples. Can simply be post-multiplied with model matrix :math:`\\mathbf{X}` to generate posterior **sample curves/predictions**.
+        :rtype: np.ndarray
         """
         return super().sample_post(n_ps,use_post,deviations,seed,par=0)
 
-    def predict(self, use_terms, n_dat,alpha=0.05,ci=False,whole_interval=False,n_ps=10000,seed=None,par=0):
+    def predict(self, use_terms:list[int]|None, n_dat:pd.DataFrame,alpha:float=0.05,ci:bool=False,whole_interval:bool=False,n_ps:int=10000,seed:int|None=None,par:int=0) -> tuple[np.ndarray,scp.sparse.csc_array,np.ndarray|None]:
         """Make a prediction using the fitted model for new data ``n_dat``.
          
         But only using the terms indexed by ``use_terms``. Importantly, predictions and standard errors are always returned on the scale of the linear predictor.
         When estimating a Generalized Additive Model, the mean predictions and standard errors (often referred to as the 'response'-scale predictions) can be obtained
         by applying the link inverse function to the predictions and the CI-bounds on the linear predictor scale (DO NOT transform the standard error first and then add it to the
-        transformed predictions - only on the scale of the linear predictor is the standard error additive)::
+        transformed predictions - only on the scale of the linear predictor is the standard error additive). See examples below.
 
-            gamma_model = GAMM(gamma_formula,Gamma()) # A true GAM
-            gamma_model.fit()
-            # Now get predictions on the scale of the linear predictor
-            pred,_,b = gamma_model.predict(None,new_dat,ci=True)
-            # Then transform to the response scale
-            mu_pred = gamma_model.family.link.fi(pred)
-            mu_upper_CI = gamma_model.family.link.fi(pred + b)
-            mu_lower_CI = gamma_model.family.link.fi(pred - b)
+        Examples::
+
+            from mssm.models import *
+            from mssmViz.sim import *
+            from mssmViz.plot import *
+            import matplotlib.pyplot as plt
+
+            # Fit a Gamma Gam
+            Gammadat = sim3(500,2,family=Gamma(),seed=0)
+
+            formula = Formula(lhs("y"),[i(),f(["x0"]),f(["x1"]),f(["x2"]),f(["x3"])],data=Gammadat)
+
+            # By default, the Gamma family assumes that the model predictions match log(\\mu_i), i.e., a log-link is used.
+            model = GAMM(formula,Gamma())
+            model.fit()
+
+            # Now make prediction for `f["x0"]`
+            new_dat = pd.DataFrame({"x0":np.linspace(0,1,30),
+                                    "x1":np.linspace(0,1,30),
+                                    "x2":np.linspace(0,1,30),
+                                    "x3":np.linspace(0,1,30)})
+
+            f0,X_f,ci = model.predict([1],new_dat,ci=True)
+
+            # Can also use the plot function from mssmViz
+            plot(model,which=[1])
 
         References:
-
          - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
          - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
 
@@ -1766,17 +2189,51 @@ class GAMM(GAMMLSS):
         :param seed: Can be used to provide a seed for the posterior sampling step in case the point-wise CI is adjusted to behave like a whole-function interval CI.
         :type seed: int or None, optional
         :return: A tuple with 3 entries. The first entry is the prediction ``pred`` based on the new data ``n_dat``. The second entry is the model matrix built for ``n_dat`` that was post-multiplied with the model coefficients to obtain ``pred``. The third entry is ``None`` if ``ci``==``False`` else the standard error ``se`` in the prediction.
-        :rtype: (np.array,scp.sparse.csc_array,np.array or None)
+        :rtype: (np.ndarray,scp.sparse.csc_array,np.ndarray or None)
         """
         return super().predict(use_terms,n_dat,alpha,ci,whole_interval,n_ps,seed,0)
         
-    def predict_diff(self,dat1,dat2,use_terms,alpha=0.05,whole_interval=False,n_ps=10000,seed=None,par=0):
+    def predict_diff(self,dat1:pd.DataFrame,dat2:pd.DataFrame,use_terms:list[int]|None,alpha:float=0.05,whole_interval:bool=False,n_ps:int=10000,seed:int|None=None,par:int=0) -> tuple[np.ndarray,np.ndarray]:
         """Get the difference in the predictions for two datasets.
         
         Useful to compare a smooth estimated for one level of a factor to the smooth estimated for another
         level of a factor. In that case, ``dat1`` and ``dat2`` should only differ in the level of said factor.
         Importantly, predictions and standard errors are again always returned on the scale of the linear predictor - 
         see the :func:`predict` method for details.
+
+        Examples::
+
+            from mssm.models import *
+            from mssmViz.sim import *
+            from mssmViz.plot import *
+            import matplotlib.pyplot as plt
+
+            # Fit a Gamma Gam
+            Gammadat = sim3(500,2,family=Gamma(),seed=0)
+
+            # Include tensor smooth in model of log(mean)
+            formula = Formula(lhs("y"),[i(),f(["x0","x1"],te=True),f(["x2"]),f(["x3"])],data=Gammadat)
+
+            # By default, the Gamma family assumes that the model predictions match log(\\mu_i), i.e., a log-link is used.
+            model = GAMM(formula,Gamma())
+            model.fit()
+
+            # Now we want to know whether the effect of x0 is different for two values of x1:
+            new_dat1 = pd.DataFrame({"x0":np.linspace(0,1,30),
+                                    "x1":[0.25 for _ in range(30)],
+                                    "x2":np.linspace(0,1,30),
+                                    "x3":np.linspace(0,1,30)})
+
+            new_dat2 = pd.DataFrame({"x0":np.linspace(0,1,30),
+                                    "x1":[0.75 for _ in range(30)],
+                                    "x2":np.linspace(0,1,30),
+                                    "x3":np.linspace(0,1,30)})
+
+            # Now we can get the predicted difference of the effect of x0 for the two values of x1:
+            pred_diff,se = model.predict_diff(new_dat1,new_dat2,use_terms=[1],par=0)
+
+            # mssmViz also has a convenience function to visualize it:
+            plot_diff(new_dat1,new_dat2,["x0"],model,use=[1],response_scale=False)
 
         References:
 
@@ -1799,6 +2256,6 @@ class GAMM(GAMMLSS):
         :param seed: Can be used to provide a seed for the posterior sampling step in case the point-wise CI is adjusted to behave like a whole-function interval CI.
         :type seed: int or None, optional
         :return: A tuple with 2 entries. The first entry is the predicted difference (between the two data sets ``dat1`` & ``dat2``) ``diff``. The second entry is the standard error ``se`` of the predicted difference. The difference CI is then [``diff`` - ``se``, ``diff`` + ``se``]
-        :rtype: (np.array,np.array)
+        :rtype: (np.ndarray,np.ndarray)
         """
         return super().predict_diff(dat1,dat2,use_terms,alpha,whole_interval,n_ps,seed,0)

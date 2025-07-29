@@ -1,13 +1,14 @@
 import warnings
 import numpy as np
 import scipy as scp
-from .custom_types import ConstType
+from .custom_types import ConstType,LambdaTerm
 from .matrix_solvers import translate_sparse
+from collections.abc import Callable
 import copy
 
 ##################################### Penalty functions #####################################
 
-def adjust_pen_drop(dat,rows,cols,drop,offset=0):
+def adjust_pen_drop(dat:list[float],rows:list[int],cols:list[int],drop:list[int],offset:int=0) -> tuple[list[float],list[int],list[int],int]:
    """Adjusts penalty matrix (represented via ``dat``, ``rows``, and ``cols``) by dropping rows and columns indicated by ``drop``.
 
    Optionally, ``offset`` is added to the elements in ``rows`` and ``cols``, which is useful when indices in ``drop`` do not start at zero.
@@ -23,7 +24,7 @@ def adjust_pen_drop(dat,rows,cols,drop,offset=0):
    :param offset: An optional offset to add to ``rows`` and ``cols`` to adjust for the indexing in ``drop``, defaults to 0
    :type offset: int, optional
    :return: A tuple with 4 elements: the data, rows, and cols of the adjusted penalty matrix excluding dropped elements and the number of excluded elements.
-   :rtype: ([float],[int],[int],int)
+   :rtype: tuple[list[float],list[int],list[int],int]
    """
    rows = np.array(rows)
    cols = np.array(cols)
@@ -52,8 +53,26 @@ def adjust_pen_drop(dat,rows,cols,drop,offset=0):
    # Now return
    return list(dat[keep]),list(rows_realign[keep]),list(cols_realign[keep]),dropped
 
-def embed_in_S_sparse(pen_data,pen_rows,pen_cols,S_emb,S_col,SJ_col,cIndex):
-   """Embed a term-specific penalty matrix (provided as elements, row and col indices) into the across-term penalty matrix (see Wood, 2017) """
+def embed_in_S_sparse(pen_data:list[float],pen_rows:list[int],pen_cols:list[int],S_emb:scp.sparse.csc_array|None,S_col:int,SJ_col:int,cIndex:int) -> tuple[scp.sparse.csc_array,int]:
+   """Embed a term-specific penalty matrix ``SJ`` (provided as three lists: ``pen_data``, ``pen_rows`` and ``pen_cols``) into the total penalty matrix ``S_emb`` (see Wood, 2017)
+
+   :param pen_data: Data of ``SJ``
+   :type pen_data: list[float]
+   :param pen_rows: Row indices of ``SJ``
+   :type pen_rows: list[int]
+   :param pen_cols: Column indices of ``SJ``
+   :type pen_cols: list[int]
+   :param S_emb: Total penalty matrix or ``None`` in case ``S_emb`` will be initialized by the function.
+   :type S_emb: scp.sparse.csc_array | None
+   :param S_col: Columns of total penalty matrix
+   :type S_col: int
+   :param SJ_col: Columns of ``SJ``
+   :type SJ_col: int
+   :param cIndex: Current row and column index indicating the top left cell of the (``SJ_col`` * ``SJ_col``) block ``SJ`` should take up in ``S_emb``
+   :type cIndex: int
+   :return: ``S_emb`` with ``SJ`` embedded, the updated ``cIndex`` (i.e., ``cIndex + SJ_col``)
+   :rtype: tuple[scp.sparse.csc_array,int]
+   """
 
    embedding = np.array(pen_data)
    r_embedding = np.array(pen_rows) + cIndex
@@ -66,8 +85,22 @@ def embed_in_S_sparse(pen_data,pen_rows,pen_cols,S_emb,S_col,SJ_col,cIndex):
 
    return S_emb,cIndex+SJ_col
 
-def embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,Sj,SJ_col):
-   """Parameterize a term-specific penalty matrix (provided as elements, row and col indices)"""
+def embed_in_Sj_sparse(pen_data:list[float],pen_rows:list[int],pen_cols:list[int],Sj:scp.sparse.csc_array|None,SJ_col:int) -> scp.sparse.csc_array:
+   """Parameterize a term-specific penalty matrix ``SJ`` (provided as three lists: ``pen_data``, ``pen_rows`` and ``pen_cols``).
+
+   :param pen_data: Data of ``SJ``
+   :type pen_data: list[float]
+   :param pen_rows: Row indices of ``SJ``
+   :type pen_rows: list[int]
+   :param pen_cols: Column indices of ``SJ``
+   :type pen_cols: list[int]
+   :param Sj: A sparse matrix or ``None``. In the latter case, ``SJ`` is simply initialized by the function. If not, then the function returns ``SJ + Sj``. The latter is useful if a term penalty is a sum of individual penalty matrices.
+   :type Sj: scp.sparse.csc_array | None
+   :param SJ_col: Columns of ``SJ``
+   :type SJ_col: int
+   :return: ``SJ`` which might actually be ``SJ + Sj``.
+   :rtype: scp.sparse.csc_array
+   """
    embedding = np.array(pen_data)
 
    if Sj is None:
@@ -77,11 +110,18 @@ def embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,Sj,SJ_col):
       
    return Sj
 
-def embed_shared_penalties(shared_penalties,formulas,extra_coef):
+def embed_shared_penalties(shared_penalties:list[list[LambdaTerm]],formulas:list,extra_coef:int) -> list[LambdaTerm]:
+   """Embed penalties from individual formulas into overall penalties for GAMMLSS/GSMM models.
+  
+   :param shared_penalties: Nested list, with the inner one containing the penalties associated with an individual formula in ``formulas``.
+   :type shared_penalties: list[list[LambdaTerm]]
+   :param formulas: List of :class:`mssm.src.python.formula.Formula` objects
+   :type formulas: list
+   :param extra_coef: Number of extra coefficients required by the model's family. Will result in the shared penalties being padded by an extra block of ``extra_coef`` zeroes.
+   :type extra_coef: int
+   :return: A list of the embedded penalties required by a GAMMLSS or GSMM model.
+   :rtype: list[LambdaTerm]
    """
-   Embed penalties from individual model into overall penalties for GAMLSS models.
-   """
-
    # Assign original formula index to each penalty
    for fi in range(len(shared_penalties)):
       for lterm in shared_penalties[fi]:
@@ -139,9 +179,22 @@ def embed_shared_penalties(shared_penalties,formulas,extra_coef):
                
    return shared_penalties
 
-def diff_pen(n,constraint,m=2):
-  # Creates difference (order=m) n*n penalty matrix
-  # Based on code in Eilers & Marx (1996) and Wood (2017)
+def diff_pen(n:int,constraint:ConstType,m:int=2) -> tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]:
+  """Creates difference (order=m) n*n penalty matrix + root of the penalty. Based on code in Eilers & Marx (1996) and Wood (2017).
+
+   References:
+      - Eilers, P. H. C., & Marx, B. D. (1996). Flexible smoothing with B-splines and penalties. Statistical Science, 11(2), 89–121. https://doi.org/10.1214/ss/1038425655
+      - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+   :param n: Dimension of square penalty matrix
+   :type n: int
+   :param constraint: Any contraint to absorb by the penalty
+   :type constraint: ConstType
+   :param m: Differencing order to apply to the identity matrix to get the penalty, defaults to 2
+   :type m: int, optional
+   :return: penalty data,penalty row indices,penalty column indices,root of penalty data,root of penalty row indices,root of penalty column indices,rank of penalty
+   :rtype: tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]
+  """
 
   D = np.diff(np.identity(n),m)
   S = D @ D.T
@@ -177,8 +230,18 @@ def diff_pen(n,constraint,m=2):
 
   return pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank
 
-def id_dist_pen(n,constraint,f=None):
-  # Creates identity matrix penalty in case f(i) = 1
+def id_dist_pen(n:int,constraint:ConstType,f:Callable|None=None) -> tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]:
+  """Creates identity matrix penalty + root in case ``f is None``.
+
+   :param n: Dimension of square penalty matrix
+   :type n: int
+   :param constraint: Any contraint to absorb by the penalty
+   :type constraint: ConstType
+   :param f: Any kind of function to apply to the diagonal elements of the penalty, defaults to None
+   :type f: Callable | None, optional
+   :return: penalty data,penalty row indices,penalty column indices,root of penalty data,root of penalty row indices,root of penalty column indices,rank of penalty
+   :rtype: tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]
+  """
   # Can be used to create event-distance weighted penalty matrices for deconvolving sms GAMMs
   elements = [0.0 for _ in range(n)]
   idx = [0.0 for _ in range(n)]
@@ -192,7 +255,25 @@ def id_dist_pen(n,constraint,f=None):
 
   return elements,idx,idx,elements,idx,idx,n # I' @ I = I; also identity is full rank
 
-def TP_pen(S_j,D_j,j,ks,constraint):
+def TP_pen(S_j:scp.sparse.csc_array,D_j:scp.sparse.csc_array,j:int,ks:list[int],constraint:ConstType) -> tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]:
+   """Computes a tensor smooth penalty + root as defined in section 5.6 of Wood (2017) based on marginal penalty matrix ``S_j``.
+
+   References:
+      - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+   :param S_j: Marginal penalty matrix
+   :type S_j: scp.sparse.csc_array
+   :param D_j: Root of marginal penalty matrix
+   :type D_j: scp.sparse.csc_array
+   :param j: Index for current marginal
+   :type j: int
+   :param ks: List of number of basis functions of all marginals
+   :type ks: list[int]
+   :param constraint: Any constraint to absorb by the final penalty
+   :type constraint: ConstType
+   :return: penalty data,penalty row indices,penalty column indices,root of penalty data,root of penalty row indices,root of penalty column indices,rank of penalty
+   :rtype: tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]
+   """
    # Tensor smooth penalty - not including the reparameterization of Wood (2017) 5.6.2
    # but reflecting Eilers & Marx (2003) instead
    if j == 0:
