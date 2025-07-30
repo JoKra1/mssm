@@ -3,7 +3,7 @@ import scipy as scp
 import copy
 from collections.abc import Callable
 from .src.python.formula import Formula,build_sparse_matrix_from_formula,lhs,pd,warnings,build_penalties
-from .src.python.exp_fam import Link,Logit,Identity,LOG,LOGb,Family,Binomial,Gaussian,GAMLSSFamily,GAUMLSS,Gamma,InvGauss,Binomial2,MULNOMLSS,GAMMALS,GSMMFamily,PropHaz,Poisson
+from .src.python.exp_fam import Link,Logit,Identity,LOG,LOGb,Family,Binomial,Gaussian,GAMLSSFamily,GAUMLSS,Gamma,InvGauss,MULNOMLSS,GAMMALS,GSMMFamily,PropHaz,Poisson
 from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2,solve_gammlss_sparse,solve_generalSmooth_sparse
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
 from .src.python.penalties import embed_shared_penalties,IdentityPenalty,DifferencePenalty
@@ -964,13 +964,12 @@ class GAMMLSS(GSMM):
     def get_resid(self) -> np.ndarray:
         """ Returns standarized residuals for GAMMLSS models (Rigby & Stasinopoulos, 2005).
 
-        The computation of the residual vector will differ a lot between different GAMMLSS models and is thus implemented
+        The computation of the residual vector will differ between different GAMMLSS models and is thus implemented
         as a method by each GAMMLSS family. These should be consulted to get more details. In general, if the
         model is specified correctly, the returned vector should approximately look like what could be expected from
         taking :math:`N` independent samples from :math:`N(0,1)`.
 
         References:
-         
          - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
          - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 

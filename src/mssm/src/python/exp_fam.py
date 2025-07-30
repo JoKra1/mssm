@@ -1418,115 +1418,6 @@ class GAUMLSS(GAMLSSFamily):
       coef = np.concatenate((m_coef.reshape(-1,1),np.ones((models[1].formulas[0].n_coef)).reshape(-1,1)))
 
       return coef
-        
-   
-class Binomial2(GAMLSSFamily):
-   """ Another implementation of the Binomial family. That allows estimating binomial models via ``GAMMLSS`` models (And thus full-newton, no PQL!).
-   
-   For this implementation we again assume that we have collected proportions of success, i.e., the dependent variables specified in the model `Formula` needs to hold observed proportions and not counts!
-   If we assume that each observation :math:`y_i` reflects a single independent draw from a binomial, (with :math:`n=1`, and :math:`p_i` being the probability that the result is 1) then the dependent variable should either hold 1 or 0.
-   If we have multiple independent draws from the binomial per observation (i.e., row in our data-frame), then :math:`n` will usually differ between observations/rows in our data-frame (i.e., we observe :math:`k_i` counts of success
-   out of :math:`n_i` draws - so that :math:`y_i=k_i/n_i`). In that case, the `Binomial()` family accepts a vector for argument :math:`\\mathbf{n}` (which is simply set to 1 by default, assuming binary data), containing :math:`n_i` for every observation :math:`y_i`.
-
-   In this implementation, the scale parameter is kept fixed/known at 1.
-
-   References:
-
-    - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
-    - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-
-   :param link: The link function to be used by the model of the mean of this family. By default set to the canonical logit link.
-   :type link: Link
-   :param n: Number of independent draws from a Binomial per observation/row of data-frame. For binary data this can simply be set to 1, which is the default.
-   :type n: int or [int], optional
-   """
-   
-   def __init__(self, link: Link = Logit(),n: int | list[int] = 1) -> None:
-      super().__init__(1, [link])
-      self.n:int|list[int] = n
-      # All derivatives taken from gamlss.dist: https://github.com/gamlss-dev/gamlss.dist
-      # see also: Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
-      self.d1:list[Callable] = []
-      def d1 (y, mu): num=(y-self.n*mu); denom=(mu*(1-mu)); d=num/denom; return d
-      self.d1.append(d1)
-
-      self.d2:list[Callable] = []
-      def d2(y, mu): denom=(mu*(1-mu)); d2 =-(self.n/denom); return d2
-      self.d2.append(d2)
-
-      self.d2m:list[Callable] = []
-   
-   def lp(self,y:np.ndarray,mu:np.ndarray) -> np.ndarray:
-      """
-      Log-probability of observing every proportion in :math:`\\mathbf{y}` under their respective binomial with mean = :math:`\\boldsymbol{\\mu}`.
-
-      References:
-
-       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-
-      :param y: A numpy array containing each observed proportion.
-      :type y: np.ndarray
-      :param mu: A numpy array containing the predicted probability for the response distribution corresponding to each observation.
-      :type mu: np.ndarray
-      :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
-      :rtype: np.ndarray
-      """
-      # y is observed proportion of success
-      return scp.stats.binom.logpmf(k=y*self.n,p=mu,n=self.n)
-   
-   def llk(self,y:np.ndarray,mu:np.ndarray) -> float:
-      """
-      log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
-
-      References:
-
-       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-
-      :param y: A numpy array containing each observation.
-      :type y: np.ndarray
-      :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
-      :type mu: np.ndarray
-      """
-      # y is observed proportion of success
-      return sum(self.lp(y,mu))[0]
-   
-   def get_resid(self,y:np.ndarray,mu:np.ndarray) -> np.ndarray:
-      """Get standardized residuals for a Binomial model
-      
-      Essentially, the deviance residuals are returned, which are equivalent to :math:`sign(y_i - \\mu_i)*D_i^{0.5}`,
-      where :math:`\\sum_{i=1,...N} D_i` equals the model deviance (see Wood 2017, section 3.1.7).
-
-      :param y: A numpy array containing each observed proportion.
-      :type y: np.ndarray
-      :param mu: A numpy array containing the predicted probability for the response distribution corresponding to each observation.
-      :type mu: np.ndarray
-      :return: A list of deviance residuals that should be ~ N(0,1) if the model is correct.
-      :rtype: np.ndarray
-      """
-      # Based on Table 3.1 in Wood (2017)
-      # Adds float_min**0.9 to log terms that could potentially be zero..
-      k = y*self.n
-      kmu = mu*self.n
-      return 2 * (k*(np.log(k + np.power(sys.float_info.min,0.9)) - np.log(kmu)) + (self.n-k) * (np.log(self.n-k + np.power(sys.float_info.min,0.9)) - np.log(self.n-kmu)))
-   
-   def init_coef(self, models:list[Callable]) -> np.ndarray:
-      """Function to initialize the coefficients of the model.
-
-      Fits a GAMM (via PQL) for the mean.
-
-      :param models: A list of :class:`mssm.models.GAMM`'s, - each based on one of the formulas provided to a model.
-      :type models: [mssm.models.GAMM]
-      :return: A numpy array of shape (-1,1), holding initial values for all model coefficients.
-      :rtype: np.ndarray
-      """
-      
-      mean_model = models[0]
-      mean_model.family = Binomial(self.links[0])
-      mean_model.fit(progress_bar=False)
-
-      coef,_ = mean_model.get_pars()
-      
-      return coef.reshape(-1,1)
 
 class MULNOMLSS(GAMLSSFamily):
    """Family for a Multinomial GAMMLSS model (Rigby & Stasinopoulos, 2005).
@@ -1637,7 +1528,7 @@ class MULNOMLSS(GAMLSSFamily):
       return sum(self.lp(y,*mus))[0]
    
    def get_resid(self,y:np.ndarray,*mus:list[np.ndarray]):
-      pass
+      return None
 
 class GAMMALS(GAMLSSFamily):
    """Family for a GAMMA GAMMLSS model (Rigby & Stasinopoulos, 2005).
