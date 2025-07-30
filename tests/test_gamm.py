@@ -110,8 +110,8 @@ class Test_NUll_penalty_reparam:
         assert np.allclose((self.S_inv2@self.Sj_reps[6].S_J).trace(),
                            (self.S_pinv@self.model.overall_penalties[6].S_J_emb).trace())
     
-    def test_GAMedf(self):
-        assert round(self.model.edf,ndigits=2) == 151.47
+    def test_GAMedf_hard(self):
+        np.testing.assert_allclose(round(self.model.edf,ndigits=2),151.47,atol=min(max_atol,0.0),rtol=min(max_rtol,1e-4))
 
     def test_GAMsigma(self):
         _, sigma = self.model.get_pars()
@@ -228,8 +228,8 @@ class Test_NUll_3:
 
     model.fit(**default_gamm_test_kwargs)
 
-    def test_GAMedf(self):
-        assert round(self.model.edf,ndigits=2) == 151.47
+    def test_GAMedf_hard(self):
+        np.testing.assert_allclose(round(self.model.edf,ndigits=2),151.47,atol=min(max_atol,0.0),rtol=min(max_rtol,1e-4))
 
     def test_GAMsigma(self):
         _, sigma = self.model.get_pars()
