@@ -11,7 +11,7 @@ from . import penalties
 from .custom_types import PenType, LambdaTerm,Constraint,ConstType,TermType,VarType,Reparameterization
 from .repara import reparam
 from .matrix_solvers import translate_sparse,warnings
-from .penalties import id_dist_pen,diff_pen, embed_in_S_sparse,embed_in_Sj_sparse,TP_pen,adjust_pen_drop
+from .penalties import embed_in_S_sparse,embed_in_Sj_sparse,TP_pen,adjust_pen_drop,Penalty,DifferencePenalty,IdentityPenalty
 from .smooths import TP_basis_calc
 
 class GammTerm():
@@ -24,15 +24,15 @@ class GammTerm():
    :param is_penalized: Whether the term is penalized/can be penalized or not
    :type is_penalized: bool
    :param penalty: The default penalties associated with a term.
-   :type penalty: [PenType]
-   :param pen_kwargs: A list of dictionaries, each with key-word arguments passed to the construction of the corresponding  :class:`PenType` in ``penalty``.
+   :type penalty: [Penalty]
+   :param pen_kwargs: A list of dictionaries, each with key-word arguments passed to the construction of the corresponding  :class:`Penalty` in ``penalty``.
    :type pen_kwargs: [dict]
    """
    
    def __init__(self,variables:list[str],
                 type:TermType,
                 is_penalized:bool,
-                penalty:list[PenType],
+                penalty:list[Penalty],
                 pen_kwargs:list[dict]) -> None:
         
         self.variables = variables
@@ -192,7 +192,7 @@ class f(GammTerm):
     multiple variables are present and a list is passed to ``nk``, a list of dictionaries with keyword arguments
     of the same length needs to be passed to ``basis_kwargs`` as well.
 
-    Multiple penalties can be placed on every term by adding ``PenType`` to the ``penalties``
+    Multiple penalties can be placed on every term by adding ``Penalty`` to the ``penalties``
     argument. In case ``variables`` contains multiple variables a separate tensor penalty (see Wood, 2017) will
     be created for every penalty included in ``penalties``. Again, key-word arguments that alter the behavior of
     the penalty creation need to be passed as dictionaries to ``pen_kwargs`` for every penalty included in ``penalties``.
@@ -226,15 +226,15 @@ class f(GammTerm):
     :type identifiable: bool, optional
     :param basis: The basis functions to use to construct the spline matrix. By default a B-spline basis (Eilers & Marx, 2010) implemented in :func:`mssm.src.smooths.B_spline_basis`.
     :type basis: Callable, optional
-    :param basis_kwargs: A list containing one or multiple dictionaries specifying how the basis should be computed. For the B-spline basis the following arguments (with default values) are available: ``convolve``=``False``, ``min_c``=``None``, ``max_c``=``None``, ``deg``=``3``. See :func:`mss.src.smooths.B_spline_basis` for details, but the default should work for most cases.
+    :param basis_kwargs: A list containing one or multiple dictionaries specifying how the basis should be computed. Consult the docstring of the function computing the basis you want. For the default B-spline basis for example see the  :func:`mss.src.smooths.B_spline_basis` function. The default arguments set by any basis function, should work for most cases though.
     :type basis_kwargs: dict, optional
     :param is_penalized: Should the term be left unpenalized or not. There are rarely good reasons to set this to False.
     :type is_penalized: bool, optional
     :param penalize_null: Should a separate Null-space penalty (Marra & Wood, 2011) be placed on the term. By default, the term here will leave a linear f(`variables`) un-penalized! Thus, there is no option for the penalty to achieve f(`variables`) = 0 even if that would be supported by the data. Adding a Null-space penalty provides the penalty with that power. This can be used for model selection instead of Hypothesis testing and is the preferred way in ``mssm`` (see Marra & Wood, 2011 for details).
     :type penalize_null: bool, optional
     :param penalty: A list of penalty types to be placed on the term.
-    :type penalty: list[PenType], optional
-    :param pen_kwargs: A list containing one or multiple dictionaries specifying how the penalty should be created. For the default difference penalty (Eilers & Marx, 2010) the only keyword argument (with default value) available is: ``m=2``. This reflects the order of the difference penalty. Note, that while a higher ``m`` permits penalizing towards smoother functions it also leads to an increased dimensionality of the penalty Kernel (the set of bases functions which will not be penalized). In other words, increasingly more complex functions will be left un-penalized for higher ``m`` (except if ``penalize_null`` is set to True). ``m=2`` is usually a good choice and thus the default but see Eilers & Marx (2010) for details.
+    :type penalty: list[Penalty], optional
+    :param pen_kwargs: A list containing one or multiple dictionaries specifying how the penalty should be created. Consult the docstring of the :func:`Penalty.constructor` method of the specific :class:`Penalty` you want to use for details.
     :type pen_kwargs: list[dict], optional
     """
 
@@ -252,7 +252,7 @@ class f(GammTerm):
                 basis_kwargs:dict={},
                 is_penalized:bool = True,
                 penalize_null:bool = False,
-                penalty:list[PenType] | None = None,
+                penalty:list[Penalty] | None = None,
                 pen_kwargs:list[dict] | None = None) -> None:
         
         if not binary is None and not by is None:
@@ -275,7 +275,7 @@ class f(GammTerm):
               nk = 4
         
         if not binary is None and identifiable:
-           # Remove identifiability constrain for
+           # Remove identifiability constraint for
            # binary difference smooths.
            identifiable = False
            # For te terms this can be skipped for these one coef is simply
@@ -286,7 +286,7 @@ class f(GammTerm):
 
         # Default penalty setup
         if penalty is None:
-           penalty = [PenType.DIFFERENCE]
+           penalty = [DifferencePenalty()]
            pen_kwargs = [{"m":2}]
 
         # For tensor product smooths we need to for every penalty in
@@ -370,24 +370,23 @@ class f(GammTerm):
       if self.should_rp == 1:
         # Demmler & Reinsch (1975) re-parameterization was requested - need penalty for this.
         pen_kwargs = self.pen_kwargs[rpidx]
-        pen = self.penalty[rpidx]
+        penalty = self.penalty[rpidx]
+
+        # Extract penalty generator
+        pen_generator = penalty.constructor
       
-        # Determine penalty generator
         constraint = None
-        if pen == PenType.DIFFERENCE:
-          pen_generator = diff_pen
-          if self.is_identifiable:
-                id_k += 1
-                constraint = self.Z[rpidx]
-        else:
-          pen_generator = id_dist_pen
+        # Pass one extra coef to penalty constructor if term is identifiable
+        if self.is_identifiable:
+          id_k += 1
+          constraint = self.Z[rpidx]
 
         # Again get penalty elements used by this term.
         pen_data,pen_rows,pen_cols,_,_,_,rank = pen_generator(id_k,constraint,**pen_kwargs)
 
         # Make sure nk matches right dimension again
         if self.is_identifiable:
-            id_k -= 1
+          id_k -= 1
         
         S_J = scp.sparse.csc_array((pen_data,(pen_rows,pen_cols)),shape=(id_k,id_k))
 
@@ -405,7 +404,7 @@ class f(GammTerm):
       else:
         raise ValueError(f"Requested a reparameterisation {self.should_rp} that is not supported")
 
-    def build_penalty(self,ti:int,penalties:list[LambdaTerm],cur_pen_idx:int,pen:PenType,penid:int,factor_levels:dict,n_coef:int,col_S:int) -> tuple[list[LambdaTerm],int]:
+    def build_penalty(self,ti:int,penalties:list[LambdaTerm],cur_pen_idx:int,penid:int,factor_levels:dict,col_S:int) -> tuple[list[LambdaTerm],int]:
       """Builds a penalty matrix associated with this smooth term and returns an updated ``penalties`` list including it.
 
       This method is implemented by most implementations of the :class:`GammTerm` class.
@@ -418,8 +417,6 @@ class f(GammTerm):
       :type penalties: [LambdaTerm]
       :param cur_pen_idx: Index of the last element in ``penalties``.
       :type cur_pen_idx: int
-      :param pen: Type of the penalty to be created. Depends on the specific term.
-      :type pen: mssm.src.python.PenType
       :param penid: If a term is subjected to multipe penalties, then ``penid`` indexes which of those penalties is currently implemented. Otherwise can be set to zero.
       :type penid: int
       :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
@@ -442,28 +439,28 @@ class f(GammTerm):
       if len(vars) > 1:
         id_k = self.nk[penid % len(vars)]
       else:
-        id_k = n_coef
+        id_k = self.nk
 
+      # Extract penalty, penalty type, and constructor
       pen_kwargs = self.pen_kwargs[penid]
+      penalty = self.penalty[penid]
+      pen_generator = penalty.constructor
+      pen = penalty.type
       
       # Determine penalty generator
       constraint = None
-      if pen == PenType.DIFFERENCE:
-        pen_generator = diff_pen
-        if self.is_identifiable:
-            if self.te == False:
-              id_k += 1
-              constraint = self.Z[penid % len(vars)]
-      else:
-        pen_generator = id_dist_pen
+
+      # Pass one extra coef to penalty constructor if term is identifiable so that we end up with self.nk identifiable coef - delay for te terms
+      if self.is_identifiable and self.te == False:
+        id_k += 1
+        constraint = self.Z[penid % len(vars)]
 
       # Again get penalty elements used by this term.
       pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = pen_generator(id_k,constraint,**pen_kwargs)
 
       # Make sure nk matches right dimension again
-      if self.is_identifiable:
-        if self.te == False:
-            id_k -= 1
+      if self.is_identifiable and self.te == False:
+        id_k -= 1
 
       if self.should_rp == 1:
         # Demmler & Reinsch (1975) Re-parameterization was requested
@@ -999,7 +996,7 @@ class fs(f):
                 basis: Callable = smooths.B_spline_basis,
                 basis_kwargs: dict = {}):
 
-      penalty = [PenType.DIFFERENCE]
+      penalty = [DifferencePenalty()]
       pen_kwargs = [{"m":m}]
       super().__init__(variables, rf, by_cont, None, 99, nk+1, False, rp, ConstType.QR, False,
                        basis, basis_kwargs,
@@ -1012,7 +1009,7 @@ class fs(f):
 
          self.name +=  ": " + self.by_subgroup[1]
     
-   def build_penalty(self,ti:int,penalties:list[LambdaTerm],cur_pen_idx:int,pen:PenType,penid:int,factor_levels:dict,n_coef:int,col_S:int) -> tuple[list[LambdaTerm],int]:
+   def build_penalty(self,ti:int,penalties:list[LambdaTerm],cur_pen_idx:int,penid:int,factor_levels:dict,col_S:int) -> tuple[list[LambdaTerm],int]:
       """Builds a penalty matrix associated with this factor smooth term and returns an updated ``penalties`` list including it.
 
       This method is implemented by most implementations of the :class:`GammTerm` class.
@@ -1025,20 +1022,16 @@ class fs(f):
       :type penalties: [LambdaTerm]
       :param cur_pen_idx: Index of the last element in ``penalties``.
       :type cur_pen_idx: int
-      :param pen: Type of the penalty to be created. Depends on the specific term.
-      :type pen: mssm.src.python.PenType
       :param penid: If a term is subjected to multipe penalties, then ``penid`` indexes which of those penalties is currently implemented. Otherwise can be set to zero.
       :type penid: int
       :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
       :type factor_levels: dict
-      :param n_coef: Number of coefficients associated with this term.
-      :type n_coef: int
       :param col_S: Number of columns of the total penalty matrix.
       :type col_S: int
       :return: Updated ``penalties`` list including the new penalties implemented as a :class:`LambdaTerm` and the updated ``cur_pen_idx``
       :rtype: tuple[list[LambdaTerm],int]
       """
-      return super().build_penalty(ti, penalties, cur_pen_idx, pen, penid, factor_levels, n_coef, col_S)
+      return super().build_penalty(ti, penalties, cur_pen_idx, penid, factor_levels, col_S)
    
    def build_matrix(self,ci:int,ti:int,var_map:dict,var_mins:dict,var_maxs:dict,factor_levels:dict,ridx:np.ndarray,cov_flat:np.ndarray,use_only:list[int],tol:int=0) -> tuple[list[float],list[int],list[int],int]:
       """Builds the design/term/model matrix for this factor smooth term.
@@ -1144,7 +1137,7 @@ class irf(GammTerm):
        :param is_penalized: Should the term be left unpenalized or not. There are rarely good reasons to set this to False.
        :type is_penalized: bool, optional
        :param penalty: A list of penalty types to be placed on the term.
-       :type penalty: list[PenType], optional
+       :type penalty: list[Penalty], optional
        :param pen_kwargs: A list containing one or multiple dictionaries specifying how the penalty should be created. For the default difference penalty (Eilers & Marx, 2010) the only keyword argument (with default value) available is: ``m=2``. This reflects the order of the difference penalty. Note, that while a higher ``m`` permits penalizing towards smoother functions it also leads to an increased dimensionality of the penalty Kernel (the set of f[``variables``] which will not be penalized). In other words, increasingly more complex functions will be left un-penalized for higher ``m`` (except if ``penalize_null`` is set to True). ``m=2`` is usually a good choice and thus the default but see Eilers & Marx (2010) for details.
        :type pen_kwargs: list[dict], optional      
        """
@@ -1157,12 +1150,12 @@ class irf(GammTerm):
                 nk:int=10,
                 basis:Callable=smooths.B_spline_basis,
                 is_penalized:bool = True,
-                penalty:list[PenType] | None = None,
+                penalty:list[Penalty] | None = None,
                 pen_kwargs:list[dict] | None = None) -> None:
         
         # Default penalty setup
         if penalty is None:
-           penalty = [PenType.DIFFERENCE]
+           penalty = [DifferencePenalty()]
            pen_kwargs = [{"m":2}]
 
         # For impulse response tensor product smooths we need to for every penalty in
@@ -1198,7 +1191,7 @@ class irf(GammTerm):
         if by is not None:
            self.name += f",by={by})"
   
-    def build_penalty(self,ti:int,penalties:list[LambdaTerm],cur_pen_idx:int,pen:PenType,penid:int,factor_levels:dict,n_coef:int,col_S:int) -> tuple[list[LambdaTerm],int]:
+    def build_penalty(self,ti:int,penalties:list[LambdaTerm],cur_pen_idx:int,penid:int,factor_levels:dict,col_S:int) -> tuple[list[LambdaTerm],int]:
       """Builds a penalty matrix associated with this impulse response smooth term and returns an updated ``penalties`` list including it.
 
       This method is implemented by most implementations of the :class:`GammTerm` class.
@@ -1211,14 +1204,10 @@ class irf(GammTerm):
       :type penalties: [LambdaTerm]
       :param cur_pen_idx: Index of the last element in ``penalties``.
       :type cur_pen_idx: int
-      :param pen: Type of the penalty to be created. Depends on the specific term.
-      :type pen: mssm.src.python.PenType
       :param penid: If a term is subjected to multipe penalties, then ``penid`` indexes which of those penalties is currently implemented. Otherwise can be set to zero.
       :type penid: int
       :param factor_levels: Factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor.
       :type factor_levels: dict
-      :param n_coef: Number of coefficients associated with this term.
-      :type n_coef: int
       :param col_S: Number of columns of the total penalty matrix.
       :type col_S: int
       :return: Updated ``penalties`` list including the new penalties implemented as a :class:`LambdaTerm` and the updated ``cur_pen_idx``
@@ -1229,13 +1218,12 @@ class irf(GammTerm):
       if len(vars) > 1:
         id_k = self.nk[penid % len(vars)]
       else:
-        id_k = n_coef
+        id_k = self.nk
 
-      # Determine penalty generator
-      if pen == PenType.DIFFERENCE:
-        pen_generator = diff_pen
-      else:
-        pen_generator = id_dist_pen
+      # Extract penalty, penalty type, and constructor
+      penalty = self.penalty[penid]
+      pen_generator = penalty.constructor
+      pen = penalty.type
 
       # Get non-zero elements and indices for the penalty used by this term.
       pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = pen_generator(id_k,None,**self.pen_kwargs[penid])
@@ -1543,7 +1531,7 @@ class ri(GammTerm):
                  variable:str) -> None:
         
         # Initialization
-        super().__init__([variable], TermType.RANDINT, True, [PenType.IDENTITY], [{}])
+        super().__init__([variable], TermType.RANDINT, True, [IdentityPenalty(PenType.IDENTITY)], [{}])
 
         # Term name
         self.name = f"ri({variable})"
@@ -1571,7 +1559,7 @@ class ri(GammTerm):
       vars = self.variables
       idk = len(factor_levels[vars[0]])
 
-      pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = id_dist_pen(idk,None)
+      pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = self.penalty[0].constructor(idk,None)
 
       lTerm = LambdaTerm(start_index=cur_pen_idx,
                                    type = PenType.IDENTITY,
@@ -1896,7 +1884,7 @@ class rs(GammTerm):
                  rf:str) -> None:
         
         # Initialization
-        super().__init__(variables, TermType.RANDSLOPE, True, [PenType.IDENTITY], [{}])
+        super().__init__(variables, TermType.RANDSLOPE, True, [IdentityPenalty(PenType.IDENTITY)], [{}])
         self.var_coef = None
         self.by = rf
         self.by_cont = None
@@ -1936,7 +1924,7 @@ class rs(GammTerm):
         # For interactions involving only continuous variables this condition will be false and a single
         # penalty will be estimated.
         idk = len(factor_levels[self.by])
-        pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = id_dist_pen(idk,None)
+        pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = self.penalty[0].constructor(idk,None)
         for _ in range(self.var_coef):
           lTerm = LambdaTerm(start_index=cur_pen_idx,
                                        type = PenType.IDENTITY,
@@ -1952,7 +1940,7 @@ class rs(GammTerm):
         # Single penalty for random coefficients of a single variable (categorical or continuous) or an
         # interaction of only continuous variables.
         idk = len(factor_levels[self.by])*self.var_coef
-        pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = id_dist_pen(idk,None)
+        pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = self.penalty[0].constructor(idk,None)
 
 
         lTerm = LambdaTerm(start_index=cur_pen_idx,

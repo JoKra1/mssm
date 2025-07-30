@@ -1499,7 +1499,7 @@ def build_penalties(formula) -> list[LambdaTerm]:
          
          else:
 
-            for penid,pen in enumerate(irsterm.penalty):
+            for penid in range(len(irsterm.penalty)):
                
                # Smooth terms can have multiple penalties.
                # In that case the starting index of every subsequent
@@ -1508,8 +1508,7 @@ def build_penalties(formula) -> list[LambdaTerm]:
                   cur_pen_idx = prev_pen_idx
 
                penalties,cur_pen_idx = irsterm.build_penalty(irsti,penalties,cur_pen_idx,
-                                                             pen,penid,factor_levels,n_coef,
-                                                             col_S)
+                                                             penid,factor_levels,col_S)
          
          # Keep track of previous penalty starting index
          prev_pen_idx = cur_pen_idx
@@ -1547,7 +1546,7 @@ def build_penalties(formula) -> list[LambdaTerm]:
          else:
             S_j_TP_last = None
             TP_last_n = 0
-            for penid,pen in enumerate(sterm.penalty):
+            for penid in range(len(sterm.penalty)):
             
                # Smooth terms can have multiple penalties.
                # In that case the starting index of every subsequent
@@ -1557,8 +1556,7 @@ def build_penalties(formula) -> list[LambdaTerm]:
                
                prev_n_pen = len(penalties)
                penalties,cur_pen_idx = sterm.build_penalty(sti,penalties,cur_pen_idx,
-                                                           pen,penid,factor_levels,n_coef,
-                                                           col_S)
+                                                           penid,factor_levels,col_S)
 
                
                # Add necessary info for derivative approx. for factor smooth penalties

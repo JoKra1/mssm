@@ -12,6 +12,9 @@ class PenType(Enum):
     DISTANCE = 3
     REPARAM1 = 4 # Approximate Demmler & Reinsch (1975) parameterization for univariate smooths; see section 5.4.2 of Wood (2017)
     NULL = 5
+    DERIVATIVE = 6
+    COEFFICIENTS = 7
+    CUSTOM = 8
 
 class ConstType(Enum):
     """Custom Constraint data type used by internal functions.
