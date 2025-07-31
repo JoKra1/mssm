@@ -394,11 +394,11 @@ class Family:
    :type link: Link
    :param twopar: Whether the family has two parameters (mean,scale) to be estimated (i.e., whether the likelihood is a function of two parameters), or only a single one (usually the mean).
    :type twopar: bool
-   :param scale: Known/fixed scale parameter for this family.
+   :param scale: Known/fixed scale parameter for this family. Setting this to None means the parameter has to be estimated. **Must be set to 1 if the family has no scale parameter** (i.e., when ``twopar = False``)
    :type scale: float or None, optional
    """
 
-   def __init__(self,link:Link | None,twopar:bool,scale:float=None) -> None:
+   def __init__(self,link:Link,twopar:bool,scale:float=None) -> None:
       self.link = link
       self.twopar = twopar
       self.scale = scale # Known scale parameter!
@@ -408,12 +408,14 @@ class Family:
       """
       Convenience function to compute an initial :math:`\\boldsymbol{\\mu}` estimate passed to the GAMM/PIRLS estimation routine.
 
-      :param y: A numpy array containing each observation.
+      :param y: A numpy array of shape (-1,1) containing each observation.
       :type y: np.ndarray
+      :return: a N-dimensional vector of shape (-1,1) containing an initial estimate of the mean
+      :rtype: np.ndarray
       """
       return y
    
-   def V(self,mu:np.ndarray,**kwargs) -> np.ndarray:
+   def V(self,mu:np.ndarray) -> np.ndarray:
       """
       The variance function (of the mean; see Wood, 2017, 3.1.2). Different exponential families allow for different relationships
       between the variance in our random response variable and the mean of it. For the normal model this is assumed to be constant.
@@ -422,12 +424,14 @@ class Family:
 
        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
-      :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+      :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: np.ndarray
+      :return: a N-dimensional vector of shape (-1,1) containing the variance function evaluated for each mean
+      :rtype: np.ndarray
       """
       pass
 
-   def dVy1(self,mu:np.ndarray,**kwargs) -> np.ndarray:
+   def dVy1(self,mu:np.ndarray) -> np.ndarray:
       """
       The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with respect ot the mean.
 
@@ -435,8 +439,10 @@ class Family:
 
        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
-      :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+      :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: np.ndarray
+      :return: a N-dimensional vector of shape (-1,1) containing the first derivative of the variance function with respect to each mean
+      :rtype: np.ndarray
       """
       pass
    
@@ -456,10 +462,12 @@ class Family:
 
        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
-      :param y: A numpy array containing each observation.
+      :param y: A numpy array of shape (-1,1) containing each observation.
       :type y: np.ndarray
-      :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+      :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: np.ndarray
+      :return: log-likelihood of the model under this family
+      :rtype: float
       """
       pass
    
@@ -479,11 +487,11 @@ class Family:
 
        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
-      :param y: A numpy array containing each observation.
+      :param y: A numpy array of shape (-1,1) containing each observation.
       :type y: np.ndarray
-      :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+      :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: np.ndarray
-      :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
+      :return: a N-dimensional vector of shape (-1,1) containing the log-probability of observing each data-point under the current model.
       :rtype: np.ndarray
       """
       pass
@@ -496,10 +504,12 @@ class Family:
 
        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
-      :param y: A numpy array containing each observation.
+      :param y: A numpy array of shape (-1,1) containing each observation.
       :type y: np.ndarray
-      :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+      :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: np.ndarray
+      :return: Deviance of the model under this family
+      :rtype: float
       """
       pass
 
@@ -511,10 +521,12 @@ class Family:
 
        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
-      :param y: A numpy array containing each observation.
+      :param y: A numpy array of shape (-1,1) containing each observation.
       :type y: np.ndarray
-      :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+      :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: np.ndarray
+      :return: a N-dimensional vector of shape (-1,1) containing the contribution of each observation to the overall deviance.
+      :rtype: np.ndarray
       """
       pass
 
@@ -553,6 +565,8 @@ class Binomial(Family):
 
       :param y: A numpy array containing each observation.
       :type y: np.ndarray
+      :return: a N-dimensional vector of shape (-1,1) containing an initial estimate of the probability of success per observation
+      :rtype: np.ndarray
       """
       prop = (y+0.5)/(2)
       self.__max_llk = self.llk(y,y)
@@ -568,6 +582,8 @@ class Binomial(Family):
 
       :param mu: A numpy array containing the predicted probability for the response distribution corresponding to each observation.
       :type mu: np.ndarray
+      :return: a N-dimensional vector of shape (-1,1) containing the variance function evaluated for each mean
+      :rtype: np.ndarray
       """
       # Faraway (2016):
       return mu * (1 - mu)/self.n
@@ -582,6 +598,8 @@ class Binomial(Family):
 
       :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: np.ndarray
+      :return: a N-dimensional vector of shape (-1,1) containing the first derivative of the variance function with respect to each mean
+      :rtype: np.ndarray
       """
       return (1 - 2*mu)/self.n
    
@@ -615,6 +633,8 @@ class Binomial(Family):
       :type y: np.ndarray
       :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: np.ndarray
+      :return: log-likelihood of the model
+      :rtype: float
       """
       # y is observed proportion of success
       return sum(self.lp(y,mu))[0]
@@ -631,6 +651,8 @@ class Binomial(Family):
       :type y: np.ndarray
       :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: np.ndarray
+      :return: Deviance of the model
+      :rtype: float
       """
       dev = np.sum(self.D(y,mu))
       return dev
@@ -647,6 +669,8 @@ class Binomial(Family):
       :type y: np.ndarray
       :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: np.ndarray
+      :return: a N-dimensional vector of shape (-1,1) containing the contribution of each observation to the model deviance
+      :rtype: np.ndarray
       """
       # Based on Table 3.1 in Wood (2017)
       k = y*self.n
@@ -698,6 +722,8 @@ class Gaussian(Family):
       :type mu: np.ndarray
       :return: a N-dimensional vector of 1s
       :rtype: np.ndarray
+      :return: a N-dimensional vector of shape (-1,1) containing the variance function evaluated for each mean
+      :rtype: np.ndarray
       """
       # Faraway (2016)
       return np.ones_like(mu)
@@ -712,6 +738,8 @@ class Gaussian(Family):
 
       :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: np.ndarray
+      :return: a N-dimensional vector of shape (-1,1) containing the first derivative of the variance function with respect to each mean
+      :rtype: np.ndarray
       """
       return np.zeros_like(mu)
    
@@ -835,6 +863,8 @@ class Gamma(Family):
 
       :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: np.ndarray
+      :return: a N-dimensional vector of shape (-1,1) containing the first derivative of the variance function with respect to each mean
+      :rtype: np.ndarray
       """
       return 2*mu
    
@@ -973,6 +1003,8 @@ class InvGauss(Family):
 
       :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: np.ndarray
+      :return: a N-dimensional vector of shape (-1,1) containing the first derivative of the variance function with respect to each mean
+      :rtype: np.ndarray
       """
       return 3*np.power(mu,2)
    
@@ -1103,6 +1135,8 @@ class Poisson(Family):
 
       :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
       :type mu: np.ndarray
+      :return: a N-dimensional vector of shape (-1,1) containing the first derivative of the variance function with respect to each mean
+      :rtype: np.ndarray
       """
       return np.ones_like(mu)
    
@@ -1195,6 +1229,8 @@ class Poisson(Family):
 
       :param y: A numpy array containing each observation.
       :type y: np.ndarray
+      :return: a N-dimensional vector of shape (-1,1) containing an intial estimate of the mean of the response variables
+      :rtype: np.ndarray
       """
 
       gmu = np.mean(y)
@@ -1245,9 +1281,9 @@ class GAMLSSFamily:
       References:
        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
-      :param y: A numpy array containing each observation.
+      :param y: A numpy array of shape (-1,1) containing each observation.
       :type y: np.ndarray
-      :param mus: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains the expected value for a particular parmeter for each of the N observations.
+      :param mus: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains a numpy array of shape (-1,1) holding the expected value for a particular parmeter for each of the N observations.
       :type mus: [np.ndarray]
       :return: The log-probability of observing all data under the current model.
       :rtype: float
@@ -1261,11 +1297,11 @@ class GAMLSSFamily:
 
        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
-      :param y: A numpy array containing each observed value.
+      :param y: A numpy array of shape (-1,1) containing each observed value.
       :type y: np.ndarray
-      :param mus: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains the expected value for a particular parmeter for each of the N observations.
+      :param mus: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains a numpy array of shape (-1,1) holding the expected value for a particular parmeter for each of the N observations.
       :type mus: [np.ndarray]
-      :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
+      :return: a N-dimensional vector of shape (-1,1) containing the log-probability of observing each data-point under the current model.
       :rtype: np.ndarray
       """
       pass
@@ -1282,9 +1318,9 @@ class GAMLSSFamily:
        - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
-      :param y: A numpy array containing each observed value.
+      :param y: A numpy array of shape (-1,1) containing each observed value.
       :type y: np.ndarray
-      :param mus: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains the expected value for a particular parmeter for each of the N observations.
+      :param mus: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains a numpy array of shape (-1,1) holding the expected value for a particular parmeter for each of the N observations.
       :type mus: [np.ndarray]
       :return: a vector of shape (-1,1) containing standardized residuals under the current model or None in case residuals are not readily available.
       :rtype: np.ndarray | None
@@ -1697,7 +1733,7 @@ class GSMMFamily:
       :type coef: np.ndarray
       :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
       :type coef_split_idx: [int]
-      :param ys: List containing the vectors of observations passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
+      :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
       :type ys: [np.ndarray or None]
       :param Xs: A list of sparse model matrices per likelihood parameter.
       :type Xs: [scp.sparse.csc_array]
@@ -1721,7 +1757,7 @@ class GSMMFamily:
       :type coef: np.ndarray
       :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
       :type coef_split_idx: [int]
-      :param ys: List containing the vectors of observations passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
+      :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
       :type ys: [np.ndarray or None]
       :param Xs: A list of sparse model matrices per likelihood parameter.
       :type Xs: [scp.sparse.csc_array]
@@ -1748,7 +1784,7 @@ class GSMMFamily:
       :type coef: np.ndarray
       :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
       :type coef_split_idx: [int]
-      :param ys: List containing the vectors of observations passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
+      :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
       :type ys: [np.ndarray or None]
       :param Xs: A list of sparse model matrices per likelihood parameter.
       :type Xs: [scp.sparse.csc_array]
@@ -1773,7 +1809,7 @@ class GSMMFamily:
       :type coef: np.ndarray
       :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
       :type coef_split_idx: [int]
-      :param ys: List containing the vectors of observations passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
+      :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
       :type ys: [np.ndarray or None]
       :param Xs: A list of sparse model matrices per likelihood parameter.
       :type Xs: [scp.sparse.csc_array]

@@ -76,7 +76,7 @@ def bbase(x:np.ndarray, knots:np.ndarray, dx:float, deg:int) -> np.ndarray:
   B = np.power(-1, deg + 1) * P @ D
   return B
 
-def B_spline_basis(cov:np.ndarray, event_onset:int, nk:int, min_c:float|None=None, max_c:float|None=None, drop_outer_k:bool=False, convolve:bool=False, deg:int=3) -> np.ndarray:
+def B_spline_basis(cov:np.ndarray, event_onset:int|None, nk:int, min_c:float|None=None, max_c:float|None=None, drop_outer_k:bool=False, convolve:bool=False, deg:int=3) -> np.ndarray:
   """Computes B-spline basis of degree ``deg`` given ``knots``.
 
   Based on code and definitions in "Splines, Knots, and Penalties" by Eilers & Marx (2010) and adapted to allow for convolving B-spline bases.
@@ -84,10 +84,10 @@ def B_spline_basis(cov:np.ndarray, event_onset:int, nk:int, min_c:float|None=Non
   References:
     - Eilers, P., & Marx, B. (2010). Splines, knots, and penalties. https://doi.org/10.1002/WICS.125
 
-  :param cov: Covariate array
+  :param cov: Flattened covariate array (i.e., of shape (-1,))
   :type cov: np.ndarray
   :param event_onset: Sample on which to place a dirac delta with which the B-spline bases should be convolved - ignored if ``convolve==False``.
-  :type event_onset: int
+  :type event_onset: int | None
   :param nk: Number of basis functions to create
   :type nk: int
   :param min_c: Minimum covariate value, defaults to None
