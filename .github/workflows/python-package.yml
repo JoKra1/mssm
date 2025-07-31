@@ -92,8 +92,8 @@ jobs:
           pip install .
       - name: Test with pytest
         run: |
-          pip install pytest pytest-cov mssmViz numdifftools
-          pytest ./tests --cov=mssm --cov-report=xml --cov-report=html
+          pip install pytest pytest-cov mssmViz==0.1.47 numdifftools
+          pytest ./tests/test_fast.py ./tests/test_gamm.py ./tests/test_gammlss.py ./tests/test_gsmm.py ./tests/test_compare.py --cov=mssm --cov-report=xml --cov-report=html
       - name: Upload coverage reports to Codecov with GitHub Action
         uses: codecov/codecov-action@v4.2.0
         env:

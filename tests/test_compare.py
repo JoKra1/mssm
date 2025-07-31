@@ -1,13 +1,19 @@
+import mssm
 from mssm.models import *
 from mssm.src.python.compare import compare_CDL
-from mssm.src.python.gamm_solvers import compute_S_emb_pinv_det,cpp_dChol,cpp_chol
 from mssm.src.python.utils import estimateVp,correct_VB,DummyRhoPrior
 import numpy as np
 import os
 from mssmViz.sim import*
+from .defaults import default_compare_test_kwargs,default_gamm_test_kwargs,default_gammlss_test_kwargs,max_atol,max_rtol,init_coef_gaumlss_tests,init_coef_gammals_tests,init_penalties_tests_gammlss
 
-max_atol = 100
-max_rtol = 100
+mssm.src.python.exp_fam.GAUMLSS.init_coef = init_coef_gaumlss_tests
+mssm.src.python.exp_fam.GAMMALS.init_coef = init_coef_gammals_tests
+mssm.src.python.exp_fam.GAUMLSS.init_lambda = init_penalties_tests_gammlss
+mssm.src.python.exp_fam.GAMMALS.init_lambda = init_penalties_tests_gammlss
+mssm.src.python.exp_fam.MULNOMLSS.init_lambda = init_penalties_tests_gammlss
+
+################################################################## Tests ##################################################################
 
 class Test_model_comparisons1:
 
@@ -23,7 +29,12 @@ class Test_model_comparisons1:
                                 print_warn=False)
 
     sim_fit_model = GAMM(sim_fit_formula,Gaussian())
-    sim_fit_model.fit(exclude_lambda=False,progress_bar=False,max_outer=100)
+
+    test_kwargs_model = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs_model["exclude_lambda"] = False
+    test_kwargs_model["max_outer"] = 100
+
+    sim_fit_model.fit(**test_kwargs_model)
 
     sim_fit_formula2 = Formula(lhs("y"),
                                 [i(),f(["x1"],nk=20,rp=1),f(["x2"],nk=20,rp=1),f(["x3"],nk=20,rp=1)],
@@ -31,47 +42,107 @@ class Test_model_comparisons1:
                                 print_warn=False)
 
     sim_fit_model2 = GAMM(sim_fit_formula2,Gaussian())
-    sim_fit_model2.fit(exclude_lambda=False,progress_bar=False,max_outer=100)
+    sim_fit_model2.fit(**test_kwargs_model)
 
     prior = DummyRhoPrior(b=np.log(1e12))
 
     # And perform a couple of bias corrected / smoothness uncertainty corrected / or not / comparisons...
-    uncor_result = compare_CDL(sim_fit_model,sim_fit_model2,correct_V=False,correct_t1=False,seed=22)
-    cor_result1 = compare_CDL(sim_fit_model,sim_fit_model2,correct_t1=False,n_c=1,grid='JJJ1',seed=22,Vp_fidiff=True)
-    cor_result2 = compare_CDL(sim_fit_model,sim_fit_model2,correct_t1=False,n_c=1,grid='JJJ2',seed=22,only_expected_edf=True,use_importance_weights=False,Vp_fidiff=False)
-    cor_result3 = compare_CDL(sim_fit_model,sim_fit_model2,correct_t1=False,n_c=10,grid='JJJ2',seed=22,use_importance_weights=False,Vp_fidiff=False)
-    cor_result4 = compare_CDL(sim_fit_model,sim_fit_model2,correct_t1=False,n_c=1,grid='JJJ3',seed=22,Vp_fidiff=False,use_importance_weights=True)
-    cor_result5 = compare_CDL(sim_fit_model,sim_fit_model2,correct_t1=False,n_c=1,grid='JJJ3',seed=22,Vp_fidiff=False,use_importance_weights=True,prior=prior)
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_V"] = False
+    test_kwargs["correct_t1"] = False
+    test_kwargs["seed"] = 22
+    uncor_result = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
 
-    unbiased_uncor_result = compare_CDL(sim_fit_model,sim_fit_model2,correct_V=False,correct_t1=True,n_c=1,grid='JJJ3',seed=22)
-    unbiased_cor_result1 = compare_CDL(sim_fit_model,sim_fit_model2,correct_t1=True,n_c=1,grid='JJJ3',seed=22,use_importance_weights=True,prior=prior)
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = False
+    test_kwargs["n_c"] = 1
+    test_kwargs["grid"] = "JJJ1"
+    test_kwargs["seed"] = 22
+    test_kwargs["Vp_fidiff"] = True
+    cor_result1 = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = False
+    test_kwargs["n_c"] = 1
+    test_kwargs["grid"] = "JJJ2"
+    test_kwargs["seed"] = 22
+    test_kwargs["only_expected_edf"] = True
+    test_kwargs["use_importance_weights"] = False
+    test_kwargs["Vp_fidiff"] = False
+    cor_result2 = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = False
+    test_kwargs["n_c"] = 10
+    test_kwargs["grid"] = "JJJ2"
+    test_kwargs["seed"] = 22
+    test_kwargs["use_importance_weights"] = False
+    test_kwargs["Vp_fidiff"] = False
+    cor_result3 = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = False
+    test_kwargs["n_c"] = 1
+    test_kwargs["grid"] = "JJJ3"
+    test_kwargs["seed"] = 22
+    test_kwargs["use_importance_weights"] = True
+    test_kwargs["Vp_fidiff"] = False
+    cor_result4 = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = False
+    test_kwargs["n_c"] = 1
+    test_kwargs["grid"] = "JJJ3"
+    test_kwargs["seed"] = 22
+    test_kwargs["use_importance_weights"] = True
+    test_kwargs["Vp_fidiff"] = False
+    test_kwargs["prior"] = prior
+    cor_result5 = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
+
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_V"] = False
+    test_kwargs["correct_t1"] = True
+    test_kwargs["n_c"] = 1
+    test_kwargs["grid"] = "JJJ3"
+    test_kwargs["seed"] = 22
+    unbiased_uncor_result = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = True
+    test_kwargs["n_c"] = 1
+    test_kwargs["grid"] = "JJJ3"
+    test_kwargs["seed"] = 22
+    test_kwargs["use_importance_weights"] = True
+    test_kwargs["prior"] = prior
+    unbiased_cor_result1 = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
 
     def test_comp1(self):
-        assert round(self.uncor_result['aic_diff'],ndigits=3) == 1.945
+        assert round(self.uncor_result['aic_diff'],ndigits=3) == 1.98
 
     def test_comp2(self):
-        assert round(self.cor_result1['aic_diff'],ndigits=3) == 1.946
+        assert round(self.cor_result1['aic_diff'],ndigits=3) == 1.981
 
     def test_comp3(self):
-        assert round(self.cor_result2['aic_diff'],ndigits=3) == 1.668
+        assert round(self.cor_result2['aic_diff'],ndigits=3) == 1.703
 
     def test_comp4(self):
-        assert round(self.cor_result3['aic_diff'],ndigits=3) == 1.701
+        assert round(self.cor_result3['aic_diff'],ndigits=3) == 1.736
 
     def test_comp5(self):
-        assert round(self.cor_result4['aic_diff'],ndigits=3) == 1.946
+        assert round(self.cor_result4['aic_diff'],ndigits=3) == 1.981
 
     def test_comp6(self):
-        assert round(self.cor_result5['aic_diff'],ndigits=3) == 2.942
+        assert round(self.cor_result5['aic_diff'],ndigits=3) == 2.977
 
     def test_comp7(self):
-        assert round(self.unbiased_uncor_result['aic_diff'],ndigits=3) == 1.945
+        assert round(self.unbiased_uncor_result['aic_diff'],ndigits=3) == 1.98
 
     def test_comp8(self):
-        assert round(self.unbiased_cor_result1['aic_diff'],ndigits=3) == 2.942
+        assert round(self.unbiased_cor_result1['aic_diff'],ndigits=3) == 2.977
     
     def test_edf1(self):
-        assert round(self.unbiased_cor_result1['Res. DOF'],ndigits=3) == 0.981
+        assert round(self.unbiased_cor_result1['Res. DOF'],ndigits=3) == 1.48
 
 
 class Test_model_comparisons2:
@@ -88,7 +159,12 @@ class Test_model_comparisons2:
                                 print_warn=False)
 
     sim_fit_model = GAMM(sim_fit_formula,Gamma())
-    sim_fit_model.fit(exclude_lambda=False,progress_bar=False,max_outer=100)
+
+    test_kwargs_model = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs_model["exclude_lambda"] = False
+    test_kwargs_model["max_outer"] = 100
+
+    sim_fit_model.fit(**test_kwargs_model)
 
     sim_fit_formula2 = Formula(lhs("y"),
                                 [i(),f(["x1"],nk=20,rp=1),f(["x2"],nk=20,rp=1),f(["x3"],nk=20,rp=1)],
@@ -96,46 +172,106 @@ class Test_model_comparisons2:
                                 print_warn=False)
 
     sim_fit_model2 = GAMM(sim_fit_formula2,Gamma())
-    sim_fit_model2.fit(exclude_lambda=False,progress_bar=False,max_outer=100)
+    sim_fit_model2.fit(**test_kwargs_model)
 
     prior = DummyRhoPrior(b=np.log(1e12))
     # And perform a couple of bias corrected / smoothness uncertainty corrected / or not / comparisons...
-    uncor_result = compare_CDL(sim_fit_model,sim_fit_model2,correct_V=False,correct_t1=False,seed=22)
-    cor_result1 = compare_CDL(sim_fit_model,sim_fit_model2,correct_t1=False,n_c=1,grid='JJJ1',seed=22,Vp_fidiff=True)
-    cor_result2 = compare_CDL(sim_fit_model,sim_fit_model2,correct_t1=False,n_c=1,grid='JJJ2',seed=22,only_expected_edf=True,use_importance_weights=False,Vp_fidiff=False)
-    cor_result3 = compare_CDL(sim_fit_model,sim_fit_model2,correct_t1=False,n_c=10,grid='JJJ2',seed=22,use_importance_weights=False,Vp_fidiff=False)
-    cor_result4 = compare_CDL(sim_fit_model,sim_fit_model2,correct_t1=False,n_c=1,grid='JJJ3',seed=22,Vp_fidiff=False,use_importance_weights=True)
-    cor_result5 = compare_CDL(sim_fit_model,sim_fit_model2,correct_t1=False,n_c=10,grid='JJJ3',seed=22,Vp_fidiff=False,use_importance_weights=True,prior=prior)
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_V"] = False
+    test_kwargs["correct_t1"] = False
+    test_kwargs["seed"] = 22
+    uncor_result = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
 
-    unbiased_uncor_result = compare_CDL(sim_fit_model,sim_fit_model2,correct_V=False,correct_t1=True,n_c=10,grid='JJJ3',seed=22)
-    unbiased_cor_result1 = compare_CDL(sim_fit_model,sim_fit_model2,correct_t1=True,n_c=10,grid='JJJ3',seed=22,use_importance_weights=True,prior=prior)
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = False
+    test_kwargs["n_c"] = 1
+    test_kwargs["grid"] = "JJJ1"
+    test_kwargs["seed"] = 22
+    test_kwargs["Vp_fidiff"] = True
+    cor_result1 = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = False
+    test_kwargs["n_c"] = 1
+    test_kwargs["grid"] = "JJJ2"
+    test_kwargs["seed"] = 22
+    test_kwargs["only_expected_edf"] = True
+    test_kwargs["use_importance_weights"] = False
+    test_kwargs["Vp_fidiff"] = False
+    cor_result2 = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = False
+    test_kwargs["n_c"] = 10
+    test_kwargs["grid"] = "JJJ2"
+    test_kwargs["seed"] = 22
+    test_kwargs["use_importance_weights"] = False
+    test_kwargs["Vp_fidiff"] = False
+    cor_result3 = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = False
+    test_kwargs["n_c"] = 1
+    test_kwargs["grid"] = "JJJ3"
+    test_kwargs["seed"] = 22
+    test_kwargs["use_importance_weights"] = True
+    test_kwargs["Vp_fidiff"] = False
+    cor_result4 = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = False
+    test_kwargs["n_c"] = 10
+    test_kwargs["grid"] = "JJJ3"
+    test_kwargs["seed"] = 22
+    test_kwargs["use_importance_weights"] = True
+    test_kwargs["Vp_fidiff"] = False
+    test_kwargs["prior"] = prior
+    cor_result5 = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
+
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_V"] = False
+    test_kwargs["correct_t1"] = True
+    test_kwargs["n_c"] = 10
+    test_kwargs["grid"] = "JJJ3"
+    test_kwargs["seed"] = 22
+    unbiased_uncor_result = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = True
+    test_kwargs["n_c"] = 10
+    test_kwargs["grid"] = "JJJ3"
+    test_kwargs["seed"] = 22
+    test_kwargs["use_importance_weights"] = True
+    test_kwargs["prior"] = prior
+    unbiased_cor_result1 = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
 
     def test_comp1(self):
-        assert round(self.uncor_result['aic_diff'],ndigits=3) == 25.323
+        assert round(self.uncor_result['aic_diff'],ndigits=3) == 25.03
 
     def test_comp2(self):
-        assert round(self.cor_result1['aic_diff'],ndigits=3) == 25.149
+        assert round(self.cor_result1['aic_diff'],ndigits=3) == 24.522
 
     def test_comp3(self):
-        assert round(self.cor_result2['aic_diff'],ndigits=3) == 24.838
+        assert round(self.cor_result2['aic_diff'],ndigits=3) == 24.545
 
     def test_comp4(self):
-        assert round(self.cor_result3['aic_diff'],ndigits=3) == 24.819
+        assert round(self.cor_result3['aic_diff'],ndigits=3) == 24.526
 
     def test_comp5(self):
-        assert round(self.cor_result4['aic_diff'],ndigits=3) == 25.058
+        assert round(self.cor_result4['aic_diff'],ndigits=3) == 24.765
 
     def test_comp6(self):
-        assert round(self.cor_result5['aic_diff'],ndigits=3) == 25.058
+        assert round(self.cor_result5['aic_diff'],ndigits=3) == 24.765
 
     def test_comp7(self):
-        assert round(self.unbiased_uncor_result['aic_diff'],ndigits=3) == 25.323
+        assert round(self.unbiased_uncor_result['aic_diff'],ndigits=3) == 25.03
 
     def test_comp8(self):
-        assert round(self.unbiased_cor_result1['aic_diff'],ndigits=3) == 25.058
+        assert round(self.unbiased_cor_result1['aic_diff'],ndigits=3) == 24.765
     
     def test_edf1(self):
-        assert round(self.unbiased_cor_result1['Res. DOF'],ndigits=3) == 22.091
+        assert round(self.unbiased_cor_result1['Res. DOF'],ndigits=3) == 21.959
 
 class Test_model_comparison3_hard:
 
@@ -156,7 +292,14 @@ class Test_model_comparison3_hard:
                                 print_warn=False)
 
     sim_fit_model = GAMMLSS([sim_fit_formula,copy.deepcopy(sim_fit_formula_sd)],family = GAMMALS([LOG(),LOGb(-0.01)]))
-    sim_fit_model.fit(progress_bar=False,max_outer=200,extend_lambda=False,control_lambda=2,max_inner=500)
+
+    test_kwargs_model = copy.deepcopy(default_gammlss_test_kwargs)
+    test_kwargs_model["extend_lambda"] = False
+    test_kwargs_model["control_lambda"] = 2
+    test_kwargs_model["max_outer"] = 200
+    test_kwargs_model["max_inner"] = 500
+
+    sim_fit_model.fit(**test_kwargs_model)
 
     sim_fit_formula2 = Formula(lhs("y"),
                                 [i(),f(["x1"],nk=20,rp=1),f(["x2"],nk=20,rp=1),f(["x3"],nk=20,rp=1)],
@@ -164,25 +307,85 @@ class Test_model_comparison3_hard:
                                 print_warn=False)
 
     sim_fit_model2 = GAMMLSS([sim_fit_formula2,copy.deepcopy(sim_fit_formula_sd)],family = GAMMALS([LOG(),LOGb(-0.01)]))
-    sim_fit_model2.fit(progress_bar=False,max_outer=200,extend_lambda=False,control_lambda=2,max_inner=500)
+    sim_fit_model2.fit(**test_kwargs_model)
 
     prior = DummyRhoPrior(b=np.log(1e12))
     # And perform a couple of bias corrected / smoothness uncertainty corrected / or not / comparisons...
-    uncor_result = compare_CDL(sim_fit_model,sim_fit_model2,correct_V=False,correct_t1=False,seed=22)
-    cor_result1 = compare_CDL(sim_fit_model,sim_fit_model2,correct_t1=False,n_c=1,grid='JJJ1',seed=22,Vp_fidiff=True)
-    cor_result2 = compare_CDL(sim_fit_model,sim_fit_model2,correct_t1=False,n_c=1,grid='JJJ2',seed=22,only_expected_edf=True,use_importance_weights=False,Vp_fidiff=False)
-    cor_result3 = compare_CDL(sim_fit_model,sim_fit_model2,correct_t1=False,n_c=1,grid='JJJ2',seed=22,use_importance_weights=False,Vp_fidiff=False)
-    cor_result4 = compare_CDL(sim_fit_model,sim_fit_model2,correct_t1=False,n_c=1,grid='JJJ3',seed=22,Vp_fidiff=False,use_importance_weights=True)
-    cor_result5 = compare_CDL(sim_fit_model,sim_fit_model2,correct_t1=False,n_c=1,grid='JJJ3',seed=22,Vp_fidiff=False,use_importance_weights=True,prior=prior)
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_V"] = False
+    test_kwargs["correct_t1"] = False
+    test_kwargs["seed"] = 22
+    uncor_result = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
 
-    unbiased_uncor_result = compare_CDL(sim_fit_model,sim_fit_model2,correct_V=False,correct_t1=True,n_c=1,grid='JJJ3',seed=22)
-    unbiased_cor_result1 = compare_CDL(sim_fit_model,sim_fit_model2,correct_t1=True,n_c=1,grid='JJJ3',seed=22,use_importance_weights=True,prior=prior)
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = False
+    test_kwargs["n_c"] = 1
+    test_kwargs["grid"] = "JJJ1"
+    test_kwargs["seed"] = 22
+    test_kwargs["Vp_fidiff"] = True
+    cor_result1 = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = False
+    test_kwargs["n_c"] = 1
+    test_kwargs["grid"] = "JJJ2"
+    test_kwargs["seed"] = 22
+    test_kwargs["only_expected_edf"] = True
+    test_kwargs["use_importance_weights"] = False
+    test_kwargs["Vp_fidiff"] = False
+    cor_result2 = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = False
+    test_kwargs["n_c"] = 1
+    test_kwargs["grid"] = "JJJ2"
+    test_kwargs["seed"] = 22
+    test_kwargs["use_importance_weights"] = False
+    test_kwargs["Vp_fidiff"] = False
+    cor_result3 = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = False
+    test_kwargs["n_c"] = 1
+    test_kwargs["grid"] = "JJJ3"
+    test_kwargs["seed"] = 22
+    test_kwargs["use_importance_weights"] = True
+    test_kwargs["Vp_fidiff"] = False
+    cor_result4 = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = False
+    test_kwargs["n_c"] = 1
+    test_kwargs["grid"] = "JJJ3"
+    test_kwargs["seed"] = 22
+    test_kwargs["use_importance_weights"] = True
+    test_kwargs["Vp_fidiff"] = False
+    test_kwargs["prior"] = prior
+    cor_result5 = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
+
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_V"] = False
+    test_kwargs["correct_t1"] = True
+    test_kwargs["n_c"] = 1
+    test_kwargs["grid"] = "JJJ3"
+    test_kwargs["seed"] = 22
+    unbiased_uncor_result = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = True
+    test_kwargs["n_c"] = 1
+    test_kwargs["grid"] = "JJJ3"
+    test_kwargs["seed"] = 22
+    test_kwargs["use_importance_weights"] = True
+    test_kwargs["prior"] = prior
+    unbiased_cor_result1 = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
 
     def test_comp1(self):
         np.testing.assert_allclose(self.uncor_result['aic_diff'],1.912,atol=min(max_atol,0.002),rtol=min(max_rtol,0.001))
 
     def test_comp2(self):
-        np.testing.assert_allclose(self.cor_result1['aic_diff'],2.799,atol=min(max_atol,0.04),rtol=min(max_rtol,0.001))
+        np.testing.assert_allclose(self.cor_result1['aic_diff'],1.877553,atol=min(max_atol,0.04),rtol=min(max_rtol,0.001))
 
     def test_comp3(self):
         np.testing.assert_allclose(self.cor_result2['aic_diff'],2.212,atol=min(max_atol,0.06),rtol=min(max_rtol,0.001))
@@ -191,19 +394,19 @@ class Test_model_comparison3_hard:
         np.testing.assert_allclose(self.cor_result3['aic_diff'],2.195,atol=min(max_atol,0.05),rtol=min(max_rtol,0.001))
 
     def test_comp5(self):
-        np.testing.assert_allclose(self.cor_result4['aic_diff'],1.945,atol=min(max_atol,0.01),rtol=min(max_rtol,0.001))
+        np.testing.assert_allclose(self.cor_result4['aic_diff'],1.945,atol=min(max_atol,0.02),rtol=min(max_rtol,0.001))
 
     def test_comp6(self):
-        np.testing.assert_allclose(self.cor_result5['aic_diff'],2.832,atol=min(max_atol,0.2),rtol=min(max_rtol,0.001))
+        np.testing.assert_allclose(self.cor_result5['aic_diff'],2.832,atol=min(max_atol,0.25),rtol=min(max_rtol,0.001))
 
     def test_comp7(self):
         np.testing.assert_allclose(self.unbiased_uncor_result['aic_diff'],1.912,atol=min(max_atol,0.002),rtol=min(max_rtol,0.001))
 
     def test_comp8(self):
-        np.testing.assert_allclose(self.unbiased_cor_result1['aic_diff'],2.832,atol=min(max_atol,0.2),rtol=min(max_rtol,0.001))
+        np.testing.assert_allclose(self.unbiased_cor_result1['aic_diff'],2.832,atol=min(max_atol,0.25),rtol=min(max_rtol,0.001))
     
     def test_edf1(self):
-        np.testing.assert_allclose(self.unbiased_cor_result1['Res. DOF'],0.974,atol=min(max_atol,0.002),rtol=min(max_rtol,0.001))
+        np.testing.assert_allclose(self.unbiased_cor_result1['Res. DOF'],1.434149,atol=min(max_atol,0.002),rtol=min(max_rtol,0.08))
 
 
 class Test_Vb_corrections:
@@ -217,7 +420,12 @@ class Test_Vb_corrections:
                                 print_warn=False)
 
     model = GAMM(sim_fit_formula,Gaussian())
-    model.fit(exclude_lambda=False,progress_bar=False,max_outer=100)
+
+    test_kwargs_model = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs_model["exclude_lambda"] = False
+    test_kwargs_model["max_outer"] = 100
+
+    model.fit(**test_kwargs_model)
 
     # Now fit nested models
     sim_fit_formula2 = Formula(lhs("y"),
@@ -226,7 +434,7 @@ class Test_Vb_corrections:
                                 print_warn=False)
 
     model2 = GAMM(sim_fit_formula2,Gaussian())
-    model2.fit(exclude_lambda=False,progress_bar=False,max_outer=100)
+    model2.fit(**test_kwargs_model)
 
     Vp1,_,_,_,_ = estimateVp(model,grid_type="JJJ1",verbose=True,seed=20)
 

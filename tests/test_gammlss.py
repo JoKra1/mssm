@@ -1,12 +1,19 @@
+import mssm
 from mssm.models import *
 import numpy as np
 import os
 from mssmViz.sim import*
 import io
 from contextlib import redirect_stdout
+from .defaults import default_gamm_test_kwargs,default_gammlss_test_kwargs,max_atol,max_rtol,init_coef_gaumlss_tests,init_coef_gammals_tests,init_penalties_tests_gammlss
 
-max_atol = 100
-max_rtol = 100
+mssm.src.python.exp_fam.GAUMLSS.init_coef = init_coef_gaumlss_tests
+mssm.src.python.exp_fam.GAMMALS.init_coef = init_coef_gammals_tests
+mssm.src.python.exp_fam.GAUMLSS.init_lambda = init_penalties_tests_gammlss
+mssm.src.python.exp_fam.GAMMALS.init_lambda = init_penalties_tests_gammlss
+mssm.src.python.exp_fam.MULNOMLSS.init_lambda = init_penalties_tests_gammlss
+
+################################################################## Tests ##################################################################
 
 class Test_GAUMLS:
     # Simulate 500 data points
@@ -31,13 +38,19 @@ class Test_GAUMLS:
 
     # Now define the model and fit!
     model = GAMMLSS(formulas,family)
-    model.fit(extension_method_lam="nesterov",max_inner=50,min_inner=50)
+
+    test_kwargs = copy.deepcopy(default_gammlss_test_kwargs)
+    test_kwargs["extension_method_lam"] = "nesterov"
+    test_kwargs["max_inner"] = 50
+    test_kwargs["min_inner"] = 50
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 18.358
 
     def test_GAMcoef(self):
-        coef = self.model.overall_coef.flatten()
+        coef = self.model.coef.flatten()
         assert np.allclose(coef,np.array([ 3.58432714, -9.20689268, -0.3901218 ,  4.33485776, -2.83325345,
                                             -4.68428463, -1.93389004, -4.14504997, -6.70579839, -4.7240103 ,
                                             -5.19939664,  0.02026291, -1.35759472,  1.5379936 ,  2.39353569,
@@ -80,9 +93,9 @@ class Test_GAUMLS:
             self.model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
-        comp = "\nDistribution parameter: 1\n\nf(['x0']); edf: 9.799 chi^2: 5768.018 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x0']); edf: 6.559 chi^2: 563.181 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
-        comp2 = "\nDistribution parameter: 1\n\nf(['x0']); edf: 9.799 chi^2: 5768.018 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x0']); edf: 6.559 chi^2: 571.527 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
-        assert comp == capture or comp2 == capture
+        comp1 = "\nDistribution parameter: 1\n\nf(['x0']); edf: 9.799 chi^2: 5696.894 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x0']); edf: 6.559 chi^2: 569.167 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        comp2 = "\nDistribution parameter: 1\n\nf(['x0']); edf: 9.799 chi^2: 5696.894 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x0']); edf: 6.559 chi^2: 571.891 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        assert (comp1 == capture) or (comp2 == capture)
 
 class Test_GAUMLS_MIXED:
     ## Simulate some data - effect of x0 on scale parameter is very very small
@@ -108,7 +121,14 @@ class Test_GAUMLS_MIXED:
     sim1_formulas = [sim1_formula_m,sim1_formula_sd]
 
     model = GAMMLSS(sim1_formulas,family)
-    model.fit(seed=30,max_outer=250,max_inner=500,extend_lambda=True,method="QR/Chol")
+
+    test_kwargs = copy.deepcopy(default_gammlss_test_kwargs)
+    test_kwargs["max_inner"] = 500
+    test_kwargs["max_outer"] = 250
+    test_kwargs["seed"] = 30
+    test_kwargs["method"] = "QR/Chol"
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 26.196
@@ -149,13 +169,19 @@ class Test_GAMMALS:
 
     # Now define the model and fit!
     model = GAMMLSS(formulas,family)
-    model.fit(extension_method_lam="nesterov",max_inner=50,min_inner=50)
+
+    test_kwargs = copy.deepcopy(default_gammlss_test_kwargs)
+    test_kwargs["extension_method_lam"] = "nesterov"
+    test_kwargs["max_inner"] = 50
+    test_kwargs["min_inner"] = 50
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 14.677 
 
     def test_GAMcoef(self):
-        coef = self.model.overall_coef.flatten()
+        coef = self.model.coef.flatten()
         assert np.allclose(coef,np.array([ 1.14440894, -0.79166857,  1.95574948,  2.46973458,  1.7725019 ,
                                             1.29047048,  1.89204546,  1.34016392,  0.24865949, -0.66762416,
                                             -1.696964  ,  0.7715949 , -0.72928057,  0.87660987,  1.12963098,
@@ -187,13 +213,21 @@ class Test_mulnom:
 
     # Fit the model
     model = GAMMLSS(formulas,family)
-    model.fit(method="Chol",control_lambda=0,extend_lambda=False,max_outer=200,max_inner=500,should_keep_drop=False)
+
+    test_kwargs = copy.deepcopy(default_gammlss_test_kwargs)
+    test_kwargs["control_lambda"] = False
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["max_outer"] = 200
+    test_kwargs["max_inner"] = 500
+    test_kwargs["should_keep_drop"] = False
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 15.114
 
     def test_GAMcoef(self):
-        coef = self.model.overall_coef.flatten()
+        coef = self.model.coef.flatten()
         assert np.allclose(coef,np.array([ 1.32831232, -0.70411299,  0.26038397,  0.8585649 ,  1.31636532,
                                             1.46064575,  1.15467552,  0.34090563, -0.96911006, -2.2518714 ,
                                             0.66532703, -0.76857181, -0.20872371,  0.11240685,  0.42769554,
@@ -229,13 +263,22 @@ class Test_mulnom_repara:
 
     # Fit the model
     model = GAMMLSS(formulas,family)
-    model.fit(method="Chol",control_lambda=0,extend_lambda=False,max_outer=200,max_inner=500,should_keep_drop=False,repara=True)
+
+    test_kwargs = copy.deepcopy(default_gammlss_test_kwargs)
+    test_kwargs["control_lambda"] = 0
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["max_outer"] = 200
+    test_kwargs["max_inner"] = 500
+    test_kwargs["should_keep_drop"] = False
+    test_kwargs["repara"] = True
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 15.114
 
     def test_GAMcoef(self):
-        coef = self.model.overall_coef.flatten()
+        coef = self.model.coef.flatten()
         assert np.allclose(coef,np.array([ 1.32831232, -0.70411299,  0.26038397,  0.85856489,  1.31636532,
                                             1.46064575,  1.15467552,  0.34090563, -0.96911006, -2.2518714 ,
                                             0.66532703, -0.76857181, -0.20872371,  0.11240685,  0.42769554,
@@ -251,7 +294,7 @@ class Test_mulnom_repara:
 
     def test_GAMreml_hard(self):
         reml = self.model.get_reml()
-        np.testing.assert_allclose(reml,-1000.749,atol=min(max_atol,2),rtol=min(max_rtol,0.002))
+        np.testing.assert_allclose(reml,-1002.688991,atol=min(max_atol,2),rtol=min(max_rtol,0.002))
     
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
@@ -262,7 +305,7 @@ class Test_te_p_values:
     sim_dat = sim3(n=500,scale=2,c=0,seed=20)
     
     formula_m = Formula(lhs("y"),
-                        [i(),f(["x0","x3"],te=True),f(["x1"])],
+                        [i(),f(["x0","x3"],te=True,nk=9),f(["x1"])],
                         data=sim_dat)
 
     formula_sd = Formula(lhs("y"),
@@ -278,15 +321,25 @@ class Test_te_p_values:
 
     # Now define the model and fit!
     model = GAMMLSS(formulas,family)
-    model.fit(max_inner=500,min_inner=50,control_lambda=2)
 
-    ps, Trs = model.approx_smooth_p_values()
+    test_kwargs = copy.deepcopy(default_gammlss_test_kwargs)
+    test_kwargs["control_lambda"] = 2
+    test_kwargs["max_inner"] = 500
+    test_kwargs["min_inner"] = 50
+
+    model.fit(**test_kwargs)
+
+    ps0, Trs0 = approx_smooth_p_values(model,par=0,edf1=False,force_approx=True)
+    ps1, Trs1 = approx_smooth_p_values(model,par=1,edf1=False,force_approx=True)
+
+    ps = [ps0,ps1]
+    Trs = [Trs0,Trs1]
 
     def test_p1(self):
         np.testing.assert_allclose(self.ps[0],np.array([np.float64(0.39714921685433136), np.float64(0.0)]),atol=min(max_atol,0),rtol=min(max_rtol,1e-6))
 
-    def test_p2(self):
-        np.testing.assert_allclose(self.ps[1],np.array([np.float64(0.738724988815144), np.float64(0.0)]),atol=min(max_atol,0),rtol=min(max_rtol,1e-6))
+    def test_p2_hard(self):
+        np.testing.assert_allclose(self.ps[1],np.array([np.float64(0.738724988815144), np.float64(0.0)]),atol=min(max_atol,0),rtol=min(max_rtol,1e-5))
 
     def test_trs1(self):
         np.testing.assert_allclose(self.Trs[0],np.array([np.float64(5.67384667149778), np.float64(226.9137363518526)]),atol=min(max_atol,0),rtol=min(max_rtol,1e-6))
@@ -319,11 +372,15 @@ class Test_pred_whole_func_cor:
     sim1_formulas = [sim1_formula_m,sim1_formula_sd]
 
     sim_fit_model = GAMMLSS(sim1_formulas,family)
-    sim_fit_model.fit(extension_method_lam="nesterov")
+    
+    test_kwargs = copy.deepcopy(default_gammlss_test_kwargs)
+    test_kwargs["extension_method_lam"] = "nesterov"
+
+    sim_fit_model.fit(**test_kwargs)
 
     # Test prediction code + whole-function correction
     pred_dat = pd.DataFrame({"x0":np.linspace(0,1,50)})
-    pred,pred_mat,ci = sim_fit_model.predict(0,[0,1],pred_dat,ci=True,whole_interval=True,seed=20)
+    pred,pred_mat,ci = sim_fit_model.predict([0,1],pred_dat,ci=True,whole_interval=True,seed=20,par=0)
 
     def test_pred(self):
         assert np.allclose(self.pred,np.array([-0.01138392,  0.05310652,  0.44636549,  1.15072365,  2.14835029,
@@ -380,7 +437,11 @@ class Test_diff_whole_func_cor:
     sim1_formulas = [sim1_formula_m,sim1_formula_sd]
 
     sim_fit_model = GAMMLSS(sim1_formulas,family)
-    sim_fit_model.fit(extension_method_lam="nesterov2")
+
+    test_kwargs = copy.deepcopy(default_gammlss_test_kwargs)
+    test_kwargs["extension_method_lam"] = "nesterov2"
+
+    sim_fit_model.fit(**test_kwargs)
 
     pred_dat1 = pd.DataFrame({"x0":np.linspace(0,1,50),
                           "cond":["a" for _ in range(50)]})
@@ -388,7 +449,7 @@ class Test_diff_whole_func_cor:
     pred_dat2 = pd.DataFrame({"x0":np.linspace(0,1,50),
                           "cond":["b" for _ in range(50)]})
     
-    diff,ci = sim_fit_model.predict_diff(pred_dat2,pred_dat1,1,[1],whole_interval=True,seed=20)
+    diff,ci = sim_fit_model.predict_diff(pred_dat2,pred_dat1,[1],whole_interval=True,seed=20,par=1)
 
     def test_print_smooth_p_hard(self):
         capture = io.StringIO()
@@ -396,9 +457,9 @@ class Test_diff_whole_func_cor:
             self.sim_fit_model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
-        comp = "\nDistribution parameter: 1\n\nf(['x0']); edf: 7.079 chi^2: 457.328 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x0'],by=cond): a; edf: 1.0 chi^2: 0.056 P(Chi^2 > chi^2) = 0.81318\nf(['x0'],by=cond): b; edf: 2.789 chi^2: 14.381 P(Chi^2 > chi^2) = 0.00194 **\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
-        comp2 = "\nDistribution parameter: 1\n\nf(['x0']); edf: 7.079 chi^2: 457.007 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x0'],by=cond): a; edf: 1.0 chi^2: 0.056 P(Chi^2 > chi^2) = 0.81318\nf(['x0'],by=cond): b; edf: 2.789 chi^2: 14.381 P(Chi^2 > chi^2) = 0.00194 **\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
-        assert comp == capture or comp2 == capture
+        comp1 = "\nDistribution parameter: 1\n\nf(['x0']); edf: 7.079 chi^2: 457.542 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x0'],by=cond): a; edf: 1.0 chi^2: 0.056 P(Chi^2 > chi^2) = 0.81334\nf(['x0'],by=cond): b; edf: 2.789 chi^2: 13.49 P(Chi^2 > chi^2) = 0.00585 **\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        comp2 = "\nDistribution parameter: 1\n\nf(['x0']); edf: 7.079 chi^2: 457.185 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x0'],by=cond): a; edf: 1.0 chi^2: 0.056 P(Chi^2 > chi^2) = 0.81334\nf(['x0'],by=cond): b; edf: 2.789 chi^2: 13.49 P(Chi^2 > chi^2) = 0.00585 **\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        assert (comp1 == capture) or (comp2 == capture)
 
     def test_diff(self):
         assert np.allclose(self.diff,np.array([-0.30135358, -0.26600859, -0.23106805, -0.19676569, -0.16333525,

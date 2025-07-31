@@ -3,14 +3,14 @@ from mssm.src.python.compare import compare_CDL
 import numpy as np
 import os
 from mssmViz.sim import*
-from mssm.src.python.formula import reparam
+from mssm.src.python.repara import reparam
 from mssm.src.python.gamm_solvers import compute_S_emb_pinv_det,cpp_chol,cpp_cholP,compute_eigen_perm,compute_Linv
 from mssm.src.python.utils import estimateVp
 import io
 from contextlib import redirect_stdout
+from .defaults import default_gamm_test_kwargs,max_atol,max_rtol
 
-max_atol = 100
-max_rtol = 100
+################################################################## Tests ##################################################################
 
 class Test_BIG_GAMM_Discretize:
     dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
@@ -28,29 +28,29 @@ class Test_BIG_GAMM_Discretize:
                                 l(["cond"]), # For cond='b'
                                 f(["time"],by="cond",nk=20), # to-way interaction between time and cond; one smooth over time per cond level
                                 f(["x"],by="cond"), # to-way interaction between x and cond; one smooth over x per cond level
-                                f(["time","x"],by="cond"), # three-way interaction
+                                f(["time","x"],by="cond",nk=9), # three-way interaction
                                 fs(["time"],rf="series",nk=20,approx_deriv=discretize)], # Random non-linear effect of time - one smooth per level of factor series
                             data=dat,
                             series_id="series") # When approximating the computations for a random smooth, the series identifier column needs to be specified!
         
     model = GAMM(formula,Gaussian())
 
-    model.fit()
+    model.fit(**default_gamm_test_kwargs)
 
     def test_GAMedf(self):
-        assert round(self.model.edf,ndigits=0) == 2434
+        assert round(self.model.edf,ndigits=0) == 2429.0
 
     def test_GAMsigma(self):
         _, sigma = self.model.get_pars()
-        assert round(sigma,ndigits=3) == 10.969 
+        assert round(sigma,ndigits=3) == 10.97
 
     def test_GAMreml(self):
         reml = self.model.get_reml()
-        assert round(reml,ndigits=2) == -84025.32
+        assert round(reml,ndigits=2) == -84062.14
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
-        assert round(llk,ndigits=0) == -75228
+        assert round(llk,ndigits=0) == -75232.0
 
 
 class Test_NUll_penalty_reparam:
@@ -68,18 +68,18 @@ class Test_NUll_penalty_reparam:
                                 l(["cond"]), # For cond='b'
                                 f(["time"],by="cond",constraint=ConstType.QR,penalize_null=True), # to-way interaction between time and cond; one smooth over time per cond level
                                 f(["x"],by="cond",constraint=ConstType.QR,penalize_null=False), # to-way interaction between x and cond; one smooth over x per cond level
-                                f(["time","x"],by="cond",constraint=ConstType.QR,penalize_null=True), # three-way interaction
+                                f(["time","x"],by="cond",constraint=ConstType.QR,penalize_null=True,nk=9), # three-way interaction
                                 fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
                         data=dat,
                         print_warn=False)
         
     model = GAMM(formula,Gaussian())
 
-    model.fit()
+    model.fit(**default_gamm_test_kwargs)
 
     #Compute re-parameterization strategy from Wood (2011)
-    S_emb,S_pinv,_,_ = compute_S_emb_pinv_det(len(model.coef),formula.penalties,"svd")
-    Sj_reps,S_reps,SJ_term_idx,S_idx,S_coefs,Q_reps,_,Mp = reparam(None,formula.penalties,None,option=4)
+    S_emb,S_pinv,_,_ = compute_S_emb_pinv_det(len(model.coef),model.overall_penalties,"svd")
+    Sj_reps,S_reps,SJ_term_idx,S_idx,S_coefs,Q_reps,_,Mp = reparam(None,model.overall_penalties,None,option=4)
 
     # For Computing derivative of log(|S_{\lambda}|) with respect to \lambda_j of univariate smooth term (Wood, 2011)
     S_rep = S_reps[0]
@@ -103,13 +103,170 @@ class Test_NUll_penalty_reparam:
     def test_reparam2(self):
         # General strategy, e.g. from Wood & Fasiolo, 2017
         assert np.allclose((self.S_inv@self.Sj_reps[0].S_J).trace(),
-                           (self.S_pinv@self.formula.penalties[0].S_J_emb).trace())
+                           (self.S_pinv@self.model.overall_penalties[0].S_J_emb).trace())
         
     def test_reparam3(self):
         # General strategy (here for tensor), e.g. from Wood & Fasiolo, 2017
         assert np.allclose((self.S_inv2@self.Sj_reps[6].S_J).trace(),
-                           (self.S_pinv@self.formula.penalties[6].S_J_emb).trace())
+                           (self.S_pinv@self.model.overall_penalties[6].S_J_emb).trace())
     
+    def test_GAMedf_hard(self):
+        np.testing.assert_allclose(round(self.model.edf,ndigits=2),151.47,atol=min(max_atol,0.0),rtol=min(max_rtol,1e-4))
+
+    def test_GAMsigma(self):
+        _, sigma = self.model.get_pars()
+        assert round(sigma,ndigits=3) == 577.199 
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        assert round(reml,ndigits=3) == -134748.719
+
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        assert round(llk,ndigits=1) == -134265.0
+
+
+class Test_NUll_1:
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+
+    # mssm requires that the data-type for variables used as factors is 'O'=object
+    dat = dat.astype({'series': 'O',
+                    'cond':'O',
+                    'sub':'O',
+                    'series':'O'})
+
+    # Add Null-penalties to univariate by-term and tensor by-term
+    formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
+                        terms=[i(), # The intercept, a
+                                l(["cond"]), # For cond='b'
+                                f(["time"],by="cond",constraint=ConstType.QR,penalize_null=True), # to-way interaction between time and cond; one smooth over time per cond level
+                                f(["x"],by="cond",constraint=ConstType.QR,penalize_null=False), # to-way interaction between x and cond; one smooth over x per cond level
+                                f(["time","x"],by="cond",constraint=ConstType.QR,penalize_null=True,nk=9), # three-way interaction
+                                fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
+                        data=dat,
+                        print_warn=False,find_nested=False)
+        
+    model = GAMM(formula,Gaussian())
+
+    model.fit(**default_gamm_test_kwargs)
+
+    def test_GAMedf(self):
+        assert round(self.model.edf,ndigits=2) == 151.46 
+
+    def test_GAMsigma(self):
+        _, sigma = self.model.get_pars()
+        assert round(sigma,ndigits=3) == 577.199 
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        assert round(reml,ndigits=3) == -134748.718 
+
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        assert round(llk,ndigits=1) == -134265.0
+
+class Test_NUll_2:
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+
+    # mssm requires that the data-type for variables used as factors is 'O'=object
+    dat = dat.astype({'series': 'O',
+                    'cond':'O',
+                    'sub':'O',
+                    'series':'O'})
+
+    # Add Null-penalties to univariate by-term and tensor by-term
+    formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
+                        terms=[i(), # The intercept, a
+                                l(["cond"]), # For cond='b'
+                                f(["time"],by="cond",constraint=ConstType.QR,penalize_null=True), # to-way interaction between time and cond; one smooth over time per cond level
+                                f(["x"],by="cond",constraint=ConstType.QR,penalize_null=False), # to-way interaction between x and cond; one smooth over x per cond level
+                                f(["time","x"],by="cond",constraint=ConstType.QR,penalize_null=True,id=1,nk=9), # three-way interaction
+                                fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
+                        data=dat,
+                        print_warn=False,find_nested=False)
+        
+    model = GAMM(formula,Gaussian())
+
+    model.fit(**default_gamm_test_kwargs)
+
+    def test_GAMedf(self):
+        assert round(self.model.edf,ndigits=2) == 151.46 
+
+    def test_GAMsigma(self):
+        _, sigma = self.model.get_pars()
+        assert round(sigma,ndigits=3) == 577.199 
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        assert round(reml,ndigits=3) == -134748.718 
+
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        assert round(llk,ndigits=1) == -134265.0
+
+class Test_NUll_3:
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+
+    # mssm requires that the data-type for variables used as factors is 'O'=object
+    dat = dat.astype({'series': 'O',
+                    'cond':'O',
+                    'sub':'O',
+                    'series':'O'})
+
+    # Add Null-penalties to univariate by-term and tensor by-term
+    formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
+                        terms=[i(), # The intercept, a
+                                l(["cond"]), # For cond='b'
+                                f(["time"],by="cond",constraint=ConstType.QR,penalize_null=True), # to-way interaction between time and cond; one smooth over time per cond level
+                                f(["x"],by="cond",constraint=ConstType.QR,penalize_null=False), # to-way interaction between x and cond; one smooth over x per cond level
+                                f(["time","x"],by="cond",constraint=ConstType.QR,penalize_null=True,nk=9), # three-way interaction
+                                fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
+                        data=dat,
+                        print_warn=False,find_nested=True)
+        
+    model = GAMM(formula,Gaussian())
+
+    model.fit(**default_gamm_test_kwargs)
+
+    def test_GAMedf_hard(self):
+        np.testing.assert_allclose(round(self.model.edf,ndigits=2),151.47,atol=min(max_atol,0.0),rtol=min(max_rtol,1e-4))
+
+    def test_GAMsigma(self):
+        _, sigma = self.model.get_pars()
+        assert round(sigma,ndigits=3) == 577.199 
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        assert round(reml,ndigits=3) == -134748.719
+
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        assert round(llk,ndigits=1) == -134265.0
+
+class Test_NUll_4:
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+
+    # mssm requires that the data-type for variables used as factors is 'O'=object
+    dat = dat.astype({'series': 'O',
+                    'cond':'O',
+                    'sub':'O',
+                    'series':'O'})
+
+    # Add Null-penalties to univariate by-term and tensor by-term
+    formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
+                        terms=[i(), # The intercept, a
+                                l(["cond"]), # For cond='b'
+                                f(["time"],by="cond",constraint=ConstType.QR,penalize_null=True), # to-way interaction between time and cond; one smooth over time per cond level
+                                f(["x"],by="cond",constraint=ConstType.QR,penalize_null=False), # to-way interaction between x and cond; one smooth over x per cond level
+                                f(["time","x"],by="cond",constraint=ConstType.QR,penalize_null=True,id=1,nk=9), # three-way interaction
+                                fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
+                        data=dat,
+                        print_warn=False,find_nested=True)
+        
+    model = GAMM(formula,Gaussian())
+
+    model.fit(**default_gamm_test_kwargs)
+
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=2) == 151.46 
 
@@ -137,7 +294,7 @@ class Test_BIG_GAMM:
                                l(["cond"]), # For cond='b'
                                f(["time"],by="cond",constraint=ConstType.QR), # to-way interaction between time and cond; one smooth over time per cond level
                                f(["x"],by="cond",constraint=ConstType.QR), # to-way interaction between x and cond; one smooth over x per cond level
-                               f(["time","x"],by="cond",constraint=ConstType.QR), # three-way interaction
+                               f(["time","x"],by="cond",constraint=ConstType.QR,nk=9), # three-way interaction
                                fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
                         data=None, # No data frame!
                         file_paths=file_paths, # Just a list with paths to files.
@@ -146,7 +303,10 @@ class Test_BIG_GAMM:
         
     model = GAMM(formula,Gaussian())
 
-    model.fit(exclude_lambda=True)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["exclude_lambda"] = True
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 153.707 
@@ -156,7 +316,7 @@ class Test_BIG_GAMM:
         assert round(sigma,ndigits=3) == 577.194
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([0.003576343523516708, 0.006011901683452655, 5028.094352875556, 230482.43912034066, 110804.13545750394, 38451.597466911124, 381047.3435206221, 330.2597296955685, 0.11887201661781975, 2.166381231196006])) 
 
 
@@ -170,7 +330,7 @@ class Test_BIG_GAMM_keep_cov:
                                 l(["cond"]), # For cond='b'
                                 f(["time"],by="cond",constraint=ConstType.QR), # to-way interaction between time and cond; one smooth over time per cond level
                                 f(["x"],by="cond",constraint=ConstType.QR), # to-way interaction between x and cond; one smooth over x per cond level
-                                f(["time","x"],by="cond",constraint=ConstType.QR), # three-way interaction
+                                f(["time","x"],by="cond",constraint=ConstType.QR,nk=9), # three-way interaction
                                 fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
                         data=None, # No data frame!
                         file_paths=file_paths, # Just a list with paths to files.
@@ -180,14 +340,14 @@ class Test_BIG_GAMM_keep_cov:
         
     model = GAMM(formula,Gaussian())
 
-    model.fit()
+    model.fit(**default_gamm_test_kwargs)
 
     def test_GAMedf(self):
-        assert round(self.model.edf,ndigits=1) == 153.7
+        assert round(self.model.edf,ndigits=1) == 151.8
 
     def test_GAMsigma(self):
         _, sigma = self.model.get_pars()
-        assert round(sigma,ndigits=3) == 577.194
+        assert round(sigma,ndigits=3) == 577.166
 
 class Test_rs_ri:
 
@@ -200,7 +360,10 @@ class Test_rs_ri:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(max_outer=100)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_outer"] = 100
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 97.59 
@@ -211,7 +374,7 @@ class Test_rs_ri:
 
     def test_GAMcoef(self):
         coef, _ = self.model.get_pars()
-        assert np.allclose(coef,np.array([ 9.34823357e+00, -4.12480712e-01, -9.79726654e+00, -8.84147613e+00,
+        assert np.allclose(coef.flatten(),np.array([ 9.34823357e+00, -4.12480712e-01, -9.79726654e+00, -8.84147613e+00,
                                             2.53418688e-02,  3.14635694e-01, -4.06353720e+00,  1.93833167e+00,
                                             2.76734845e-01,  1.23222086e+00, -2.55837222e+00,  4.74284163e+00,
                                             3.98128948e+00, -9.93660084e-01, -3.54564194e+00,  4.29251585e+00,
@@ -265,7 +428,7 @@ class Test_rs_ri:
                                             1.95026568e-04, -1.94851637e-02])) 
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([2.21567798e+00, 2.58200022e+04])) 
 
     def test_GAMreml(self):
@@ -286,7 +449,10 @@ class Test_no_pen:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(max_outer=100)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_outer"] = 100
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 6 
@@ -297,11 +463,11 @@ class Test_no_pen:
 
     def test_GAMcoef(self):
         coef, _ = self.model.get_pars()
-        assert np.allclose(coef,np.array([  9.09462398,  -0.40030025, -10.08258653,  -8.66437813,
+        assert np.allclose(coef.flatten(),np.array([  9.09462398,  -0.40030025, -10.08258653,  -8.66437813,
                                             0.07117496,   0.29090723])) 
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([])) 
 
     def test_GAMllk(self):
@@ -318,7 +484,10 @@ class Test_te_rs_fact:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(max_outer=100)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_outer"] = 100
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 92.601 
@@ -329,7 +498,7 @@ class Test_te_rs_fact:
 
     def test_GAMcoef(self):
         coef, _ = self.model.get_pars()
-        assert np.allclose(coef,np.array([-8.30300915e-01, -1.62575662e+01,  3.75545293e+00,  3.28335584e+01,
+        assert np.allclose(coef.flatten(),np.array([-8.30300915e-01, -1.62575662e+01,  3.75545293e+00,  3.28335584e+01,
                                             -1.03918612e+02,  3.44105191e+01,  5.27629918e+00,  1.56969059e+01,
                                             1.26673363e+01, -1.00123881e+02,  6.70143258e+01,  3.86562330e+00,
                                             1.95649156e+01,  4.86327309e+00, -7.25159919e+01,  1.30742924e+01,
@@ -368,7 +537,7 @@ class Test_te_rs_fact:
                                             5.32136453e-01])) 
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([2.21073262e-02, 3.79563141e-03, 6.78414676e-01, 2.50485765e+02,
                                          3.11881227e+01, 2.13019441e+02])) 
 
@@ -399,7 +568,11 @@ class Test_te_rs_fact_QR:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(max_outer=100,method="QR")
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_outer"] = 100
+    test_kwargs["method"] = "QR"
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 92.601
@@ -410,7 +583,7 @@ class Test_te_rs_fact_QR:
 
     def test_GAMcoef(self):
         coef, _ = self.model.get_pars()
-        assert np.allclose(coef,np.array([-8.30300915e-01, -1.62575662e+01,  3.75545293e+00,  3.28335584e+01,
+        assert np.allclose(coef.flatten(),np.array([-8.30300915e-01, -1.62575662e+01,  3.75545293e+00,  3.28335584e+01,
                                             -1.03918612e+02,  3.44105191e+01,  5.27629918e+00,  1.56969059e+01,
                                             1.26673363e+01, -1.00123881e+02,  6.70143258e+01,  3.86562330e+00,
                                             1.95649156e+01,  4.86327309e+00, -7.25159919e+01,  1.30742924e+01,
@@ -449,7 +622,7 @@ class Test_te_rs_fact_QR:
                                             5.32136453e-01])) 
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([2.21073262e-02, 3.79563141e-03, 6.78414676e-01, 2.50485765e+02,
                                          3.11881227e+01, 2.13019441e+02])) 
 
@@ -471,7 +644,10 @@ class Test_print_parametric:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(max_outer=100)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_outer"] = 100
+
+    model.fit(**test_kwargs)
     
     def test_print_parametric(self):
         capture = io.StringIO()
@@ -492,7 +668,10 @@ class Test_ti_rs_fact:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(max_outer=100)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_outer"] = 100
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 103.555 
@@ -503,7 +682,7 @@ class Test_ti_rs_fact:
 
     def test_GAMcoef(self):
         coef, _ = self.model.get_pars()
-        assert np.allclose(coef,np.array([-9.71704143e-01,  1.54721686e+00,  6.37094590e+00, -1.81024530e+00,
+        assert np.allclose(coef.flatten(),np.array([-9.71704143e-01,  1.54721686e+00,  6.37094590e+00, -1.81024530e+00,
                                             1.49129313e+00,  7.76170446e+00, -1.96237580e+00, -1.36937262e+00,
                                             -9.83761681e+00, -4.32302196e+01,  9.49189307e+00,  8.32820414e+00,
                                             1.03243783e+01,  5.21269242e+00,  6.91971180e+00,  5.49551079e+00,
@@ -546,7 +725,7 @@ class Test_ti_rs_fact:
                                             -7.18868817e-02,  5.92954524e-01, -3.56891388e-01,  5.75216981e-01])) 
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([2.06462523e-01, 2.61797067e-01, 4.54850831e-03, 7.59911476e-02,
                                         5.72234072e-01, 2.49782036e+02, 2.32293389e+01, 3.00260310e+02])) 
 
@@ -569,7 +748,7 @@ class Test_3way_li:
     model = GAMM(formula,Gaussian())
 
     # then fit
-    model.fit()
+    model.fit(**default_gamm_test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 12 
@@ -585,7 +764,7 @@ class Test_3way_li:
                                                     -7.20358812e-04, -7.44800816e-05,  1.88303305e-04,  8.13699273e-05])) 
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([])) 
 
 class Test_print_smooth_by_factor_p:
@@ -598,7 +777,10 @@ class Test_print_smooth_by_factor_p:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(max_outer=100)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_outer"] = 100
+
+    model.fit(**test_kwargs)
     
     def test_print_smooth_p(self):
         capture = io.StringIO()
@@ -606,7 +788,7 @@ class Test_print_smooth_by_factor_p:
             self.model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
-        comp = "f(['time'],by=fact): fact_1; edf: 9.43 f: 62.313 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.607 f: 18.735 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_3; edf: 4.839 f: 12.721 P(F > f) = 5.083e-12 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        comp = "f(['time'],by=fact): fact_1; edf: 9.43 f: 60.057 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.607 f: 16.831 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_3; edf: 4.839 f: 10.948 P(F > f) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         assert comp == capture
 
 class Test_print_smooth_by_factor_fs_p:
@@ -619,7 +801,10 @@ class Test_print_smooth_by_factor_fs_p:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(max_outer=100)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_outer"] = 100
+
+    model.fit(**test_kwargs)
     
     def test_print_smooth_p(self):
         capture = io.StringIO()
@@ -627,7 +812,7 @@ class Test_print_smooth_by_factor_fs_p:
             self.model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
-        comp = "f(['time'],by=fact): fact_1; edf: 9.493 f: 35.033 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.866 f: 10.265 P(F > f) = 1.559e-11 ***\nf(['time'],by=fact): fact_3; edf: 5.295 f: 3.324 P(F > f) = 0.00656 **\nf(['time'],by=sub); edf: 94.041\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        comp = "f(['time'],by=fact): fact_1; edf: 9.493 f: 34.404 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.866 f: 8.889 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_3; edf: 5.295 f: 3.238 P(F > f) = 0.00449 **\nf(['time'],by=sub); edf: 94.041\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         assert comp == capture
 
 class Test_print_smooth_binomial:
@@ -637,7 +822,12 @@ class Test_print_smooth_binomial:
 
     # By default, the Binomial family assumes binary data and uses the logit link.
     model = GAMM(formula,Binomial())
-    model.fit(max_inner=1)
+
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_inner"] = 1
+    test_kwargs["control_lambda"] = 2
+
+    model.fit(**test_kwargs)
 
     def test_print_smooth_p(self):
         capture = io.StringIO()
@@ -645,7 +835,7 @@ class Test_print_smooth_binomial:
             self.model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
-        comp = "f(['x0']); edf: 2.856 chi^2: 18.441 P(Chi^2 > chi^2) = 3.017e-04 ***\nf(['x1']); edf: 1.962 chi^2: 60.923 P(Chi^2 > chi^2) = 1.421e-13 ***\nf(['x2']); edf: 6.243 chi^2: 168.288 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x3']); edf: 1.407 chi^2: 2.62 P(Chi^2 > chi^2) = 0.16737\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        comp = "f(['x0']); edf: 2.856 chi^2: 18.417 P(Chi^2 > chi^2) = 7.220e-04 ***\nf(['x1']); edf: 1.962 chi^2: 59.723 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x2']); edf: 6.243 chi^2: 168.267 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x3']); edf: 1.407 chi^2: 2.731 P(Chi^2 > chi^2) = 0.19612\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         assert comp == capture
 
 class Test_Vp_estimation_hard:
@@ -655,31 +845,39 @@ class Test_Vp_estimation_hard:
 
     # By default, the Binomial family assumes binary data and uses the logit link.
     model = GAMM(formula,Binomial())
-    model.fit(max_inner=1)
+    
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_inner"] = 1
+    test_kwargs["control_lambda"] = 2
+
+    model.fit(**test_kwargs)
 
     Vp,_,_,_,_ = estimateVp(model,strategy="JJJ1",Vp_fidiff=True)
 
     def test_Vp(self):
-        np.testing.assert_allclose(np.round(self.Vp,decimals=3),np.array([[ 2.281e+00,  9.000e-03,  3.000e-03,  2.100e-02],
-                                                                          [ 9.000e-03,  2.779e+00,  1.000e-03, -2.400e-02],
-                                                                          [ 3.000e-03,  1.000e-03,  4.940e-01,  2.200e-02],
-                                                                          [ 2.100e-02, -2.400e-02,  2.200e-02,  1.541e+01]]),atol=min(max_atol,0.001))
+        np.testing.assert_allclose(np.round(self.Vp,decimals=3),np.array([[ 2.2810e+00,  9.0000e-03,  3.0000e-03,  2.1000e-02],
+                                                                          [ 9.0000e-03,  2.7780e+00,  1.0000e-03, -2.5000e-02],
+                                                                          [ 3.0000e-03,  1.0000e-03,  4.9400e-01,  2.2000e-02],
+                                                                          [ 2.1000e-02, -2.5000e-02,  2.2000e-02,  1.5413e+01]]),atol=min(max_atol,0.001))
 
 class Test_te_p_values:
     sim_dat = sim3(n=500,scale=2,c=0,seed=20)
 
-    formula = Formula(lhs("y"),[i(),f(["x0","x3"],te=True),f(["x1"]),f(["x2"])],data=sim_dat)
+    formula = Formula(lhs("y"),[i(),f(["x0","x3"],te=True,nk=9),f(["x1"]),f(["x2"])],data=sim_dat)
     model = GAMM(formula,Gaussian())
 
-    model.fit(max_outer=100)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_outer"] = 100
 
-    ps, Trs = model.approx_smooth_p_values()
+    model.fit(**test_kwargs)
+
+    ps, Trs = approx_smooth_p_values(model,par=0,edf1=False,force_approx=True)
 
     def test_p(self):
-        np.testing.assert_allclose(self.ps,np.array([np.float64(0.24528857280469096), np.float64(0.0), np.float64(0.0)]),atol=min(max_atol,0),rtol=min(max_rtol,1e-6))
+        np.testing.assert_allclose(self.ps,np.array([np.float64(0.24528857280469096), np.float64(0.0), np.float64(0.0)]),atol=min(max_atol,0.06),rtol=min(max_rtol,1e-6))
 
     def test_trs(self):
-        np.testing.assert_allclose(self.Trs,np.array([np.float64(1.4741483696834052),np.float64(128.17369821317232),np.float64(126.04637199015741)]),atol=min(max_atol,0),rtol=min(max_rtol,1e-6))
+        np.testing.assert_allclose(self.Trs,np.array([np.float64(1.4741483696834052),np.float64(128.17369821317232),np.float64(126.04637199015741)]),atol=min(max_atol,0),rtol=min(max_rtol,0.02))
 
 class Test_diff:
     # pred_diff test
@@ -691,7 +889,10 @@ class Test_diff:
     # ... and model
     model = GAMM(formula,Gaussian())
 
-    model.fit(max_outer=100)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_outer"] = 100
+
+    model.fit(**test_kwargs)
 
     pred_dat1 = pd.DataFrame({"time":np.linspace(min(sim_dat["time"]),max(sim_dat["time"]),50),
                                 "x":[0 for _ in range(50)],

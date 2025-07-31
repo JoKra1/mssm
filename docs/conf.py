@@ -19,12 +19,17 @@ author = 'Joshua Krause'
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
-extensions = ['sphinx.ext.autodoc']
+extensions = ['sphinx.ext.autodoc',
+              "myst_nb"]
 
 templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 
-
+# -- myst_nb configuration ---------------------------------------------------
+# https://myst-nb.readthedocs.io/en/latest/configuration.html
+nb_execution_timeout = 500
+nb_execution_show_tb = True
+nb_scroll_outputs = True
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
