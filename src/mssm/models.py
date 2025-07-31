@@ -294,10 +294,55 @@ class GSMM():
         reml = REML(llk,-1*self.hessian,self.coef,1,self.overall_penalties,keep)[0,0]
         return reml
     
-    def get_resid(self):
-        """What qualifies as "residual" will differ vastly between different implementations of this class, so this method simply returns ``None``.
+    def get_resid(self,drop_NA:bool=True,**kwargs) -> np.ndarray:
+        """The computation of the residual vector will differ between different :class:`GSMM` models and is thus implemented
+        as a method by each :class:`GSMMFamily` family. These should be consulted to get more details. In general, if the model is specified correctly,
+        the returned vector should approximately look like what could be expected from taking independent samples from :math:`N(0,1)`.
+
+        Additional arguments required by the specific :func:`GSMMFamily.get_resid` method can be passed along via ``kwargs``.
+
+        **Note**: Families for which no residuals are available can return None.
+
+        References:
+            - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
+            - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+        
+        :param drop_NA: Whether rows in the model matrices corresponding to NAs in the dependent variable vector should be dropped from the model matrices, defaults to True
+        :type drop_NA: bool, optional
+        :raises ValueError: An error is raised in case the residuals are requested before the model has been fit.
+        :return: vector of standardized residuals of shape (-1,1). **Note**, the first axis will not necessarily match the dimension of any of the response vectors (this will depend on the specific Family's implementation).
+        :rtype: np.ndarray
         """
-        return None
+
+        if self.coef is None is None:
+            raise ValueError("Model needs to be estimated before evaluating the residuals. Call model.fit()")
+        
+        # Get observation vectors
+        ys = []
+        for fi,form in enumerate(self.formulas):
+            
+            # Repeated y-variable - don't have to pass all of them
+            if fi > 0 and form.get_lhs().variable == self.formulas[0].get_lhs().variable:
+                ys.append(None)
+                continue
+
+            # New y-variable
+            if drop_NA:
+                y = form.y_flat[form.NOT_NA_flat]
+            else:
+                y = form.y_flat
+
+            # Optionally apply function to dep. var.
+            if not form.get_lhs().f is None:
+                y = form.get_lhs().f(y)
+            
+            # And collect
+            ys.append(y)
+
+        # Get model matrices
+        Xs = self.get_mmat(drop_NA=drop_NA)
+
+        return self.family.get_resid(self.coef,self.coef_split_idx,ys,Xs,**kwargs)
     
     ##################################### Summary #####################################
     
@@ -875,7 +920,7 @@ class GAMMLSS(GSMM):
     :ivar Fit_info info: A :class:`Fit_info` instance, with information about convergence (speed) of the model.
     :ivar np.ndarray res: The working residuals of the model (If applicable). Initialized with ``None``.
     """
-    def __init__(self, formulas: [Formula], family: GAMLSSFamily):
+    def __init__(self, formulas: list[Formula], family: GAMLSSFamily):
         super().__init__(formulas, family)
         self.res:np.ndarray = None
     
@@ -961,13 +1006,17 @@ class GAMMLSS(GSMM):
         reml = REML(llk,-1*self.hessian,self.coef,1,self.overall_penalties,keep)[0,0]
         return reml
     
-    def get_resid(self) -> np.ndarray:
+    def get_resid(self,**kwargs) -> np.ndarray:
         """ Returns standarized residuals for GAMMLSS models (Rigby & Stasinopoulos, 2005).
 
         The computation of the residual vector will differ between different GAMMLSS models and is thus implemented
         as a method by each GAMMLSS family. These should be consulted to get more details. In general, if the
         model is specified correctly, the returned vector should approximately look like what could be expected from
         taking :math:`N` independent samples from :math:`N(0,1)`.
+
+        Additional arguments required by the specific :func:`GAMLSSFamily.get_resid` method can be passed along via ``kwargs``.
+
+        **Note**: Families for which no residuals are available can return None.
 
         References:
          - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
@@ -976,7 +1025,7 @@ class GAMMLSS(GSMM):
         :raises NotImplementedError: An error is raised in case the residuals are to be computed for a Multinomial GAMMLSS model, which is currently not supported.
         :raises ValueError: An error is raised in case the residuals are requested before the model has been fit.
         :return: A np.ndarray of standardized residuals that should be :math:`\\sim N(0,1)` if the model is correct.
-        :return: Empirical residual vector
+        :return: Standardized residual vector as array of shape (-1,1)
         :rtype: np.ndarray
         """
 
@@ -986,7 +1035,7 @@ class GAMMLSS(GSMM):
         if isinstance(self.family,MULNOMLSS):
             raise NotImplementedError("Residual computation for Multinomial model is not currently supported.")
         
-        return self.family.get_resid(self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat],*self.mus)
+        return self.family.get_resid(self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat],*self.mus,**kwargs)
 
     ##################################### Summary #####################################
     

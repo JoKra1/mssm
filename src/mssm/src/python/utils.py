@@ -71,7 +71,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
         links = [Identity(),LOG()]
 
         # Now define the general family + model
-        gsmm_fam = GAMLSSGSMMFamily(2,links,GAUMLSS(links))
+        gsmm_fam = GAMLSSGSMMFamily(2,GAUMLSS(links))
         model = GSMM(formulas=formulas,family=gsmm_fam)
 
         # Fit with SR1
@@ -99,7 +99,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
         links = family.links
 
         # Now again define the general family + model
-        gsmm_fam = GAMLSSGSMMFamily(4,links,family)
+        gsmm_fam = GAMLSSGSMMFamily(4,family)
         model = GSMM(formulas=formulas,family=gsmm_fam)
 
         # And fit with SR1
@@ -120,14 +120,12 @@ class GAMLSSGSMMFamily(GSMMFamily):
 
     :param pars: Number of parameters of the likelihood.
     :type pars: int
-    :param links: List of Link functions for each parameter of the likelihood, e.g., `links=[Identity(),LOG()]`.
-    :type links: [Link]
     :param gammlss_family: Any implemented member of the :class:`GAMLSSFamily` class. Available in ``self.llkargs[0]``.
     :type gammlss_family: GAMLSSFamily
     """
 
-    def __init__(self, pars: int, links:[Link], gammlss_family:GAMLSSFamily) -> None:
-        super().__init__(pars, links, gammlss_family)
+    def __init__(self, pars: int, gammlss_family:GAMLSSFamily) -> None:
+        super().__init__(pars, gammlss_family.links, gammlss_family)
     
     def llk(self, coef:np.ndarray,coef_split_idx:list[int],ys:list[np.ndarray],Xs:list[scp.sparse.csc_array]) -> float:
         """

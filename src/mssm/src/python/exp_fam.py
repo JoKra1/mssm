@@ -1270,23 +1270,24 @@ class GAMLSSFamily:
       """
       pass
 
-   def get_resid(self,y:np.ndarray,*mus:list[np.ndarray]):
+   def get_resid(self,y:np.ndarray,*mus:list[np.ndarray],**kwargs) -> np.ndarray|None:
       """Get standardized residuals for a GAMMLSS model (Rigby & Stasinopoulos, 2005).
 
       Any implementation of this function should return a vector that looks like what could be expected from taking ``len(y)`` independent draws from :math:`N(0,1)`.
+      Any additional arguments required by a specific implementation can be passed along via ``kwargs``.
+
+      **Note**: Families for which no residuals are available can return None.
 
       References:
-
        - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-
 
       :param y: A numpy array containing each observed value.
       :type y: np.ndarray
       :param mus: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains the expected value for a particular parmeter for each of the N observations.
       :type mus: [np.ndarray]
-      :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
-      :rtype: np.ndarray
+      :return: a vector of shape (-1,1) containing standardized residuals under the current model or None in case residuals are not readily available.
+      :rtype: np.ndarray | None
       """
       pass
 
@@ -1527,7 +1528,16 @@ class MULNOMLSS(GAMLSSFamily):
       """
       return sum(self.lp(y,*mus))[0]
    
-   def get_resid(self,y:np.ndarray,*mus:list[np.ndarray]):
+   def get_resid(self,y:np.ndarray,*mus:list[np.ndarray]) -> None:
+      """Placeholder function for residuals of a Multinomial model - yet to be implemented.
+
+      :param y: A numpy array containing each observed class, every element must be larger than or equal to 0 and smaller than `self.n_par + 1`.
+      :type y: np.ndarray
+      :param mus: A list containing K-1 (`self.n_par`) lists, each containing the non-normalized probabilities of observing class k for every observation.
+      :type mus: [np.ndarray]
+      :return: Currently None - since no residuals are implemented
+      """
+      warnings.warn("Getting residuals for multinomial model are currently not supported.")
       return None
 
 class GAMMALS(GAMLSSFamily):
@@ -1658,7 +1668,6 @@ class GSMMFamily:
    Additional parameters needed for likelihood, gradient, or hessian evaluation can be passed along via the ``llkargs``. They are then made available in ``self.llkargs``.
 
    References:
-
     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
     - Nocedal & Wright (2006). Numerical Optimization. Springer New York.
     - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient Estimation and Selection of Large Multi-Level Statistical Models. https://doi.org/10.48550/arXiv.2506.13132
@@ -1680,7 +1689,7 @@ class GSMMFamily:
       """log-probability of data under given model.
 
       References:
-
+       - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
        - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient Estimation and Selection of Large Multi-Level Statistical Models. https://doi.org/10.48550/arXiv.2506.13132
 
@@ -1704,6 +1713,7 @@ class GSMMFamily:
       See the link in the references for more details. 
 
       References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
          - ``scipy.optimize.approx_fprime``: at https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.approx_fprime.html
          - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient Estimation and Selection of Large Multi-Level Statistical Models. https://doi.org/10.48550/arXiv.2506.13132
 
@@ -1715,7 +1725,7 @@ class GSMMFamily:
       :type ys: [np.ndarray or None]
       :param Xs: A list of sparse model matrices per likelihood parameter.
       :type Xs: [scp.sparse.csc_array]
-      :return: The Gradient of the log-likelihood evaluated at ``coef`` as numpy array) of shape (-1,1).
+      :return: The Gradient of the log-likelihood evaluated at ``coef`` as numpy array of shape (-1,1).
       :rtype: np.ndarray
       """
       llk_warp = lambda x: self.llk(x.reshape(-1,1),coef_split_idx,ys,Xs)
@@ -1730,6 +1740,7 @@ class GSMMFamily:
       to be used insetad, this method does not have to be implemented.
 
       References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
          - ``scipy.optimize.approx_fprime``: at https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.approx_fprime.html
          - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient Estimation and Selection of Large Multi-Level Statistical Models. https://doi.org/10.48550/arXiv.2506.13132
 
@@ -1745,6 +1756,31 @@ class GSMMFamily:
       :rtype: scp.sparse.csc_array
       """
       return None
+   
+   def get_resid(self,coef:np.ndarray,coef_split_idx:list[int],ys:list[np.ndarray],Xs:list[scp.sparse.csc_array],**kwargs) -> np.ndarray | None:
+      """Get standardized residuals for a GSMM model.
+
+      Any implementation of this function should return a vector that looks like what could be expected from taking independent draws from :math:`N(0,1)`.
+      Any additional arguments required by a specific implementation can be passed along via ``kwargs``.
+
+      **Note**: Families for which no residuals are available can return None.
+
+      References:
+       - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be flattened!).
+      :type coef: np.ndarray
+      :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
+      :type coef_split_idx: [int]
+      :param ys: List containing the vectors of observations passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
+      :type ys: [np.ndarray or None]
+      :param Xs: A list of sparse model matrices per likelihood parameter.
+      :type Xs: [scp.sparse.csc_array]
+      :return: a vector of shape (-1,1) containing standardized residuals under the current model (**Note**, the first axis will not necessarily match the dimension of any of the response vectors (this will depend on the specific Family's implementation)) or None in case residuals are not readily available.
+      :rtype: np.ndarray | None
+      """
+      pass
    
    def init_coef(self,models:list[Callable]) -> np.ndarray:
       """(Optional) Function to initialize the coefficients of the model.
@@ -1831,6 +1867,17 @@ class PropHaz(GSMMFamily):
 
       References:
        - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+
+      :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be flattened!).
+      :type coef: np.ndarray
+      :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk - not required by this family, which has a single parameter.
+      :type coef_split_idx: [int]
+      :param ys: List containing the ``delta`` vector at the first and only index - see description of the model family.
+      :type ys: [np.ndarray]
+      :param Xs: A list containing the sparse model matrix at the first and only index.
+      :type Xs: [scp.sparse.csc_array]
+      :return: The log-likelihood evaluated at ``coef``.
+      :rtype: float
       """
       
       # Extract and define all variables defined by WPS (2016)
@@ -1866,12 +1913,22 @@ class PropHaz(GSMMFamily):
 
       return llk
 
-
    def gradient(self, coef:np.ndarray,coef_split_idx:list[int],ys:list[np.ndarray],Xs:list[scp.sparse.csc_array]) -> np.ndarray:
       """Gradient as defined by Wood, Pya, & Säfken (2016).
 
       References:
        - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+
+      :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be flattened!).
+      :type coef: np.ndarray
+      :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk - not required by this family, which has a single parameter.
+      :type coef_split_idx: [int]
+      :param ys: List containing the ``delta`` vector at the first and only index - see description of the model family.
+      :type ys: [np.ndarray]
+      :param Xs: A list containing the sparse model matrix at the first and only index.
+      :type Xs: [scp.sparse.csc_array]
+      :return: The Gradient of the log-likelihood evaluated at ``coef`` as numpy array of shape (-1,1).
+      :rtype: np.ndarray
       """
       
       # Extract and define all variables defined by WPS (2016)
@@ -1920,6 +1977,17 @@ class PropHaz(GSMMFamily):
 
       References:
        - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+
+      :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be flattened!).
+      :type coef: np.ndarray
+      :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk - not required by this family, which has a single parameter.
+      :type coef_split_idx: [int]
+      :param ys: List containing the ``delta`` vector at the first and only index - see description of the model family.
+      :type ys: [np.ndarray]
+      :param Xs: A list containing the sparse model matrix at the first and only index.
+      :type Xs: [scp.sparse.csc_array]
+      :return: The Hessian of the log-likelihood evaluated at ``coef``.
+      :rtype: scp.sparse.csc_array
       """
 
       # Extract and define all variables defined by WPS (2016)
@@ -1963,13 +2031,68 @@ class PropHaz(GSMMFamily):
 
       return scp.sparse.csc_array(H)
    
+   def get_resid(self, coef, coef_split_idx, ys, Xs, resid_type:str="Martingale", reorder:np.ndarray|None=None) -> np.ndarray:
+      """Get Martingale or Deviance residuals for a proportional Hazard model.
+
+      See the :func:`PropHaz.get_survival` function for examples.
+
+      References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be flattened!).
+      :type coef: np.ndarray
+      :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk - not required by this family, which has a single parameter.
+      :type coef_split_idx: [int]
+      :param ys: List containing the ``delta`` vector at the first and only index - see description of the model family.
+      :type ys: [np.ndarray]
+      :param Xs: A list containing the sparse model matrix at the first and only index.
+      :type Xs: [scp.sparse.csc_array]
+      :param resid_type: The type of residual to compute, supported are "Martingale" and "Deviance".
+      :type resid_type: str, optional
+      :param reorder: A flattened np.ndarray containing for each data point the original index in the data-set before sorting. Used to re-order the residual vector into the original order. If this is set to None, the residual vector is not re-ordered and instead returned in the order of the sorted data-frame passed to the model formula.
+      :type reorder: np.ndarray
+      :return: The residual vector of shape (-1,1)
+      :rtype: np.ndarray
+      """
+
+      if resid_type not in ["Martingale","Deviance"]:
+         raise ValueError("`resid_type` must be one of 'Martingale' or 'Deviance'.")
+
+      # Extract all quantities needed to evaluate residuals
+      delta = ys[0]
+      ut = self.llkargs[0]
+      r = self.llkargs[1]
+      X = Xs[0]
+
+      # Following based on derivation by Wood, Pya, and Säfken (2016)
+      res = np.zeros(X.shape[0])
+      for idx, tidx in enumerate(r):
+         Xi = X[idx,:].toarray()
+         ti = ut[tidx]
+         di = delta[idx]
+         Si,_ = self.get_survival(coef,Xs,delta,ti,Xi,None,compute_var=False)
+         mi = di + np.log(Si[0])
+
+         if resid_type == "Martingale":
+            res[idx] = mi
+         else:
+            # Deviance requires a bit more work
+            Di = np.sign(mi) * np.power(-2*(mi + di*np.log(-min(np.log(Si[0]),-np.finfo(float).eps))),0.5)
+            res[idx] = Di
+
+      # Return to order of original dataframe
+      if reorder is not None:
+         res = res[reorder]
+      
+      return res.reshape(-1,1)
+   
    def __prepare_predictions(self,coef:np.ndarray,delta:np.ndarray,Xs:list[scp.sparse.csc_array]) -> None:
     """Computes all the quantities defined by Wood, Pya, & Säfken (2016) that are necessary for predictions.
 
     This includes the cumulative base-line hazard, as well as the :math`\\mathbf{a}` vectors from WPS (2016). These are assigned to the instance of this family.
     
     References:
-
      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
 
     :param coef: Coefficient vector as numpy array of shape (-1,1).
@@ -2105,7 +2228,7 @@ class PropHaz(GSMMFamily):
     
     return self.__hs
 
-   def get_survival(self,coef:np.ndarray,Xs:list[scp.sparse.csc_array],delta:np.ndarray,t:int,x:np.ndarray|scp.sparse.csc_array,V:scp.sparse.csc_array) -> tuple[np.ndarray,np.ndarray]:
+   def get_survival(self,coef:np.ndarray,Xs:list[scp.sparse.csc_array],delta:np.ndarray,t:int,x:np.ndarray|scp.sparse.csc_array,V:scp.sparse.csc_array,compute_var:bool=True) -> tuple[np.ndarray, np.ndarray | None]:
     """Compute survival function + variance at time-point ``t``, given ``k`` optional covariate vector(s) x as defined by Wood, Pya, & Säfken (2016).
 
     Examples::
@@ -2119,6 +2242,11 @@ class PropHaz(GSMMFamily):
       sim_dat = sim3(500,2,c=1,seed=0,family=PropHaz([0],[0]),binom_offset = 0.1,correlate=False)
             
       # Prep everything for prophaz model
+
+      # Create index variable for residual ordering
+      sim_dat["index"] = np.arange(sim_dat.shape[0])
+
+      # Now sort
       sim_dat = sim_dat.sort_values(['y'],ascending=[False])
       sim_dat = sim_dat.reset_index(drop=True)
       print(sim_dat.head(),np.mean(sim_dat["delta"]))
@@ -2126,6 +2254,7 @@ class PropHaz(GSMMFamily):
       u,inv = np.unique(sim_dat["y"],return_inverse=True)
       ut = np.flip(u)
       r = np.abs(inv - max(inv))
+      res_idx = np.argsort(sim_dat["index"].values)
 
       # Now specify formula and model
       sim_formula_m = Formula(lhs("delta"),
@@ -2173,6 +2302,18 @@ class PropHaz(GSMMFamily):
       # Note how the main effect of x0 is reflected in the plot above:
       plot(model,which=[0])
 
+      # Residual plots can be created via `plot_val` from `mssmViz` - by default Martingale residuals are returned (see Wood, 2017)
+      fig = plt.figure(figsize=(10,3),layout='constrained')
+      axs = fig.subplots(1,3,gridspec_kw={"wspace":0.2})
+      # Note the use of `gsmm_kwargs_pred={}` to ensure that the re-ordering is not applied to the plot against predicted values
+      plot_val(model,gsmm_kwargs={"reorder":res_idx},gsmm_kwargs_pred={},ar_lag=25,axs=axs)
+
+      # Can also get Deviance residuals:
+      fig = plt.figure(figsize=(10,3),layout='constrained')
+      axs = fig.subplots(1,3,gridspec_kw={"wspace":0.2})
+
+      plot_val(model,gsmm_kwargs={"reorder":res_idx,"resid_type":"Deviance"},gsmm_kwargs_pred={"resid_type":"Deviance"},ar_lag=25,axs=axs)
+
     References:
      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
 
@@ -2188,8 +2329,10 @@ class PropHaz(GSMMFamily):
     :type x: np.ndarray or scp.sparse.csc_array
     :param V: Estimated Co-variance matrix of posterior for ``coef``
     :type V: scp.sparse.csc_array
-    :return: Two arrays, the first holds ``k`` survival function estimates, the latter holds ``k`` variance estimates for each of the survival function estimates.
-    :rtype: tuple[np.ndarray,np.ndarray]
+    :param compute_var: Whether to compue the variance estimate of the survival as well. Otherwise None will be returned as the second argument.
+    :type compute_var: bool, optional
+    :return: Two arrays, the first holds ``k`` survival function estimates, the latter holds ``k`` variance estimates for each of the survival function estimates. The second argument will be None instead if ``compute_var = False``.
+    :rtype: tuple[np.ndarray, np.ndarray | None]
     """
 
     if self.__hs is None:
@@ -2212,11 +2355,13 @@ class PropHaz(GSMMFamily):
     # Compute (log) survival
     lS = -self.__hs[ti] * np.exp(eta)
     S = np.exp(lS)
-
-    # Compute variance
-    v =  - self.__hs[ti]*x + self.__avs[tiv]
     
-    varS = np.exp(eta) * S * np.power(self.__qs[ti] + np.sum(v@V * v,axis=1).reshape(-1,1),0.5)
+    varS = None
+    if compute_var:
+      # Compute variance
+      v =  - self.__hs[ti]*x + self.__avs[tiv]
+      
+      varS = np.exp(eta) * S * np.power(self.__qs[ti] + np.sum(v@V * v,axis=1).reshape(-1,1),0.5)
     return S, varS    
 
    def init_coef(self,models:list[Callable]) -> np.ndarray:

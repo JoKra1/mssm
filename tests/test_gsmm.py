@@ -33,7 +33,7 @@ class Test_GAUMLSSGEN_hard:
     links = [Identity(),LOG()]
 
     # Now define the general family + model and fit!
-    gsmm_fam = GAMLSSGSMMFamily(2,links,GAUMLSS(links))
+    gsmm_fam = GAMLSSGSMMFamily(2,GAUMLSS(links))
     model = GSMM(formulas=formulas,family=gsmm_fam)
 
     # First fit with SR1
