@@ -1,8 +1,21 @@
-mssm.src.python package
-=======================
+api
+===
 
-Submodules
-----------
+mssm.models module
+------------------
+
+.. automodule:: mssm.models
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+mssm.src.python.compact_rep module
+------------------------------
+
+.. automodule:: mssm.src.python.compact_rep
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
 mssm.src.python.compare module
 ------------------------------
@@ -12,10 +25,10 @@ mssm.src.python.compare module
    :undoc-members:
    :show-inheritance:
 
-mssm.src.python.constraints module
+mssm.src.python.custom_types module
 ----------------------------------
 
-.. automodule:: mssm.src.python.constraints
+.. automodule:: mssm.src.python.custom_types
    :members:
    :undoc-members:
    :show-inheritance:
@@ -28,11 +41,19 @@ mssm.src.python.exp\_fam module
    :undoc-members:
    :show-inheritance:
 
+mssm.src.python.file\_loading module
+-------------------------------
+
+.. automodule:: mssm.src.python.file_loading
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 mssm.src.python.formula module
 ------------------------------
 
 .. automodule:: mssm.src.python.formula
-   :members: Formula, VarType,lhs,reparam
+   :members:
    :undoc-members:
    :show-inheritance:
 
@@ -40,7 +61,15 @@ mssm.src.python.gamm_solvers module
 ------------------------------
 
 .. automodule:: mssm.src.python.gamm_solvers
-   :members: Fit_info
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+mssm.src.python.matrix_solvers module
+------------------------------
+
+.. automodule:: mssm.src.python.matrix_solvers
+   :members:
    :undoc-members:
    :show-inheritance:
 
@@ -48,7 +77,23 @@ mssm.src.python.penalties module
 ------------------------------
 
 .. automodule:: mssm.src.python.penalties
-   :members: LambdaTerm
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+mssm.src.python.repara module
+------------------------------
+
+.. automodule:: mssm.src.python.repara
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+mssm.src.python.smooths module
+----------------------------
+
+.. automodule:: mssm.src.python.smooths
+   :members:
    :undoc-members:
    :show-inheritance:
 

@@ -3,6 +3,9 @@ from mssm.src.python.compare import compare_CDL
 import numpy as np
 import os
 from mssmViz.sim import*
+from .defaults import default_gamm_test_kwargs
+
+################################################################## Tests ##################################################################
 
 class Test_GAM:
 
@@ -22,7 +25,10 @@ class Test_GAM:
         
     model = GAMM(formula,Gaussian())
 
-    model.fit(exclude_lambda=True)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["exclude_lambda"] = True
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 9.723
@@ -35,7 +41,7 @@ class Test_GAM:
         assert round(sigma,ndigits=3) == 1084.879
     
     def test_GAMlam(self):
-        assert round(self.model.formula.penalties[0].lam,ndigits=5) == 0.0089
+        assert round(self.model.overall_penalties[0].lam,ndigits=5) == 0.0089
 
 class Test_GAM_TE:
 
@@ -50,13 +56,16 @@ class Test_GAM_TE:
     formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
                         terms=[i(), # The intercept, a
                                l(["cond"]), # Offset for cond='b'
-                               f(["time","x"],by="cond",te=True)], # one smooth surface over time and x - f(time,x) - per level of cond: three-way interaction!
+                               f(["time","x"],by="cond",te=True,nk=9)], # one smooth surface over time and x - f(time,x) - per level of cond: three-way interaction!
                         data=dat,
                         print_warn=False)
         
     model = GAMM(formula,Gaussian())
 
-    model.fit(exclude_lambda=True)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["exclude_lambda"] = True
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 33.835 
@@ -85,14 +94,17 @@ class Test_GAM_TE_BINARY:
     
     formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
                         terms=[i(), # The intercept, a
-                               f(["time","x"],te=True), # one smooth surface over time and x - f(time,x) - for the reference level = cond == b
-                               f(["time","x"],te=True,binary=["cond","a"])], # another smooth surface over time and x - f(time,x) - representing the difference from the other surface when cond==a
+                               f(["time","x"],te=True,nk=9), # one smooth surface over time and x - f(time,x) - for the reference level = cond == b
+                               f(["time","x"],te=True,binary=["cond","a"],nk=9)], # another smooth surface over time and x - f(time,x) - representing the difference from the other surface when cond==a
                         data=dat,
                         print_warn=False)
         
     model = GAMM(formula,Gaussian())
 
-    model.fit(exclude_lambda=True)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["exclude_lambda"] = True
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 29.845 
@@ -103,7 +115,7 @@ class Test_GAM_TE_BINARY:
 
     def test_GAMcoef(self):
         coef, _ = self.model.get_pars()
-        assert np.allclose(coef,np.array([52.82251019977649, 443.11341640457823, 444.8417119315177, 442.81025980578295, 441.8124532480443,
+        assert np.allclose(coef.flatten(),np.array([52.82251019977649, 443.11341640457823, 444.8417119315177, 442.81025980578295, 441.8124532480443,
                         449.15233147591147, 456.0654049813386, 459.6018424108562, 462.4183191702384, -161.15323911424358,
                         -159.623877790315, -168.32352305206663, -219.50255970350344, -262.8874671436067, -209.74096633357095,
                         -157.34589159088728, -144.89197515466134, -141.64907622342892, 83.02517725702134, 83.61685004722325,
@@ -160,14 +172,17 @@ class Test_GAMM:
                                l(["cond"]), # For cond='b'
                                f(["time"],by="cond",constraint=ConstType.QR), # to-way interaction between time and cond; one smooth over time per cond level
                                f(["x"],by="cond",constraint=ConstType.QR), # to-way interaction between x and cond; one smooth over x per cond level
-                               f(["time","x"],by="cond",constraint=ConstType.QR), # three-way interaction
+                               f(["time","x"],by="cond",constraint=ConstType.QR,nk=9), # three-way interaction
                                fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
                         data=dat,
-                        print_warn=False)
+                        print_warn=False,find_nested=False)
         
     model = GAMM(formula,Gaussian())
 
-    model.fit(exclude_lambda=True)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["exclude_lambda"] = True
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 153.707 
@@ -177,7 +192,7 @@ class Test_GAMM:
         assert round(sigma,ndigits=3) == 577.194 
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([0.003576343523507944, 0.006011901683446546, 5028.094352541816, 230482.43896738067, 110804.13553081625, 38451.59746745403, 381047.3436998889, 330.25972969656937, 0.11887201661809699, 2.166381231169934])) 
 
     def test_GAMreml(self):
@@ -197,7 +212,11 @@ class Test_Binom_GAMM:
 
     # By default, the Binomial family assumes binary data and uses the logit link.
     model = GAMM(formula,Binomial())
-    model.fit(max_inner=1)
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_inner"] = 1
+    test_kwargs["control_lambda"] = 2
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 13.468 
@@ -208,7 +227,7 @@ class Test_Binom_GAMM:
 
     def test_GAMcoef(self):
         coef, _ = self.model.get_pars()
-        assert np.allclose(coef,np.array([0.7422333451777551, -0.17195247706792302, 0.057394164386376505, 0.18704155831577263, 0.22846608870924795,
+        assert np.allclose(coef.flatten(),np.array([0.7422333451777551, -0.17195247706792302, 0.057394164386376505, 0.18704155831577263, 0.22846608870924795,
                         0.23511563352132572, 0.23707380980366774, 0.1858274828099582, 0.012619280027852899, -0.17315651504766674,
                         -0.17250023796593375, -0.094200972083248, -0.04409410888775292, 0.01921436719459457, 0.1053763860762365,
                         0.20885336302996846, 0.3163156513235213, 0.3922828489471839, 0.4674708452078455, -0.4517546540990654,
@@ -218,7 +237,7 @@ class Test_Binom_GAMM:
                         -0.05044390273197432, -0.03325208528628772])) 
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([122.52719452460906, 655.3557029613052, 1.3826427117149267, 2841.8313047699667])) 
 
     def test_GAMreml(self):
@@ -238,7 +257,11 @@ class Test_Gamma_GAMM:
 
     # By default, the Gamma family assumes that the model predictions match log(\mu_i), i.e., a log-link is used.
     model = GAMM(formula,Gamma())
-    model.fit(max_inner=1)
+
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_inner"] = 1
+
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 17.814 
@@ -249,7 +272,7 @@ class Test_Gamma_GAMM:
 
     def test_GAMcoef(self):
         coef, _ = self.model.get_pars()
-        assert np.allclose(coef,np.array([7.654619964489497, -0.8985855581443037, 0.00737676745266728, 0.8957095904668417, 1.5029863477484788,
+        assert np.allclose(coef.flatten(),np.array([7.654619964489497, -0.8985855581443037, 0.00737676745266728, 0.8957095904668417, 1.5029863477484788,
                         1.4934830568869881, 0.8784847301646945, 0.2609849004219141, -0.4103254152440804, -1.1149172513050318,
                         -1.5927978049483915, -1.1489580382151177, -0.7600627541048914, -0.12495962121796242, 0.7216923726284495,
                         1.8576586195422136, 3.0961194280261264, 4.115797342436188, 5.270279060056066, -6.587035189026303,
@@ -259,7 +282,7 @@ class Test_Gamma_GAMM:
                         -0.03330475732996358, -0.12102663295792625])) 
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([6.772970379249816, 14.900828781781744, 0.026452879018106484, 227.86741305016199])) 
 
     def test_GAMreml(self):
@@ -284,7 +307,7 @@ class Test_Overlap_GAMM:
                                         series_id="series")
 
     model = GAMM(overlap_formula,Gaussian())
-    model.fit()
+    model.fit(**default_gamm_test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 54.547 
@@ -295,7 +318,7 @@ class Test_Overlap_GAMM:
 
     def test_GAMcoef(self):
         coef, _ = self.model.get_pars()
-        assert np.allclose(coef,np.array([0.5414381914556667, 0.9027253840593255, 1.2394888139729652, 1.5408974325924492, 1.793282236604561,
+        assert np.allclose(coef.flatten(),np.array([0.5414381914556667, 0.9027253840593255, 1.2394888139729652, 1.5408974325924492, 1.793282236604561,
                                         1.9605024352161622, 2.0342513059209852, 2.018245078562129, 1.9481936897353123, 1.8291845270086586,
                                         1.6414046863148892, 1.3759062972662246, 1.0473698479784739, 0.6781931660932433, 0.2896778273936524,
                                         5.018807622568596, 8.155536921854802, 9.057658829442943, 8.118583945017296, 6.009795403374646,
@@ -311,7 +334,7 @@ class Test_Overlap_GAMM:
                                         1.0573347505186208, 0.999116483922564, -1.09744680946051, 0.7031765530477949, 0.799916646746684])) 
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([227.8068139397452, 1.8954868106567002, 3.04743103446127])) 
 
     def test_GAMreml(self):
@@ -333,7 +356,7 @@ class Test_ri_li:
     model = GAMM(formula,Gaussian())
 
     # then fit
-    model.fit()
+    model.fit(**default_gamm_test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf,ndigits=3) == 27.458 
@@ -344,7 +367,7 @@ class Test_ri_li:
 
     def test_GAMcoef(self):
         coef, _ = self.model.get_pars()
-        assert np.allclose(coef,np.array([4.4496869070736516, 1.5961324271808035, 6.4361364571346265, -3.0591651115769993, 0.07948249536871332,
+        assert np.allclose(coef.flatten(),np.array([4.4496869070736516, 1.5961324271808035, 6.4361364571346265, -3.0591651115769993, 0.07948249536871332,
                                           -0.11501386584710335, 0.6505400484007926, 0.7096563086326143, -0.7142393186240358, 0.5593738772412031,
                                           -0.7133681425701058, 0.00984614953239883, 0.516050065109191, 1.038654222613382, 0.920317555859632,
                                           1.6827256736523348, -0.5615052428662065, -0.36418148548156637, -2.0302380548653485, 0.8057098517098714,
@@ -355,7 +378,7 @@ class Test_ri_li:
                                           1.3002335376265413, -0.7276918391919509, 0.2894890343822381, -0.3097228498687097])) 
 
     def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.formula.penalties])
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         assert np.allclose(lam,np.array([7.880949768403679])) 
 
     def test_GAMreml(self):

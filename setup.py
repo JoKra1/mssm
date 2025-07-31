@@ -35,9 +35,18 @@ class get_eigen_include(object):
         return target_dir.name
 
 # Create Pybind setuptools extension
-ext = Pybind11Extension(name='cpp_solvers',
-                        sources=['src/mssm/src/cpp/cpp_solvers.cpp'],
+ext1 = Pybind11Extension(name='eigen_solvers',
+                        sources=['src/mssm/src/cpp/eigen_solvers.cpp'],
                         include_dirs=[get_eigen_include()],
                         cxx_std=14)
 
-setup(ext_modules=[ext])
+ext2 = Pybind11Extension(name='davies',
+                        sources=['src/mssm/src/cpp/davies.cpp'],
+                        cxx_std=14)
+
+ext3 = Pybind11Extension(name='dChol',
+                        sources=['src/mssm/src/cpp/dchol.cpp'],
+                        include_dirs=[get_eigen_include()],
+                        cxx_std=14)
+
+setup(ext_modules=[ext1,ext2,ext3])

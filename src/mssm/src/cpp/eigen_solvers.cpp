@@ -2,8 +2,9 @@
 #include <pybind11/eigen.h>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
-#include<Eigen/Sparse>
+#include <Eigen/Sparse>
 #include <Eigen/Dense>
+#include <Eigen/Householder>
 #include <iostream>
 #include <vector>
 #include <memory>
@@ -14,170 +15,6 @@
 namespace py = pybind11;
 
 typedef Eigen::Vector<long long int, Eigen::Dynamic> VectorXi64;
-
-std::tuple<std::vector<std::vector<double>>,std::vector<long long int>,std::vector<std::vector<long long int>>> dCholdRho(long long int Rrows, long long int Rcols, long long int Rnnz,
-                                                                                                                          py::array_t<double, py::array::f_style | py::array::forcecast> Rdata,
-                                                                                                                          py::array_t<long long int, py::array::f_style | py::array::forcecast> Ridptr,
-                                                                                                                          py::array_t<long long int, py::array::f_style | py::array::forcecast> Rindices,
-                                                                                                                          long long int Arows, long long int Acols, long long int Annz,
-                                                                                                                          py::array_t<double, py::array::f_style | py::array::forcecast> Adata,
-                                                                                                                          py::array_t<long long int, py::array::f_style | py::array::forcecast> Aidptr,
-                                                                                                                          py::array_t<long long int, py::array::f_style | py::array::forcecast> Aindices){
-
-    /*
-    Derivative of transpose of Cholesky (R) of negative hessian of the penalized likelihood with respect to \rho.
-    (A) holds derivative of negative hessian of the penalized likelihood with respect to said \rho.
-
-    Based on equations in Sup. D in Wood, Pya, and Säfken (2016).
-    */
-    
-    // Both A and R are row-storage!
-    Eigen::Map<Eigen::SparseMatrix<double,1,long long int>> R(Rrows,Rcols,Rnnz,
-                                                    (Eigen::SparseMatrix<double,1,long long int>::StorageIndex*) Ridptr.data(),
-                                                    (Eigen::SparseMatrix<double,1,long long int>::StorageIndex*) Rindices.data(),
-                                                    (Eigen::SparseMatrix<double,1,long long int>::Scalar*) Rdata.data());
-    
-    Eigen::Map<Eigen::SparseMatrix<double,1,long long int>> A(Arows,Acols,Annz,
-                                                    (Eigen::SparseMatrix<double,1,long long int>::StorageIndex*) Aidptr.data(),
-                                                    (Eigen::SparseMatrix<double,1,long long int>::StorageIndex*) Aindices.data(),
-                                                    (Eigen::SparseMatrix<double,1,long long int>::Scalar*) Adata.data());
-
-    // Also get a copy of R in column-storage for cheap indexing.
-    Eigen::SparseMatrix<double,0,long long int> Rc = R;
-    
-    // Define vectors that will hold data, rows, and cols of desired derivative
-    std::vector<std::vector<double>> dRdat(Rrows,std::vector<double>()); // One vector per row to preserve easy access to non-zero elements in loop below
-    std::vector<long long int> dRrow;
-    std::vector<std::vector<long long int>> dRcol(Rrows,std::vector<long long int>()); // Same as for dat
-
-    /*
-    Iterate over all columns in each row of R take care.
-
-    Take care to keep track (via inner iterators) of non-zero elements in R and A in the current row.
-    */
-
-    for(Eigen::Index i=0; i<Rrows; ++i) // Loop also suggested in the Eigen tutorial: https://eigen.tuxfamily.org/dox/group__TutorialSparse.html
-    {   
-
-        /*
-        Get iterators over columns of R & A for current row
-
-        itR.col() needs to be checked against c essentially (but only if itR still has elements) and then itR needs to be increased.
-        */
-        Eigen::Map<Eigen::SparseMatrix<double,1,long long int>>::InnerIterator itR(R, i);
-        Eigen::Map<Eigen::SparseMatrix<double,1,long long int>>::InnerIterator itA(A, i);
-
-        // Initialize diagonal elements, which need to be accessed off-diagonal repeatedly.
-        double Rii = 0;
-        double dRii = 0;
-
-        for(Eigen::Index j=i; j<Rcols; ++j)
-        {
-            
-            /*
-            Get itertor over rows of columns (i) and (j) in R
-            */
-
-            Eigen::SparseMatrix<double,0,long long int>::InnerIterator itRi(Rc, i);
-            Eigen::SparseMatrix<double,0,long long int>::InnerIterator itRj(Rc, j);
-
-            // Compute B_ij;
-            double Bij = 0;
-            if(itA && itA.col() == j)
-            {
-                Bij = itA.value();
-                //py::print(Bij,itA.row(),itA.col());
-                ++itA;
-            }
-            //py::print("Iteration: ", i,j, Bij);
-
-            // Compute remainder of B_ij in WPS (2016)
-            // Sum is zero for i==0.
-            if(i > 0)
-            {
-                long long int k = 0;
-
-                while(k < i)
-                {   
-                    double SBij = 0;
-                    
-                    if(itRi && itRi.row() == k)
-                    {
-                        for(size_t kj = 0; kj < dRcol[k].size(); ++kj)
-                        {
-                            if(dRcol[k][kj] == j)
-                            {   
-                                //py::print(k,i,j,itRi.value(),dRdat[k][kj],itRi.value()*dRdat[k][kj]);
-                                SBij += itRi.value()*dRdat[k][kj];
-                                break;
-                            } else if (dRcol[k][kj] > j)
-                            {
-                                break;
-                            }
-                        }
-                        ++itRi;
-                    }
-
-                    if(itRj && itRj.row() == k)
-                    {
-                        for(size_t ki = 0; ki < dRcol[k].size(); ++ki)
-                        {
-                            if(dRcol[k][ki] == i)
-                            {
-                                //py::print(k,i,j,itRj.value(),dRdat[k][ki],itRj.value()*dRdat[k][ki]);
-                                SBij += itRj.value()*dRdat[k][ki];
-                                break;
-                            } else if (dRcol[k][ki] > i)
-                            {
-                                break;
-                            }
-                            
-                        }
-                        ++itRj;
-                    }
-                    
-                    Bij -= SBij;
-                    ++k;
-                    
-                }
-            }
-
-            //std::cout << Bij;
-            //std::cout << "\n";
-
-            // Now handle case if i == j
-            double dR = 0;
-            if(i==j)
-            {   
-                Rii = itR.value();
-                dRii = 0.5 * Bij / Rii;
-                dR = dRii;
-                
-                ++itR;
-
-            } else if (j > i) // And case if j > i
-            {
-                dR = Bij;
-                if(itR && itR.col() == j){
-                    dR -= itR.value()*dRii;
-                    //py::print(i,j,Bij,itR.value(),dRii,Rii,(Bij - itR.value()*dRii)/Rii);
-                    ++itR;
-                }
-                dR /= Rii;
-                
-            }
-            
-            // Store dR, i, j in respective vectors..
-            if(abs(dR) > 0){
-                dRdat[i].push_back(dR);
-                dRcol[i].push_back(j);
-                dRrow.push_back(i);
-            }
-        }
-    }
-                                       
-    return std::make_tuple(std::move(dRdat),std::move(dRrow),std::move(dRcol));
-}
 
 std::tuple<Eigen::SparseMatrix<double,0,long long int>,int> chol(long long int Arows, long long int Acols, long long int Annz,
                                                  py::array_t<double, py::array::f_style | py::array::forcecast> Adata,
@@ -918,9 +755,67 @@ Eigen::SparseMatrix<double,0,long long int> backsolve_tr(long long int Arows, lo
     return C;
 }
 
-PYBIND11_MODULE(cpp_solvers, m) {
-    m.doc() = "cpp solvers for sms (DC) GAMM estimation";
-    m.def("dCholdRho", &dCholdRho, "Compute derivative of transpose of cholesky factor L of A.");
+std::tuple<VectorXi64,long long int> id_dependencies(const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &X1,
+                                                                     const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &X2,
+                                                                     double tol)
+            {
+                /*
+                Identify linear dependencies between matrices X1 and X2, based on section 5.6.3 in Wood (2017) and
+                the fixDependence function in mgcv, see: https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/mgcv.r#L501
+                */
+
+                size_t X1cols = X1.cols();
+
+                // Need QR decomposition of X1
+                Eigen::HouseholderQR<Eigen::MatrixXd> qr1(X1);
+                Eigen::MatrixXd R1 = qr1.matrixQR().triangularView<Eigen::Upper>();
+
+                // Need to check for zero blocks in R2 later on - mgcv uses first diagonal element on R1 as an indication of a "healthy" element to threshold, so we do the same
+                double thresh = abs(R1(0,0))*tol;
+                
+                // B = Q1.T@X2
+                Eigen::MatrixXd B(X2);
+                B.applyOnTheLeft(qr1.householderQ().adjoint());
+
+                // Extract lower block
+                B = B(Eigen::seq(X1cols,Eigen::last),Eigen::all);
+                
+                // Apply second QR decomposition, now with pivoting
+                Eigen::ColPivHouseholderQR<Eigen::MatrixXd> qr2(B);
+                
+                // Extract pivot and rank estimate
+                VectorXi64 piv = qr2.colsPermutation().indices().cast<long long int>();
+                
+                // Now check for zero block in lower right corner of R2.
+                // Make sure that any previous rank determination by Eigen is aknolwedged.
+                long long int r = qr2.rank();
+                Eigen::MatrixXd R2 = qr2.matrixR().topLeftCorner(r,r).triangularView<Eigen::Upper>();
+                
+                double mb;
+                while (r > 0)
+                {
+                    // The check of the mean absolute value of the sub-block is performed by mgcv, so we use the same here.
+                    // see: https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/mgcv.r#L526
+                    mb = R2(Eigen::seq(r-1,Eigen::last),
+                            Eigen::seq(r-1,Eigen::last)).array().abs().mean();
+
+                    // mean absolute block value too large to hint at zero block -> get out
+                    if (mb >= thresh)
+                    {
+                        break;
+                    }
+                    
+                    // Lower rank by 1
+                    r--;
+                    
+                }
+
+                return std::make_tuple(piv,r);
+
+            }
+
+PYBIND11_MODULE(eigen_solvers, m) {
+    m.doc() = "cpp solvers for GAMM, GAMMLSS, and GSMM estimation";
     m.def("chol", &chol, "Compute cholesky factor L of A");
     m.def("cholP", &cholP, "Compute cholesky factor L of A after applying a sparsity enhancing permutation to A");
     m.def("pqr", &pqr, "Perform column pivoted QR decomposition of A");
@@ -936,4 +831,5 @@ PYBIND11_MODULE(cpp_solvers, m) {
     m.def("solve_coefXX", &solve_coefXX, "Solve additive model coefficients, but with XX + S and Xy pre-computed.");
     m.def("solve_tr",&solve_tr,"Solve A*B = C, where A is lower triangular.");
     m.def("backsolve_tr",&backsolve_tr,"Solve A*B = C, where A is upper triangular.");
+    m.def("id_dependencies",&id_dependencies,"Identify linear dependencies between matrices X1 and X2.");
 }

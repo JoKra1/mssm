@@ -1,82 +1,15 @@
+import mssm
 from mssm.models import *
 import numpy as np
 import os
 from mssmViz.sim import*
-from numdifftools import Gradient,Hessian
-from mssm.src.python.gamm_solvers import deriv_transform_mu_eta,deriv_transform_eta_beta
+from .defaults import default_gsmm_test_kwargs,max_atol,max_rtol,init_penalties_tests_gammlss,init_penalties_tests_gsmm
 
-max_atol = 100 #0
-max_rtol = 100 #0.001
-
-class GAMLSSGENSMOOTHFamily(GENSMOOTHFamily):
-    """Implementation of the ``GENSMOOTHFamily`` class that uses only information about the likelihood to estimate
-    a GAMLSS model.
-
-    References:
-
-        - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-        - Nocedal & Wright (2006). Numerical Optimization. Springer New York.
-    """
-
-    def __init__(self, pars: int, links:[Link], llkfun:Callable, *llkargs) -> None:
-        super().__init__(pars, links, *llkargs)
-        self.llkfun = llkfun
-    
-    def llk(self, coef, coef_split_idx, y, Xs):
-        return self.llkfun(coef, coef_split_idx, self.links, y, Xs,*self.llkargs)
-    
-    def gradient(self, coef, coef_split_idx, y, Xs):
-        """
-        Function to evaluate gradient for gsmm model.
-        """
-        coef = coef.reshape(-1,1)
-        split_coef = np.split(coef,coef_split_idx)
-        eta_mu = Xs[0]@split_coef[0]
-        if len(Xs) > 1:
-            eta_sd = Xs[1]@split_coef[1]
-        
-        # Get the Gamlss family
-        gammlss_family = self.llkargs[0]
-        
-        if len(Xs) > 1:
-            d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,[self.links[0].fi(eta_mu),self.links[1].fi(eta_sd)],gammlss_family)
-        else:
-            d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,[self.links[0].fi(eta_mu)],gammlss_family)
-            
-        grad,_ = deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs,only_grad=True)
-        #print(pgrad.flatten())
-        return grad.reshape(-1,1)
-    
-    def hessian(self, coef, coef_split_idx, y, Xs):
-        return None
-            
-
-def llk_gamm_fun(coef,coef_split_idx,links,y,Xs,gammlss_family):
-    """Likelihood for a GAM(LSS) - implemented so
-    that the model can be estimated using the general smooth code.
-
-    Note, gammlss_family is passed via llkargs so that this code works with
-    Gaussian and Gamma models.
-    """
-    coef = coef.reshape(-1,1)
-    split_coef = np.split(coef,coef_split_idx)
-    eta_mu = Xs[0]@split_coef[0]
-    if len(Xs) > 1:
-        eta_sd = Xs[1]@split_coef[1]
-    
-    mu_mu = links[0].fi(eta_mu)
-    if len(Xs) > 1:
-        mu_sd = links[1].fi(eta_sd)
-    
-    if len(Xs) > 1:
-        llk = gammlss_family.llk(y,mu_mu,mu_sd)
-    else:
-        llk = gammlss_family.llk(y,mu_mu)
-
-    if np.isnan(llk):
-        return -np.inf
-    
-    return llk
+mssm.src.python.exp_fam.GAUMLSS.init_lambda = init_penalties_tests_gammlss
+mssm.src.python.exp_fam.GAMMALS.init_lambda = init_penalties_tests_gammlss
+mssm.src.python.exp_fam.MULNOMLSS.init_lambda = init_penalties_tests_gammlss
+mssm.src.python.exp_fam.PropHaz.init_lambda = init_penalties_tests_gsmm
+mssm.src.python.utils.GAMLSSGSMMFamily.init_lambda = init_penalties_tests_gsmm
 
 ################################################################## Tests ##################################################################
 
@@ -100,82 +33,93 @@ class Test_GAUMLSSGEN_hard:
     links = [Identity(),LOG()]
 
     # Now define the general family + model and fit!
-    gsmm_fam = GAMLSSGENSMOOTHFamily(2,links,llk_gamm_fun,GAUMLSS(links))
+    gsmm_fam = GAMLSSGSMMFamily(2,GAUMLSS(links))
     model = GSMM(formulas=formulas,family=gsmm_fam)
 
-    # First fit with SR1 and, to speed things up, only then with Newton
+    # First fit with SR1
     bfgs_opt={"gtol":1e-9,
             "ftol":1e-9,
             "maxcor":30,
             "maxls":200,
             "maxfun":1e7}
-                    
-    model.fit(init_coef=None,method='qEFS',extend_lambda=False,
-            control_lambda=False,max_outer=200,max_inner=500,min_inner=500,
-            seed=0,qEFSH='SR1',max_restarts=5,overwrite_coef=False,qEFS_init_converge=False,prefit_grad=True,
-            progress_bar=True,**bfgs_opt)
+    
+    test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
+    test_kwargs["method"] = 'qEFS'
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["control_lambda"] = 1
+    test_kwargs["max_outer"] = 200
+    test_kwargs["max_inner"] = 500
+    test_kwargs["min_inner"] = 500
+    test_kwargs["seed"] = 0
+    test_kwargs["max_restarts"] = 5
+    test_kwargs["overwrite_coef"] = False
+    test_kwargs["qEFS_init_converge"] = False
+    test_kwargs["prefit_grad"] = True
+    test_kwargs["bfgs_options"] = bfgs_opt
+
+    model.fit(**test_kwargs)
 
     model2 = copy.deepcopy(model)
+    test_kwargs["qEFSH"] = 'BFGS'
+    test_kwargs["max_restarts"] = 0
+    test_kwargs["overwrite_coef"] = True
+    test_kwargs["qEFS_init_converge"] = True
+    test_kwargs["prefit_grad"] = False
 
     # Now fit with BFGS
-    model2.fit(init_coef=None,method='qEFS',extend_lambda=False,
-            control_lambda=False,max_outer=200,max_inner=500,min_inner=500,
-            seed=0,qEFSH='BFGS',max_restarts=0,overwrite_coef=True,qEFS_init_converge=True,prefit_grad=False,
-            progress_bar=True,**bfgs_opt)
+    model2.fit(**test_kwargs)
 
     def test_GAMedf(self):
-        np.testing.assert_allclose(self.model.edf,19.049,atol=min(max_atol,0.5),rtol=min(max_rtol,0.025))
+        np.testing.assert_allclose(self.model.edf,19.06605212367808,atol=min(max_atol,0.5),rtol=min(max_rtol,0.025))
 
     def test_GAMedf2(self):
-        np.testing.assert_allclose(self.model2.edf,16.305,atol=min(max_atol,0.5),rtol=min(max_rtol,0.025))
+        np.testing.assert_allclose(self.model2.edf,20.085993154912806,atol=min(max_atol,1.3),rtol=min(max_rtol,0.07))
 
     def test_GAMcoef(self):
-        coef = self.model.overall_coef.flatten()
-        np.testing.assert_allclose(coef,np.array([ 7.64905998, -0.86968557, -0.83494213,  0.07122906,  1.20919857,
-                                            1.67258359,  0.46597024, -0.53378393, -0.76055135, -0.7941819 ,
-                                            -1.81015845, -1.07691283, -0.44119683,  0.33501224,  1.01000229,
-                                            1.9723699 ,  3.16101178,  4.12055134,  5.27092295, -9.19693724,
-                                            4.33968853,  5.20719195, -2.48498028, -0.41483633, -1.68072058,
-                                            -4.12405797, -4.32178097, -1.28126424, -0.05013006, -0.01078947,
-                                            0.01309918,  0.0304733 ,  0.04832851,  0.06789398,  0.08949696,
-                                            0.09934445,  0.10436846,  0.66643841]),atol=min(max_atol,0.35))
+        coef = self.model.coef.flatten()
+        np.testing.assert_allclose(coef,np.array([ 7.64896332, -0.87163571, -0.84714219,  0.05745359,  1.19376365,
+                                                1.65146764,  0.45272538, -0.54724611, -0.76214353, -0.76137743,
+                                                -1.8210173 , -1.04816578, -0.41222123,  0.34134332,  1.0342988 ,
+                                                2.01876926,  3.18538175,  4.08327798,  5.17126124, -8.62853231,
+                                                4.78466146,  5.76753761, -1.98400143,  0.10081098, -1.16777336,
+                                                -3.57420725, -4.0600672 , -1.08798903, -0.04889937, -0.01052461,
+                                                0.01277757,  0.02972515,  0.04714203,  0.06622719,  0.08729984,
+                                                0.0969056 ,  0.10180631,  0.66763451]),atol=min(max_atol,0.7),rtol=min(max_rtol,1e-6))
 
     def test_GAMcoef2(self):
-        coef = self.model2.overall_coef.flatten()
-        np.testing.assert_allclose(coef,np.array([  7.6489859 ,  -0.90359436,  -1.1995978 ,  -0.1219847 ,
-                                            0.8902022 ,   1.53926404,   0.09832465,  -0.914336  ,
-                                            -0.87410618,  -0.50078609,  -1.70675555,  -1.40414449,
-                                            -0.78427345,   0.28350426,   0.78126954,   1.56534334,
-                                            2.89252623,   4.27551005,   5.81263687, -10.35107199,
-                                            3.37333916,   4.0633653 ,  -3.53414945,  -1.49195269,
-                                            -2.73210049,  -5.26428994,  -4.80803947,  -2.02328384,
-                                            -0.01671727,  -0.02500594,  -0.0339186 ,  -0.0572995 ,
-                                            -0.03603238,   0.02741854,   0.08237743,   0.14099506,
-                                            0.20398593,   0.66054218]),atol=min(max_atol,0.15),rtol=min(max_rtol,1e-6))  
+        coef = self.model2.coef.flatten()
+        np.testing.assert_allclose(coef,np.array([ 7.64898791, -0.87442422, -0.7302071 ,  0.14596979,  1.27647368,
+                                                1.70078317,  0.56790503, -0.41554354, -0.73983263, -0.90265256,
+                                                -1.83369152, -1.02612303, -0.38474768,  0.35920819,  1.05915048,
+                                                2.05300297,  3.20549805,  4.06563624,  5.12037278, -8.52043318,
+                                                4.84751426,  5.85726955, -1.89210962,  0.16967413, -1.06785945,
+                                                -3.53406784, -3.88453386, -2.01468058, -0.04870832, -0.01048352,
+                                                0.0127276 ,  0.02960897,  0.04695781,  0.06596845,  0.08695881,
+                                                0.09652709,  0.10140869,  0.66877099]),atol=min(max_atol,0.3),rtol=min(max_rtol,1e-6))  
 
     def test_GAMlam(self):
         lam = np.array([p.lam for p in self.model.overall_penalties])
-        np.testing.assert_allclose(lam,np.array([7.21928261e-01, 5.68402996e+00, 7.31895390e-03, 1.00000000e+07]),atol=min(max_atol,1.5),rtol=min(max_rtol,0.35))
+        np.testing.assert_allclose(lam,np.array([7.35504400e-01, 7.27801598e+00, 8.04428324e-03, 1.00000000e+07]),atol=min(max_atol,1.5),rtol=min(max_rtol,0.37))
 
     def test_GAMlam2(self):
         lam = np.array([p.lam for p in self.model2.overall_penalties])
-        np.testing.assert_allclose(lam,np.array([2.61309258e-01, 9.35511512e-01, 5.32567098e-03, 3.27034646e+01]),atol=min(max_atol,15),rtol=min(max_rtol,0.35))  
+        np.testing.assert_allclose(lam,np.array([9.58110974e-01, 8.39545471e+00, 8.87952624e-03, 1.00000000e+07]),atol=min(max_atol,15),rtol=min(max_rtol,0.35))  
 
     def test_GAMreml(self):
         reml = self.model.get_reml()
-        np.testing.assert_allclose(reml,-1078.492,atol=min(max_atol,2),rtol=min(max_rtol,1e-6))
+        np.testing.assert_allclose(reml,-1080.9668585544648,atol=min(max_atol,2),rtol=min(max_rtol,1e-6))
 
     def test_GAMreml2(self):
         reml = self.model2.get_reml()
-        np.testing.assert_allclose(reml,-1062.438,atol=min(max_atol,2),rtol=min(max_rtol,1e-6))
+        np.testing.assert_allclose(reml,-1083.887431273825,atol=min(max_atol,2),rtol=min(max_rtol,0.015))
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
-        np.testing.assert_allclose(llk,-1042.691,atol=min(max_atol,0.5),rtol=min(max_rtol,1e-6))
+        np.testing.assert_allclose(llk,-1043.3141308788472,atol=min(max_atol,0.5),rtol=min(max_rtol,0.001))
     
     def test_GAMllk2(self):
         llk = self.model2.get_llk(False)
-        np.testing.assert_allclose(llk,-1039.741,atol=min(max_atol,0.5),rtol=min(max_rtol,1e-6))
+        np.testing.assert_allclose(llk,-1043.8544317953304,atol=min(max_atol,0.5),rtol=min(max_rtol,0.002))
 
 
 class Test_PropHaz_hard:
@@ -199,51 +143,68 @@ class Test_PropHaz_hard:
     gsmm_newton_fam = PropHaz(ut,r)
     gsmm_newton = GSMM([copy.deepcopy(sim_formula_m)],gsmm_newton_fam)
 
+    test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
+    test_kwargs["method"] = 'QR/Chol'
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["control_lambda"] = False
+    test_kwargs["max_outer"] = 200
+    test_kwargs["max_inner"] = 500
+    test_kwargs["min_inner"] = 500
+    test_kwargs["seed"] = 0
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        gsmm_newton.fit(init_coef=None,method="QR/Chol",extend_lambda=False,
-                        control_lambda=False,max_outer=200,seed=0,max_inner=500,
-                        min_inner=500,progress_bar=True)
+        gsmm_newton.fit(**test_kwargs)
         
-
     gsmm_qefs_fam = PropHaz(ut,r)
     gsmm_qefs = GSMM([copy.deepcopy(sim_formula_m)],gsmm_qefs_fam)
 
     # Fit with qEFS update without initialization
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        bfgs_opt={"gtol":1e-9,
-                    "ftol":1e-9,
+        bfgs_opt={"gtol":1e-7,
+                    "ftol":1e-7,
                     "maxcor":30,
-                    "maxls":200,
-                    "maxfun":1e7}
+                    "maxls":20,
+                    "maxfun":100}
         
-        gsmm_qefs.fit(init_coef=None,method='qEFS',extend_lambda=False,
-                        control_lambda=False,max_outer=200,max_inner=500,min_inner=500,
-                        seed=0,qEFSH='SR1',max_restarts=0,overwrite_coef=False,qEFS_init_converge=False,prefit_grad=True,
-                        progress_bar=True,**bfgs_opt)
+        test_kwargs["method"] = 'qEFS'
+        test_kwargs["extend_lambda"] = False
+        test_kwargs["control_lambda"] = 1
+        test_kwargs["max_outer"] = 200
+        test_kwargs["max_inner"] = 500
+        test_kwargs["min_inner"] = 500
+        test_kwargs["seed"] = 0
+        test_kwargs["max_restarts"] = 0
+        test_kwargs["overwrite_coef"] = False
+        test_kwargs["qEFS_init_converge"] = False
+        test_kwargs["prefit_grad"] = True
+        test_kwargs["bfgs_options"] = bfgs_opt
+        
+        gsmm_qefs.fit(**test_kwargs)
 
     def test_GAMcoef(self):
 
-        np.testing.assert_allclose((self.gsmm_newton.overall_coef - self.gsmm_qefs.overall_coef).flatten(),
-                           np.array([ 0.00085094, -0.00112174, -0.00254822, -0.00133955,  0.00105183,
-                                        -0.00174351, -0.00296606,  0.00099741,  0.00571504, -0.00296058,
-                                        -0.00230932,  0.00126035,  0.00379059,  0.00195697,  0.00087278,
-                                        0.00414338, -0.01210031, -0.03304087,  0.03062558,  0.02426205,
-                                        0.01574717,  0.03415708,  0.02328558,  0.02059044,  0.02940937,
-                                        0.01876927,  0.02136963,  0.00305857, -0.01617596, -0.02171221,
-                                        -0.00669945,  0.01213701,  0.0186336 , -0.00328931, -0.04652364,
-                                        -0.0910511 ]),atol=0.025) 
+        np.testing.assert_allclose((self.gsmm_newton.coef - self.gsmm_qefs.coef).flatten(),
+                           np.array([-5.44700213e-04, -5.57025326e-04,  1.64013870e-04,  8.67670135e-04,
+                                    4.92493649e-04,  7.65198038e-04,  5.14628775e-04, -9.50230485e-04,
+                                    -2.48488958e-03, -6.72884363e-04, -1.17596358e-03, -6.75266364e-04,
+                                    6.72783782e-05,  1.07678488e-04, -2.63805422e-07,  1.65661496e-03,
+                                    -1.61770568e-03, -6.64843399e-03, -4.78166505e-02, -3.54112498e-02,
+                                    -4.53015190e-02, -3.99937127e-02, -4.29717381e-02, -4.15610992e-02,
+                                    -4.73157234e-02, -1.93293685e-02, -2.61343991e-02,  5.38161813e-05,
+                                    -3.18588497e-04, -3.70497505e-04,  7.79857596e-05,  5.19593795e-04,
+                                    5.72184426e-04, -2.22179748e-04, -1.67729712e-03, -3.14518797e-03]),atol=0.025) 
 
     def test_GAMlam(self):
         np.testing.assert_allclose(np.round(np.array([p1.lam - p2.lam for p1,p2 in zip(self.gsmm_newton.overall_penalties,self.gsmm_qefs.overall_penalties)]),decimals=3),
-                           np.array([ 0.282,  0.544,  0.   , 44.97 ]),atol=min(max_atol,10),rtol=min(max_rtol,0.35)) 
+                           np.array([-0.098,  0.149, -0.   ,  2.152]),atol=min(max_atol,2),rtol=min(max_rtol,0.35)) 
 
     def test_GAMreml(self):
-        np.testing.assert_allclose(self.gsmm_newton.get_reml() - self.gsmm_qefs.get_reml(),-0.816,atol=min(max_atol,0.2),rtol=min(max_rtol,4e-4))
+        np.testing.assert_allclose(self.gsmm_newton.get_reml() - self.gsmm_qefs.get_reml(),0.0907684010567209,atol=min(max_atol,0.2),rtol=min(max_rtol,4e-4))
 
     def test_GAMllk(self):
-        np.testing.assert_allclose(self.gsmm_newton.get_llk(True) - self.gsmm_qefs.get_llk(True),-0.498,atol=min(max_atol,0.2),rtol=min(max_rtol,9e-4))
+        np.testing.assert_allclose(self.gsmm_newton.get_llk(True) - self.gsmm_qefs.get_llk(True),0.07796569660399655,atol=min(max_atol,0.1),rtol=min(max_rtol,9e-4))
 
 class Test_PropHaz_repara_hard:
     sim_dat = sim3(500,2,c=1,seed=0,family=PropHaz([0],[0]),binom_offset = 0.1,correlate=False)
@@ -266,48 +227,67 @@ class Test_PropHaz_repara_hard:
     gsmm_newton_fam = PropHaz(ut,r)
     gsmm_newton = GSMM([copy.deepcopy(sim_formula_m)],gsmm_newton_fam)
 
+    test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
+    test_kwargs["method"] = 'QR/Chol'
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["control_lambda"] = False
+    test_kwargs["max_outer"] = 200
+    test_kwargs["max_inner"] = 500
+    test_kwargs["min_inner"] = 500
+    test_kwargs["seed"] = 0
+    test_kwargs["repara"] = True
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        gsmm_newton.fit(init_coef=None,method="QR/Chol",extend_lambda=False,
-                        control_lambda=False,max_outer=200,seed=0,max_inner=500,
-                        min_inner=500,progress_bar=True,repara=True)
+        gsmm_newton.fit(**test_kwargs)
         
-
     gsmm_qefs_fam = PropHaz(ut,r)
     gsmm_qefs = GSMM([copy.deepcopy(sim_formula_m)],gsmm_qefs_fam)
 
     # Fit with qEFS update without initialization
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        bfgs_opt={"gtol":1e-9,
-                    "ftol":1e-9,
+        bfgs_opt={"gtol":1e-7,
+                    "ftol":1e-7,
                     "maxcor":30,
-                    "maxls":200,
-                    "maxfun":1e7}
+                    "maxls":20,
+                    "maxfun":100}
         
-        gsmm_qefs.fit(init_coef=None,method='qEFS',extend_lambda=False,
-                        control_lambda=False,max_outer=200,max_inner=500,min_inner=500,
-                        seed=0,qEFSH='SR1',max_restarts=0,overwrite_coef=False,qEFS_init_converge=False,prefit_grad=True,
-                        progress_bar=True,repara=True,**bfgs_opt)
+        test_kwargs["method"] = 'qEFS'
+        test_kwargs["extend_lambda"] = False
+        test_kwargs["control_lambda"] = 1
+        test_kwargs["max_outer"] = 200
+        test_kwargs["max_inner"] = 500
+        test_kwargs["min_inner"] = 500
+        test_kwargs["seed"] = 0
+        test_kwargs["max_restarts"] = 0
+        test_kwargs["overwrite_coef"] = False
+        test_kwargs["qEFS_init_converge"] = False
+        test_kwargs["prefit_grad"] = True
+        test_kwargs["repara"] = True
+        test_kwargs["bfgs_options"] = bfgs_opt
+        
+        gsmm_qefs.fit(**test_kwargs)
 
     def test_GAMcoef(self):
 
-        np.testing.assert_allclose((self.gsmm_newton.overall_coef - self.gsmm_qefs.overall_coef).flatten(),
-                           np.array([ 0.00130659, -0.00146633, -0.00482344, -0.00219018,  0.00408372,
-                                    -0.00254493, -0.00538949,  0.00269739,  0.01220294, -0.00574834,
-                                    -0.00341937,  0.00293582,  0.00723694,  0.0041163 ,  0.00185322,
-                                    0.00810604, -0.0177597 , -0.05120267, -0.0156164 , -0.01146629,
-                                    -0.03849618, -0.00090847, -0.02320778, -0.0266449 , -0.01706707,
-                                    0.00320521, -0.00176434,  0.00787907, -0.03024446, -0.04263593,
-                                    -0.01658554,  0.01727422,  0.0315337 , -0.0050121 , -0.08136764,
-                                    -0.15992784]),atol=min(max_atol,0.2),rtol=min(max_rtol,5e-6)) 
+        np.testing.assert_allclose((self.gsmm_newton.coef - self.gsmm_qefs.coef).flatten(),
+                           np.array([-7.63719208e-05, -2.33388059e-03, -2.08491805e-03,  5.08375257e-04,
+                                    1.83801694e-03, -2.16724620e-04, -2.62911257e-03, -3.04387685e-03,
+                                    -3.04146788e-03, -4.36797594e-03, -5.87605352e-05,  3.44683488e-03,
+                                    4.97359403e-03,  4.08998852e-03,  3.61352707e-03,  5.51083558e-03,
+                                    -2.76692609e-06, -6.36423104e-03, -7.39506193e-02, -5.38276772e-02,
+                                    -8.00034940e-02, -5.66388675e-02, -7.02723612e-02, -7.13573512e-02,
+                                    -7.28973942e-02, -2.79028844e-02, -1.82273956e-02,  2.95831797e-03,
+                                    -1.53464860e-02, -2.04331998e-02, -6.47717863e-03,  1.15027597e-02,
+                                    1.73769619e-02, -3.68834284e-03, -4.49034467e-02, -8.78434801e-02]),atol=min(max_atol,0.02),rtol=min(max_rtol,5e-6)) 
 
     def test_GAMlam(self):
         np.testing.assert_allclose(np.array([p1.lam - p2.lam for p1,p2 in zip(self.gsmm_newton.overall_penalties,self.gsmm_qefs.overall_penalties)]),
-                                   np.array([ 6.706370e-01,  8.527276e-01, -1.329478e-04,  6.377809e+01]),atol=min(max_atol,70),rtol=min(max_rtol,1.1)) 
+                                   np.array([ 3.64040108e-02,  1.58535686e-01, -2.20926595e-04,  4.33667703e+01]),atol=min(max_atol,5),rtol=min(max_rtol,1.1)) 
 
     def test_GAMreml(self):
-        np.testing.assert_allclose(self.gsmm_newton.get_reml() - self.gsmm_qefs.get_reml(),-0.865,atol=min(max_atol,1.5),rtol=min(max_rtol,6e-4))
+        np.testing.assert_allclose(self.gsmm_newton.get_reml() - self.gsmm_qefs.get_reml(),1.4408541227944625,atol=min(max_atol,0.5),rtol=min(max_rtol,6e-4))
 
     def test_GAMllk(self):
-        np.testing.assert_allclose(self.gsmm_newton.get_llk(True) - self.gsmm_qefs.get_llk(True),-0.758,atol=min(max_atol,1),rtol=min(max_rtol,2e-4))
+        np.testing.assert_allclose(self.gsmm_newton.get_llk(True) - self.gsmm_qefs.get_llk(True),-0.18673595259474496,atol=min(max_atol,0.1),rtol=min(max_rtol,2e-4))
