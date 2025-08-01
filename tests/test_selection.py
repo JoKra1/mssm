@@ -1,7 +1,5 @@
 from mssm.models import *
 from mssm.src.python.compare import compare_CDL
-from mssm.src.python.gamm_solvers import compute_S_emb_pinv_det,cpp_dChol,cpp_chol
-from mssm.src.python.utils import estimateVp,correct_VB,DummyRhoPrior
 import numpy as np
 import os
 from mssmViz.sim import*
@@ -129,10 +127,10 @@ class Test_AIC:
                     ######################################## Comparisons ########################################
 
                     # Uncorrected
-                    uncor_result = compare_CDL(sim_fit_model,sim_fit_model2,correct_V=False,correct_t1=False,grid='JJJ3',seed=sim_i,verbose=False,only_expected_edf=False)
+                    uncor_result = compare_CDL(sim_fit_model,sim_fit_model2,correct_V=False,correct_t1=False,grid='JJJ1',seed=sim_i,verbose=False,only_expected_edf=False)
 
                     # WPS:
-                    wps_pql_result = compare_CDL(sim_fit_model,sim_fit_model2,nR=nR,df=df,correct_t1=False,n_c=n_cores,grid='JJJ1',Vp_fidiff=False,seed=sim_i,verbose=False,only_expected_edf=False)
+                    wps_pql_result = compare_CDL(sim_fit_model,sim_fit_model2,nR=nR,df=df,correct_t1=False,n_c=n_cores,grid='JJJ1',Vp_fidiff=False,seed=sim_i,verbose=False,only_expected_edf=False,compute_Vcc=True)
                     
                     if uncor_result["aic_diff"] < 0:
                         AIC_rej[c_i] += 1
@@ -252,10 +250,10 @@ class Test_AIC:
                     ######################################## Comparisons ########################################
 
                     # Uncorrected
-                    uncor_result = compare_CDL(sim_fit_model,sim_fit_model2,correct_V=False,correct_t1=False,grid='JJJ3',seed=sim_i,verbose=False,only_expected_edf=False)
+                    uncor_result = compare_CDL(sim_fit_model,sim_fit_model2,correct_V=False,correct_t1=False,grid='JJJ1',seed=sim_i,verbose=False,only_expected_edf=False)
 
                     # WPS:
-                    wps_pql_result = compare_CDL(sim_fit_model,sim_fit_model2,nR=nR,df=df,correct_t1=False,n_c=n_cores,grid='JJJ1',Vp_fidiff=False,seed=sim_i,verbose=False,only_expected_edf=False)
+                    wps_pql_result = compare_CDL(sim_fit_model,sim_fit_model2,nR=nR,df=df,correct_t1=False,n_c=n_cores,grid='JJJ1',Vp_fidiff=False,seed=sim_i,verbose=False,only_expected_edf=False,compute_Vcc=True)
                     
                     if uncor_result["aic_diff"] < 0:
                         AIC_rej[c_i] += 1
@@ -377,8 +375,9 @@ class Test_p():
             ps = np.array(ps)
             ps[np.isnan(ps)] = 1
             qs = np.linspace(5/(len(ps)*10),1 - (5/(len(ps)*10)),len(ps))
+            qs = scp.stats.uniform.ppf(qs)
 
-            ax.plot(scp.stats.uniform.ppf(qs),np.sort(ps),color="gray",linestyle='dashed')
+            ax.plot(qs,np.sort(ps),color="gray",linestyle='dashed')
             ax.plot(qs,qs,color="black")
 
             ax.set_ylim(0,1)
