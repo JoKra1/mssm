@@ -8,7 +8,7 @@ and Shape (**GAMMLSS**), and more general smooth (mixed) models (**GSMMs**) in t
 ``mssm`` is an excellent choice for the modeling of multi-level time-series data, often estimating additive models with separate smooths for thousands of levels in a couple of minutes.
 
 You can either use the side-bar on the left to navigate through the document tree or click on the links below. To get started, we suggest that you first work through the `Getting Started`
-section, which includes installation instructions. Then you should complete the `Tutorial`, in which you will familiarize yourself with the syntax of ``mssm`` and the `mssmViz <https://github.com/JoKra1/mssm_tutorials>`_ package. ``mssmViz``
+section, which includes installation instructions. Then you should complete the `Tutorial`, in which you will familiarize yourself with the syntax of ``mssm`` and the `mssmViz <https://github.com/JoKra1/mssmViz>`_ package. ``mssmViz``
 offers functions to visualize & validate models estimated via the ``mssm`` toolbox. If you are interested in adding your own custom smooth basis and penalty matrices, head to the `Programmer's Guide` section.
 If you just want to take a look at the api, check out the `api` section.
 

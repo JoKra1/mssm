@@ -122,7 +122,7 @@ class Formula():
 
       ######## Stream data from file and set up custom codebook #########
 
-      file_paths = [f'https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat_cond_{cond}.csv' for cond in ["a","b"]]
+      file_paths = [f'https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat_cond_{cond}.csv' for cond in ["a","b"]]
 
       # Set up specific coding for factor 'cond'
       codebook = {'cond':{'a': 0, 'b': 1}}
@@ -155,7 +155,7 @@ class Formula():
 
       ########## preparing for ar1 model (with resets per time-series) and data type requirements ##########
 
-      dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+      dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat.csv')
 
       # mssm requires that the data-type for variables used as factors is 'O'=object
       dat = dat.astype({'series': 'O',

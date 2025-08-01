@@ -1832,7 +1832,7 @@ class GAMM(GAMMLSS):
             from mssmViz.plot import *
 
             ########## Big Model ##########
-            dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+            dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat.csv')
 
             # mssm requires that the data-type for variables used as factors is 'O'=object
             dat = dat.astype({'series': 'O',
