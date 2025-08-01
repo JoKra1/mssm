@@ -303,7 +303,7 @@ class Test_p():
         model2.fit(**test_kwargs)
 
         # Compute bunch of p-values
-        res = compare_CDL(model1,model2,correct_t1=True,perform_GLRT=True)
+        res = compare_CDL(model1,model2,correct_t1=True,perform_GLRT=True,grid='JJJ1',compute_Vcc=True,only_expected_edf=False)
         pss, Trs = approx_smooth_p_values(model1)
         ps_GLRT_n.append(res['p'])
         ps_n.append(pss[0])
@@ -319,7 +319,7 @@ class Test_p():
         model2.fit(**test_kwargs)
 
         # Compute bunch of p-values
-        res = compare_CDL(model1,model2,correct_t1=True,perform_GLRT=True)
+        res = compare_CDL(model1,model2,correct_t1=True,perform_GLRT=True,grid='JJJ1',compute_Vcc=True,only_expected_edf=False)
         pss, Trs = approx_smooth_p_values(model1)
         ps_GLRT_bi.append(res['p'])
         ps_bi.append(pss[0])
@@ -336,7 +336,7 @@ class Test_p():
         model2.fit(**test_kwargs)
 
         # Compute bunch of p-values
-        res = compare_CDL(model1,model2,correct_t1=True,perform_GLRT=True)
+        res = compare_CDL(model1,model2,correct_t1=True,perform_GLRT=True,grid='JJJ1',compute_Vcc=True,only_expected_edf=False)
         pss, Trs = approx_smooth_p_values(model1)
         ps_GLRT_te.append(res['p'])
         ps_te.append(pss[0])
@@ -352,7 +352,7 @@ class Test_p():
         model2.fit(**test_kwargs)
 
         # Compute bunch of p-values
-        res = compare_CDL(model1,model2,correct_t1=True,perform_GLRT=True)
+        res = compare_CDL(model1,model2,correct_t1=True,perform_GLRT=True,grid='JJJ1',compute_Vcc=True,only_expected_edf=False)
         pss, Trs = approx_smooth_p_values(model1)
         ps_GLRT_bi_te.append(res['p'])
         ps_bi_te.append(pss[0])
