@@ -284,9 +284,9 @@ class IdentityPenalty(Penalty):
       :param n: Dimension of square penalty matrix
       :type n: int
       :param constraint: Any contraint to absorb by the penalty or None if no constraint is required
-      :type constraint: ConstType |None
+      :type constraint: ConstType|None
       :param f: Any kind of function to apply to the diagonal elements of the penalty, defaults to None
-      :type f: Callable | None, optional
+      :type f: Callable|None, optional
       :return: penalty data,penalty row indices,penalty column indices,root of penalty data,root of penalty row indices,root of penalty column indices,rank of penalty
       :rtype: tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]
       """

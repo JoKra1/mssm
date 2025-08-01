@@ -31,6 +31,10 @@ nb_execution_timeout = 500
 nb_execution_show_tb = True
 nb_scroll_outputs = True
 
+myst_enable_extensions = [
+                          "dollarmath"
+                         ]
+
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
