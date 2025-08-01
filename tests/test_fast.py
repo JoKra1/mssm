@@ -9,7 +9,7 @@ from .defaults import default_gamm_test_kwargs
 
 class Test_GAM:
 
-    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat.csv')
     
     # mssm requires that the data-type for variables used as factors is 'O'=object
     dat = dat.astype({'series': 'O',
@@ -45,7 +45,7 @@ class Test_GAM:
 
 class Test_GAM_TE:
 
-    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat.csv')
     
     # mssm requires that the data-type for variables used as factors is 'O'=object
     dat = dat.astype({'series': 'O',
@@ -84,7 +84,7 @@ class Test_GAM_TE:
 
 class Test_GAM_TE_BINARY:
 
-    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat.csv')
     
     # mssm requires that the data-type for variables used as factors is 'O'=object
     dat = dat.astype({'series': 'O',
@@ -159,7 +159,7 @@ class Test_GAM_TE_BINARY:
 
 class Test_GAMM:
 
-    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat.csv')
 
     # mssm requires that the data-type for variables used as factors is 'O'=object
     dat = dat.astype({'series': 'O',

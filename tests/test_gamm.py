@@ -13,7 +13,7 @@ from .defaults import default_gamm_test_kwargs,max_atol,max_rtol
 ################################################################## Tests ##################################################################
 
 class Test_BIG_GAMM_Discretize:
-    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat.csv')
 
     # mssm requires that the data-type for variables used as factors is 'O'=object
     dat = dat.astype({'series': 'O',
@@ -54,7 +54,7 @@ class Test_BIG_GAMM_Discretize:
 
 
 class Test_NUll_penalty_reparam:
-    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat.csv')
 
     # mssm requires that the data-type for variables used as factors is 'O'=object
     dat = dat.astype({'series': 'O',
@@ -127,7 +127,7 @@ class Test_NUll_penalty_reparam:
 
 
 class Test_NUll_1:
-    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat.csv')
 
     # mssm requires that the data-type for variables used as factors is 'O'=object
     dat = dat.astype({'series': 'O',
@@ -166,7 +166,7 @@ class Test_NUll_1:
         assert round(llk,ndigits=1) == -134265.0
 
 class Test_NUll_2:
-    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat.csv')
 
     # mssm requires that the data-type for variables used as factors is 'O'=object
     dat = dat.astype({'series': 'O',
@@ -205,7 +205,7 @@ class Test_NUll_2:
         assert round(llk,ndigits=1) == -134265.0
 
 class Test_NUll_3:
-    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat.csv')
 
     # mssm requires that the data-type for variables used as factors is 'O'=object
     dat = dat.astype({'series': 'O',
@@ -244,7 +244,7 @@ class Test_NUll_3:
         assert round(llk,ndigits=1) == -134265.0
 
 class Test_NUll_4:
-    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat.csv')
 
     # mssm requires that the data-type for variables used as factors is 'O'=object
     dat = dat.astype({'series': 'O',
@@ -283,7 +283,7 @@ class Test_NUll_4:
         assert round(llk,ndigits=1) == -134265.0
 
 class Test_ar1_Gaussian:
-    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat.csv')
 
     # mssm requires that the data-type for variables used as factors is 'O'=object
     dat = dat.astype({'series': 'O',
@@ -387,7 +387,7 @@ class Test_ar1_Gamma:
 
 class Test_BIG_GAMM:
 
-    file_paths = [f'https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat_cond_{cond}.csv' for cond in ["a","b"]]
+    file_paths = [f'https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat_cond_{cond}.csv' for cond in ["a","b"]]
 
     codebook = {'cond':{'a': 0, 'b': 1}}
 
@@ -423,7 +423,7 @@ class Test_BIG_GAMM:
 
 
 class Test_BIG_GAMM_keep_cov:
-    file_paths = [f'https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat_cond_{cond}.csv' for cond in ["a","b"]]
+    file_paths = [f'https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat_cond_{cond}.csv' for cond in ["a","b"]]
 
     codebook = {'cond':{'a': 0, 'b': 1}}
 
