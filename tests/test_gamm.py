@@ -282,6 +282,108 @@ class Test_NUll_4:
         llk = self.model.get_llk(False)
         assert round(llk,ndigits=1) == -134265.0
 
+class Test_ar1_Gaussian:
+    dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssm_tutorials/main/data/GAMM/sim_dat.csv')
+
+    # mssm requires that the data-type for variables used as factors is 'O'=object
+    dat = dat.astype({'series': 'O',
+                    'cond':'O',
+                    'sub':'O',
+                    'series':'O'})
+
+    formula = Formula(lhs=lhs("y"),
+                    terms=[i(),
+                                l(["cond"]),
+                                f(["time"],by="cond"),
+                                f(["x"],by="cond"),
+                                f(["time","x"],by="cond")],
+                    data=dat,
+                    print_warn=False,
+                    series_id='series') # 'series' variable identifies individual time-series
+
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["rho"] = 0.97
+    test_kwargs["max_inner"] = 1
+
+    model = GAMM(formula,Gaussian())
+    model.fit(**test_kwargs)
+
+    def test_GAMedf(self):
+        np.testing.assert_allclose(self.model.edf,20.848721033068795,atol=min(max_atol,0),rtol=min(max_rtol,0.0001)) 
+
+    def test_GAMcoef(self):
+        coef = self.model.coef
+        np.testing.assert_allclose(coef,np.array([[36.56746619], [18.38610041], [-194.86662089], [-69.64843072], [-151.3548762],
+                                                [-165.01347493], [-96.31054075], [-105.92452482], [475.66390794], [1047.67911573],
+                                                [1617.59990081], [-73.51078279], [33.0187979], [14.37041146], [-11.65065876],
+                                                [-13.83346069], [-36.02625752], [-36.8593549], [42.77691521], [115.10561624],
+                                                [-6.45145897], [-4.46471154], [-1.17417159], [3.90436888], [6.32542163],
+                                                [4.97724076], [4.6508228], [5.98385755], [7.7258949], [-6.54343469],
+                                                [-4.52837177], [-1.190887], [3.96008844], [6.41555198], [5.04813343],
+                                                [4.71715262], [6.06929885], [7.83627795], [-0.13894973], [0.48227914],
+                                                [0.42007256], [0.5196528], [-0.50033832], [1.73661863], [1.51262315],
+                                                [1.8711972], [-0.52197612], [1.81172224], [1.57803973], [1.95212164],
+                                                [-0.8028081], [2.78645856], [2.4270506], [3.00239477], [-0.08915421],
+                                                [0.30944679], [0.26953233], [0.33342608], [-0.32103445], [1.1142749],
+                                                [0.97054976], [1.20062169], [-0.33491735], [1.16246303], [1.01252275],
+                                                [1.25254547], [-0.51510814], [1.78788576], [1.55727613], [1.92643499]]),atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+
+    def test_GAMlam(self):
+        lam = np.array([p.lam for p in self.model.overall_penalties])
+        np.testing.assert_allclose(lam,np.array([0.002621769139735816, 0.043577859437411604, 10000000.0, 10000000.0, 10000000.0, 10000000.0, 10000000.0, 10000000.0]),atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        np.testing.assert_allclose(reml,-86642.72573737243,atol=min(max_atol,0),rtol=min(max_rtol,0.0001)) 
+
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        np.testing.assert_allclose(llk,-86608.91815873925,atol=min(max_atol,0),rtol=min(max_rtol,0.0001)) 
+
+class Test_ar1_Gamma:
+
+    # We simulate some data including a random smooth - but then dont include it in the model:
+    sim_dat = sim11(5000,2,c=0,seed=20,family=Gamma(),n_ranef=20,binom_offset = 0)
+
+    sim_dat = sim_dat.sort_values(['x4'], ascending=[True])
+
+    sim_formula = Formula(lhs("y"),
+                        [i(),f(["x0"]),f(["x1"]),f(["x2"]),f(["x3"])],
+                        data=sim_dat,
+                        series_id="x4") # Can already specify this.
+
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["rho"] = 0.2
+    test_kwargs["max_inner"] = 1
+
+    model = GAMM(sim_formula,Gamma())
+    model.fit(**test_kwargs)
+
+    def test_GAMedf(self):
+        np.testing.assert_allclose(self.model.edf,18.88816369593533,atol=min(max_atol,0),rtol=min(max_rtol,0.0001)) 
+
+    def test_GAMcoef(self):
+        coef = self.model.coef
+        np.testing.assert_allclose(coef,np.array([[8.71146084], [-1.00898003], [-0.13519481], [0.49561407], [1.06551493],
+                                                    [1.51182884], [1.28590751], [0.9621435], [0.31948718], [-0.34296106],
+                                                    [-1.71386039], [-0.88131229], [-0.44807988], [0.06209922], [0.77365994],
+                                                    [1.84859538], [3.34299994], [4.67604185], [6.01029269], [-11.76718717],
+                                                    [-0.00959794], [0.7839461], [-7.24148541], [-5.10575246], [-5.50342036],
+                                                    [-8.98985234], [-6.08908095], [-3.96555809], [-0.00823194], [-0.0028227],
+                                                    [0.00027623], [0.00321517], [0.00639628], [0.00994498], [0.01336785],
+                                                    [0.01524764], [0.01702762]]),atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+
+    def test_GAMlam(self):
+        lam = np.array([p.lam for p in self.model.overall_penalties])
+        np.testing.assert_allclose(lam,np.array([52.28279162655495, 55.95969508678077, 0.035347301657971626, 244928.41719951248]),atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        np.testing.assert_allclose(reml,-47019.61861396541,atol=min(max_atol,0),rtol=min(max_rtol,0.0001)) 
+
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        np.testing.assert_allclose(llk,-46974.16558162963,atol=min(max_atol,0),rtol=min(max_rtol,0.0001))
 
 class Test_BIG_GAMM:
 
