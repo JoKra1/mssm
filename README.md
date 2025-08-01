@@ -12,7 +12,7 @@
 
 ``mssm`` is a toolbox to estimate Generalized Additive Mixed Models (GAMMs), Generalized Additive Mixed Models of Location Scale and Shape (GAMMLSS), and more general (mixed) smooth models in the sense defined by [Wood, Pya, & Säfken (2016)](https://doi.org/10.1080/01621459.2016.1180986). Approximate estimation (and automatic regularization) of the latter only requires users to provide the (gradient of) the log-likelihood. Furthermore, ``mssm`` is an excellent choice for the modeling of multi-level time-series data, often estimating additive models with separate smooths for thousands of levels in a couple of minutes.
 
-**Note**: The ``main`` branch is updated frequently to reflect new developments. The ``stable`` branch should reflect the latest releases. If you don't need the newest functionality, you should install from the ``stable`` branch (see below for instructions). **Documentation** is hosted [here](https://jokra1.github.io/mssm/index.html) - together with a tutorial for `mssm`! Plotting code to visualize and validate `mssm` models is provided in this [repository](https://github.com/JoKra1/mssm_tutorials)!
+**Note**: The ``main`` branch is updated frequently to reflect new developments. The ``stable`` branch should reflect the latest releases. If you don't need the newest functionality, you should install from the ``stable`` branch (see below for instructions). **Documentation** is hosted [here](https://jokra1.github.io/mssm/index.html) - together with a tutorial for `mssm`! Plotting code to visualize and validate `mssm` models is provided in this [repository](https://github.com/JoKra1/mssmViz)!
 
 ## Installation
 
