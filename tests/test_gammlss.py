@@ -346,6 +346,47 @@ class Test_te_p_values:
 
     def test_trs2(self):
         np.testing.assert_allclose(self.Trs[1],np.array([np.float64(0.11127579603700907), np.float64(135.27602836358722)]),atol=min(max_atol,0),rtol=min(max_rtol,1e-6))
+
+
+class Test_drop:
+    sim_dat = sim13(5000,2,c=0,seed=0,family=Gaussian(),binom_offset = 0,n_ranef=20)
+
+    formula = Formula(lhs("y"),
+                    [i(),l(["x5"]),l(["x6"]),f(["x0"],by="x5"),f(["x0"],by="x6"),fs(["x0"],rf="x4")],
+                    data=sim_dat)
+
+    formula_sd = Formula(lhs("y"),
+                        [i()],
+                        data=sim_dat)
+
+    model = GAMMLSS([formula,formula_sd],GAUMLSS([Identity(),LOGb(-0.001)]))
+
+    test_kwargs = copy.deepcopy(default_gammlss_test_kwargs)
+    test_kwargs["max_inner"] = 500
+    test_kwargs["min_inner"] = 500
+    test_kwargs["max_outer"] = 200
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["control_lambda"] = 2
+    test_kwargs["method"] = "LU/Chol"
+    model.fit(**test_kwargs)
+
+    def test_GAMedf(self):
+        np.testing.assert_allclose(self.model.edf,108.54811953082891,atol=min(max_atol,0),rtol=min(max_rtol,0.01))
+
+    def test_GAMlam(self):
+        lam = np.array([p.lam for p in self.model.overall_penalties])
+        np.testing.assert_allclose(lam,np.array([4.913869938536273, 5.087829328785329, 0.0029242223796059627, 10000000.0, 1.2211364471705635, 1.105677472005988]),atol=min(max_atol,0),rtol=min(max_rtol,1.5)) 
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        np.testing.assert_allclose(reml,-10648.977191385402,atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        np.testing.assert_allclose(llk,-10435.44335659411,atol=min(max_atol,0),rtol=min(max_rtol,0.01))
+    
+    def test_drop(self):
+        assert len(self.model.info.dropped) == 1
      
 
 class Test_pred_whole_func_cor:

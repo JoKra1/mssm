@@ -291,3 +291,45 @@ class Test_PropHaz_repara_hard:
 
     def test_GAMllk(self):
         np.testing.assert_allclose(self.gsmm_newton.get_llk(True) - self.gsmm_qefs.get_llk(True),-0.18673595259474496,atol=min(max_atol,0.1),rtol=min(max_rtol,2e-4))
+
+
+class Test_drop:
+    sim_dat = sim13(5000,2,c=0,seed=0,family=Gaussian(),binom_offset = 0,n_ranef=20)
+
+    formula = Formula(lhs("y"),
+                    [i(),l(["x5"]),l(["x6"]),f(["x0"],by="x5"),f(["x0"],by="x6"),fs(["x0"],rf="x4")],
+                    data=sim_dat)
+
+    formula_sd = Formula(lhs("y"),
+                        [i()],
+                        data=sim_dat)
+
+    model = GSMM([formula,formula_sd],GAMLSSGSMMFamily(2,GAUMLSS([Identity(),LOGb(-0.001)])))
+
+    test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
+    test_kwargs["max_inner"] = 500
+    test_kwargs["min_inner"] = 500
+    test_kwargs["max_outer"] = 200
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["control_lambda"] = 2
+    test_kwargs["repara"] = False
+    test_kwargs["method"] = "LU/Chol"
+    model.fit(**test_kwargs)
+
+    def test_GAMedf(self):
+        np.testing.assert_allclose(self.model.edf,108.54783796715027,atol=min(max_atol,0),rtol=min(max_rtol,0.01))
+
+    def test_GAMlam(self):
+        lam = np.array([p.lam for p in self.model.overall_penalties])
+        np.testing.assert_allclose(lam,np.array([4.913881081300338, 5.087832012717992, 0.002924222705631079, 10000000.0, 1.2211531005561156, 1.1056775054652457]),atol=min(max_atol,0),rtol=min(max_rtol,1.5)) 
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        np.testing.assert_allclose(reml,-10648.977146470883,atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        np.testing.assert_allclose(llk,-10435.443686415718,atol=min(max_atol,0),rtol=min(max_rtol,0.01))
+
+    def test_drop(self):
+        assert len(self.model.info.dropped) == 1

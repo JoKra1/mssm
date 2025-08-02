@@ -51,7 +51,7 @@ def computeAr1Chol(formula:Formula,rho:float) -> tuple[scp.sparse.csc_array,floa
 class GAMLSSGSMMFamily(GSMMFamily):
     """Implementation of the ``GSMMFamily`` class that uses only information about the likelihood to estimate any implemented GAMMLSS model.
     
-    Allows to estimate any GAMMLSS as a GSMM via the L-qEFS update. Example::
+    Allows to estimate any GAMMLSS as a GSMM via the L-qEFS & Newton update. Example::
 
         # Simulate 500 data points
         sim_dat = sim3(500,2,c=1,seed=0,family=Gaussian(),binom_offset = 0, correlate=False)
@@ -191,8 +191,41 @@ class GAMLSSGSMMFamily(GSMMFamily):
 
         return grad.reshape(-1,1)
     
-    def hessian(self, coef, coef_split_idx, ys, Xs) -> None:
-        return None
+    def hessian(self, coef:np.ndarray,coef_split_idx:list[int],ys:list[np.ndarray],Xs:list[scp.sparse.csc_array]) -> scp.sparse.csc_array:
+        """
+        Function to evaluate Hessian of GAMM(LSS) model when estimated via GSMM.
+
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be flattened!).
+        :type coef: np.ndarray
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
+        :type coef_split_idx: [int]
+        :param ys: List containing the vectors of observations passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
+        :type ys: [np.ndarray or None]
+        :param Xs: A list of sparse model matrices per likelihood parameter.
+        :type Xs: [scp.sparse.csc_array]
+        :return: The Hessian of the log-likelihood evaluated at ``coef``.
+        :rtype: scp.sparse.csc_array
+        """
+        y = ys[0]
+        split_coef = np.split(coef,coef_split_idx)
+        etas = [Xs[ei]@split_coef[ei] for ei in range(len(Xs))]
+        mus = [self.links[ei].fi(etas[ei]) for ei in range(len(Xs))]
+        
+        # Get the Gamlss family
+        gammlss_family = self.llkargs[0]
+        
+        if gammlss_family.d_eta == False:
+         
+            d1eta,d2eta,d2meta = deriv_transform_mu_eta(y,mus,gammlss_family)
+        else:
+            d1eta = [fd1(y,*mus) for fd1 in gammlss_family.d1]
+            d2eta = [fd2(y,*mus) for fd2 in gammlss_family.d2]
+            d2meta = [fd2m(y,*mus) for fd2m in gammlss_family.d2m]
+            
+        # Get Hessian
+        _,H = deriv_transform_eta_beta(d1eta,d2eta,d2meta,Xs,only_grad=False)
+
+        return H
 
 
 def sample_MVN(n:int,mu:int|np.ndarray,scale:float,P:scp.sparse.csc_array|None,L:scp.sparse.csc_array|None,LI:scp.sparse.csc_array|None=None,use:list[int]|None=None,seed:int|None=None) -> np.ndarray:
