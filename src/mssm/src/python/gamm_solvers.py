@@ -1846,14 +1846,14 @@ def solve_gamm_sparse(mu_init:np.ndarray,y:np.ndarray,X:scp.sparse.csc_array,pen
 
          # Adjust working residuals
          wres_full = np.zeros_like(eta)
-         wres_full[inval==False] = wres
+         wres_full[inval==False] = wres.flatten()
          wres = wres_full
 
          if Lrhoi is not None:
             wres_full2 = np.zeros_like(eta)
-            wres_full2[inval==False] = wres2
+            wres_full2[inval==False] = wres2.flatten()
             wres2 = wres_full2
-      
+
       if wres2 is not None:
          wres = [wres,wres2]
    
