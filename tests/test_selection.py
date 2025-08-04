@@ -5,6 +5,9 @@ import os
 from mssmViz.sim import*
 from .defaults import default_compare_test_kwargs,default_gamm_test_kwargs,default_gammlss_test_kwargs,default_gsmm_test_kwargs,max_atol,max_rtol
 
+mssm.src.python.exp_fam.PropHaz.init_lambda = init_penalties_tests_gsmm
+mssm.src.python.utils.GAMLSSGSMMFamily.init_lambda = init_penalties_tests_gsmm
+
 ################################################################## Tests ##################################################################
 
 class Test_AIC:
@@ -15,6 +18,7 @@ class Test_AIC:
     test_kwargs["max_outer"] = 200
     test_kwargs["max_inner"] = 500
     test_kwargs["extend_lambda"] = False
+    test_kwargs["control_lambda"] = 2
 
     test_kwargs_gsmm["progress_bar"] = False
     test_kwargs_gsmm["max_outer"] = 200
@@ -65,8 +69,6 @@ class Test_AIC:
                         mod_fam = Binomial()
                     if family == "Gamma":
                         mod_fam = Gamma()
-
-                    mod_fam.is_canonical = True
                     
                     ######################################## Create Data ########################################
                     if family == "PropHaz":
@@ -188,8 +190,6 @@ class Test_AIC:
                         mod_fam = Binomial()
                     if family == "Gamma":
                         mod_fam = Gamma()
-
-                    mod_fam.is_canonical = True
                     
                     ######################################## Create Data ########################################
                     if family == "PropHaz":
@@ -275,6 +275,7 @@ class Test_p():
     test_kwargs["max_outer"] = 200
     test_kwargs["max_inner"] = 500
     test_kwargs["extend_lambda"] = False
+    test_kwargs["control_lambda"] = 2
 
     n_sim = 1000
     n_dat = 500

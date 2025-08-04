@@ -2021,7 +2021,7 @@ def compute_Vp_WPS(Vbr:scp.sparse.csc_array,H:scp.sparse.csc_array,S_emb:scp.spa
     # Get partial derivatives of coef with respect to log(lambda) - see Wood (2017):
     dBetadRhos = np.zeros((len(coef),len(penalties)))
 
-    # Vbr.T@Vbr*scale = nH^{-1} - Vbr is available in model.lvi or model.lvi after fitting
+    # Vbr.T@Vbr = nH^{-1} - Vbr is available in model.lvi or model.lvi after fitting
     for peni,pen in enumerate(penalties):
         # Given in Wood (2017)
         dBetadRhos[:,[peni]] = -pen.lam *  (Vbr.T @ (Vbr @ (pen.S_J_emb @ coef)))
@@ -2921,11 +2921,7 @@ def correct_VB(model,nR:int = 250,grid_type:str = 'JJJ1',a:float=1e-7,b:float=1e
     # In mgcv, an upper limit is enforced on edf and total_edf when they are uncertainty corrected - based on t1 in section 6.1.2 of Wood (2017)
     # so the same is done here.
     if isinstance(family,Family):
-        if isinstance(family,Gaussian) and isinstance(family.link,Identity): # Strictly additive case
-            ucF = (model.lvi.T@model.lvi)@((X.T@X))
-        else: # Generalized case
-            W = model.Wr@model.Wr
-            ucF = (model.lvi.T@model.lvi)@((X.T@W@X))
+        ucF = model.lvi.T@model.lvi@((-1*model.hessian)*orig_scale)
     else: # GSMM/GAMLSS case
         ucF = (model.lvi.T@model.lvi)@(-1*model.hessian)
 

@@ -216,7 +216,7 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
     
     # Handle very big additive models
     if only_expected_edf is None:
-        if grid == 'JJJ2' and len(model1.coef) > 4000 and perform_GLRT == False:
+        if grid == 'JJJ2' and len(model1.coef) > 4000 and perform_GLRT == False and correct_t1 == False:
             only_expected_edf = True
         else:
             only_expected_edf = False
@@ -230,7 +230,7 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
 
     # Integration weights should be based on REML score for all but strictly additive models
     if use_importance_weights is None:
-        if isinstance(model1.family,Gaussian) and isinstance(model1.family.link,Identity):
+        if grid == 'JJJ1' or (isinstance(model1.family,Gaussian) and isinstance(model1.family.link,Identity)):
             use_importance_weights = False
         else:
             use_importance_weights = True
@@ -259,8 +259,8 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
             print("Correcting for uncertainty in lambda estimates...\n")
         
         #V,LV,Vp,Vpr,edf,total_edf,edf2,total_edf2,upper_edf
-        _,_,_,_,_,DOF1,_,DOF12,expected_edf1,_ = correct_VB(model1,nR=nR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,only_expected_edf=(only_expected_edf and (correct_t1==False)),Vp_fidiff=Vp_fidiff,use_importance_weights=use_importance_weights,prior=prior,recompute_H=recompute_H,compute_Vcc=compute_Vcc,seed=seed,**bfgs_options)
-        _,_,_,_,_,DOF2,_,DOF22,expected_edf2,_ = correct_VB(model2,nR=nR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,only_expected_edf=(only_expected_edf and (correct_t1==False)),Vp_fidiff=Vp_fidiff,use_importance_weights=use_importance_weights,prior=prior,recompute_H=recompute_H,compute_Vcc=compute_Vcc,seed=seed,**bfgs_options)
+        _,_,_,_,_,DOF1,_,DOF12,expected_edf1,_ = correct_VB(model1,nR=nR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,only_expected_edf=only_expected_edf,Vp_fidiff=Vp_fidiff,use_importance_weights=use_importance_weights,prior=prior,recompute_H=recompute_H,compute_Vcc=compute_Vcc,seed=seed,**bfgs_options)
+        _,_,_,_,_,DOF2,_,DOF22,expected_edf2,_ = correct_VB(model2,nR=nR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,only_expected_edf=only_expected_edf,Vp_fidiff=Vp_fidiff,use_importance_weights=use_importance_weights,prior=prior,recompute_H=recompute_H,compute_Vcc=compute_Vcc,seed=seed,**bfgs_options)
         
         if only_expected_edf:
             DOF1 = expected_edf1
