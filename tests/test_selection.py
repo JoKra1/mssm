@@ -1,9 +1,10 @@
+import mssm
 from mssm.models import *
 from mssm.src.python.compare import compare_CDL
 import numpy as np
 import os
 from mssmViz.sim import*
-from .defaults import default_compare_test_kwargs,default_gamm_test_kwargs,default_gammlss_test_kwargs,default_gsmm_test_kwargs,max_atol,max_rtol
+from .defaults import default_compare_test_kwargs,default_gamm_test_kwargs,default_gammlss_test_kwargs,default_gsmm_test_kwargs,max_atol,max_rtol,init_penalties_tests_gsmm
 
 mssm.src.python.exp_fam.PropHaz.init_lambda = init_penalties_tests_gsmm
 mssm.src.python.utils.GAMLSSGSMMFamily.init_lambda = init_penalties_tests_gsmm
