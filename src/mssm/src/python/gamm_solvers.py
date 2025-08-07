@@ -4011,7 +4011,7 @@ def solve_gammlss_sparse(family:GAMLSSFamily,y:np.ndarray,Xs:list[scp.sparse.csc
 
 ################################################ General Smooth model code ################################################
 
-def correct_coef_step_gen_smooth(family:GSMMFamily,ys:list[np.ndarray],Xs:list[scp.sparse.csc_array],coef:np.ndarray,next_coef:np.ndarray,coef_split_idx:list[int],c_llk:float,S_emb:scp.sparse.csc_array,a:float) -> tuple[np.ndarray,float,float,float]:
+def correct_coef_step_gen_smooth(family:GSMMFamily,ys:list[np.ndarray | None],Xs:list[scp.sparse.csc_array | None],coef:np.ndarray,next_coef:np.ndarray,coef_split_idx:list[int],c_llk:float,S_emb:scp.sparse.csc_array,a:float) -> tuple[np.ndarray,float,float,float]:
    """Apply step size correction to Newton update for general smooth models, as discussed by Wood, Pya, & Säfken (2016).
 
     References:
@@ -4020,9 +4020,9 @@ def correct_coef_step_gen_smooth(family:GSMMFamily,ys:list[np.ndarray],Xs:list[s
    :param family: Model family
    :type family: GSMMFamily
    :param ys: List of vectors of observations
-   :type ys: list[np.ndarray]
+   :type ys: list[np.ndarray | None]
    :param Xs: List of model matrices
-   :type Xs: list[scp.sparse.csc_array]
+   :type Xs: list[scp.sparse.csc_array | None]
    :param coef: Coefficient estimate
    :type coef: np.ndarray
    :param next_coef: Proposed next coefficient estimate
@@ -4114,15 +4114,15 @@ def back_track_alpha(coef:np.ndarray,step:np.ndarray,llk_fun:Callable,grad_fun:C
    
    return None
 
-def check_drop_valid_gensmooth(ys:list[np.ndarray],coef:np.ndarray,Xs:list[scp.sparse.csc_array],S_emb:scp.sparse.csc_array,keep:list[int],family:GSMMFamily) -> tuple[bool,float|None]:
+def check_drop_valid_gensmooth(ys:list[np.ndarray | None],coef:np.ndarray,Xs:list[scp.sparse.csc_array | None],S_emb:scp.sparse.csc_array,keep:list[int],family:GSMMFamily) -> tuple[bool,float|None]:
    """Checks whether an identified set of coefficients to be dropped from the model results in a valid log-likelihood.
 
    :param ys: List holding vectors of observations
-   :type ys: list[np.ndarray]
+   :type ys: list[np.ndarray | None]
    :param coef: Vector of coefficients
    :type coef: np.ndarray
    :param Xs: List of model matrices - one per parameter
-   :type Xs: list[scp.sparse.csc_array]
+   :type Xs: list[scp.sparse.csc_array | None]
    :param S_emb: Total Penalty matrix
    :type S_emb: scp.sparse.csc_array
    :param keep: List of coefficients to retain
@@ -4151,7 +4151,7 @@ def check_drop_valid_gensmooth(ys:list[np.ndarray],coef:np.ndarray,Xs:list[scp.s
    
    return True,c_pen_llk
 
-def restart_coef(coef:np.ndarray,c_llk:float,c_pen_llk:float,n_coef:np.ndarray,coef_split_idx:list[int],ys:list[np.ndarray],Xs:list[scp.sparse.csc_array],S_emb:scp.sparse.csc_array,family:GSMMFamily,outer:int,restart_counter:int) -> tuple[np.ndarray, float, float]:
+def restart_coef(coef:np.ndarray,c_llk:float,c_pen_llk:float,n_coef:np.ndarray,coef_split_idx:list[int],ys:list[np.ndarray | None],Xs:list[scp.sparse.csc_array | None],S_emb:scp.sparse.csc_array,family:GSMMFamily,outer:int,restart_counter:int) -> tuple[np.ndarray, float, float]:
    """Shrink coef towards random vector to restart algorithm if it get's stuck.
 
    :param coef: Coefficient estimate
@@ -4165,9 +4165,9 @@ def restart_coef(coef:np.ndarray,c_llk:float,c_pen_llk:float,n_coef:np.ndarray,c
    :param coef_split_idx: List with indices to split coef - one per parameter of response distribution
    :type coef_split_idx: list[int]
    :param ys: List of observation vectors
-   :type ys: list[np.ndarray]
+   :type ys: list[np.ndarray | None]
    :param Xs: List of model matrices
-   :type Xs: list[scp.sparse.csc_array]
+   :type Xs: list[scp.sparse.csc_array | None]
    :param S_emb: Total penalty matrix
    :type S_emb: scp.sparse.csc_array
    :param family: Model family
@@ -4267,19 +4267,19 @@ def test_SR1(sk:np.ndarray,yk:np.ndarray,rho:np.ndarray,sks:np.ndarray,yks:np.nd
    rhos = np.delete(rhos,0)
    return Fail
 
-def handle_drop_gsmm(family:GSMMFamily, ys:list[np.ndarray], coef:np.ndarray, keep:list[int], Xs:list[scp.sparse.csc_array], S_emb:scp.sparse.csc_array) -> tuple[np.ndarray, list[int], list[scp.sparse.csc_array], scp.sparse.csc_array, float, float]:
+def handle_drop_gsmm(family:GSMMFamily, ys:list[np.ndarray | None], coef:np.ndarray, keep:list[int], Xs:list[scp.sparse.csc_array | None], S_emb:scp.sparse.csc_array) -> tuple[np.ndarray, list[int], list[scp.sparse.csc_array], scp.sparse.csc_array, float, float]:
    """Drop coefficients and make sure this is reflected in the model matrices, total penalty, llk, and penalized llk.
 
    :param family: Model family
    :type family: GSMMFamily
    :param ys: List with vector of observations
-   :type ys: list[np.ndarray]
+   :type ys: list[np.ndarray | None]
    :param coef: Vector of coefficients
    :type coef: np.ndarray
    :param keep: List of parameter indices to keep.
    :type keep: list[int]
    :param Xs: List of model matrices
-   :type Xs: list[scp.sparse.csc_array]
+   :type Xs: list[scp.sparse.csc_array | None]
    :param S_emb: Total penalty matrix.
    :type S_emb: scp.sparse.csc_array
    :return: A tuple holding: reduced coef vector, a new list of indices determining where to split the reduced coef vector, list with reduced model matrices, reduced total penalty matrix, updated llk, and penalized llk
@@ -4302,7 +4302,7 @@ def handle_drop_gsmm(family:GSMMFamily, ys:list[np.ndarray], coef:np.ndarray, ke
 
    return coef, rcoef_split_idx, rXs, rS_emb, c_llk, c_pen_llk
     
-def update_coef_gen_smooth(family:GSMMFamily,ys:list[np.ndarray],Xs:list[scp.sparse.csc_array],coef:np.ndarray,coef_split_idx:list[int],
+def update_coef_gen_smooth(family:GSMMFamily,ys:list[np.ndarray | None],Xs:list[scp.sparse.csc_array | None],coef:np.ndarray,coef_split_idx:list[int],
                            S_emb:scp.sparse.csc_array,S_norm:scp.sparse.csc_array,S_pinv:scp.sparse.csc_array,FS_use_rank:list[bool],smooth_pen:list[LambdaTerm],
                            c_llk:float,outer:int,max_inner:int,min_inner:int,conv_tol:float,method:str,piv_tol:float,keep_drop:list[list[int],list[int]]|None,
                            opt_raw:scp.sparse.linalg.LinearOperator|None) -> tuple[np.ndarray,scp.sparse.csc_array|None,scp.sparse.csc_array|None,scp.sparse.csc_array|scp.sparse.linalg.LinearOperator,float,float,float,list[int]|None,list[int]|None]:
@@ -4317,9 +4317,9 @@ def update_coef_gen_smooth(family:GSMMFamily,ys:list[np.ndarray],Xs:list[scp.spa
    :param family: Model family
    :type family: GSMMFamily
    :param ys: List of observation vectors
-   :type ys: list[np.ndarray]
+   :type ys: list[np.ndarray | None]
    :param Xs: List of model matrices
-   :type Xs: list[scp.sparse.csc_array]
+   :type Xs: list[scp.sparse.csc_array | None]
    :param coef: Coefficient estimate
    :type coef: np.ndarray
    :param coef_split_idx: The indices at which to split the overall coefficient vector into separate lists - one per parameter of llk.
@@ -4823,7 +4823,7 @@ def update_coef_gen_smooth(family:GSMMFamily,ys:list[np.ndarray],Xs:list[scp.spa
    
    return full_coef,H,L,LV,c_llk,c_pen_llk,eps,keep,drop
 
-def correct_lambda_step_gen_smooth(family:GSMMFamily,ys:list[np.ndarray],Xs:list[scp.sparse.csc_array],S_norm:scp.sparse.csc_array,n_coef:int,form_n_coef:list[int],form_up_coef:list[int],coef:np.ndarray,
+def correct_lambda_step_gen_smooth(family:GSMMFamily,ys:list[np.ndarray | None],Xs:list[scp.sparse.csc_array | None],S_norm:scp.sparse.csc_array,n_coef:int,form_n_coef:list[int],form_up_coef:list[int],coef:np.ndarray,
                                     coef_split_idx:list[int],smooth_pen:list[LambdaTerm],lam_delta:np.ndarray,
                                     extend_by:dict,was_extended:list[bool],c_llk:float,fit_info:Fit_info,outer:int,
                                     max_inner:int,min_inner:int,conv_tol:float,gamma:float,method:str,qEFSH:str,overwrite_coef:bool,qEFS_init_converge:bool,optimizer:str,
@@ -4841,9 +4841,9 @@ def correct_lambda_step_gen_smooth(family:GSMMFamily,ys:list[np.ndarray],Xs:list
    :param family: Model family
    :type family: GSMMFamily
    :param ys: List of observation vectors
-   :type ys: list[np.ndarray]
+   :type ys: list[np.ndarray | None]
    :param Xs: List of model matrices
-   :type Xs: list[scp.sparse.csc_array]
+   :type Xs: list[scp.sparse.csc_array | None]
    :param S_norm: Scaled version of the penalty matrix (i.e., unweighted total penalty divided by it's norm).
    :type S_norm: scp.sparse.csc_array
    :param n_coef: Number of coefficients
@@ -5187,7 +5187,7 @@ def correct_lambda_step_gen_smooth(family:GSMMFamily,ys:list[np.ndarray],Xs:list
 
    return next_coef,H,L,LV,V,next_llk,next_pen_llk,__old_opt,keep,drop,S_emb,smooth_pen,total_edf,term_edfs,lam_delta
 
-def solve_generalSmooth_sparse(family:GSMMFamily,ys:list[np.ndarray],Xs:list[scp.sparse.csc_array],form_n_coef:list[int],form_up_coef:list[int],coef:np.ndarray,coef_split_idx:list[int],smooth_pen:list[LambdaTerm],
+def solve_generalSmooth_sparse(family:GSMMFamily,ys:list[np.ndarray | None],Xs:list[scp.sparse.csc_array | None],form_n_coef:list[int],form_up_coef:list[int],coef:np.ndarray,coef_split_idx:list[int],smooth_pen:list[LambdaTerm],
                                max_outer:int=50,max_inner:int=50,min_inner:int=50,conv_tol:float=1e-7,extend_lambda:bool=True,extension_method_lam:str = "nesterov2",control_lambda:int=1,optimizer:str="Newton",method:str="Chol",
                                check_cond:int=1,piv_tol:float=0.175,repara:bool=True,should_keep_drop:bool=True,form_VH:bool=True,use_grad:bool=False,gamma:float=1,qEFSH:str='SR1',overwrite_coef:bool=True,max_restarts:int=0,
                                qEFS_init_converge:bool=True,prefit_grad:bool=False,progress_bar:bool=True,n_c:int=10,init_bfgs_options:dict={"gtol":1e-9,"ftol":1e-9,"maxcor":30,"maxls":100,"maxfun":1e7},
@@ -5206,9 +5206,9 @@ def solve_generalSmooth_sparse(family:GSMMFamily,ys:list[np.ndarray],Xs:list[scp
    :param family: Model family
    :type family: GSMMFamily
    :param ys: List of observation vectors
-   :type ys: list[np.ndarray]
+   :type ys: list[np.ndarray | None]
    :param Xs: List of model matrices
-   :type Xs: list[scp.sparse.csc_array]
+   :type Xs: list[scp.sparse.csc_array | None]
    :param form_n_coef: List of number of coefficients per formula
    :type form_n_coef: list[int]
    :param form_up_coef: List of un-penalized number of coefficients per formula

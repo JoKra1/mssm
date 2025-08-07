@@ -1721,7 +1721,7 @@ class GSMMFamily:
       self.llkargs = llkargs # Any arguments that need to be passed to evaluate the likelihood/gradiant/hessian
       self.extra_coef:int|None = None
 
-   def llk(self,coef:np.ndarray,coef_split_idx:list[int],ys:list[np.ndarray],Xs:list[scp.sparse.csc_array]) -> float:
+   def llk(self,coef:np.ndarray,coef_split_idx:list[int],ys:list[np.ndarray | None],Xs:list[scp.sparse.csc_array | None]) -> float:
       """log-probability of data under given model.
 
       References:
@@ -1734,15 +1734,15 @@ class GSMMFamily:
       :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
       :type coef_split_idx: [int]
       :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
-      :type ys: [np.ndarray or None]
-      :param Xs: A list of sparse model matrices per likelihood parameter.
-      :type Xs: [scp.sparse.csc_array]
+      :type ys: list[np.ndarray | None]
+      :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None`` at indices for matrices which were flagged as "do not build" via the ``build_mat`` argument of the :func:`mssm.models.GSMM.fit` method.
+      :type Xs: list[scp.sparse.csc_array | None]
       :return: The log-likelihood evaluated at ``coef``.
       :rtype: float
       """
       pass
    
-   def gradient(self,coef:np.ndarray,coef_split_idx:list[int],ys:list[np.ndarray],Xs:list[scp.sparse.csc_array]) -> np.ndarray:
+   def gradient(self,coef:np.ndarray,coef_split_idx:list[int],ys:list[np.ndarray | None],Xs:list[scp.sparse.csc_array | None]) -> np.ndarray:
       """Function to evaluate the gradient of the llk at current coefficient estimate ``coef``.
 
       By default relies on numerical differentiation as implemented in scipy to approximate the Gradient from the implemented log-likelihood function.
@@ -1758,9 +1758,9 @@ class GSMMFamily:
       :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
       :type coef_split_idx: [int]
       :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
-      :type ys: [np.ndarray or None]
-      :param Xs: A list of sparse model matrices per likelihood parameter.
-      :type Xs: [scp.sparse.csc_array]
+      :type ys: list[np.ndarray | None]
+      :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None`` at indices for matrices which were flagged as "do not build" via the ``build_mat`` argument of the :func:`mssm.models.GSMM.fit` method.
+      :type Xs: list[scp.sparse.csc_array | None]
       :return: The Gradient of the log-likelihood evaluated at ``coef`` as numpy array of shape (-1,1).
       :rtype: np.ndarray
       """
@@ -1769,7 +1769,7 @@ class GSMMFamily:
       grad = scp.optimize.approx_fprime(coef.flatten(),llk_warp)
       return grad.reshape(-1,1)
    
-   def hessian(self,coef:np.ndarray,coef_split_idx:list[int],ys:list[np.ndarray],Xs:list[scp.sparse.csc_array]) -> scp.sparse.csc_array | None:
+   def hessian(self,coef:np.ndarray,coef_split_idx:list[int],ys:list[np.ndarray | None],Xs:list[scp.sparse.csc_array | None]) -> scp.sparse.csc_array | None:
       """Function to evaluate the hessian of the llk at current coefficient estimate ``coef``.
 
       Only has to be implemented if full Newton is to be used to estimate coefficients. If the L-qEFS update by Krause et al. (in preparation) is
@@ -1785,15 +1785,15 @@ class GSMMFamily:
       :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
       :type coef_split_idx: [int]
       :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
-      :type ys: [np.ndarray or None]
-      :param Xs: A list of sparse model matrices per likelihood parameter.
-      :type Xs: [scp.sparse.csc_array]
+      :type ys: list[np.ndarray | None]
+      :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None`` at indices for matrices which were flagged as "do not build" via the ``build_mat`` argument of the :func:`mssm.models.GSMM.fit` method.
+      :type Xs: list[scp.sparse.csc_array | None]
       :return: The Hessian of the log-likelihood evaluated at ``coef``.
       :rtype: scp.sparse.csc_array
       """
       return None
    
-   def get_resid(self,coef:np.ndarray,coef_split_idx:list[int],ys:list[np.ndarray],Xs:list[scp.sparse.csc_array],**kwargs) -> np.ndarray | None:
+   def get_resid(self,coef:np.ndarray,coef_split_idx:list[int],ys:list[np.ndarray | None],Xs:list[scp.sparse.csc_array | None],**kwargs) -> np.ndarray | None:
       """Get standardized residuals for a GSMM model.
 
       Any implementation of this function should return a vector that looks like what could be expected from taking independent draws from :math:`N(0,1)`.
@@ -1810,9 +1810,9 @@ class GSMMFamily:
       :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
       :type coef_split_idx: [int]
       :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
-      :type ys: [np.ndarray or None]
-      :param Xs: A list of sparse model matrices per likelihood parameter.
-      :type Xs: [scp.sparse.csc_array]
+      :type ys: list[np.ndarray | None]
+      :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None`` at indices for matrices which were flagged as "do not build" via the ``build_mat`` argument of the :func:`mssm.models.GSMM.fit` method.
+      :type Xs: list[scp.sparse.csc_array | None]
       :return: a vector of shape (-1,1) containing standardized residuals under the current model (**Note**, the first axis will not necessarily match the dimension of any of the response vectors (this will depend on the specific Family's implementation)) or None in case residuals are not readily available.
       :rtype: np.ndarray | None
       """

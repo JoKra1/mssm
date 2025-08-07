@@ -449,7 +449,7 @@ class GSMM():
         :type form_VH: bool,optional
         :param use_grad: Deprecated.
         :type use_grad: bool,optional
-        :param build_mat: An (optional) list, containing one bool per :class:`mssm.src.python.formula.Formula` in ``self.formulas`` - indicating whether the corresponding model matrix should be built. Useful if multiple formulas specify the same model matrix, in which case only one needs to be built. Only the matrices actually built are then passed down to the likelihood/gradient/hessian function in ``Xs``. Defaults to None, which means all model matrices are built.
+        :param build_mat: An (optional) list, containing one bool per :class:`mssm.src.python.formula.Formula` in ``self.formulas`` - indicating whether the corresponding model matrix should be built. Useful if multiple formulas specify the same model matrix, in which case only one needs to be built. Only the matrices actually built are then passed down to the likelihood/gradient/hessian function in ``Xs``, for the remaining ones ``None`` is inserted in the list. Defaults to None, which means all model matrices are built.
         :type build_mat: [bool], optional
         :param should_keep_drop: Only used when ``method in ["QR/Chol","LU/Chol","Direct/Chol"]``. If set to True, any coefficients that are dropped during fitting - are permanently excluded from all subsequent iterations. If set to False, this is determined anew at every iteration - **costly**! Defaults to True.
         :type should_keep_drop: bool,optional
@@ -531,11 +531,14 @@ class GSMM():
         Xs = []
         ind_penalties = []
         for fi,form in enumerate(self.formulas):
+
+            if restart == False:
+                ind_penalties.append(build_penalties(form))
             
             if build_mat is None or build_mat[fi]:
-                if restart == False:
-                    ind_penalties.append(build_penalties(form))
                 Xs.append(self.get_mmat(drop_NA=drop_NA,par=fi))
+            else:
+                Xs.append(None)
 
         # Get all penalties
         if restart == False:
