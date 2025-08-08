@@ -1375,9 +1375,21 @@ class GAUMLSS(GAMLSSFamily):
 
       # All derivatives taken from gamlss.dist: https://github.com/gamlss-dev/gamlss.dist
       # see also: Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
-      self.d1:list[Callable] = [lambda y, mu, sigma: (1/np.power(sigma,2))*(y-mu),lambda y, mu, sigma: (np.power(y-mu,2)-np.power(sigma,2))/(np.power(sigma,3))]
-      self.d2:list[Callable] = [lambda y, mu, sigma: -(1/np.power(sigma,2)), lambda y, mu, sigma: -(2/np.power(sigma,2))]
-      self.d2m:list[Callable] = [lambda y, mu, sigma: np.zeros_like(y)]
+      def d11(y, mu, sigma):
+         return (1/np.power(sigma,2))*(y-mu)
+      def d12(y, mu, sigma):
+         return (np.power(y-mu,2)-np.power(sigma,2))/(np.power(sigma,3))
+      self.d1:list[Callable] = [d11,d12]
+
+      def d21(y, mu, sigma):
+         return -(1/np.power(sigma,2))
+      def d22(y, mu, sigma):
+         return -(2/np.power(sigma,2))
+      self.d2:list[Callable] = [d21,d22]
+
+      def dm21(y, mu, sigma):
+         return np.zeros_like(y)
+      self.d2m:list[Callable] = [dm21]
       self.mean_init_fam:Family = Gaussian(link=links[0])
    
    def lp(self,y:np.ndarray,mu:np.ndarray,sigma:np.ndarray) -> np.ndarray:
@@ -1598,9 +1610,22 @@ class GAMMALS(GAMLSSFamily):
       super().__init__(2, links)
       # All derivatives based on gamlss.dist: https://github.com/gamlss-dev/gamlss.dist, but adjusted so that \\phi (the scale) is \\sigma^2.
       # see also: Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
-      self.d1:list[Callable] = [lambda y, mu, scale: (y-mu)/(scale*np.power(mu,2)),lambda y, mu, scale: (2/(scale*np.sqrt(scale)))*((y/mu)-np.log(y)+np.log(mu)+np.log(scale)-1+scp.special.digamma(1/(scale)))]
-      self.d2:list[Callable] = [lambda y, mu, scale:  -1/(scale*np.power(mu,2)), lambda y, mu, scale: (4/np.power(scale,2))-(4/np.power(scale,3))*scp.special.polygamma(1,1/scale)]
-      self.d2m:list[Callable] = [lambda y, mu, scale: np.zeros_like(y)]
+
+      def d11(y, mu, scale):
+         return (y-mu)/(scale*np.power(mu,2))
+      def d12(y, mu, scale):
+         return (2/(scale*np.sqrt(scale)))*((y/mu)-np.log(y)+np.log(mu)+np.log(scale)-1+scp.special.digamma(1/(scale)))
+      self.d1:list[Callable] = [d11,d12]
+      
+      def d21(y, mu, scale):
+         return-1/(scale*np.power(mu,2))
+      def d22(y, mu, scale):
+         return (4/np.power(scale,2))-(4/np.power(scale,3))*scp.special.polygamma(1,1/scale)
+      self.d2:list[Callable] = [d21,d22]
+
+      def dm21(y,mu,scale):
+         return np.zeros_like(y)
+      self.d2m:list[Callable] = [dm21]
    
    def lp(self,y:np.ndarray,mu:np.ndarray,scale:np.ndarray) -> np.ndarray:
       """Log-probability of observing every proportion in :math:`\\mathbf{y}` under their respective Gamma with mean = :math:`\\boldsymbol{\\mu}` and scale = :math:`\\boldsymbol{\\phi}`.
