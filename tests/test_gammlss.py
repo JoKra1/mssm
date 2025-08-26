@@ -178,27 +178,27 @@ class Test_GAMMALS:
     model.fit(**test_kwargs)
 
     def test_GAMedf(self):
-        assert round(self.model.edf,ndigits=3) == 14.677 
+        assert round(self.model.edf,ndigits=3) == 12.268
 
     def test_GAMcoef(self):
         coef = self.model.coef.flatten()
-        assert np.allclose(coef,np.array([ 1.14440894, -0.79166857,  1.95574948,  2.46973458,  1.7725019 ,
-                                            1.29047048,  1.89204546,  1.34016392,  0.24865949, -0.66762416,
-                                            -1.696964  ,  0.7715949 , -0.72928057,  0.87660987,  1.12963098,
-                                            1.22774166,  1.1121008 ,  1.27841939,  1.38510189,  0.72797382,
-                                            0.02458096, -0.55655912])) 
+        assert np.allclose(coef,np.array([ 1.14793023, -0.78753333,  1.97054867,  2.47570424,  1.77919304,
+                                           1.31179936,  1.90257167,  1.34991222,  0.26584116, -0.67303397,
+                                           -1.72023523,  0.77361312, -0.69700968,  0.55005875,  0.92263986,
+                                           0.98818801,  0.97583   ,  1.05108543,  1.03544474,  0.64241168,
+                                           -0.10886021, -0.84455636])) 
 
     def test_GAMlam(self):
         lam = np.array([p.lam for p in self.model.overall_penalties])
-        assert np.allclose(lam,np.array([0.51599945, 2.4946028])) 
+        assert np.allclose(lam,np.array([0.52037363, 4.41778594])) 
 
     def test_GAMreml(self):
         reml = self.model.get_reml()
-        assert round(reml,ndigits=3) == -923.897 
+        assert round(reml,ndigits=3) == -916.176
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
-        assert round(llk,ndigits=3) == -892.042
+        assert round(llk,ndigits=3) == -893.662
 
 class Test_mulnom:
     # Test multinomial model

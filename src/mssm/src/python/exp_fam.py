@@ -1476,7 +1476,7 @@ class MULNOMLSS(GAMLSSFamily):
    probabilities - that :math:`Y_i` takes on class 1, ..., :math:`K` - are modeled as additive combinations of smooth functions of covariates and
    other parametric terms.
 
-   As an example, consider a visual search experiment where :math:`K-1` distractors are presented on a computer screen together with
+   As an example, consider a visual search experiment where :math:`K` distractors are presented on a computer screen together with
    a single target and subjects are instructed to find the target and fixate it. With a Multinomial model we can estimate how
    the probability of looking at each of the :math:`K` stimuli on the screen changes (smoothly) over time and as a function of other
    predictor variables of interest (e.g., contrast of stimuli, dependening on whether parfticipants are instructed to be fast or accurate).
@@ -1526,13 +1526,13 @@ class MULNOMLSS(GAMLSSFamily):
       """Log-probability of observing class k under current model.
 
       Our DV consists of K classes but we essentially enforce a sum-to zero constraint on the DV so that we end up modeling only
-      K-1 (non-normalized) probabilities of observing class k (for all k except k==K) as an additive combination of smooth functions of our
-      covariates and other parametric terms. The probability of observing class K as well as the normalized probabilities of observing each
+      K-1 (non-normalized) probabilities of observing class k (for all k except k==0) as an additive combination of smooth functions of our
+      covariates and other parametric terms. The probability of observing class 0 as well as the normalized probabilities of observing each
       other class can readily be computed from these K-1 non-normalized probabilities. This is explained quite well on Wikipedia (see refs).
 
       Specifically, the probability of the outcome being class k is simply:
 
-      :math:`p(Y_i == k) = \\mu_k / (1 + \\sum_j^{K-1} \\mu_j)` where :math:`\\mu_k` is the aforementioned non-normalized probability of observing class :math:`k` - which is simply set to 1 for class :math:`K` (this follows from the sum-to-zero constraint; see Wikipedia).
+      :math:`p(Y_i == k) = \\mu_k / (1 + \\sum_j^{K-1} \\mu_j)` where :math:`\\mu_k` is the aforementioned non-normalized probability of observing class :math:`k` - which is simply set to 1 for class :math:`k==0` (this follows from the sum-to-zero constraint; see Wikipedia).
 
       So, the log-prob of the outcome being class k is:
 
@@ -1614,13 +1614,13 @@ class GAMMALS(GAMLSSFamily):
       def d11(y, mu, scale):
          return (y-mu)/(scale*np.power(mu,2))
       def d12(y, mu, scale):
-         return (2/(scale*np.sqrt(scale)))*((y/mu)-np.log(y)+np.log(mu)+np.log(scale)-1+scp.special.digamma(1/(scale)))
+         return (1/np.power(scale,2))*((y/mu)-np.log(y)+np.log(mu)+np.log(scale)-1+scp.special.digamma(1/(scale)))
       self.d1:list[Callable] = [d11,d12]
       
       def d21(y, mu, scale):
          return-1/(scale*np.power(mu,2))
       def d22(y, mu, scale):
-         return (4/np.power(scale,2))-(4/np.power(scale,3))*scp.special.polygamma(1,1/scale)
+         return (1/np.power(scale,3))-(1/np.power(scale,4))*scp.special.polygamma(1,1/scale)
       self.d2:list[Callable] = [d21,d22]
 
       def dm21(y,mu,scale):

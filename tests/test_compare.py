@@ -382,31 +382,31 @@ class Test_model_comparison3_hard:
     unbiased_cor_result1 = compare_CDL(sim_fit_model,sim_fit_model2,**test_kwargs)
 
     def test_comp1(self):
-        np.testing.assert_allclose(self.uncor_result['aic_diff'],1.912,atol=min(max_atol,0.002),rtol=min(max_rtol,0.001))
+        np.testing.assert_allclose(self.uncor_result['aic_diff'],1.912876,atol=min(max_atol,0.002),rtol=min(max_rtol,0.001))
 
     def test_comp2(self):
-        np.testing.assert_allclose(self.cor_result1['aic_diff'],1.877553,atol=min(max_atol,0.04),rtol=min(max_rtol,0.001))
+        np.testing.assert_allclose(self.cor_result1['aic_diff'],1.921694,atol=min(max_atol,0.04),rtol=min(max_rtol,0.001))
 
     def test_comp3(self):
-        np.testing.assert_allclose(self.cor_result2['aic_diff'],2.212,atol=min(max_atol,0.06),rtol=min(max_rtol,0.001))
+        np.testing.assert_allclose(self.cor_result2['aic_diff'],2.226203,atol=min(max_atol,0.06),rtol=min(max_rtol,0.001))
 
     def test_comp4(self):
-        np.testing.assert_allclose(self.cor_result3['aic_diff'],2.195,atol=min(max_atol,0.05),rtol=min(max_rtol,0.001))
+        np.testing.assert_allclose(self.cor_result3['aic_diff'],2.204921,atol=min(max_atol,0.05),rtol=min(max_rtol,0.001))
 
     def test_comp5(self):
-        np.testing.assert_allclose(self.cor_result4['aic_diff'],1.945,atol=min(max_atol,0.02),rtol=min(max_rtol,0.001))
+        np.testing.assert_allclose(self.cor_result4['aic_diff'],1.949568,atol=min(max_atol,0.02),rtol=min(max_rtol,0.001))
 
     def test_comp6(self):
-        np.testing.assert_allclose(self.cor_result5['aic_diff'],2.832,atol=min(max_atol,0.25),rtol=min(max_rtol,0.001))
+        np.testing.assert_allclose(self.cor_result5['aic_diff'],2.843975,atol=min(max_atol,0.25),rtol=min(max_rtol,0.001))
 
     def test_comp7(self):
-        np.testing.assert_allclose(self.unbiased_uncor_result['aic_diff'],1.912,atol=min(max_atol,0.002),rtol=min(max_rtol,0.001))
+        np.testing.assert_allclose(self.unbiased_uncor_result['aic_diff'],1.912876,atol=min(max_atol,0.002),rtol=min(max_rtol,0.001))
 
     def test_comp8(self):
-        np.testing.assert_allclose(self.unbiased_cor_result1['aic_diff'],2.832,atol=min(max_atol,0.25),rtol=min(max_rtol,0.001))
+        np.testing.assert_allclose(self.unbiased_cor_result1['aic_diff'],2.843975,atol=min(max_atol,0.25),rtol=min(max_rtol,0.001))
     
     def test_edf1(self):
-        np.testing.assert_allclose(self.unbiased_cor_result1['Res. DOF'],1.434149,atol=min(max_atol,0.002),rtol=min(max_rtol,0.08))
+        np.testing.assert_allclose(self.unbiased_cor_result1['Res. DOF'],1.440292,atol=min(max_atol,0.002),rtol=min(max_rtol,0.08))
 
 
 class Test_Vb_corrections:
