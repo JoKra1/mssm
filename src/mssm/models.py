@@ -402,8 +402,8 @@ class GSMM():
             n_cores:int=10,seed:int=0,drop_NA:bool=True,init_lambda:list[float]|None=None,form_VH:bool=True,
             use_grad:bool=False,build_mat:list[bool]|None=None,should_keep_drop:bool=True,gamma:float=1,
             qEFSH:str='SR1',overwrite_coef:bool=True,max_restarts:int=0,qEFS_init_converge:bool=False,
-            prefit_grad:bool=True,repara:bool=None,init_bfgs_options:dict|None=None,
-            bfgs_options:dict|None=None):
+            prefit_grad:bool=True,repara:bool=None,extra_penalties:list[LambdaTerm]|None=None,
+            callback:Callable|None=None,init_bfgs_options:dict|None=None,bfgs_options:dict|None=None):
         """
         Fit the specified model.
 
@@ -467,6 +467,10 @@ class GSMM():
         :type prefit_grad: bool,optional
         :param repara: Whether to re-parameterize the model (for every proposed update to the regularization parameters) via the steps outlined in Appendix B of Wood (2011) and suggested by Wood et al., (2016). This greatly increases the stability of the fitting iteration. Defaults to True if ``method != 'qEFS'`` else False.
         :type repara: bool,optional
+        :param extra_penalties: **Experimental**. An optional list of extra penalties to be placed on the coefficients. **Important:** mssm does not (currently) support partially overlapping penalties. Thus, if you do provide your own penalties they should either only affect coefficients not penalized already or match (in terms of ``start_index`` and dimensions of ``S_J``) an existing penalty matrix. Currently, is not supported together with ``repara``, so if this argument is not None we set ``repara=False``. Defaults to None.
+        :type extra_penalties: list[LambdaTerm] | None, optional
+        :param callback: An optional callback function to call after every update to the :math:`\\lambda` parameters. The signature of the provided function needs to match ``callback(outer:int,pen_llk:float,coef:np.ndarray,lam:[float]) -> None``, where ``outer`` is the current iteration of the outer algorithm used to update the :math:`\\lambda`` parameters, ``pen_llk`` is the current penalized log-likelihood, ``coef`` is the current coefficient estimate, and ``lam`` holds a list with the current :math:`lambda` parameters. Defaults to None.
+        :type callback: Callable | None ,optional
         :param init_bfgs_options: An optional dictionary holding the same key:value pairs that can be passed to ``bfgs_options`` but pased to the optimizer of the un-penalized problem. If this is None, it will be set to a copy of ``bfgs_options``. Only has an effect when ``qEFS_init_converge=True``. Defaults to None.
         :type init_bfgs_options: dict,optional
         :param bfgs_options: An optional dictionary holding arguments that should be passed on to the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If none are provided, the ``gtol`` argument will be initialized to ``conv_tol``. Note also, that in any case the ``maxiter`` argument is automatically set to ``max_inner``. Defaults to None.
@@ -487,6 +491,10 @@ class GSMM():
             
         if min_inner is None:
             min_inner = max_inner
+
+        if repara and extra_penalties is not None:
+            warnings.warn("Ignoring argument ``repara``, which is currently not supported in the presence of ``extra_penalties``.")
+            repara = False
 
         if repara is None:
             repara = True if method != 'qEFS' else False
@@ -546,6 +554,12 @@ class GSMM():
             shared_penalties = [sp for sp in shared_penalties if len(sp) > 0]
 
             smooth_pen = [pen for pens in shared_penalties for pen in pens]
+
+            # Collect any extra penalties
+            if extra_penalties is not None:
+                for pen in extra_penalties:
+                    smooth_pen.append(pen)
+
             self.overall_penalties = smooth_pen
 
             # Clean up
@@ -600,7 +614,7 @@ class GSMM():
                                                                                     max_outer,max_inner,min_inner,conv_tol,extend_lambda,extension_method_lam,
                                                                                     control_lambda,optimizer,method,check_cond,piv_tol,repara,should_keep_drop,form_VH,
                                                                                     use_grad,gamma,qEFSH,overwrite_coef,max_restarts,qEFS_init_converge,prefit_grad,
-                                                                                    progress_bar,n_cores,init_bfgs_options,bfgs_options)
+                                                                                    progress_bar,n_cores,callback,init_bfgs_options,bfgs_options)
         
         self.overall_penalties = smooth_pen
         self.coef = coef

@@ -1,7 +1,7 @@
 import warnings
 import numpy as np
 import scipy as scp
-from .custom_types import ConstType,LambdaTerm,PenType
+from .custom_types import Constraint,ConstType,LambdaTerm,PenType
 from .matrix_solvers import translate_sparse
 from collections.abc import Callable
 import copy
@@ -191,13 +191,13 @@ class Penalty:
    def __init__(self,pen_type:PenType) -> None:
       self.type = pen_type
    
-   def constructor(self,n:int,constraint:ConstType|None,*args,**kwargs) -> tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]:
+   def constructor(self,n:int,constraint:Constraint|None,*args,**kwargs) -> tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]:
       """Creates penalty matrix + root of the penalty and returns both in list form (data, row indices, col indices).
 
       :param n: Dimension of square penalty matrix
       :type n: int
       :param constraint: Any contraint to absorb by the penalty or None if no constraint is required
-      :type constraint: ConstType | None
+      :type constraint: Constraint | None
       :return: penalty data, penalty row indices, penalty column indices, root of penalty data, root of penalty row indices, root of penalty column indices, rank of penalty
       :rtype: tuple[list[float], list[int], list[int], list[float], list[int], list[int], int]
       """
@@ -212,7 +212,7 @@ class DifferencePenalty(Penalty):
    def __init__(self):
       super().__init__(PenType.DIFFERENCE)
 
-   def constructor(self, n:int, constraint:ConstType|None, m:int=2) -> tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]:
+   def constructor(self, n:int, constraint:Constraint|None, m:int=2) -> tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]:
       """Creates difference (order=m) n*n penalty matrix + root of the penalty. Based on code in Eilers & Marx (1996) and Wood (2017).
 
       References:
@@ -222,7 +222,7 @@ class DifferencePenalty(Penalty):
       :param n: Dimension of square penalty matrix
       :type n: int
       :param constraint: Any contraint to absorb by the penalty or None if no constraint is required
-      :type constraint: ConstType|None
+      :type constraint: Constraint|None
       :param m: Differencing order to apply to the identity matrix to get the penalty (this will also be the dimension of the penalty's Kernel), defaults to 2
       :type m: int, optional
       :return: penalty data,penalty row indices,penalty column indices,root of penalty data,root of penalty row indices,root of penalty column indices,rank of penalty
@@ -275,7 +275,7 @@ class IdentityPenalty(Penalty):
          raise ValueError(f"pen_type must be PenType.IDENTITY or PenType.DISTANCE, but is {pen_type}")
       super().__init__(pen_type)
    
-   def constructor(self, n:int, constraint:ConstType|None, f:Callable|None=None) -> tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]:
+   def constructor(self, n:int, constraint:Constraint|None, f:Callable|None=None) -> tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]:
       """Creates identity matrix penalty + root in case ``f is None``.
 
       **Note**: This penalty never absorbs marginal constraints. It always returns an identity matrix but just decreases ``n`` by 1 if ``constraint is not None``
@@ -284,7 +284,7 @@ class IdentityPenalty(Penalty):
       :param n: Dimension of square penalty matrix
       :type n: int
       :param constraint: Any contraint to absorb by the penalty or None if no constraint is required
-      :type constraint: ConstType|None
+      :type constraint: Constraint|None
       :param f: Any kind of function to apply to the diagonal elements of the penalty, defaults to None
       :type f: Callable|None, optional
       :return: penalty data,penalty row indices,penalty column indices,root of penalty data,root of penalty row indices,root of penalty column indices,rank of penalty
@@ -306,7 +306,7 @@ class IdentityPenalty(Penalty):
 
       return elements,idx,idx,elements,idx,idx,n # I' @ I = I; also identity is full rank
 
-def TP_pen(S_j:scp.sparse.csc_array,D_j:scp.sparse.csc_array,j:int,ks:list[int],constraint:ConstType|None) -> tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]:
+def TP_pen(S_j:scp.sparse.csc_array,D_j:scp.sparse.csc_array,j:int,ks:list[int],constraint:Constraint|None) -> tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]:
    """Computes a tensor smooth penalty + root as defined in section 5.6 of Wood (2017) based on marginal penalty matrix ``S_j``.
 
    References:
@@ -321,7 +321,7 @@ def TP_pen(S_j:scp.sparse.csc_array,D_j:scp.sparse.csc_array,j:int,ks:list[int],
    :param ks: List of number of basis functions of all marginals
    :type ks: list[int]
    :param constraint: Any constraint to absorb by the final penalty or None if no constraint is required
-   :type constraint: ConstType | None
+   :type constraint: Constraint | None
    :return: penalty data,penalty row indices,penalty column indices,root of penalty data,root of penalty row indices,root of penalty column indices,rank of penalty
    :rtype: tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]
    """

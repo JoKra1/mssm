@@ -987,7 +987,7 @@ class Formula():
 
             continue
 
-         term_constraint = sterm.Z
+         term_constraint = sterm._const_type
          sterm.Z = []
 
          if sterm.should_rp > 0:
@@ -1050,7 +1050,7 @@ class Formula():
 
             continue
 
-         term_constraint = sterm.Z
+         term_constraint = sterm._const_type
          sterm.Z = []
          matrix_term = None # for Te basis
          for vi in range(len(vars)):

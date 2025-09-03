@@ -5190,7 +5190,7 @@ def correct_lambda_step_gen_smooth(family:GSMMFamily,ys:list[np.ndarray | None],
 def solve_generalSmooth_sparse(family:GSMMFamily,ys:list[np.ndarray | None],Xs:list[scp.sparse.csc_array | None],form_n_coef:list[int],form_up_coef:list[int],coef:np.ndarray,coef_split_idx:list[int],smooth_pen:list[LambdaTerm],
                                max_outer:int=50,max_inner:int=50,min_inner:int=50,conv_tol:float=1e-7,extend_lambda:bool=True,extension_method_lam:str = "nesterov2",control_lambda:int=1,optimizer:str="Newton",method:str="Chol",
                                check_cond:int=1,piv_tol:float=0.175,repara:bool=True,should_keep_drop:bool=True,form_VH:bool=True,use_grad:bool=False,gamma:float=1,qEFSH:str='SR1',overwrite_coef:bool=True,max_restarts:int=0,
-                               qEFS_init_converge:bool=True,prefit_grad:bool=False,progress_bar:bool=True,n_c:int=10,init_bfgs_options:dict={"gtol":1e-9,"ftol":1e-9,"maxcor":30,"maxls":100,"maxfun":1e7},
+                               qEFS_init_converge:bool=True,prefit_grad:bool=False,progress_bar:bool=True,n_c:int=10,callback:Callable|None=None,init_bfgs_options:dict={"gtol":1e-9,"ftol":1e-9,"maxcor":30,"maxls":100,"maxfun":1e7},
                                bfgs_options:dict={"gtol":1e-9,"ftol":1e-9,"maxcor":30,"maxls":100,"maxfun":1e7}) -> tuple[np.ndarray,scp.sparse.csc_array|None,scp.sparse.csc_array|scp.sparse.linalg.LinearOperator,scp.sparse.linalg.LinearOperator|None,float,list[float],float,list[LambdaTerm],Fit_info]:
    """Fits a general smooth model. Essentially completes the steps discussed in sections 3.3 and 4 of the paper by Krause et al. (submitted).
    
@@ -5265,6 +5265,8 @@ def solve_generalSmooth_sparse(family:GSMMFamily,ys:list[np.ndarray | None],Xs:l
    :type progress_bar: bool, optional
    :param n_c: Number of cores to use, defaults to 10
    :type n_c: int, optional
+   :param callback: An optional callback function to call after every update to the :math:`\\lambda` parameters. The signature of the provided function needs to match ``callback(outer:int,llk:float,coef:np.ndarray,lam:[float]) -> None``, where ``outer`` is the current iteration of the outer algorithm used to update the :math:`\\lambda`` parameters, ``llk`` is the current log-likelihood, ``coef`` is the current coefficient estimate, and ``lam`` holds a list with the current :math:`lambda` parameters. Defaults to None.
+   :type callback: Callable | None ,optional
    :param init_bfgs_options: An optional dictionary holding the same key:value pairs that can be passed to ``bfgs_options`` but pased to the optimizer of the un-penalized problem, defaults to {"gtol":1e-9,"ftol":1e-9,"maxcor":30,"maxls":100,"maxfun":1e7}
    :type init_bfgs_options: _type_, optional
    :param bfgs_options: An optional dictionary holding arguments that should be passed on to the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``, defaults to {"gtol":1e-9,"ftol":1e-9,"maxcor":30,"maxls":100,"maxfun":1e7}
@@ -5416,6 +5418,10 @@ def solve_generalSmooth_sparse(family:GSMMFamily,ys:list[np.ndarray | None],Xs:l
                      iterator.close()
                   fit_info.code = 0
                   break
+      
+      # Call any provided callback function
+      if callback is not None:
+         callback(outer,c_pen_llk,coef,[lterm.lam for lterm in smooth_pen])
         
       # We need the penalized likelihood of the model at this point for convergence control (step 2 in Wood, 2017 based on step 4 in Wood, Goude, & Shaw, 2016)
       prev_pen_llk = c_pen_llk

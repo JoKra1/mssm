@@ -305,7 +305,8 @@ class f(GammTerm):
         # Initialization: ToDo: the deepcopy can be dropped now.
         super().__init__(variables, TermType.SMOOTH, is_penalized, copy.deepcopy(penalty), copy.deepcopy(pen_kwargs))
         self.is_identifiable = identifiable
-        self.Z = constraint
+        self._const_type = constraint
+        self.Z = []
         self.should_rp = rp
         if rp:
           self.RP = [Reparameterization() for _ in range(len(variables))]

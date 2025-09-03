@@ -1306,6 +1306,24 @@ class GAMLSSFamily:
       """
       pass
 
+   def lcp(self,y:np.ndarray,*mus:list[np.ndarray]) -> np.ndarray|None:
+      """Log of the cumulative probability of observing a value as extreme or less extreme for every element in :math:`\\mathbf{y}` under their respective distribution parameterized by ``mus``.
+
+      **Important:** Families for which this function is not implemented can return None.
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param y: A numpy array of shape (-1,1) containing each observed value.
+      :type y: np.ndarray
+      :param mus: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains a numpy array of shape (-1,1) holding the expected value for a particular parmeter for each of the N observations.
+      :type mus: [np.ndarray]
+      :return: a N-dimensional vector of shape (-1,1) containing the log cumulative probability of observing a value as extreme or less extreme for every data-point under the current model or None if this function is not implemented by the specific family.
+      :rtype: np.ndarray
+      """
+      return None
+
    def get_resid(self,y:np.ndarray,*mus:list[np.ndarray],**kwargs) -> np.ndarray|None:
       """Get standardized residuals for a GAMMLSS model (Rigby & Stasinopoulos, 2005).
 
@@ -1393,7 +1411,7 @@ class GAUMLSS(GAMLSSFamily):
       self.mean_init_fam:Family = Gaussian(link=links[0])
    
    def lp(self,y:np.ndarray,mu:np.ndarray,sigma:np.ndarray) -> np.ndarray:
-      """Log-probability of observing every proportion in y under their respective Normal with observation-specific mean and standard deviation.
+      """Log-probability of observing every value in y under their respective Normal with observation-specific mean and standard deviation.
 
       References:
 
@@ -1409,6 +1427,24 @@ class GAUMLSS(GAMLSSFamily):
       :rtype: np.ndarray
       """
       return scp.stats.norm.logpdf(y,loc=mu,scale=sigma)
+   
+   def lcp(self,y:np.ndarray,mu:np.ndarray,sigma:np.ndarray) -> np.ndarray:
+      """Log of the cumulative probability of observing every value in y under their respective Normal with observation-specific mean and standard deviation.
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param y: A numpy array containing each observed value.
+      :type y: np.ndarray
+      :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: np.ndarray
+      :param sigma: A numpy array containing the predicted stdandard deviation for the response distribution corresponding to each observation.
+      :type sigma: np.ndarray
+      :return: a N-dimensional vector containing the log of the cumulative probability of observing each data-point under the current model.
+      :rtype: np.ndarray
+      """
+      return scp.stats.norm.logcdf(y,loc=mu,scale=sigma)
    
    def llk(self,y:np.ndarray,mu:np.ndarray,sigma:np.ndarray) -> float:
       """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
@@ -1656,6 +1692,26 @@ class GAMMALS(GAMLSSFamily):
       alpha = 1/scale
       beta = alpha/mu  
       return scp.stats.gamma.logpdf(y,a=alpha,scale=(1/beta))
+   
+   def lcp(self,y:np.ndarray,mu:np.ndarray,scale:np.ndarray) -> np.ndarray:
+      """Log of the cumulative probability of observing every value in y under their respective Gamma with mean = :math:`\\boldsymbol{\\mu}` and scale = :math:`\\boldsymbol{\\phi}`.
+
+      References:
+
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+
+      :param y: A numpy array containing each observed value.
+      :type y: np.ndarray
+      :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+      :type mu: np.ndarray
+      :param scale: A numpy array containing the predicted scale parameter for the response distribution corresponding to each observation.
+      :type scale: np.ndarray
+      :return: a N-dimensional vector containing the log of the cumulative probability of observing each data-point under the current model.
+      :rtype: np.ndarray
+      """
+      alpha = 1/scale
+      beta = alpha/mu 
+      return scp.stats.gamma.logcdf(y,a=alpha,scale=(1/beta))
    
    def llk(self,y:np.ndarray,mu:np.ndarray,scale:np.ndarray) -> float:
       """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
