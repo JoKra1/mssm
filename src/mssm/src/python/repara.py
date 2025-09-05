@@ -2,12 +2,12 @@ import math
 import numpy as np
 import scipy as scp
 from .matrix_solvers import eigen_solvers,map_csc_to_eigen,translate_sparse,cpp_chol,compute_Linv
-from .penalties import embed_in_S_sparse
+from .penalties import embed_in_S_sparse,split_shared_penalties
 from .custom_types import LambdaTerm
 import copy
 import sys
 
-def reparam(X:scp.sparse.csc_array|None,S:list[LambdaTerm],cov:np.ndarray|None,option:int=1,n_bins:int=30,QR:bool=False,identity:bool=False,scale:bool=False) -> tuple:
+def reparam(X:scp.sparse.csc_array|None,S:list[LambdaTerm],cov:np.ndarray|None,option:int=1,n_bins:int=30,QR:bool=False,identity:bool=False,scale:bool=False,form_inverse:int=0,form_root:bool=False,n_c:int=10) -> tuple:
    """Options 1 - 3 are natural reparameterization discussed in Wood (2017; 5.4.2)
    with different strategies for the QR computation of :math:`\\mathbf{X}`. Option 4 helps with stabilizing the REML computation
    and is from Appendix B of Wood (2011) and section 6.2.7 in Wood (2017):
@@ -202,6 +202,9 @@ def reparam(X:scp.sparse.csc_array|None,S:list[LambdaTerm],cov:np.ndarray|None,o
       # Reparameterize S_\\lambda for safe REML evaluation - based on section 6.2.7 in Wood (2017) and Appendix B of Wood (2011).
       # S needs to be list holding penalties.
 
+      # Reparam is best performed based on term-specific penalties rather than lambda-specific penalties
+      #S = split_shared_penalties(S)
+
       # We first sort S into term-specific groups of penalties
       SJs = [] # SJs groups per term
       ljs = [] # Lambda groups per term
@@ -211,6 +214,7 @@ def reparam(X:scp.sparse.csc_array|None,S:list[LambdaTerm],cov:np.ndarray|None,o
       SJ_coef = [] # Number of coef in the term penalized by a (sum of) SJ
       SJ_idx_max = 0 # Max starting index - used to decide whether a new SJ should be added.
       SJ_idx_len = 0 # Number of separate SJ blocks.
+      n_coef = S[0].S_J_emb.shape[1] if len(S) > 0 else 0
 
       # Build S_emb and collect every block for pinv(S_emb)
       for lti,lTerm in enumerate(S):
@@ -243,9 +247,18 @@ def reparam(X:scp.sparse.csc_array|None,S:list[LambdaTerm],cov:np.ndarray|None,o
       # Now we can re-parameterize SJ groups of length > 1
       Sj_reps = [] # Will hold transformed S_J
       Q_reps = []
-      QT_reps = []
       for pen in S:
-         Sj_reps.append(LambdaTerm(S_J=copy.deepcopy(pen.S_J),rep_sj=pen.rep_sj,lam=pen.lam,type=pen.type,rank=pen.rank,term=pen.term,start_index=pen.start_index,dist_param=pen.dist_param))
+         Sj_reps.append(LambdaTerm(S_J=copy.deepcopy(pen.S_J),
+                                   S_J_emb=copy.deepcopy(pen.S_J_emb),
+                                   D_J_emb=copy.deepcopy(pen.D_J_emb),
+                                   rep_sj=pen.rep_sj,
+                                   lam=pen.lam,
+                                   type=pen.type,
+                                   rank=pen.rank,
+                                   term=pen.term,
+                                   start_index=pen.start_index,
+                                   dist_param=pen.dist_param,
+                                   id=pen.id))
 
       S_reps = [] # Term specific S_\\lambda
       eps = sys.float_info.epsilon**0.7
@@ -272,10 +285,8 @@ def reparam(X:scp.sparse.csc_array|None,S:list[LambdaTerm],cov:np.ndarray|None,o
 
          # Initial re-parameterization as discussed by Wood (2011)
          if r < normed_S.shape[1]:
-            SJbar = [Ur.T@SJ_mat@Ur for SJ_mat in SJgroup]
-
-            if not X is None:
-               Q_rep0 = copy.deepcopy(U) # Need to account for this when computing Q matrix.
+            SJbar = [(Ur.T@SJ_mat@Ur).tocsc() for SJ_mat in SJgroup]
+            Q_rep0 = copy.deepcopy(U) # Need to account for this when computing Q matrix.
          else:
             SJbar = copy.deepcopy(SJgroup)
             Q_rep0 = None
@@ -284,13 +295,11 @@ def reparam(X:scp.sparse.csc_array|None,S:list[LambdaTerm],cov:np.ndarray|None,o
             Sj_reps[grp_idx[0]].S_J = SJbar[0]
             S_reps.append(SJbar[0]*LJgroup[0])
 
-            if not X is None:
-               if not Q_rep0 is None:
-                  Q_reps.append(scp.sparse.csc_array(Q_rep0))
-                  QT_reps.append(scp.sparse.csc_array(Q_rep0.T))
-               else:
-                  Q_reps.append(scp.sparse.eye(r,format='csc'))
-                  QT_reps.append(scp.sparse.eye(r,format='csc'))
+            if not Q_rep0 is None:
+               Q_reps.append(scp.sparse.csc_array(Q_rep0))
+            else:
+               Q_reps.append(scp.sparse.eye(r,format='csc'))
+
             continue
 
          S_Jrep = copy.deepcopy(SJbar) # Original S_J transformed 
@@ -367,14 +376,13 @@ def reparam(X:scp.sparse.csc_array|None,S:list[LambdaTerm],cov:np.ndarray|None,o
                   Ta = np.concatenate((Ur.toarray(),np.zeros((Ur.shape[0],n))),axis=1)
                   Tg = U.toarray()
                   
-                  if not X is None:
-                     if Q_rep0 is None:
-                        Q_rep = U.toarray()
-                     else:
-                        init_drop = Q_rep0.shape[1] - U.shape[1]
-                        
-                        Q_rep = np.concatenate((np.concatenate((U.toarray(),np.zeros((U.shape[0],init_drop))),axis=1),
-                                                np.concatenate((np.zeros((init_drop,U.shape[1])),np.identity(init_drop)),axis=1)),axis=0)
+                  if Q_rep0 is None:
+                     Q_rep = U.toarray()
+                  else:
+                     init_drop = Q_rep0.shape[1] - U.shape[1]
+                     
+                     Q_rep = np.concatenate((np.concatenate((U.toarray(),np.zeros((U.shape[0],init_drop))),axis=1),
+                                             np.concatenate((np.zeros((init_drop,U.shape[1])),np.identity(init_drop)),axis=1)),axis=0)
             else:
                   A = S_rep[:K,:K] # From partitioning step 6 in Wood, 2011
                   B = S_rep[:K,K:] # From partitioning step 6 in Wood, 2011
@@ -388,13 +396,12 @@ def reparam(X:scp.sparse.csc_array|None,S:list[LambdaTerm],cov:np.ndarray|None,o
                   Tg = np.concatenate((np.concatenate((np.identity(K),np.zeros((K,r+n))),axis=1),
                                        np.concatenate((np.zeros((U.shape[0],K)),U.toarray()),axis=1)),axis=0)
                   
-                  if not X is None:
-                     if Q_rep0 is None:
-                        Q_rep = Q_rep @ Tg
-                     else:
-                        init_drop = Q_rep0.shape[1] - Tg.shape[1]
-                        Q_rep = Q_rep @ np.concatenate((np.concatenate((Tg,np.zeros((Tg.shape[0],init_drop))),axis=1),
-                                                        np.concatenate((np.zeros((init_drop,Tg.shape[1])),np.identity(init_drop)),axis=1)),axis=0)
+                  if Q_rep0 is None:
+                     Q_rep = Q_rep @ Tg
+                  else:
+                     init_drop = Q_rep0.shape[1] - Tg.shape[1]
+                     Q_rep = Q_rep @ np.concatenate((np.concatenate((Tg,np.zeros((Tg.shape[0],init_drop))),axis=1),
+                                                      np.concatenate((np.zeros((init_drop,Tg.shape[1])),np.identity(init_drop)),axis=1)),axis=0)
 
             #print(Ta.shape,Tg.shape)
             # Transform remaining terms that made up Sjk
@@ -416,20 +423,73 @@ def reparam(X:scp.sparse.csc_array|None,S:list[LambdaTerm],cov:np.ndarray|None,o
 
          if S_rep is None: # Fix r==Q in first iteration
             S_rep = SJbar[0]*LJgroup[0]
-            if not X is None:
-               Q_rep = scp.sparse.eye(r,format='csc')
+            Q_rep = scp.sparse.eye(r,format='csc')
 
          S_reps.append(scp.sparse.csc_array(S_rep))
 
-         if not X is None:
-            if not Q_rep0 is None:
-               Q_reps.append(scp.sparse.csc_array(Q_rep0@Q_rep))
-               QT_reps.append(scp.sparse.csc_array(Q_rep.T@Q_rep0.T))
-            else:
-               Q_reps.append(scp.sparse.csc_array(Q_rep))
-               QT_reps.append(scp.sparse.csc_array(Q_rep.T))
+         if not Q_rep0 is None:
+            Q_rep = scp.sparse.csc_array(Q_rep0@Q_rep)
+         else:
+            Q_rep = scp.sparse.csc_array(Q_rep)
+
+         Q_reps.append(Q_rep)
+      
+      # Can now update re-parameterized penalties
+      S_emb_rp = None # Overall transformed penalty
+      S_inv_rp = None # Inverse of overall penalty
+      S_root_rp = None # root of overall penalty
+
+      for Si,(Q_rep,S_rep,grp_idx,S_coef) in enumerate(zip(Q_reps,S_reps,SJ_term_idx,SJ_coef)):
+          
+         for j in range(len(grp_idx)):
+            S_J = Sj_reps[grp_idx[j]].S_J
+
+            # Update embedded S_J
+            S_J_emb_rp,_ = embed_in_S_sparse(*translate_sparse(S_J),None,n_coef,S_coef,SJ_idx[Si])
+            Q_J_emb,c_idx_j = embed_in_S_sparse(*translate_sparse(Q_rep),None,n_coef,S_coef,SJ_idx[Si])
+            for _ in range(1,SJ_reps[Si]):
+                  S_J_emb_rp,_ = embed_in_S_sparse(*translate_sparse(S_J),S_J_emb_rp,n_coef,S_coef,c_idx_j)
+                  Q_J_emb,c_idx_j = embed_in_S_sparse(*translate_sparse(Q_rep),None,n_coef,S_coef,c_idx_j)
+
+            Sj_reps[grp_idx[j]].S_J_emb = S_J_emb_rp
+
+            # And root
+            Sj_reps[grp_idx[j]].D_J_emb = (Q_J_emb.T @ Sj_reps[grp_idx[j]].D_J_emb).tocsc()
+
+            # Also pad S_J (not embedded) with zeros so that shapes remain consistent compared to original parameterization
+            S_J_rp,_ = embed_in_S_sparse(*translate_sparse(S_J),None,S_coef,S_coef,0)
+            Sj_reps[grp_idx[j]].S_J = S_J_rp
+
+         # Update total penalty and optionally root and inverse
          
-      return Sj_reps,S_reps,SJ_term_idx,SJ_idx,SJ_coef,Q_reps,QT_reps,Mp
+         # Compute inverse of S_rep
+         if ((form_inverse == 1) and (len(grp_idx) > 1)) or form_root or form_inverse == 2:
+               L,code = cpp_chol(S_rep.tocsc())
+               if code != 0:
+                  raise ValueError("Inverse of transformed penalty could not be computed.")
+               
+               S_root_rp,_ = embed_in_S_sparse(*translate_sparse(L),S_root_rp,n_coef,S_coef,SJ_idx[Si])
+         
+         # Form inverse - only if this is not a single penalty term
+         if ((form_inverse == 1) and (len(grp_idx) > 1)) or form_inverse == 2:
+               Linv = compute_Linv(L,n_c)
+               S_inv = Linv.T@Linv
+
+               S_inv_rp,_ = embed_in_S_sparse(*translate_sparse(S_inv),S_inv_rp,n_coef,S_coef,SJ_idx[Si])
+            
+         # Total penalty
+         S_emb_rp,c_idx = embed_in_S_sparse(*translate_sparse(S_rep),S_emb_rp,n_coef,S_coef,SJ_idx[Si])
+
+         for _ in range(1,SJ_reps[Si]):
+            if ((form_inverse == 1) and (len(grp_idx) > 1)) or form_root or form_inverse == 2:
+               S_root_rp,_ = embed_in_S_sparse(*translate_sparse(L),S_root_rp,n_coef,S_coef,c_idx)
+
+            if ((form_inverse == 1) and (len(grp_idx) > 1)) or form_inverse == 2:
+               S_inv_rp,_ = embed_in_S_sparse(*translate_sparse(S_inv),S_inv_rp,n_coef,S_coef,c_idx)
+            
+            S_emb_rp,c_idx = embed_in_S_sparse(*translate_sparse(S_rep),S_emb_rp,n_coef,S_coef,c_idx)
+         
+      return Sj_reps,S_emb_rp,S_inv_rp,S_root_rp,S_reps,SJ_term_idx,SJ_idx,SJ_coef,Q_reps,Mp
          
    else:
       raise NotImplementedError(f"Requested option {option} for reparameterization is not implemented.")
@@ -469,12 +529,9 @@ def reparam_model(dist_coef:list[int], dist_up_coef:list[int], coef:np.ndarray, 
     """
 
     # Apply reparam from Wood (2011) Appendix B
-    Sj_reps,S_reps,SJ_term_idx,_,S_coefs,Q_reps,_,_ = reparam(Xs[0],penalties,None,option=4)
+    Sj_reps,S_emb_rp,S_inv_rp,S_root_rp,S_reps,SJ_term_idx,_,S_coefs,Q_reps,_ = reparam(Xs[0],penalties,None,option=4,form_inverse=int(form_inverse),form_root=form_root)
 
-    S_emb_rp = None
     S_norm_rp = None
-    S_root_rp = None
-    S_inv_rp = None
     Q_emb = None
 
     dist_idx = Sj_reps[0].dist_param
@@ -498,29 +555,6 @@ def reparam_model(dist_coef:list[int], dist_up_coef:list[int], coef:np.ndarray, 
             Q_emb,c_idx = embed_in_S_sparse(*translate_sparse(scp.sparse.identity(dist_up_coef[dist_idx],format='csc')),Q_emb,len(coef),dist_up_coef[dist_idx],c_idx)
             #c_idx += dist_up_coef[dist_idx]
 
-        # Compute inverse of S_rep
-        if (form_inverse and len(SJ_term_idx[Si]) > 1) or form_root:
-            L,code = cpp_chol(S_rep.tocsc())
-            if code != 0:
-                raise ValueError("Inverse of transformed penalty could not be computed.")
-        
-        # Form inverse - only if this is not a single penalty term
-        if form_inverse and len(SJ_term_idx[Si]) > 1:
-            Linv = compute_Linv(L,n_c)
-            S_inv = Linv.T@Linv
-
-        # Embed transformed unweighted SJ as well
-        for sjidx in SJ_term_idx[Si]:
-            S_J_emb_rp,c_idx_j = embed_in_S_sparse(*translate_sparse(Sj_reps[sjidx].S_J),None,len(coef),S_coef,c_idx)
-            for _ in range(1,Sj_reps[SJ_term_idx[Si][0]].rep_sj):
-                S_J_emb_rp,c_idx_j = embed_in_S_sparse(*translate_sparse(Sj_reps[sjidx].S_J),S_J_emb_rp,len(coef),S_coef,c_idx_j)
-            
-            Sj_reps[sjidx].S_J_emb = S_J_emb_rp
-            
-            # Also pad S_J (not embedded) with zeros so that shapes remain consistent compared to original parameterization
-            S_J_rp,_ = embed_in_S_sparse(*translate_sparse(Sj_reps[sjidx].S_J),None,S_coef,S_coef,0)
-            Sj_reps[sjidx].S_J = S_J_rp
-
         # Continue to fill overall penalty matrix and current Q
         for _ in range(Sj_reps[SJ_term_idx[Si][0]].rep_sj):
 
@@ -528,30 +562,14 @@ def reparam_model(dist_coef:list[int], dist_up_coef:list[int], coef:np.ndarray, 
             Qd_emb,cd_idx = embed_in_S_sparse(*translate_sparse(Q_reps[Si]),Qd_emb,dist_coef[dist_idx],S_coef,cd_idx)
 
             # Overall transformation matrix for penalties
-            Q_emb,_ = embed_in_S_sparse(*translate_sparse(Q_reps[Si]),Q_emb,len(coef),S_coef,c_idx)
+            Q_emb,c_idx = embed_in_S_sparse(*translate_sparse(Q_reps[Si]),Q_emb,len(coef),S_coef,c_idx)
 
-            # Inverse of total weighted penalty
-            if form_inverse and len(SJ_term_idx[Si]) > 1:
-                S_inv_rp,_ = embed_in_S_sparse(*translate_sparse(S_inv),S_inv_rp,len(coef),S_coef,c_idx)
-            
-            # Root of total weighted penalty
-            if form_root:
-                S_root_rp,_ = embed_in_S_sparse(*translate_sparse(L),S_root_rp,len(coef),S_coef,c_idx)
-            
-            # Total weighted penalty
-            S_emb_rp,c_idx = embed_in_S_sparse(*translate_sparse(S_rep),S_emb_rp,len(coef),S_coef,c_idx)
-   
     # Fill remaining cells of Q_emb in case final dist. parameter/linear predictor has only unpenalized coef
     if c_idx != len(coef):
        Q_emb,c_idx = embed_in_S_sparse(*translate_sparse(scp.sparse.identity(len(coef)-c_idx,format='csc')),Q_emb,len(coef),len(coef)-c_idx,c_idx)
-
     
     # Collect final Q
     Qs.append(Qd_emb)
-
-    # Transform roots of S_J_emb
-    for pidx in range(len(Sj_reps)):
-        Sj_reps[pidx].D_J_emb = Q_emb.T @ penalties[pidx].D_J_emb
 
     if form_balanced:
         # Compute balanced penalty in reparam

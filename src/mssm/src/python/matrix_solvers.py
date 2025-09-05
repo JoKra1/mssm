@@ -70,6 +70,9 @@ def translate_sparse(mat:scp.sparse.csc_array) -> tuple[np.ndarray,np.ndarray,np
    :return: data, rows, cols of sparse matrix
    :rtype: tuple[np.ndarray,np.ndarray,np.ndarray]
   """
+
+  if mat.format != "csc":
+      raise TypeError(f"Format of sparse matrix passed to be translated must be 'csc' but is {mat.getformat()}")
   
   elements = mat.data
   idx = mat.indices

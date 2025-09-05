@@ -1389,7 +1389,7 @@ def REML(llk:float,nH:scp.sparse.csc_array,coef:np.ndarray,scale:float,penalties
    S_emb,_,_,_ = compute_S_emb_pinv_det(len(coef),penalties,"svd")
 
    # Re-parameterize as shown in Wood (2011) to enable stable computation of log(|S_\\lambda|+)
-   Sj_reps,S_reps,SJ_term_idx,S_idx,S_coefs,Q_reps,_,Mp = reparam(None,penalties,None,option=4)
+   Sj_reps,_,_,_,S_reps,SJ_term_idx,S_idx,S_coefs,Q_reps,Mp = reparam(None,penalties,None,option=4)
    
    #if not X is None:
    # S_emb = None
@@ -2027,7 +2027,7 @@ def compute_Vp_WPS(Vbr:scp.sparse.csc_array,H:scp.sparse.csc_array,S_emb:scp.spa
         dBetadRhos[:,[peni]] = -pen.lam *  (Vbr.T @ (Vbr @ (pen.S_J_emb @ coef)))
 
     # Also need to apply re-parameterization from Wood (2011) to the penalties and S_emb
-    Sj_reps,S_reps,SJ_term_idx,SJ_idx,S_coefs,Q_reps,_,Mp = reparam(None,penalties,None,option=4)
+    Sj_reps,_,S_inv_rp,_,S_reps,SJ_term_idx,SJ_idx,S_coefs,Q_reps,Mp = reparam(None,penalties,None,option=4,form_inverse=2)
 
     # Need the inverse of each re-parameterized S_rep
     S_inv_reps = []
@@ -2067,10 +2067,10 @@ def compute_Vp_WPS(Vbr:scp.sparse.csc_array,H:scp.sparse.csc_array,S_emb:scp.spa
             # Now derivative of the log-determinant of S_emb. Only defined if peni==penj or both are in the same group
             t3 = 0
             if gamma or penj in SJ_term_idx[grp_idx]:
-                t3 = -1* penalties[peni].lam * penalties[penj].lam * penalties[peni].rep_sj * (S_inv_reps[grp_idx]@Sj_reps[penj].S_J@S_inv_reps[grp_idx]@Sj_reps[peni].S_J).trace()
+                t3 = -1* penalties[peni].lam * penalties[penj].lam * penalties[peni].rep_sj * (S_inv_rp@Sj_reps[penj].S_J_emb@S_inv_rp@Sj_reps[peni].S_J_emb).trace()
 
                 if gamma:
-                    t3 += penalties[peni].lam * penalties[peni].rep_sj * (S_inv_reps[grp_idx]@Sj_reps[peni].S_J).trace()
+                    t3 += penalties[peni].lam * penalties[peni].rep_sj * (S_inv_rp@Sj_reps[peni].S_J_emb).trace()
 
                 t3 = 0.5*t3
             

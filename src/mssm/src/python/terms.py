@@ -213,7 +213,7 @@ class f(GammTerm):
     :param binary: A list containing two strings. The first string corresponds to a factor in ``data`` passed to ``Formula``. A separate f(``variables``) will be estimated for the level of this factor corresponding to the second string.
     :type binary: [str,str], optional
     :param id: Only useful in combination with specifying a ``by`` variable. If ``id`` is set to any integer the penalties placed on the separate f(``variables``) will share a single smoothness penalty.
-    :type id: int, optional
+    :type id: int|None, optional
     :param nk: Number of basis functions to use. Even if ``identifiable`` is true, this number will reflect the final number of basis functions for this term (i.e., mssm acts like you would have asked for 10 basis functions if ``nk=9`` and identifiable=True; the default).
     :type nk: int or list[int], optional
     :param te: For tensor interaction terms only. If set to false, the term mimics the behavior of ``ti()`` in mgcv (Wood, 2017). Otherwise, the term behaves like a ``te()`` term in mgcv - i.e., the marginal basis functions are not removed from the interaction.
@@ -242,7 +242,7 @@ class f(GammTerm):
                 by:str=None,
                 by_cont:str=None,
                 binary:tuple[str,str] | None = None,
-                id:int=None,
+                id:int|None=None,
                 nk:int | list[int] = None,
                 te: bool = False,
                 rp:int = 0,

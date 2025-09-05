@@ -15,6 +15,7 @@ class PenType(Enum):
     DERIVATIVE = 6
     COEFFICIENTS = 7
     CUSTOM = 8
+    SHARED = 9
 
 class ConstType(Enum):
     """Custom Constraint data type used by internal functions.
@@ -55,10 +56,9 @@ class LambdaTerm:
   :ivar int start_index: The first row and column in the overall penalty matrix taken up by ``S_J``. Initialized with ``None``.
   :ivar PenType type: The type of this penalty term. Initialized with ``None``.
   :ivar int rank: The rank of ``S_J``. Initialized with ``None``.
-  :ivar int term: The index of the term in a :class:`mssm.src.python.formula.Formula` with which this penalty is associated. Initialized with ``None``.
+  :ivar list[int] | int term: The index (indices) of the term(s) in a :class:`mssm.src.python.formula.Formula` with which this penalty is associated. Initialized with ``None``.
   """
-  # Lambda term storage. Can hold multiple penalties associated with a single lambda
-  # value!
+  # Lambda term storage.
   # start_index can be useful in case we want to have multiple penalties on some
   # coefficients (see Wood, 2017; Wood & Fasiolo, 2017).
   S_J:scp.sparse.csc_array|None=None
@@ -70,12 +70,20 @@ class LambdaTerm:
   frozen:bool = False
   type:PenType|None = None
   rank:int | None = None
-  term:int | None = None
+  term:list[int]| int | None = None
   clust_series: list[int] | None = None
   clust_weights:list[list[float]] | None = None
-  dist_param: int = 0
+  dist_param: list[int]|int = 0
   rp_idx: int | None = None
-  S_J_lam:scp.sparse.csc_array | None=None
+  # Can hold multiple penalties associated with a single lambda value - need to keep track of their individual matrices, start indices, etc. for easy splitting
+  id:int | None = None
+  S_Js:list[scp.sparse.csc_array]|None = None
+  S_J_embs:list[scp.sparse.csc_array]|None=None
+  D_J_embs:list[scp.sparse.csc_array]|None=None
+  rep_sjs:list[int]|None = None
+  start_indices:list[scp.sparse.csc_array]|None=None
+  types:list[PenType]|None = None
+  ranks:list[int]|None = None
 
 @dataclass
 class Reparameterization:

@@ -9,6 +9,121 @@ import sys
 
 ##################################### Penalty functions #####################################
 
+def sort_penalties(penalties:list[LambdaTerm]) -> list[LambdaTerm]:
+   """Sorts penalties by ``start_index`` in ascending order.
+
+   :param penalties: A list of term-specific penalties.
+   :type penalties: list[LambdaTerm]
+   :return: A list of term-specific penalties, sorted by start index.
+   :rtype: list[LambdaTerm]
+   """
+
+   idx = [pen.start_index for pen in penalties]
+   sort_idx = np.argsort(idx)
+   return [penalties[sidx] for sidx in sort_idx]
+
+def combine_shared_penalties(penalties:list[LambdaTerm]) -> list[LambdaTerm]:
+   """Identifies penalties that should share a lambda parameter and merges them into a single :class:`LambdaTerm`.
+
+   :param penalties: A list of term-specific penalties, some of which might have a ``id`` flag.
+   :type penalties: list[LambdaTerm]
+   :return: A list of penalty matrices in which individual penalties with a shared ``id`` flag have been combined into a single :class:`LambdaTerm`.
+   :rtype: list[LambdaTerm]
+   """
+
+   id_dict = {}
+
+   for peni,pen in enumerate(penalties):
+      if pen.id is not None:
+         if pen.id in id_dict:
+            id_dict[pen.id].append(peni)
+         else:
+            id_dict[pen.id] = [peni]
+   
+   if len(id_dict) == 0 or max([len(v) for v in id_dict.values()]) <= 1:
+      return penalties
+   else:
+      merged_penalties = [pen for pen in penalties if (pen.id not in id_dict) or (len(id_dict[pen.id]) <= 1)]
+
+      for id in id_dict.keys():
+         m_pens = [pen for pen in penalties if pen.id == id]
+         S_J_emb = m_pens[0].S_J_emb
+         D_J_emb = m_pens[0].D_J_emb
+
+         for peni in range(1,len(m_pens)):
+            S_J_emb += m_pens[peni].S_J_emb
+            D_J_emb += m_pens[peni].D_J_emb
+
+         m_pen = LambdaTerm(S_J=S_J_emb[m_pens[0].start_index:(m_pens[-1].start_index+(m_pens[-1].S_J.shape[1]*m_pens[-1].rep_sj)),
+                                        m_pens[0].start_index:(m_pens[-1].start_index+(m_pens[-1].S_J.shape[1]*m_pens[-1].rep_sj))],
+                            S_J_emb=S_J_emb,
+                            D_J_emb=D_J_emb,
+                            lam=m_pens[0].lam,
+                            rep_sj=1,
+                            start_index=m_pens[0].start_index,
+                            type=PenType.SHARED,
+                            rank = np.sum([pen.rank for pen in m_pens]),
+                            term=[pen.term for pen in m_pens],
+                            dist_param = [pen.dist_param for pen in m_pens],
+                            S_Js = [pen.S_J for pen in m_pens],
+                            S_J_embs=[pen.S_J_emb for pen in m_pens],
+                            D_J_embs=[pen.D_J_emb for pen in m_pens],
+                            rep_sjs=[pen.rep_sj for pen in m_pens],
+                            start_indices=[pen.start_index for pen in m_pens],
+                            types = [pen.type for pen in m_pens],
+                            ranks = [pen.rank for pen in m_pens],
+                            id=id
+                            )
+         
+         merged_penalties.append(m_pen)
+      
+      return merged_penalties
+
+def split_shared_penalties(merged_penalties:list[LambdaTerm]) -> list[LambdaTerm]:
+   """Identifies penalties that share a lambda parameter and splits them into individual :class:`LambdaTerm`s - all having the same :math:`\\lambda` value.
+
+   Basically inverts what is achieved by the :func:`combine_shared_penalties` function.
+
+   :param merged_penalties:  list of penalty matrices in which individual penalties with a shared ``id`` flag have been combined into a single :class:`LambdaTerm`.
+   :type merged_penalties: list[LambdaTerm]
+   :return: A list of penalty matrices in which merged penalties have been split into individual penalties again.
+   :rtype: list[LambdaTerm]
+   """
+
+   merged_idx = []
+   for peni,pen in enumerate(merged_penalties):
+      if isinstance(pen.S_Js,list):
+         merged_idx.append(peni)
+   
+   penalties = [merged_penalties[peni] for peni in range(len(merged_penalties)) if peni not in merged_idx]
+
+   if len(merged_idx) == 0:
+      return penalties
+   
+   else:
+      for idx in merged_idx:
+
+         merged_pen = merged_penalties[idx]
+
+         for m in range(len(merged_pen.S_Js)):
+
+            penalties.append(LambdaTerm(S_J=merged_pen.S_Js[m],
+                                        S_J_emb=merged_pen.S_J_embs[m],
+                                        D_J_emb=merged_pen.D_J_embs[m],
+                                        lam=merged_pen.lam,
+                                        rep_sj=merged_pen.rep_sjs[m],
+                                        start_index=merged_pen.start_indices[m],
+                                        type=merged_pen.types[m],
+                                        rank = merged_pen.ranks[m],
+                                        term=merged_pen.term[m],
+                                        dist_param = merged_pen.dist_param[m],
+                                        id=merged_pen.id
+                                       ))
+
+      # Sort back by start indices
+      penalties = sort_penalties(penalties)
+      return penalties
+
 def adjust_pen_drop(dat:list[float],rows:list[int],cols:list[int],drop:list[int],offset:int=0) -> tuple[list[float],list[int],list[int],int]:
    """Adjusts penalty matrix (represented via ``dat``, ``rows``, and ``cols``) by dropping rows and columns indicated by ``drop``.
 
