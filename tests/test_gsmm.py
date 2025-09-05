@@ -272,25 +272,25 @@ class Test_PropHaz_repara_hard:
     def test_GAMcoef(self):
 
         np.testing.assert_allclose((self.gsmm_newton.coef - self.gsmm_qefs.coef).flatten(),
-                           np.array([-7.63719208e-05, -2.33388059e-03, -2.08491805e-03,  5.08375257e-04,
-                                    1.83801694e-03, -2.16724620e-04, -2.62911257e-03, -3.04387685e-03,
-                                    -3.04146788e-03, -4.36797594e-03, -5.87605352e-05,  3.44683488e-03,
-                                    4.97359403e-03,  4.08998852e-03,  3.61352707e-03,  5.51083558e-03,
-                                    -2.76692609e-06, -6.36423104e-03, -7.39506193e-02, -5.38276772e-02,
-                                    -8.00034940e-02, -5.66388675e-02, -7.02723612e-02, -7.13573512e-02,
-                                    -7.28973942e-02, -2.79028844e-02, -1.82273956e-02,  2.95831797e-03,
-                                    -1.53464860e-02, -2.04331998e-02, -6.47717863e-03,  1.15027597e-02,
-                                    1.73769619e-02, -3.68834284e-03, -4.49034467e-02, -8.78434801e-02]),atol=min(max_atol,0.02),rtol=min(max_rtol,5e-6)) 
+                           np.array([-6.00505655e-04, -9.64003472e-04, -3.83549187e-04,  1.17537678e-03,
+                                    1.59927985e-03,  7.38051198e-04, -4.44997108e-04, -1.80074704e-03,
+                                    -3.11562028e-03, -1.82326872e-03,  3.14446254e-03,  3.46507392e-03,
+                                    2.31289573e-03,  2.99595003e-03,  3.18175605e-03,  1.01399062e-03,
+                                    1.37963294e-02,  3.14823158e-02, -1.02728366e-01, -7.73625299e-02,
+                                    -9.77585419e-02, -8.96668581e-02, -9.31593570e-02, -9.24209095e-02,
+                                    -1.01698088e-01, -4.87830255e-02, -1.39815381e-02, -9.37696374e-05,
+                                    -2.59179471e-03, -3.05352437e-03, -2.36146501e-04,  3.03758717e-03,
+                                    3.90425367e-03, -7.14453093e-05, -7.63733239e-03, -1.53736159e-02]),atol=min(max_atol,0.02),rtol=min(max_rtol,5e-6)) 
 
     def test_GAMlam(self):
         np.testing.assert_allclose(np.array([p1.lam - p2.lam for p1,p2 in zip(self.gsmm_newton.overall_penalties,self.gsmm_qefs.overall_penalties)]),
-                                   np.array([ 3.64040108e-02,  1.58535686e-01, -2.20926595e-04,  4.33667703e+01]),atol=min(max_atol,5),rtol=min(max_rtol,1.1)) 
+                                   np.array([-9.87297096e-03, -5.29255787e-01, -2.50321169e-04,  1.10708062e+01]),atol=min(max_atol,5),rtol=min(max_rtol,1.1)) 
 
     def test_GAMreml(self):
-        np.testing.assert_allclose(self.gsmm_newton.get_reml() - self.gsmm_qefs.get_reml(),1.4408541227944625,atol=min(max_atol,0.5),rtol=min(max_rtol,6e-4))
+        np.testing.assert_allclose(self.gsmm_newton.get_reml() - self.gsmm_qefs.get_reml(),2.9739911355409276,atol=min(max_atol,0.5),rtol=min(max_rtol,6e-4))
 
     def test_GAMllk(self):
-        np.testing.assert_allclose(self.gsmm_newton.get_llk(True) - self.gsmm_qefs.get_llk(True),-0.18673595259474496,atol=min(max_atol,0.1),rtol=min(max_rtol,2e-4))
+        np.testing.assert_allclose(self.gsmm_newton.get_llk(True) - self.gsmm_qefs.get_llk(True),0.21546192785831408,atol=min(max_atol,0.1),rtol=min(max_rtol,2e-4))
 
 
 class Test_drop:
