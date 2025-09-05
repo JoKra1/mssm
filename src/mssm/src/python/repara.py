@@ -449,7 +449,7 @@ def reparam(X:scp.sparse.csc_array|None,S:list[LambdaTerm],cov:np.ndarray|None,o
             Q_J_emb,c_idx_j = embed_in_S_sparse(*translate_sparse(Q_rep),None,n_coef,S_coef,SJ_idx[Si])
             for _ in range(1,SJ_reps[Si]):
                   S_J_emb_rp,_ = embed_in_S_sparse(*translate_sparse(S_J),S_J_emb_rp,n_coef,S_coef,c_idx_j)
-                  Q_J_emb,c_idx_j = embed_in_S_sparse(*translate_sparse(Q_rep),None,n_coef,S_coef,c_idx_j)
+                  Q_J_emb,c_idx_j = embed_in_S_sparse(*translate_sparse(Q_rep),Q_J_emb,n_coef,S_coef,c_idx_j)
 
             Sj_reps[grp_idx[j]].S_J_emb = S_J_emb_rp
 
