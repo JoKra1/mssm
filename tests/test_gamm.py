@@ -79,35 +79,22 @@ class Test_NUll_penalty_reparam:
 
     #Compute re-parameterization strategy from Wood (2011)
     S_emb,S_pinv,_,_ = compute_S_emb_pinv_det(len(model.coef),model.overall_penalties,"svd")
-    Sj_reps,S_reps,SJ_term_idx,S_idx,S_coefs,Q_reps,_,Mp = reparam(None,model.overall_penalties,None,option=4)
+    Sj_reps,S_emb_rp,S_inv_rp,S_root_rp,S_reps,SJ_term_idx,S_idx,S_coefs,Q_reps,Mp = reparam(None,model.overall_penalties,None,option=4,form_inverse=True)
 
-    # For Computing derivative of log(|S_{\lambda}|) with respect to \lambda_j of univariate smooth term (Wood, 2011)
-    S_rep = S_reps[0]
-
-    L,code = cpp_chol(S_rep)
-    Linv = compute_Linv(L)
-    S_inv = Linv.T@Linv
-
-    # And the same for tensor term
-    S_rep2 = S_reps[4]
-
-    L2,code2 = cpp_chol(S_rep2)
-    Linv2 = compute_Linv(L2)
-    S_inv2 = Linv2.T@Linv2
 
     def test_reparam_1(self):
         # Transformation strategy from Wood (2011) &  Wood, Li, Shaddick, & Augustin (2017)
-        assert np.allclose((self.S_inv@self.Sj_reps[0].S_J).trace(),
+        assert np.allclose((self.S_inv_rp@self.Sj_reps[0].S_J_emb).trace(),
                             self.Sj_reps[0].rank/self.Sj_reps[0].lam)
     
     def test_reparam2(self):
         # General strategy, e.g. from Wood & Fasiolo, 2017
-        assert np.allclose((self.S_inv@self.Sj_reps[0].S_J).trace(),
+        assert np.allclose((self.S_inv_rp@self.Sj_reps[0].S_J_emb).trace(),
                            (self.S_pinv@self.model.overall_penalties[0].S_J_emb).trace())
         
     def test_reparam3(self):
         # General strategy (here for tensor), e.g. from Wood & Fasiolo, 2017
-        assert np.allclose((self.S_inv2@self.Sj_reps[6].S_J).trace(),
+        assert np.allclose((self.S_inv_rp@self.Sj_reps[6].S_J_emb).trace(),
                            (self.S_pinv@self.model.overall_penalties[6].S_J_emb).trace())
     
     def test_GAMedf_hard(self):

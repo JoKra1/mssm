@@ -464,7 +464,7 @@ def reparam(X:scp.sparse.csc_array|None,S:list[LambdaTerm],cov:np.ndarray|None,o
          
          # Compute inverse of S_rep
          if ((form_inverse == 1) and (len(grp_idx) > 1)) or form_root or form_inverse == 2:
-               L,code = cpp_chol(S_rep.tocsc())
+               L,code = cpp_chol(S_rep)
                if code != 0:
                   raise ValueError("Inverse of transformed penalty could not be computed.")
                
@@ -473,7 +473,7 @@ def reparam(X:scp.sparse.csc_array|None,S:list[LambdaTerm],cov:np.ndarray|None,o
          # Form inverse - only if this is not a single penalty term
          if ((form_inverse == 1) and (len(grp_idx) > 1)) or form_inverse == 2:
                Linv = compute_Linv(L,n_c)
-               S_inv = Linv.T@Linv
+               S_inv = (Linv.T@Linv).tocsc()
 
                S_inv_rp,_ = embed_in_S_sparse(*translate_sparse(S_inv),S_inv_rp,n_coef,S_coef,SJ_idx[Si])
             
