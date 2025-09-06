@@ -6,7 +6,7 @@ from .src.python.formula import Formula,build_sparse_matrix_from_formula,lhs,pd,
 from .src.python.exp_fam import Link,Logit,Identity,LOG,LOGb,Family,Binomial,Gaussian,GAMLSSFamily,GAUMLSS,Gamma,InvGauss,MULNOMLSS,GAMMALS,GSMMFamily,PropHaz,Poisson
 from .src.python.gamm_solvers import solve_gamm_sparse,mp,repeat,tqdm,cpp_cholP,apply_eigen_perm,compute_Linv,solve_gamm_sparse2,solve_gammlss_sparse,solve_generalSmooth_sparse
 from .src.python.terms import TermType,GammTerm,i,f,fs,irf,l,li,ri,rs
-from .src.python.penalties import embed_shared_penalties,IdentityPenalty,DifferencePenalty
+from .src.python.penalties import embed_shared_penalties,IdentityPenalty,DifferencePenalty,sort_penalties,combine_shared_penalties
 from .src.python.utils import sample_MVN,REML,adjust_CI,print_smooth_terms,print_parametric_terms,approx_smooth_p_values,compute_bias_corrected_edf,GAMLSSGSMMFamily,computeAr1Chol
 from .src.python.custom_types import VarType,ConstType,Constraint,PenType,LambdaTerm,Fit_info
 
@@ -559,7 +559,12 @@ class GSMM():
             if extra_penalties is not None:
                 for pen in extra_penalties:
                     smooth_pen.append(pen)
+                
+                # Re-order penalties, taking into account extra ones
+                smooth_pen = sort_penalties(smooth_pen)
 
+            # Merge any shared penalties.
+            smooth_pen = combine_shared_penalties(smooth_pen)
             self.overall_penalties = smooth_pen
 
             # Clean up
@@ -1205,6 +1210,9 @@ class GAMMLSS(GSMM):
         if restart == False:
             shared_penalties = embed_shared_penalties(ind_penalties,self.formulas,None)
             gamlss_pen = [pen for pens in shared_penalties for pen in pens]
+
+            # Merge any shared penalties
+            gamlss_pen = combine_shared_penalties(gamlss_pen)
             self.overall_penalties = gamlss_pen
 
             # Clean up
@@ -1955,7 +1963,7 @@ class GAMM(GAMMLSS):
         if not restart:
             if self.overall_penalties is not None:
                 warnings.warn("Resetting penalties. If you don't want that, set ``restart=True``.")
-            self.overall_penalties = build_penalties(self.formulas[0])
+            self.overall_penalties = combine_shared_penalties(build_penalties(self.formulas[0]))
         penalties = self.overall_penalties
         
         # Some checks

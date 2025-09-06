@@ -10,6 +10,7 @@ from .file_loading import mp
 from .repara import reparam
 from ..python.exp_fam import Family,Gaussian, Identity,GAMLSSFamily,GSMMFamily,Link
 from ..python.formula import Formula,LambdaTerm
+from ..python.penalties import split_shared_penalties,combine_shared_penalties
 import davies
 import dChol
 from collections.abc import Callable
@@ -514,7 +515,9 @@ def print_smooth_terms(model,par:int=0,pen_cutoff:float=0.2,ps:list[float]|None=
                 term_edf = []
                 prev_start_idx = 0
                 prev_edf_idx = 0
-                for pen in model.overall_penalties:
+                # edf are best computed on term-pecific penalties
+                penalties = split_shared_penalties(model.overall_penalties)
+                for pen in penalties:
 
                     if pen.dist_param > par:
                         break
@@ -673,7 +676,11 @@ def compute_bias_corrected_edf(model,overwrite:bool=False) -> None:
         F_diag = F.diagonal()
 
         prev_start_idx = 0
-        for pen in model.overall_penalties:
+        
+        # edf are best computed on term-pecific penalties
+        penalties = split_shared_penalties(model.overall_penalties)
+
+        for pen in penalties:
             if pen.start_index > prev_start_idx:
                 S_start = pen.start_index
                 S_len = pen.rep_sj * pen.S_J.shape[1]
@@ -772,7 +779,11 @@ def approx_smooth_p_values(model,par:int=0,n_sel:int=1e5,edf1:bool=True,force_ap
 
             prev_start_idx = 0
             prev_edf_idx = 0
-            for pen in model.overall_penalties:
+
+            # edf are best computed on term-pecific penalties
+            penalties = split_shared_penalties(model.overall_penalties)
+
+            for pen in penalties:
                 if pen.start_index > prev_start_idx:
                     
                     if pen.dist_param > par:
@@ -2028,6 +2039,7 @@ def compute_Vp_WPS(Vbr:scp.sparse.csc_array,H:scp.sparse.csc_array,S_emb:scp.spa
 
     # Also need to apply re-parameterization from Wood (2011) to the penalties and S_emb
     Sj_reps,_,S_inv_rp,_,S_reps,SJ_term_idx,SJ_idx,S_coefs,Q_reps,Mp = reparam(None,penalties,None,option=4,form_inverse=2)
+    Sj_reps = combine_shared_penalties(Sj_reps)
 
     # Need the inverse of each re-parameterized S_rep
     S_inv_reps = []
@@ -2042,14 +2054,7 @@ def compute_Vp_WPS(Vbr:scp.sparse.csc_array,H:scp.sparse.csc_array,S_emb:scp.spa
     Vp = np.zeros((len(penalties),len(penalties)))
 
     # Now can accumulate hessian of reml with respect to log(lambda)
-    grp_idx = 0
     for peni in range(len(penalties)):
-        
-        # Keep track of which S_rep/group this S_i belongs to
-        for grp_i,grp in enumerate(SJ_term_idx):
-            if peni in grp:
-                grp_idx = grp_i
-                break
         
         for penj in range(peni,len(penalties)):
 
@@ -2066,7 +2071,7 @@ def compute_Vp_WPS(Vbr:scp.sparse.csc_array,H:scp.sparse.csc_array,S_emb:scp.spa
             
             # Now derivative of the log-determinant of S_emb. Only defined if peni==penj or both are in the same group
             t3 = 0
-            if gamma or penj in SJ_term_idx[grp_idx]:
+            if gamma or (penalties[peni].start_index == penalties[penj].start_index):
                 t3 = -1* penalties[peni].lam * penalties[penj].lam * penalties[peni].rep_sj * (S_inv_rp@Sj_reps[penj].S_J_emb@S_inv_rp@Sj_reps[peni].S_J_emb).trace()
 
                 if gamma:

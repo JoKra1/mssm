@@ -1130,3 +1130,73 @@ class Test_diff:
                                                 5.32994662, 5.32191458, 5.31645209, 5.32872033, 5.36073382,
                                                 5.4007834 , 5.43114323, 5.44312329, 5.45849684, 5.51697233,
                                                 5.62549037, 5.78645176, 6.09575666, 6.8585062 , 8.57200825]))
+        
+
+class Test_shared:
+    sim_fit_dat = sim3(n=500,scale=2,c=0.0,family=Gamma(),seed=1)
+
+    # Now fit nested models
+    sim_fit_formula = Formula(lhs("y"),
+                                [i(),f(["x0"],id=1),f(["x1"]),f(["x2"]),f(["x3"],id=1)],
+                                data=sim_fit_dat,
+                                print_warn=False)
+
+
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["method"] = "QR"
+    test_kwargs["control_lambda"] = 2
+    test_kwargs["max_inner"] = 500
+    test_kwargs["extend_lambda"] = False
+
+    model = GAMM(sim_fit_formula,Gamma())
+    model.fit(**test_kwargs)
+
+    def test_GAMedf(self):
+        np.testing.assert_allclose(self.model.edf,14.474560341691095,atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+
+    def test_GAMsigma(self):
+        _, sigma = self.model.get_pars()
+        np.testing.assert_allclose(sigma,1.7122644814590584,atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+
+    def test_GAMcoef(self):
+        coef, _ = self.model.get_pars()
+        np.testing.assert_allclose(coef,np.array([[6.63115934], [-0.0728171], [-0.0202448], [0.01181259], [0.0380147],
+                        [0.06274025], [0.09110549], [0.11721487], [0.12369589], [0.13045535],
+                        [-1.89545643], [-1.02998279], [-0.50963573], [0.01338543], [0.8723655],
+                        [2.10927161], [3.52039551], [4.40419881], [5.22845418], [-7.05710007],
+                        [3.770508], [6.38517406], [-1.7808684], [-0.47531908], [0.41080258],
+                        [-5.39519788], [-1.57547179], [-8.82661351], [-0.09628179], [-0.02911359],
+                        [0.0087516], [0.05074923], [0.09477548], [0.12442737], [0.152579],
+                        [0.16546373], [0.17582209]]),atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+
+    def test_GAMlam(self):
+        lam = np.array([p.lam for p in self.model.overall_penalties])
+        np.testing.assert_allclose(lam,np.array([14.629935583511205, 0.013963952614761084, 274960.77985164756]),atol=min(max_atol,0),rtol=min(max_rtol,1.5)) 
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        np.testing.assert_allclose(reml,-3735.1471784723763,atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        np.testing.assert_allclose(llk,-3704.806458939361,atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+
+    def test_para(self):
+        capture = io.StringIO()
+        with redirect_stdout(capture):
+            self.model.print_parametric_terms()
+        capture = capture.getvalue()
+
+        comp = 'Intercept: 6.631, t: 113.315, DoF.: 463, P(|T| > |t|): 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: .\n'
+
+        assert comp == capture 
+
+    def test_smooth(self):
+        capture = io.StringIO()
+        with redirect_stdout(capture):
+            self.model.print_smooth_terms()
+        capture = capture.getvalue()
+
+        comp = "f(['x0']); edf: 1.001 f: 0.919 P(F > f) = 0.33893\nf(['x1']); edf: 3.264 f: 263.966 P(F > f) = 0.000e+00 ***\nf(['x2']); edf: 8.208 f: 238.843 P(F > f) = 0.000e+00 ***\nf(['x3']); edf: 1.001 f: 1.655 P(F > f) = 0.199\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+
+        assert comp == capture

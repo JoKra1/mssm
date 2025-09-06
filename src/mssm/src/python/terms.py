@@ -212,7 +212,7 @@ class f(GammTerm):
     :type by_cont: str, optional
     :param binary: A list containing two strings. The first string corresponds to a factor in ``data`` passed to ``Formula``. A separate f(``variables``) will be estimated for the level of this factor corresponding to the second string.
     :type binary: [str,str], optional
-    :param id: Only useful in combination with specifying a ``by`` variable. If ``id`` is set to any integer the penalties placed on the separate f(``variables``) will share a single smoothness penalty.
+    :param id: Different smooth functions with the same id share their :math:`\\lambda` values. Effect differs when also specifying a ``by`` variable: In that case, if ``id`` is set to any integer the penalties placed on the separate f(``variables``) will share a single smoothness penalty and other smooth terms will ignore this term's particular id.
     :type id: int|None, optional
     :param nk: Number of basis functions to use. Even if ``identifiable`` is true, this number will reflect the final number of basis functions for this term (i.e., mssm acts like you would have asked for 10 basis functions if ``nk=9`` and identifiable=True; the default).
     :type nk: int or list[int], optional
@@ -677,6 +677,9 @@ class f(GammTerm):
               penalties.append(lTerm)
 
       else:
+          if self.id is not None:
+            lTerm.id = self.id + penid
+
           penalties.append(lTerm)
 
       return penalties,cur_pen_idx
@@ -1129,7 +1132,7 @@ class irf(GammTerm):
        :type basis_kwargs: dict
        :param by: A string corresponding to a factor in ``data`` passed to ``Formula``. Separate irf(``variables``) (and smoothness penalties) will be estimated per level of ``by``.
        :type by: str, optional
-       :param id: Only useful in combination with specifying a ``by`` variable. If ``id`` is set to any integer the penalties placed on the separate irff(``variables``) will share a single smoothness penalty.
+       :param id: Different impulse response smooth functions with the same id share their :math:`\\lambda` values. Effect differs when also specifying a ``by`` variable: In that case, if ``id`` is set to any integer the penalties placed on the separate irff(``variables``) will share a single smoothness penalty and other impulse response smooth functions will ignore this term's id.
        :type id: int, optional
        :param nk: Number of basis functions to use. I.e., if ``nk=10`` (the default), the term will use 10 basis functions (Note that these terms are not made identifiable by absorbing any kind of constraint). 
        :type nk: int, optional
@@ -1294,6 +1297,9 @@ class irf(GammTerm):
             lTerm.rank = rank
             penalties.append(lTerm)
       else:
+        if self.id is not None:
+          lTerm.id = self.id + penid
+
         penalties.append(lTerm)
       
       return penalties,cur_pen_idx
@@ -1527,15 +1533,20 @@ class ri(GammTerm):
 
     :param variable: The name (string) of a factor variable. For every level of this factor a random intercept will be estimated. The random intercepts are assumed to follow a normal distribution centered around zero.
     :type variable: str
+    :param id: Different random intercepts with the same id share their :math:`\\lambda` values. Defaults to None.
+    :type id: int|None, optional
     """
     def __init__(self,
-                 variable:str) -> None:
+                 variable:str,
+                 id:int|None=None) -> None:
         
         # Initialization
         super().__init__([variable], TermType.RANDINT, True, [IdentityPenalty(PenType.IDENTITY)], [{}])
 
         # Term name
         self.name = f"ri({variable})"
+        
+        self.id = id
 
     def build_penalty(self,ti:int,penalties:list[LambdaTerm],cur_pen_idx:int,factor_levels:dict,col_S:int) -> tuple[list[LambdaTerm],int]:
       """Builds a penalty matrix associated with this random intercept term and returns an updated ``penalties`` list including it.
@@ -1570,6 +1581,7 @@ class ri(GammTerm):
       lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,idk,cur_pen_idx)
       lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,idk)
       lTerm.rank = rank
+      lTerm.id = self.id
       penalties.append(lTerm)
 
       return penalties, cur_pen_idx
@@ -1879,16 +1891,20 @@ class rs(GammTerm):
     :type variables: [str]
     :param rf: A factor variable. Identifies the random factor in the data.
     :type rf: str
+    :param id: Different random slopes with the same id share their :math:`\\lambda` values. Defaults to None.
+    :type id: int|None, optional
     """
     def __init__(self,
                  variables:list[str],
-                 rf:str) -> None:
+                 rf:str,
+                 id:int|None=None) -> None:
         
         # Initialization
         super().__init__(variables, TermType.RANDSLOPE, True, [IdentityPenalty(PenType.IDENTITY)], [{}])
         self.var_coef = None
         self.by = rf
         self.by_cont = None
+        self.id = id
 
         # Term name
         self.name = f"rs({variables},{rf})"
@@ -1926,7 +1942,7 @@ class rs(GammTerm):
         # penalty will be estimated.
         idk = len(factor_levels[self.by])
         pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank = self.penalty[0].constructor(idk,None)
-        for _ in range(self.var_coef):
+        for ilvl in range(self.var_coef):
           lTerm = LambdaTerm(start_index=cur_pen_idx,
                                        type = PenType.IDENTITY,
                                        term = ti)
@@ -1935,6 +1951,7 @@ class rs(GammTerm):
           lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,idk,cur_pen_idx)
           lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,idk)
           lTerm.rank = rank
+          lTerm.id = self.id + ilvl
           penalties.append(lTerm)
 
       else:
@@ -1952,6 +1969,7 @@ class rs(GammTerm):
         lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,idk,cur_pen_idx)
         lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,idk)
         lTerm.rank = rank
+        lTerm.id = self.id
         penalties.append(lTerm)
 
       return penalties, cur_pen_idx

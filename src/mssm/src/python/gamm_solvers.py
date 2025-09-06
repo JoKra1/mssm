@@ -1,7 +1,7 @@
 import numpy as np
 import scipy as scp
 from .exp_fam import Family,Gaussian,est_scale,GAMLSSFamily,GSMMFamily,Identity,warnings
-from .penalties import embed_in_S_sparse
+from .penalties import embed_in_S_sparse,split_shared_penalties,create_id_dict
 from .formula import build_sparse_matrix_from_formula,setup_cache,clear_cache,pd,Formula,mp,repeat,os,math,tqdm,sys,copy
 from .compact_rep import computeH, computeHSR1, computeV, computeVSR1
 from .repara import reparam_model
@@ -115,14 +115,14 @@ def grad_lambda(lgdet_deriv:float,ldet_deriv:float,bSb:float,scale:float) -> np.
    # From Wood & Fasiolo (2016)
    return lgdet_deriv/2 - ldet_deriv/2 - bSb / (2*scale)
 
-def compute_S_emb_pinv_det(col_S:int,penalties:list[LambdaTerm],pinv:str,root:bool=False) -> tuple[scp.sparse.csc_array, scp.sparse.csc_array, scp.sparse.csc_array|None, list[bool]]:
+def compute_S_emb_pinv_det(col_S:int,merged_penalties:list[LambdaTerm],pinv:str,root:bool=False) -> tuple[scp.sparse.csc_array, scp.sparse.csc_array, scp.sparse.csc_array|None, list[bool]]:
    """Internal function. Compute the total embedded penalty matrix, a generalized inverse of the former, optionally a root of the total penalty matrix, and determines for which EFS updates the rank rather than the generalized inverse should be used.
 
 
    :param col_S: Number of columns of total penalty matrix
    :type col_S: int
-   :param penalties: List of penalties
-   :type penalties: list[LambdaTerm]
+   :param merged_penalties: List of penalties - potentially including shared lambda terms
+   :type merged_penalties: list[LambdaTerm]
    :param pinv: Strategy to use to compute the generalized inverse. Set this to 'svd'.
    :type pinv: str
    :param root: Whther to compute a root of the generalized inverse, defaults to False
@@ -134,6 +134,8 @@ def compute_S_emb_pinv_det(col_S:int,penalties:list[LambdaTerm],pinv:str,root:bo
    # and the pseudo-inverse of this term. Optionally, the matrix
    # root of this term can be computed as well.
    S_emb = None
+
+   penalties = split_shared_penalties(merged_penalties)
 
    # We need to compute the pseudo-inverse on the penalty block (so sum of all
    # penalties weighted by lambda) for every term so we first collect and sum
@@ -285,6 +287,22 @@ def compute_S_emb_pinv_det(col_S:int,penalties:list[LambdaTerm],pinv:str,root:bo
 
    if len(FS_use_rank) != len(penalties):
       raise IndexError("An incorrect number of rank decisions were made.")
+   
+   # At this point FS_use_rank has rank decisions for term-specific penalties. Now need to adjust this to lambda specific rank decisions
+   id_dict = create_id_dict(penalties)
+   
+   if id_dict is not None:
+      merged_FS_use_rank = [rd for rdi,rd in enumerate(FS_use_rank) if (penalties[rdi].id not in id_dict) or (len(id_dict[penalties[rdi].id]) <= 1)]
+
+      for id in id_dict.keys():
+         rds = [rd for rdi,rd in enumerate(FS_use_rank) if penalties[rdi].id == id]
+
+         if len(np.unique(rds)) > 1:
+            raise ValueError("Different rank decisions were made for penalties sharing a lambda term.")
+         
+         merged_FS_use_rank.append(rds[0])
+      
+      FS_use_rank = merged_FS_use_rank
    
    return S_emb, S_pinv, S_root, FS_use_rank
 
@@ -500,7 +518,7 @@ def computetrVS3(t1:np.ndarray|None,t2:np.ndarray|None,t3:np.ndarray|None,lTerm:
    return tr
 
 def calculate_edf(LP:scp.sparse.csc_array|None,Pr:list[int],InvCholXXS:scp.sparse.csc_array|scp.sparse.linalg.LinearOperator|None,
-                  penalties:list[LambdaTerm],lgdetDs:list[float]|None,colsX:int,n_c:int,drop:list[int]|None,S_emb:scp.sparse.csc_array) -> tuple[float,list[float],list[scp.sparse.csc_array]]:
+                  merged_penalties:list[LambdaTerm],lgdetDs:list[float]|None,colsX:int,n_c:int,drop:list[int]|None,S_emb:scp.sparse.csc_array) -> tuple[float,list[float],list[scp.sparse.csc_array]]:
    """Internal function. Follows steps outlined by Wood & Fasiolo (2017) to compute total degrees of freedom by the model.
    
    Generates the B matrix also required for the derivative of the log-determinant of X.T@X+S_lambda. This
@@ -519,8 +537,8 @@ def calculate_edf(LP:scp.sparse.csc_array|None,Pr:list[int],InvCholXXS:scp.spars
    :type Pr: list[int]
    :param InvCholXXS: Unpivoted Inverse of ``LP``, or a quasi-newton approximation of it (for the L-qEFS update), or None
    :type InvCholXXS: scp.sparse.csc_array | scp.sparse.linalg.LinearOperator | None
-   :param penalties: list of penalties
-   :type penalties: list[LambdaTerm]
+   :param merged_penalties: list of penalties
+   :type merged_penalties: list[LambdaTerm]
    :param lgdetDs: list of Derivatives of :math:`log(|\\mathbf{H} + S_\\lambda|)` (:math:`\\mathbf{X}` is negative hessian of penalized llk) with respect to lambda.
    :type lgdetDs: list[float]
    :param colsX: Number of columns of model matrix
@@ -538,6 +556,8 @@ def calculate_edf(LP:scp.sparse.csc_array|None,Pr:list[int],InvCholXXS:scp.spars
    total_edf = colsX
    Bs = []
    term_edfs = []
+
+   penalties = split_shared_penalties(merged_penalties)
 
    if (not InvCholXXS is None) and isinstance(InvCholXXS,scp.sparse.linalg.LinearOperator):
       # Following prepares trace computation via equation 3.13 in Byrd, Nocdeal & Schnabel (1992).
@@ -650,10 +670,23 @@ def calculate_edf(LP:scp.sparse.csc_array|None,Pr:list[int],InvCholXXS:scp.spars
       total_edf -= pen_params
       Bs.append(Bps)
       term_edfs.append(pen_params) # Not actually edf yet - rather the amount of parameters penalized away by individual penalties.
+
+   # At this point Bs has derivatives for term-specific penalties. Now need to adjust this to lambda specific ones
+   id_dict = create_id_dict(penalties)
+   
+   if id_dict is not None:
+      merged_Bs = [B for bdi,B in enumerate(Bs) if (penalties[bdi].id not in id_dict) or (len(id_dict[penalties[bdi].id]) <= 1)]
+
+      for id in id_dict.keys():
+         mBs = [B for bdi,B in enumerate(Bs) if penalties[bdi].id == id]
+         
+         merged_Bs.append(np.sum(mBs))
+      
+      Bs = merged_Bs
    
    return total_edf,term_edfs,Bs
 
-def calculate_term_edf(penalties:list[LambdaTerm],param_penalized:list[float]) -> list[float]:
+def calculate_term_edf(merged_penalties:list[LambdaTerm],param_penalized:list[float]) -> list[float]:
    """Internal function. Computes the smooth-term (and random term) specific estimated degrees of freedom.
 
    See Wood (2017) for a definition and Wood, S. N., & Fasiolo, M. (2017). for the computations.
@@ -662,8 +695,8 @@ def calculate_term_edf(penalties:list[LambdaTerm],param_penalized:list[float]) -
       - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
 
-   :param penalties: List of penalties
-   :type penalties: list[LambdaTerm]
+   :param merged_penalties: List of penalties
+   :type merged_penalties: list[LambdaTerm]
    :param param_penalized: List holding the amount of parameters penalized away by individual penalties - obtained from :func:`calculate_edf`.
    :type param_penalized: list[float]
    :return: A list holding the estimated degrees of freedom per smooth/random term in the model
@@ -677,6 +710,8 @@ def calculate_term_edf(penalties:list[LambdaTerm],param_penalized:list[float]) -
    term_idx = []
    SJ_idx_max = 0
    SJ_idx_len = 0
+
+   penalties = split_shared_penalties(merged_penalties)
 
    for lti,lTerm in enumerate(penalties):
 
@@ -3036,70 +3071,6 @@ def identify_drop(H:scp.sparse.csc_array,S_scaled:scp.sparse.csc_array,method:st
     
    return keep,drop
 
-def drop_terms_S(penalties:list[LambdaTerm],keep:list[int]) -> list[LambdaTerm]:
-   """Zeros out rows and cols of penalty matrices corresponding to dropped terms. Roots are re-computed as well.
-
-   :param penalties: List of Lambda terms included in the model formula
-   :type penalties: list[LambdaTerm]
-   :param keep: List of columns/rows to keep.
-   :type keep: list[int]
-   :return: List of updated penalties - a copy is made.
-   :rtype: list[LambdaTerm]
-   """
-   # Don´t actually drop, just zero
-   
-   drop_pen = copy.deepcopy(penalties)
-
-   for peni,pen in enumerate(drop_pen):
-      start_idx = pen.start_index
-      end_idx = start_idx + pen.rep_sj*pen.S_J.shape[1]
-      # Identify coefficients kept for this penalty matrix. Take care to look
-      # out for rep_sj...
-      keep_pen = [cf-start_idx for cf in keep if cf >= start_idx and cf < end_idx]
-
-      needs_drop = len(keep_pen) < (end_idx - start_idx)
-
-      if needs_drop:
-         # If we have repetitions then the easiest solution is the one below - but this
-         # is far from efficient...
-         if pen.rep_sj > 1:
-            pen.S_J = pen.S_J_emb[start_idx:end_idx,start_idx:end_idx]
-            pen.rep_sj = 1
-         
-         # Compute new reduced penalty
-         rS_J = pen.S_J[keep_pen,:]
-         rS_J = rS_J[:,keep_pen]
-
-         # Re-compute root & rank - this will now be very costly for shared penalties.
-         eig, U =scp.linalg.eigh(rS_J.toarray())
-         pen.rank = sum([1 for e in eig if e >  sys.float_info.epsilon**0.7])
-
-         rD_J = scp.sparse.csc_array(U@np.diag([e**0.5 if e > sys.float_info.epsilon**0.7 else 0 for e in eig]))
-
-         # Re-embed in orig shape blocks
-         keep_pen = np.array(keep_pen)
-
-         Sdat,Srow,Scol = translate_sparse(rS_J)
-         Ddat,Drow,Dcol = translate_sparse(rD_J)
-         Srow = keep_pen[Srow]
-         Scol = keep_pen[Scol]
-         Drow = keep_pen[Drow]
-         Dcol = keep_pen[Dcol]
-
-         pen.S_J = scp.sparse.csc_array((Sdat,(Srow,Scol)),shape=penalties[peni].S_J.shape)
-         #print(pen.S_J.toarray())
-         #D_J = scp.sparse.csc_array((Ddat,(Drow,Dcol)),shape=penalties[peni].S_J.shape)
-
-         #print("rPen",(D_J@D_J.T-pen.S_J).min(),(D_J@D_J.T-pen.S_J).max())
-
-         # Now Re-embed in overall zero blocks again
-         pen.D_J_emb,_ = embed_in_S_sparse(Ddat,Drow,Dcol,None,penalties[peni].S_J_emb.shape[1],penalties[peni].S_J.shape[1],start_idx)
-         pen.S_J_emb,_ = embed_in_S_sparse(Sdat,Srow,Scol,None,penalties[peni].S_J_emb.shape[1],penalties[peni].S_J.shape[1],start_idx)
-         #print("rPen2",(pen.D_J_emb@pen.D_J_emb.T-pen.S_J_emb).min(),(pen.D_J_emb@pen.D_J_emb.T-pen.S_J_emb).max())
-   #print(drop_pen)
-   return drop_pen
-
-
 def drop_terms_X(Xs:list[scp.sparse.csc_array],keep:list[int]) -> tuple[list[scp.sparse.csc_array],list[int]]:
    """Drops cols of model matrices corresponding to dropped terms.
 
@@ -3986,6 +3957,12 @@ def solve_gammlss_sparse(family:GAMLSSFamily,y:np.ndarray,Xs:list[scp.sparse.csc
       # 4) Checked for convergence
       # 5) Applied the new update lambdas so that we can go to the next iteration
       #print("lambda after step:",[lterm.lam for lterm in gamlss_pen])
+
+   # H, L, and LV do not have sorted indices after undoing repara transform - need to take care of that here.
+   if repara:
+      H.sort_indices()
+      LV.sort_indices()
+      L.sort_indices()
     
    if check_cond == 1:
       K2,_,_,Kcode = est_condition(L,LV,verbose=False)
@@ -5479,6 +5456,12 @@ def solve_generalSmooth_sparse(family:GSMMFamily,ys:list[np.ndarray | None],Xs:l
       else:
          LV = None
          H = None # Do not approximate H.
+
+   # H, L, and LV do not have sorted indices after undoing repara transform - need to take care of that here.
+   if repara and method != "qEFS":
+      H.sort_indices()
+      LV.sort_indices()
+      L.sort_indices()
        
    if check_cond == 1 and (method != "qEFS" or form_VH):
       K2,_,_,Kcode = est_condition(L,LV,verbose=False)

@@ -22,15 +22,14 @@ def sort_penalties(penalties:list[LambdaTerm]) -> list[LambdaTerm]:
    sort_idx = np.argsort(idx)
    return [penalties[sidx] for sidx in sort_idx]
 
-def combine_shared_penalties(penalties:list[LambdaTerm]) -> list[LambdaTerm]:
-   """Identifies penalties that should share a lambda parameter and merges them into a single :class:`LambdaTerm`.
-
+def create_id_dict(penalties:list[LambdaTerm]) -> dict|None:
+   """Identifies penalties that should share a lambda parameter and fills a dictionary holding penalty indices for each shared penalty (id).
+   
    :param penalties: A list of term-specific penalties, some of which might have a ``id`` flag.
    :type penalties: list[LambdaTerm]
-   :return: A list of penalty matrices in which individual penalties with a shared ``id`` flag have been combined into a single :class:`LambdaTerm`.
-   :rtype: list[LambdaTerm]
+   :return: A dictionary. Keys are ids shared by two or more penalties. Values are lists holding corresponding penalty indices. If no id exists that is shared by two or more penalties, None is returned instead.
+   :rtype: dict|None
    """
-
    id_dict = {}
 
    for peni,pen in enumerate(penalties):
@@ -40,7 +39,23 @@ def combine_shared_penalties(penalties:list[LambdaTerm]) -> list[LambdaTerm]:
          else:
             id_dict[pen.id] = [peni]
    
-   if len(id_dict) == 0 or max([len(v) for v in id_dict.values()]) <= 1:
+   if len(id_dict) > 0 and max([len(v) for v in id_dict.values()]) > 1:
+      return id_dict
+   
+   return None
+
+def combine_shared_penalties(penalties:list[LambdaTerm]) -> list[LambdaTerm]:
+   """Identifies penalties that should share a lambda parameter and merges them into a single :class:`LambdaTerm`.
+
+   :param penalties: A list of term-specific penalties, some of which might have a ``id`` flag.
+   :type penalties: list[LambdaTerm]
+   :return: A list of penalty matrices in which individual penalties with a shared ``id`` flag have been combined into a single :class:`LambdaTerm`.
+   :rtype: list[LambdaTerm]
+   """
+
+   id_dict = create_id_dict(penalties)
+   
+   if id_dict is None:
       return penalties
    else:
       merged_penalties = [pen for pen in penalties if (pen.id not in id_dict) or (len(id_dict[pen.id]) <= 1)]

@@ -2,7 +2,7 @@ import math
 import numpy as np
 import scipy as scp
 from .matrix_solvers import eigen_solvers,map_csc_to_eigen,translate_sparse,cpp_chol,compute_Linv
-from .penalties import embed_in_S_sparse,split_shared_penalties
+from .penalties import embed_in_S_sparse,split_shared_penalties,combine_shared_penalties
 from .custom_types import LambdaTerm
 import copy
 import sys
@@ -203,7 +203,7 @@ def reparam(X:scp.sparse.csc_array|None,S:list[LambdaTerm],cov:np.ndarray|None,o
       # S needs to be list holding penalties.
 
       # Reparam is best performed based on term-specific penalties rather than lambda-specific penalties
-      #S = split_shared_penalties(S)
+      S = split_shared_penalties(S)
 
       # We first sort S into term-specific groups of penalties
       SJs = [] # SJs groups per term
@@ -593,5 +593,8 @@ def reparam_model(dist_coef:list[int], dist_up_coef:list[int], coef:np.ndarray, 
         split_coef_rp[qi] = Q.T@split_coef_rp[qi]
 
     coef_rp = np.concatenate(split_coef_rp).reshape(-1,1)
+
+    # Re-combine any shared penalties
+    Sj_reps = combine_shared_penalties(Sj_reps)
 
     return coef_rp,Xs_rp,Sj_reps,S_emb_rp,S_norm_rp,S_root_rp,S_inv_rp,Q_emb,Qs
