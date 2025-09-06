@@ -1194,7 +1194,7 @@ class Test_shared:
     def test_smooth(self):
         capture = io.StringIO()
         with redirect_stdout(capture):
-            self.model.print_smooth_terms()
+            self.model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
         comp = "f(['x0']); edf: 1.001 f: 0.919 P(F > f) = 0.33893\nf(['x1']); edf: 3.264 f: 263.966 P(F > f) = 0.000e+00 ***\nf(['x2']); edf: 8.208 f: 238.843 P(F > f) = 0.000e+00 ***\nf(['x3']); edf: 1.001 f: 1.655 P(F > f) = 0.199\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"

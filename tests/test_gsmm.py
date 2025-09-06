@@ -444,7 +444,7 @@ class Test_shared:
     def test_smooth(self):
         capture = io.StringIO()
         with redirect_stdout(capture):
-            self.model.print_smooth_terms()
+            self.model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
         comp = "\nDistribution parameter: 1\n\nf(['x0']); edf: 6.052 chi^2: 38.396 P(Chi^2 > chi^2) = -4.001e-06 ***\nf(['x1']); edf: 4.15 chi^2: 2835.762 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x0'],by=x4); edf: 83.204\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x2']); edf: 6.178 chi^2: 243.205 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x3']); edf: 1.193 chi^2: 3.779 P(Chi^2 > chi^2) = 0.0791 .\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
@@ -567,7 +567,7 @@ class Test_shared_qefs:
     def test_smooth(self):
         capture = io.StringIO()
         with redirect_stdout(capture):
-            self.model.print_smooth_terms()
+            self.model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
         comp = "\nDistribution parameter: 1\n\nf(['x0']); edf: 7.672 chi^2: 211.97 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x1']); edf: 5.036 chi^2: 1711.875 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x0'],by=x4); edf: 109.728\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x2']); edf: 7.717 chi^2: 399.143 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x3']); edf: 1.284 chi^2: 3.212 P(Chi^2 > chi^2) = 0.1246\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"

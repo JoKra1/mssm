@@ -1951,7 +1951,8 @@ class rs(GammTerm):
           lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,idk,cur_pen_idx)
           lTerm.S_J = embed_in_Sj_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J,idk)
           lTerm.rank = rank
-          lTerm.id = self.id + ilvl
+          if self.id is not None:
+            lTerm.id = self.id + ilvl
           penalties.append(lTerm)
 
       else:
