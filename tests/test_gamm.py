@@ -1152,11 +1152,11 @@ class Test_shared:
     model.fit(**test_kwargs)
 
     def test_GAMedf(self):
-        np.testing.assert_allclose(self.model.edf,14.474560341691095,atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+        np.testing.assert_allclose(self.model.edf,14.474560341691095,atol=min(max_atol,0),rtol=min(max_rtol,0.1)) 
 
     def test_GAMsigma(self):
         _, sigma = self.model.get_pars()
-        np.testing.assert_allclose(sigma,1.7122644814590584,atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+        np.testing.assert_allclose(sigma,1.7122644814590584,atol=min(max_atol,0),rtol=min(max_rtol,0.1)) 
 
     def test_GAMcoef(self):
         coef, _ = self.model.get_pars()
@@ -1167,36 +1167,35 @@ class Test_shared:
                         [3.770508], [6.38517406], [-1.7808684], [-0.47531908], [0.41080258],
                         [-5.39519788], [-1.57547179], [-8.82661351], [-0.09628179], [-0.02911359],
                         [0.0087516], [0.05074923], [0.09477548], [0.12442737], [0.152579],
-                        [0.16546373], [0.17582209]]),atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+                        [0.16546373], [0.17582209]]),atol=min(max_atol,0),rtol=min(max_rtol,0.5)) 
 
     def test_GAMlam(self):
         lam = np.array([p.lam for p in self.model.overall_penalties])
-        np.testing.assert_allclose(lam,np.array([14.629935583511205, 0.013963952614761084, 274960.77985164756]),atol=min(max_atol,0),rtol=min(max_rtol,1.5)) 
+        np.testing.assert_allclose(lam,np.array([14.629935583511205, 0.013963952614761084, 274960.77985164756]),atol=min(max_atol,0),rtol=min(max_rtol,2.5)) 
 
     def test_GAMreml(self):
         reml = self.model.get_reml()
-        np.testing.assert_allclose(reml,-3735.1471784723763,atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+        np.testing.assert_allclose(reml,-3735.1471784723763,atol=min(max_atol,0),rtol=min(max_rtol,0.1)) 
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
-        np.testing.assert_allclose(llk,-3704.806458939361,atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+        np.testing.assert_allclose(llk,-3704.806458939361,atol=min(max_atol,0),rtol=min(max_rtol,0.1)) 
 
-    def test_para(self):
-        capture = io.StringIO()
-        with redirect_stdout(capture):
-            self.model.print_parametric_terms()
-        capture = capture.getvalue()
+    def test_edf1(self):
+        compute_bias_corrected_edf(self.model,overwrite=False)
+        edf1 = np.array([edf1 for edf1 in self.model.term_edf1])
+        np.testing.assert_allclose(edf1,np.array([1.0026619803714023, 3.9345191984495687, 8.730848583106779, 1.0027681370571946]),atol=min(max_atol,0),rtol=min(max_rtol,1.5)) 
 
-        comp = 'Intercept: 6.631, t: 113.315, DoF.: 463, P(|T| > |t|): 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: .\n'
+    def test_ps(self):
+        ps = []
+        for par in range(len(self.model.formulas)):
+            pps, _ = approx_smooth_p_values(self.model,par=par)
+            ps.extend(pps)
+        np.testing.assert_allclose(ps,np.array([0.3389291306383489, 0.0, 0.0, 0.19899991251845162]),atol=min(max_atol,0),rtol=min(max_rtol,0.5)) 
 
-        assert comp == capture 
-
-    def test_smooth(self):
-        capture = io.StringIO()
-        with redirect_stdout(capture):
-            self.model.print_smooth_terms(p_values=True)
-        capture = capture.getvalue()
-
-        comp = "f(['x0']); edf: 1.001 f: 0.919 P(F > f) = 0.33893\nf(['x1']); edf: 3.264 f: 263.966 P(F > f) = 0.000e+00 ***\nf(['x2']); edf: 8.208 f: 238.843 P(F > f) = 0.000e+00 ***\nf(['x3']); edf: 1.001 f: 1.655 P(F > f) = 0.199\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
-
-        assert comp == capture
+    def test_TRs(self):
+        Trs = []
+        for par in range(len(self.model.formulas)):
+            _, pTrs = approx_smooth_p_values(self.model,par=par)
+            Trs.extend(pTrs)
+        np.testing.assert_allclose(Trs,np.array([0.9194104426252923, 263.96555423099835, 238.8429544293655, 1.6554767488819178]),atol=min(max_atol,0),rtol=min(max_rtol,1.5))

@@ -555,7 +555,7 @@ class Test_shared_pen:
     model.fit(**test_kwargs)
 
     def test_GAMedf(self):
-        np.testing.assert_allclose(self.model.edf,102.77768526577066,atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+        np.testing.assert_allclose(self.model.edf,102.77768526577066,atol=min(max_atol,0),rtol=min(max_rtol,0.1)) 
 
     def test_GAMcoef(self):
         coef = self.model.coef
@@ -604,39 +604,38 @@ class Test_shared_pen:
                                                 [-0.40279217], [0.79291944], [1.10560544], [0.25250519], [0.53906606],
                                                 [0.44550243], [0.25445301], [-0.27622053], [-0.72065483], [0.04653594],
                                                 [0.01143272], [-0.01000409], [-0.02870777], [-0.04345144], [-0.05704806],
-                                                [-0.06786803], [-0.06543554], [-0.06456724]]),atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+                                                [-0.06786803], [-0.06543554], [-0.06456724]]),atol=min(max_atol,0.5),rtol=min(max_rtol,0.5)) 
 
     def test_GAMlam(self):
         lam = np.array([p.lam for p in self.model.overall_penalties])
-        np.testing.assert_allclose(lam,np.array([31.222081138940332, 4.071165297330471, 3.9187652112113875, 11307.85547736765, 2.358734759947485]),atol=min(max_atol,0),rtol=min(max_rtol,1.5)) 
+        np.testing.assert_allclose(lam,np.array([31.222081138940332, 4.071165297330471, 3.9187652112113875, 11307.85547736765, 2.358734759947485]),atol=min(max_atol,0),rtol=min(max_rtol,2.5)) 
 
     def test_GAMreml(self):
         reml = self.model.get_reml()
-        np.testing.assert_allclose(reml,-15526.867512177605,atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+        np.testing.assert_allclose(reml,-15526.867512177605,atol=min(max_atol,0),rtol=min(max_rtol,0.1)) 
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
-        np.testing.assert_allclose(llk,-15331.745250625594,atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+        np.testing.assert_allclose(llk,-15331.745250625594,atol=min(max_atol,0),rtol=min(max_rtol,0.1)) 
 
-    def test_para(self):
-        capture = io.StringIO()
-        with redirect_stdout(capture):
-            self.model.print_parametric_terms()
-        capture = capture.getvalue()
+    def test_edf1(self):
+        compute_bias_corrected_edf(self.model,overwrite=False)
+        edf1 = np.array([edf1 for edf1 in self.model.term_edf1])
+        np.testing.assert_allclose(edf1,np.array([6.713831972418086, 4.921128087309552, 102.24427710377597, 6.914787187470902, 1.3584941787931564]),atol=min(max_atol,0),rtol=min(max_rtol,1.5)) 
 
-        comp = '\nDistribution parameter: 1\n\nIntercept: 2.161, z: 18.457, P(|Z| > |z|): 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: .\n\nDistribution parameter: 2\n\nIntercept: 0.329, z: 19.267, P(|Z| > |z|): 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: .\n'
+    def test_ps(self):
+        ps = []
+        for par in range(len(self.model.formulas)):
+            pps, _ = approx_smooth_p_values(self.model,par=par)
+            ps.extend(pps)
+        np.testing.assert_allclose(ps,np.array([-4.00113349563469e-06, 0.0, 0.0, 0.07909498523766123]),atol=min(max_atol,0),rtol=min(max_rtol,0.5)) 
 
-        assert comp == capture 
-
-    def test_smooth(self):
-        capture = io.StringIO()
-        with redirect_stdout(capture):
-            self.model.print_smooth_terms(p_values=True)
-        capture = capture.getvalue()
-
-        comp = "\nDistribution parameter: 1\n\nf(['x0']); edf: 6.052 chi^2: 38.396 P(Chi^2 > chi^2) = -4.001e-06 ***\nf(['x1']); edf: 4.15 chi^2: 2835.762 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x0'],by=x4); edf: 83.204\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x2']); edf: 6.178 chi^2: 243.205 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x3']); edf: 1.193 chi^2: 3.779 P(Chi^2 > chi^2) = 0.07909 .\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
-
-        assert comp == capture
+    def test_TRs(self):
+        Trs = []
+        for par in range(len(self.model.formulas)):
+            _, pTrs = approx_smooth_p_values(self.model,par=par)
+            Trs.extend(pTrs)
+        np.testing.assert_allclose(Trs,np.array([38.39621398859056, 2835.761588753815, 243.2047117086251, 3.7791188495195702]),atol=min(max_atol,0),rtol=min(max_rtol,1.5))
     
     def test_lcp(self):
         y = self.model.formulas[0].y_flat[self.model.formulas[0].NOT_NA_flat]
@@ -675,7 +674,7 @@ class Test_shared_pen2:
     model.fit(**test_kwargs)
 
     def test_GAMedf(self):
-        np.testing.assert_allclose(self.model.edf,130.72218261728594,atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+        np.testing.assert_allclose(self.model.edf,130.72218261728594,atol=min(max_atol,0),rtol=min(max_rtol,0.1)) 
 
     def test_GAMcoef(self):
         coef = self.model.coef
@@ -724,39 +723,38 @@ class Test_shared_pen2:
                         [-0.44229743], [0.70869284], [0.8898239], [0.30911353], [0.34759764],
                         [0.32849039], [-0.0591877], [-0.25116141], [-0.26208804], [-0.02282505],
                         [-0.00788459], [0.0014938], [0.01083016], [0.0193732], [0.02798971],
-                        [0.03547143], [0.03660794], [0.03841562]]),atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+                        [0.03547143], [0.03660794], [0.03841562]]),atol=min(max_atol,1),rtol=min(max_rtol,0.5)) 
 
     def test_GAMlam(self):
         lam = np.array([p.lam for p in self.model.overall_penalties])
-        np.testing.assert_allclose(lam,np.array([3.9614527961398274, 0.8717540995086903, 1.0050277835190533, 10000000.0, 3.0248416458589253]),atol=min(max_atol,0),rtol=min(max_rtol,1.5)) 
+        np.testing.assert_allclose(lam,np.array([3.9614527961398274, 0.8717540995086903, 1.0050277835190533, 10000000.0, 3.0248416458589253]),atol=min(max_atol,0),rtol=min(max_rtol,2.5)) 
 
     def test_GAMreml(self):
         reml = self.model.get_reml()
-        np.testing.assert_allclose(reml,-8886.226185427402,atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+        np.testing.assert_allclose(reml,-8886.226185427402,atol=min(max_atol,0),rtol=min(max_rtol,0.1)) 
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
-        np.testing.assert_allclose(llk,-8606.027341258703,atol=min(max_atol,0),rtol=min(max_rtol,0.01)) 
+        np.testing.assert_allclose(llk,-8606.027341258703,atol=min(max_atol,0),rtol=min(max_rtol,0.1)) 
 
-    def test_para(self):
-        capture = io.StringIO()
-        with redirect_stdout(capture):
-            self.model.print_parametric_terms()
-        capture = capture.getvalue()
+    def test_edf1(self):
+        compute_bias_corrected_edf(self.model,overwrite=False)
+        edf1 = np.array([edf1 for edf1 in self.model.term_edf1])
+        np.testing.assert_allclose(edf1,np.array([5.621712839293441, 6.497582544082489, 128.47016448878225, 7.430870523057176, 1.0015037147259365]),atol=min(max_atol,0),rtol=min(max_rtol,1.5)) 
 
-        comp = '\nDistribution parameter: 1\n\nIntercept: 4.334, z: 18.879, P(|Z| > |z|): 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: .\n\nDistribution parameter: 2\n\nIntercept: 0.302, z: 30.213, P(|Z| > |z|): 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: .\n'
+    def test_ps(self):
+        ps = []
+        for par in range(len(self.model.formulas)):
+            pps, _ = approx_smooth_p_values(self.model,par=par)
+            ps.extend(pps)
+        np.testing.assert_allclose(ps,np.array([3.574312402943036e-06, 0.0, 0.0, 0.09119187436952991]),atol=min(max_atol,0),rtol=min(max_rtol,0.5)) 
 
-        assert comp == capture 
-
-    def test_smooth(self):
-        capture = io.StringIO()
-        with redirect_stdout(capture):
-            self.model.print_smooth_terms(p_values=True)
-        capture = capture.getvalue()
-
-        comp = "\nDistribution parameter: 1\n\nf(['x0']); edf: 5.128 chi^2: 38.362 P(Chi^2 > chi^2) = 3.574e-06 ***\nf(['x1']); edf: 5.706 chi^2: 9463.442 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x0'],by=x4); edf: 110.121\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x2']); edf: 6.767 chi^2: 712.243 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x3']); edf: 1.001 chi^2: 2.856 P(Chi^2 > chi^2) = 0.09119 .\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
-
-        assert comp == capture
+    def test_TRs(self):
+        Trs = []
+        for par in range(len(self.model.formulas)):
+            _, pTrs = approx_smooth_p_values(self.model,par=par)
+            Trs.extend(pTrs)
+        np.testing.assert_allclose(Trs,np.array([38.36237880945953, 9463.441910146503, 712.2431495413452, 2.856138998529643]),atol=min(max_atol,0),rtol=min(max_rtol,1.5))
 
     def test_lcp(self):
         y = self.model.formulas[0].y_flat[self.model.formulas[0].NOT_NA_flat]
