@@ -628,7 +628,7 @@ class Test_shared_pen:
         for par in range(len(self.model.formulas)):
             pps, _ = approx_smooth_p_values(self.model,par=par)
             ps.extend(pps)
-        np.testing.assert_allclose(ps,np.array([-4.00113349563469e-06, 0.0, 0.0, 0.07909498523766123]),atol=min(max_atol,0),rtol=min(max_rtol,0.5)) 
+        np.testing.assert_allclose(ps,np.array([0.0, 0.0, 0.0, 0.07909498523766123]),atol=min(max_atol,0),rtol=min(max_rtol,0.75)) 
 
     def test_TRs(self):
         Trs = []

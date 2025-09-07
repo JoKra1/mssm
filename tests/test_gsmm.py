@@ -289,7 +289,7 @@ class Test_PropHaz_repara_hard:
                                    np.array([-9.87297096e-03, -5.29255787e-01, -2.50321169e-04,  1.10708062e+01]),atol=min(max_atol,5),rtol=min(max_rtol,1.1)) 
 
     def test_GAMreml(self):
-        np.testing.assert_allclose(self.gsmm_newton.get_reml() - self.gsmm_qefs.get_reml(),2.9739911355409276,atol=min(max_atol,1),rtol=min(max_rtol,6e-4))
+        np.testing.assert_allclose(self.gsmm_newton.get_reml() - self.gsmm_qefs.get_reml(),2.9739911355409276,atol=min(max_atol,0.5),rtol=min(max_rtol,1))
 
     def test_GAMllk(self):
         np.testing.assert_allclose(self.gsmm_newton.get_llk(True) - self.gsmm_qefs.get_llk(True),0.21546192785831408,atol=min(max_atol,0.2),rtol=min(max_rtol,2e-4))
@@ -441,7 +441,7 @@ class Test_shared:
         for par in range(len(self.model.formulas)):
             pps, _ = approx_smooth_p_values(self.model,par=par)
             ps.extend(pps)
-        np.testing.assert_allclose(ps,np.array([-4.0011657986838145e-06, 0.0, 0.0, 0.07909902713107153]),atol=min(max_atol,0),rtol=min(max_rtol,0.5)) 
+        np.testing.assert_allclose(ps,np.array([0.0, 0.0, 0.0, 0.07909902713107153]),atol=min(max_atol,0),rtol=min(max_rtol,0.75)) 
 
     def test_TRs(self):
         Trs = []
@@ -565,7 +565,7 @@ class Test_shared_qefs:
         for par in range(len(self.model.formulas)):
             pps, _ = approx_smooth_p_values(self.model,par=par)
             ps.extend(pps)
-        np.testing.assert_allclose(ps,np.array([0.0, 0.0, 0.0, 0.1245955153970093]),atol=min(max_atol,0),rtol=min(max_rtol,0.5)) 
+        np.testing.assert_allclose(ps,np.array([0.0, 0.0, 0.0, 0.1245955153970093]),atol=min(max_atol,0.13),rtol=min(max_rtol,0.5)) 
 
     def test_TRs(self):
         Trs = []

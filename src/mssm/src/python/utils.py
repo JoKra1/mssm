@@ -974,8 +974,8 @@ def approx_smooth_p_values(model,par:int=0,n_sel:int=1e5,edf1:bool=True,force_ap
                                 
                                 p1,code1,_ = davies.daviesQF(lb,nc,n,Tr1,0,2e-5,len(n),20000)
                                 p2,code2,_ = davies.daviesQF(lb,nc,n,Tr2,0,2e-5,len(n),20000)
-                                p1 = 1 - p1
-                                p2 = 1 - p2
+                                p1 = 1 - min(p1,1)
+                                p2 = 1 - min(p2,1)
 
                                 if code1 > 0 or code2 > 0 or force_approx:
 
