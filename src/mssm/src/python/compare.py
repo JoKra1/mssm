@@ -1,41 +1,54 @@
 import numpy as np
 import scipy as scp
 import math
-from ...models import GAMM,GAMMLSS,GSMM,Family,GAMLSSFamily,GSMMFamily,Gaussian,Identity
+from ...models import (
+    GAMM,
+    GAMMLSS,
+    GSMM,
+    Family,
+    GAMLSSFamily,
+    GSMMFamily,
+    Gaussian,
+    Identity,
+)
 from .utils import correct_VB
 import warnings
 from collections.abc import Callable
 
-def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
-                model2:GAMM | GAMMLSS | GSMM,
-                correct_V:bool=True,
-                correct_t1:bool|None=None,
-                perform_GLRT:bool=False,
-                nR:int=250,
-                n_c:int=1,
-                alpha:int=0.05,
-                grid:str|None=None,
-                a:float=1e-7,b:float=1e7,df:int=40,
-                verbose:bool=False,
-                drop_NA:bool=True,
-                method:str="Chol",
-                seed:int|None=None,
-                only_expected_edf:bool|None=None,
-                Vp_fidiff:bool=False,
-                use_importance_weights:bool|None=None,
-                prior:Callable|None=None,
-                recompute_H:bool|None=None,
-                compute_Vcc:bool|None=None,
-                bfgs_options:dict={}) -> dict:
 
-    """ Computes the AIC difference and (optionally) performs an approximate GLRT on twice the difference in unpenalized likelihood between models ``model1`` and ``model2`` (see Wood et al., 2016).
-    
+def compare_CDL(
+    model1: GAMM | GAMMLSS | GSMM,
+    model2: GAMM | GAMMLSS | GSMM,
+    correct_V: bool = True,
+    correct_t1: bool | None = None,
+    perform_GLRT: bool = False,
+    nR: int = 250,
+    n_c: int = 1,
+    alpha: int = 0.05,
+    grid: str | None = None,
+    a: float = 1e-7,
+    b: float = 1e7,
+    df: int = 40,
+    verbose: bool = False,
+    drop_NA: bool = True,
+    method: str = "Chol",
+    seed: int | None = None,
+    only_expected_edf: bool | None = None,
+    Vp_fidiff: bool = False,
+    use_importance_weights: bool | None = None,
+    prior: Callable | None = None,
+    recompute_H: bool | None = None,
+    compute_Vcc: bool | None = None,
+    bfgs_options: dict = {},
+) -> dict:
+    """Computes the AIC difference and (optionally) performs an approximate GLRT on twice the difference in unpenalized likelihood between models ``model1`` and ``model2`` (see Wood et al., 2016).
+
     For the GLRT to be appropriate ``model1`` should be set to the model containing more effects and ``model2`` should be a nested, simpler, variant of ``model1``.
     For the degrees of freedom for the test, the expected degrees of freedom (EDF) of each model are used (i.e., this is the conditional test discussed in Wood (2017: 6.12.4)).
     The difference between the models in EDF serves as DoF for computing the Chi-Square statistic. In addition, ``correct_t1`` should be set to True, when computing the GLRT.
-    
+
     To get the AIC for each model, 2*edf is added to twice the negative (conditional) likelihood (see Wood et al., 2016).
-    
+
     By default (``correct_V=True``), ``mssm`` will attempt to correct the edf for uncertainty in the estimated :math:`\\lambda` parameters. Which correction is computed depends on the
     choice for the ``grid`` argument. **Approximately** the analytic solution for the correction proposed by Wood, Pya, & Säfken (2016) is computed  when ``grid='JJJ1'`` (the default) - which is exact for
     strictly Gaussian and some canonical Generalized additive models. This is too costly for very large sparse multi-level models and not exact for more generic models. The MC based alternative available via ``grid = 'JJJ2'`` addresses the first problem (**Important**, set: ``use_importance_weights=False`` and ``only_expected_edf=True``.). The second MC based alternative
@@ -123,7 +136,7 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
 
         # Set up a uniform prior from log(1e-7) to log(1e12) for each regularization parameter
         prior = DummyRhoPrior(b=np.log(1e12))
-        
+
         # Now correct for uncertainty in regularization parameters using the second MC strategy discussed by Krause et al. (submitted):
         # You can also set prior to ``None`` in which case the proposal distribution (by default a T-distribution with 40 degrees of freedom) is used as prior.
         cor_result_gs_1 = compare_CDL(sim_fit_model,sim_fit_model2,n_c=10,grid='JJJ3',seed=22,only_expected_edf=False,use_importance_weights=True,prior=prior,recompute_H=True)
@@ -202,21 +215,28 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
     # Strictly Gaussian, many cores, many coef -> grid = 'JJJ2'
     # Rest: grid = 'JJJ3'
     if grid is None:
-        if isinstance(model1.family,Gaussian) and isinstance(model1.family.link,Identity):
-            grid = 'JJJ1'
+        if isinstance(model1.family, Gaussian) and isinstance(
+            model1.family.link, Identity
+        ):
+            grid = "JJJ1"
 
             if len(model1.coef) > 2000 and n_c > 5 and perform_GLRT == False:
-                grid = 'JJJ2'
+                grid = "JJJ2"
 
         elif (n_c <= 5) or (len(model1.coef) > 2000):
-            grid = 'JJJ1'
+            grid = "JJJ1"
 
         else:
-            grid = 'JJJ3'
+            grid = "JJJ3"
 
     # Handle very big additive models
     if only_expected_edf is None:
-        if grid == 'JJJ2' and len(model1.coef) > 4000 and perform_GLRT == False and correct_t1 == False:
+        if (
+            grid == "JJJ2"
+            and len(model1.coef) > 4000
+            and perform_GLRT == False
+            and correct_t1 == False
+        ):
             only_expected_edf = True
         else:
             only_expected_edf = False
@@ -230,14 +250,20 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
 
     # Integration weights should be based on REML score for all but strictly additive models
     if use_importance_weights is None:
-        if grid == 'JJJ1' or (isinstance(model1.family,Gaussian) and isinstance(model1.family.link,Identity)):
+        if grid == "JJJ1" or (
+            isinstance(model1.family, Gaussian)
+            and isinstance(model1.family.link, Identity)
+        ):
             use_importance_weights = False
         else:
             use_importance_weights = True
 
     # Re-compute hessian based on posterior samples for all but strictly additive models
     if recompute_H is None:
-        if grid == 'JJJ1' or (isinstance(model1.family,Gaussian) and isinstance(model1.family.link,Identity)):
+        if grid == "JJJ1" or (
+            isinstance(model1.family, Gaussian)
+            and isinstance(model1.family.link, Identity)
+        ):
             recompute_H = False
         else:
             recompute_H = True
@@ -245,11 +271,23 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
     if type(model1.family) != type(model2.family):
         raise ValueError("Both models should be estimated using the same family.")
 
-    if perform_GLRT and isinstance(model1.family,Family) and model1.formulas[0].n_coef < model2.formulas[0].n_coef:
-        raise ValueError("For the GLRT, model1 needs to be set to the more complex model (i.e., needs to have more coefficients than model2).")
+    if (
+        perform_GLRT
+        and isinstance(model1.family, Family)
+        and model1.formulas[0].n_coef < model2.formulas[0].n_coef
+    ):
+        raise ValueError(
+            "For the GLRT, model1 needs to be set to the more complex model (i.e., needs to have more coefficients than model2)."
+        )
 
-    if perform_GLRT and (isinstance(model1.family,Family) == False) and len(model1.coef) < len(model2.coef):
-        raise ValueError("For the GLRT, model1 needs to be set to the more complex model (i.e., needs to have more coefficients than model2).")
+    if (
+        perform_GLRT
+        and (isinstance(model1.family, Family) == False)
+        and len(model1.coef) < len(model2.coef)
+    ):
+        raise ValueError(
+            "For the GLRT, model1 needs to be set to the more complex model (i.e., needs to have more coefficients than model2)."
+        )
 
     # Collect total DOF for uncertainty in \\lambda using correction proposed by Greven & Scheipl (2016)
     aic_DOF1 = None
@@ -258,9 +296,49 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
         if verbose:
             print("Correcting for uncertainty in lambda estimates...\n")
 
-        #V,LV,Vp,Vpr,edf,total_edf,edf2,total_edf2,upper_edf
-        _,_,_,_,_,DOF1,_,DOF12,expected_edf1,_ = correct_VB(model1,nR=nR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,only_expected_edf=only_expected_edf,Vp_fidiff=Vp_fidiff,use_importance_weights=use_importance_weights,prior=prior,recompute_H=recompute_H,compute_Vcc=compute_Vcc,seed=seed,**bfgs_options)
-        _,_,_,_,_,DOF2,_,DOF22,expected_edf2,_ = correct_VB(model2,nR=nR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,only_expected_edf=only_expected_edf,Vp_fidiff=Vp_fidiff,use_importance_weights=use_importance_weights,prior=prior,recompute_H=recompute_H,compute_Vcc=compute_Vcc,seed=seed,**bfgs_options)
+        # V,LV,Vp,Vpr,edf,total_edf,edf2,total_edf2,upper_edf
+        _, _, _, _, _, DOF1, _, DOF12, expected_edf1, _ = correct_VB(
+            model1,
+            nR=nR,
+            n_c=n_c,
+            form_t1=correct_t1,
+            grid_type=grid,
+            a=a,
+            b=b,
+            df=df,
+            verbose=verbose,
+            drop_NA=drop_NA,
+            method=method,
+            only_expected_edf=only_expected_edf,
+            Vp_fidiff=Vp_fidiff,
+            use_importance_weights=use_importance_weights,
+            prior=prior,
+            recompute_H=recompute_H,
+            compute_Vcc=compute_Vcc,
+            seed=seed,
+            **bfgs_options,
+        )
+        _, _, _, _, _, DOF2, _, DOF22, expected_edf2, _ = correct_VB(
+            model2,
+            nR=nR,
+            n_c=n_c,
+            form_t1=correct_t1,
+            grid_type=grid,
+            a=a,
+            b=b,
+            df=df,
+            verbose=verbose,
+            drop_NA=drop_NA,
+            method=method,
+            only_expected_edf=only_expected_edf,
+            Vp_fidiff=Vp_fidiff,
+            use_importance_weights=use_importance_weights,
+            prior=prior,
+            recompute_H=recompute_H,
+            compute_Vcc=compute_Vcc,
+            seed=seed,
+            **bfgs_options,
+        )
 
         if only_expected_edf:
             DOF1 = expected_edf1
@@ -282,19 +360,21 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
             # Compute uncertainty un-corrected but smoothness bias corrected edf (t1 in section 6.1.2 of Wood, 2017)
             V1 = model1.lvi.T @ model1.lvi
             V2 = model2.lvi.T @ model2.lvi
-            if isinstance(model1.family,Family) and model1.family.twopar: # Undo scaling by phi
-                F1 = V1@(-1*model1.hessian*model1.scale)
-                F2 = V2@(-1*model2.hessian*model2.scale)
+            if (
+                isinstance(model1.family, Family) and model1.family.twopar
+            ):  # Undo scaling by phi
+                F1 = V1 @ (-1 * model1.hessian * model1.scale)
+                F2 = V2 @ (-1 * model2.hessian * model2.scale)
 
-            else: # single par GAMM or GAMLSS or GSMM case
-                F1 = V1@(-1*model1.hessian)
-                F2 = V2@(-1*model2.hessian)
+            else:  # single par GAMM or GAMLSS or GSMM case
+                F1 = V1 @ (-1 * model1.hessian)
+                F2 = V2 @ (-1 * model2.hessian)
 
             ucFFd1 = F1.multiply(F1.T).sum(axis=0)
             ucFFd2 = F2.multiply(F2.T).sum(axis=0)
 
-            DOF12 = 2*DOF1 - np.sum(ucFFd1)
-            DOF22 = 2*DOF2 - np.sum(ucFFd2)
+            DOF12 = 2 * DOF1 - np.sum(ucFFd1)
+            DOF22 = 2 * DOF2 - np.sum(ucFFd2)
 
             aic_DOF1 = DOF1
             aic_DOF2 = DOF2
@@ -302,7 +382,7 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
             DOF2 = DOF22
 
     # Correct dof for scale paramter
-    if isinstance(model1.family,Family) and model1.family.twopar:
+    if isinstance(model1.family, Family) and model1.family.twopar:
         DOF1 += 1
         DOF2 += 1
 
@@ -319,7 +399,7 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
     test_stat = stat
 
     # ... and degrees of freedom under NULL (see Wood, 2017)
-    DOF_diff = DOF1-DOF2
+    DOF_diff = DOF1 - DOF2
     test_DOF_diff = abs(DOF_diff)
 
     # Multiple scenarios that this test needs to cover...
@@ -330,46 +410,52 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
 
     # Personally, I think cases 2 & 3 should both return NAs for p-values.. But anova.gam for mgcv returns a p-value for case 3 so we will do the same here
     # and just raise a warning. For case 1, we need to take -1*test_stat.
-    if  llk1 < llk2 and DOF1 < DOF2:
-        test_stat = -1*test_stat
+    if llk1 < llk2 and DOF1 < DOF2:
+        test_stat = -1 * test_stat
 
     # Compute p-value under reference distribution.
-    if perform_GLRT == False or test_stat < 0: # Correct for aforementioned possibility 2: model 1 has lower llk and higher edf.
+    if (
+        perform_GLRT == False or test_stat < 0
+    ):  # Correct for aforementioned possibility 2: model 1 has lower llk and higher edf.
         H1 = np.nan
         p = np.nan
     else:
         if llk1 > llk2 and DOF1 < DOF2:
-            warnings.warn("Model with more coefficients has higher likelihood but lower expected degrees of freedom. Interpret results with caution.")
+            warnings.warn(
+                "Model with more coefficients has higher likelihood but lower expected degrees of freedom. Interpret results with caution."
+            )
 
-        if isinstance(model1.family,Family) and model1.family.twopar: # F-test
-            test_stat/= test_DOF_diff
+        if isinstance(model1.family, Family) and model1.family.twopar:  # F-test
+            test_stat /= test_DOF_diff
             X = model1.get_mmat()
-            rs_df = X.shape[0] - max(DOF1,DOF2)
-            p = 1 - scp.stats.f.cdf(test_stat,test_DOF_diff,rs_df)
-        else: # Chi-square test.
-            p = 1 - scp.stats.chi2.cdf(test_stat,test_DOF_diff)
+            rs_df = X.shape[0] - max(DOF1, DOF2)
+            p = 1 - scp.stats.f.cdf(test_stat, test_DOF_diff, rs_df)
+        else:  # Chi-square test.
+            p = 1 - scp.stats.chi2.cdf(test_stat, test_DOF_diff)
 
         # Reject NULL?
         H1 = p <= alpha
 
     # Also correct AIC for GAM (see Wood et al., 2017)
     if correct_t1:
-        aic1 = -2*llk1 + 2*aic_DOF1
-        aic2 = -2*llk2 + 2*aic_DOF2
+        aic1 = -2 * llk1 + 2 * aic_DOF1
+        aic2 = -2 * llk2 + 2 * aic_DOF2
     else:
-        aic1 = -2*llk1 + 2*DOF1
-        aic2 = -2*llk2 + 2*DOF2
+        aic1 = -2 * llk1 + 2 * DOF1
+        aic2 = -2 * llk2 + 2 * DOF2
 
-    result = {"H1":H1,
-              "p":p,
-              "test_stat":stat,
-              "DOF1":DOF1,
-              "DOF2":DOF2,
-              "DOF12":aic_DOF1,
-              "DOF22":aic_DOF2,
-              "Res. DOF":DOF_diff,
-              "aic1":aic1,
-              "aic2":aic2,
-              "aic_diff":aic1-aic2}
+    result = {
+        "H1": H1,
+        "p": p,
+        "test_stat": stat,
+        "DOF1": DOF1,
+        "DOF2": DOF2,
+        "DOF12": aic_DOF1,
+        "DOF22": aic_DOF2,
+        "Res. DOF": DOF_diff,
+        "aic1": aic1,
+        "aic2": aic2,
+        "aic_diff": aic1 - aic2,
+    }
 
     return result

@@ -3,36 +3,40 @@ from enum import Enum
 import scipy as scp
 import numpy as np
 
+
 ################################################################## Enums/Types ##################################################################
 class PenType(Enum):
-    """Custom Penalty data type used by internal functions.
-    """
+    """Custom Penalty data type used by internal functions."""
+
     IDENTITY = 1
     DIFFERENCE = 2
     DISTANCE = 3
-    REPARAM1 = 4 # Approximate Demmler & Reinsch (1975) parameterization for univariate smooths; see section 5.4.2 of Wood (2017)
+    REPARAM1 = 4  # Approximate Demmler & Reinsch (1975) parameterization for univariate smooths; see section 5.4.2 of Wood (2017)
     NULL = 5
     DERIVATIVE = 6
     COEFFICIENTS = 7
     CUSTOM = 8
     SHARED = 9
 
+
 class ConstType(Enum):
-    """Custom Constraint data type used by internal functions.
-    """
+    """Custom Constraint data type used by internal functions."""
+
     DROP = 1
     QR = 2
     DIFF = 3
 
+
 class VarType(Enum):
-    """Custom variable data type used by internal functions.
-    """
+    """Custom variable data type used by internal functions."""
+
     NUMERIC = 1
     FACTOR = 2
 
+
 class TermType(Enum):
-    """Custom Term data type used by internal functions.
-      """
+    """Custom Term data type used by internal functions."""
+
     IRSMOOTH = 1
     SMOOTH = 2
     LINEAR = 3
@@ -41,6 +45,7 @@ class TermType(Enum):
 
 
 ################################################################## Data-classes ##################################################################
+
 
 @dataclass
 class LambdaTerm:
@@ -58,32 +63,34 @@ class LambdaTerm:
     :ivar int rank: The rank of ``S_J``. Initialized with ``None``.
     :ivar list[int] | int term: The index (indices) of the term(s) in a :class:`mssm.src.python.formula.Formula` with which this penalty is associated. Initialized with ``None``.
     """
+
     # Lambda term storage.
     # start_index can be useful in case we want to have multiple penalties on some
     # coefficients (see Wood, 2017; Wood & Fasiolo, 2017).
-    S_J:scp.sparse.csc_array|None=None
-    S_J_emb:scp.sparse.csc_array|None=None
-    D_J_emb:scp.sparse.csc_array|None=None
-    rep_sj:int=1
-    lam:float = 1.1
-    start_index:int|None = None
-    frozen:bool = False
-    type:PenType|None = None
-    rank:int | None = None
-    term:list[int]| int | None = None
+    S_J: scp.sparse.csc_array | None = None
+    S_J_emb: scp.sparse.csc_array | None = None
+    D_J_emb: scp.sparse.csc_array | None = None
+    rep_sj: int = 1
+    lam: float = 1.1
+    start_index: int | None = None
+    frozen: bool = False
+    type: PenType | None = None
+    rank: int | None = None
+    term: list[int] | int | None = None
     clust_series: list[int] | None = None
-    clust_weights:list[list[float]] | None = None
-    dist_param: list[int]|int = 0
+    clust_weights: list[list[float]] | None = None
+    dist_param: list[int] | int = 0
     rp_idx: int | None = None
     # Can hold multiple penalties associated with a single lambda value - need to keep track of their individual matrices, start indices, etc. for easy splitting
-    id:int | None = None
-    S_Js:list[scp.sparse.csc_array]|None = None
-    S_J_embs:list[scp.sparse.csc_array]|None=None
-    D_J_embs:list[scp.sparse.csc_array]|None=None
-    rep_sjs:list[int]|None = None
-    start_indices:list[scp.sparse.csc_array]|None=None
-    types:list[PenType]|None = None
-    ranks:list[int]|None = None
+    id: int | None = None
+    S_Js: list[scp.sparse.csc_array] | None = None
+    S_J_embs: list[scp.sparse.csc_array] | None = None
+    D_J_embs: list[scp.sparse.csc_array] | None = None
+    rep_sjs: list[int] | None = None
+    start_indices: list[scp.sparse.csc_array] | None = None
+    types: list[PenType] | None = None
+    ranks: list[int] | None = None
+
 
 @dataclass
 class Reparameterization:
@@ -93,15 +100,17 @@ class Reparameterization:
     :ivar scp.sparse.csc_array Drp: The root of the transformed penalty matrix
     :ivar scp.sparse.csc_array C: Transformation matrix for model matrix and/or penalty.
     """
+
     # Holds all information necessary to transform model matrix & penalty via various re-parameterization strategies as discussed in Wood (2017).
-    Srp:scp.sparse.csc_array|None = None # Transformed penalty
-    Drp:scp.sparse.csc_array|None = None # Transformed root of penalty
-    C:scp.sparse.csc_array|None= None
-    scale:float|None = None
-    IRrp:scp.sparse.csc_array|None = None
-    rms1:float|None = None
-    rms2:float|None = None
-    rank:int|None = None
+    Srp: scp.sparse.csc_array | None = None  # Transformed penalty
+    Drp: scp.sparse.csc_array | None = None  # Transformed root of penalty
+    C: scp.sparse.csc_array | None = None
+    scale: float | None = None
+    IRrp: scp.sparse.csc_array | None = None
+    rms1: float | None = None
+    rms2: float | None = None
+    rank: int | None = None
+
 
 @dataclass
 class Fit_info:
@@ -114,12 +123,14 @@ class Fit_info:
     :ivar float K2: An estimate for the condition number of matrix ``A``, where ``A.T@A=H`` and ``H`` is the final estimate of the negative Hessian of the penalized likelihood. Only available if ``check_cond>0`` when ``model.fit()`` is called for any model (i.e., GAMM, GAMMLSS, GSMM). Initialized with ``None``.
     :ivar [int] dropped: The final set of coefficients dropped during GAMMLSS/GSMM estimation when using ``method in ["QR/Chol","LU/Chol","Direct/Chol"]`` or ``None`` in which case no coefficients were dropped. Initialized with 0.
     """
-    lambda_updates:int=0
-    iter:int=0
-    code:int=1
-    eps:float | None = None
-    K2:float | None = None
-    dropped:list[int] | None = None
+
+    lambda_updates: int = 0
+    iter: int = 0
+    code: int = 1
+    eps: float | None = None
+    K2: float | None = None
+    dropped: list[int] | None = None
+
 
 @dataclass
 class Constraint:
@@ -150,5 +161,6 @@ class Constraint:
       - Eilers, P. H. C., & Marx, B. D. (1996). Flexible smoothing with B-splines and penalties. Statistical Science, 11(2), 89–121. https://doi.org/10.1214/ss/1038425655
 
     """
-    Z:np.ndarray|int|None = None
-    type:ConstType|None = None
+
+    Z: np.ndarray | int | None = None
+    type: ConstType | None = None

@@ -6,6 +6,7 @@ import warnings
 import copy
 from collections.abc import Callable
 
+
 class Link:
     """
     Link function base class. To be implemented by any link functiion used for GAMMs and GAMMLSS models.
@@ -13,7 +14,7 @@ class Link:
     that every method returns only valid values. Specifically, no returned element may be ``numpy.nan`` or ``numpy.inf``.
     """
 
-    def f(self,mu:np.ndarray) -> np.ndarray:
+    def f(self, mu: np.ndarray) -> np.ndarray:
         """
         Link function :math:`f()` mapping mean :math:`\\boldsymbol{\\mu}` of an exponential family to the model prediction :math:`\\boldsymbol{\\eta}`, so that :math:`f(\\boldsymbol{\\mu}) = \\boldsymbol{\\eta}`.
         see Wood (2017, 3.1.2) and Faraway (2016).
@@ -27,7 +28,7 @@ class Link:
         """
         pass
 
-    def fi(self,eta:np.ndarray) -> np.ndarray:
+    def fi(self, eta: np.ndarray) -> np.ndarray:
         """
         Inverse of the link function mapping :math:`\\boldsymbol{\\eta} = f(\\boldsymbol{\\mu})` to the mean :math:`fi(\\boldsymbol{\\eta}) = fi(f(\\boldsymbol{\\mu})) = \\boldsymbol{\\mu}`.
         see Faraway (2016) and the ``Link.f`` function.
@@ -41,7 +42,7 @@ class Link:
         """
         pass
 
-    def dy1(self,mu:np.ndarray) -> np.ndarray:
+    def dy1(self, mu: np.ndarray) -> np.ndarray:
         """
         First derivative of :math:`f(\\boldsymbol{\\mu})` with respect to :math:`\\boldsymbol{\\mu}` Needed for Fisher scoring/PIRLS (Wood, 2017).
 
@@ -54,7 +55,7 @@ class Link:
         """
         pass
 
-    def dy2(self,mu:np.ndarray) -> np.ndarray:
+    def dy2(self, mu: np.ndarray) -> np.ndarray:
         """
         Second derivative of :math:`f(\\boldsymbol{\\mu})` with respect to :math:`\\boldsymbol{\\mu}`. Needed for GAMMLSS models (Wood, 2017).
 
@@ -68,12 +69,13 @@ class Link:
         """
         pass
 
+
 class Logit(Link):
     """
     Logit Link function, which is canonical for the binomial model. :math:`\\boldsymbol{\\eta}` = log-odds of success.
     """
 
-    def f(self, mu:np.ndarray) -> np.ndarray:
+    def f(self, mu: np.ndarray) -> np.ndarray:
         """
         Canonical link for binomial distribution with :math:`\\boldsymbol{\\mu}` holding the probabilities of success, so that the model prediction :math:`\\boldsymbol{\\eta}`
         is equal to the log-odds.
@@ -85,13 +87,13 @@ class Logit(Link):
         :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
         :type mu: np.ndarray
         """
-        with warnings.catch_warnings(): # Divide by 0
+        with warnings.catch_warnings():  # Divide by 0
             warnings.simplefilter("ignore")
             eta = np.log(mu / (1 - mu))
 
         return eta
 
-    def fi(self,eta:np.ndarray) -> np.ndarray:
+    def fi(self, eta: np.ndarray) -> np.ndarray:
         """
         For the logit link and the binomial model, :math:`\\boldsymbol{\\eta}` = log-odds, so the inverse to go from :math:`\\boldsymbol{\\eta}` to :math:`\\boldsymbol{\\mu}` is :math:`\\boldsymbol{\\mu} = exp(\\boldsymbol{\\eta}) / (1 + exp(\\boldsymbol{\\eta}))`.
         see Faraway (2016)
@@ -103,13 +105,13 @@ class Logit(Link):
         :param eta: A numpy array containing the model prediction corresponding to each observation.
         :type eta: np.ndarray
         """
-        with warnings.catch_warnings(): # Overflow
+        with warnings.catch_warnings():  # Overflow
             warnings.simplefilter("ignore")
             mu = np.exp(eta) / (1 + np.exp(eta))
 
         return mu
 
-    def dy1(self,mu:np.ndarray) -> np.ndarray:
+    def dy1(self, mu: np.ndarray) -> np.ndarray:
         """
         First derivative of :math:`f(\\boldsymbol{\\mu})` with respect to :math:`\\boldsymbol{\\mu}`. Needed for Fisher scoring/PIRLS (Wood, 2017):
 
@@ -131,13 +133,13 @@ class Logit(Link):
         :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
         :type mu: np.ndarray
         """
-        with warnings.catch_warnings(): # Divide by 0
+        with warnings.catch_warnings():  # Divide by 0
             warnings.simplefilter("ignore")
             d = 1 / ((1 - mu) * mu)
 
         return d
 
-    def dy2(self,mu:np.ndarray) -> np.ndarray:
+    def dy2(self, mu: np.ndarray) -> np.ndarray:
         """
         Second derivative of :math:`f(\\boldsymbol{\\mu})` with respect to :math:`\\boldsymbol{\\mu}`. Needed for GAMMLSS models (Wood, 2017).
 
@@ -149,18 +151,19 @@ class Logit(Link):
         :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
         :type mu: np.ndarray
         """
-        with warnings.catch_warnings(): # Divide by 0
+        with warnings.catch_warnings():  # Divide by 0
             warnings.simplefilter("ignore")
-            d2 = (2 * mu - 1) / (np.power(mu,2) * np.power(1-mu,2))
+            d2 = (2 * mu - 1) / (np.power(mu, 2) * np.power(1 - mu, 2))
 
         return d2
+
 
 class Identity(Link):
     """
     Identity Link function. :math:`\\boldsymbol{\\mu}=\\boldsymbol{\\eta}` and so this link is trivial.
     """
 
-    def f(self, mu:np.ndarray) -> np.ndarray:
+    def f(self, mu: np.ndarray) -> np.ndarray:
         """
         Canonical link for normal distribution with :math:`\\boldsymbol{\\eta} = \\boldsymbol{\\mu}`.
 
@@ -173,7 +176,7 @@ class Identity(Link):
         """
         return mu
 
-    def fi(self,eta:np.ndarray) -> np.ndarray:
+    def fi(self, eta: np.ndarray) -> np.ndarray:
         """
         For the identity link, :math:`\\boldsymbol{\\eta} = \\boldsymbol{\\mu}`, so the inverse is also just the identity.
         see Faraway (2016)
@@ -187,7 +190,7 @@ class Identity(Link):
         """
         return eta
 
-    def dy1(self,mu:np.ndarray) -> np.ndarray:
+    def dy1(self, mu: np.ndarray) -> np.ndarray:
         """
         First derivative of :math:`f(\\boldsymbol{\\mu})` with respect to :math:`\\boldsymbol{\\mu}`. Needed for Fisher scoring/PIRLS (Wood, 2017).
 
@@ -200,7 +203,7 @@ class Identity(Link):
         """
         return np.ones_like(mu)
 
-    def dy2(self,mu:np.ndarray) -> np.ndarray:
+    def dy2(self, mu: np.ndarray) -> np.ndarray:
         """
         Second derivative of :math:`f(\\boldsymbol{\\mu})` with respect to :math:`\\boldsymbol{\\mu}`. Needed for GAMMLSS models (Wood, 2017).
 
@@ -214,12 +217,13 @@ class Identity(Link):
         """
         return np.zeros_like(mu)
 
+
 class LOG(Link):
     """
     Log Link function. :math:`log(\\boldsymbol{\\mu}) = \\boldsymbol{\\eta}`.
     """
 
-    def f(self,mu:np.ndarray) -> np.ndarray:
+    def f(self, mu: np.ndarray) -> np.ndarray:
         """
         Non-canonical link for Gamma distribution with :math:`log(\\boldsymbol{\\mu}) = \\boldsymbol{\\eta}`.
 
@@ -230,13 +234,13 @@ class LOG(Link):
         :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
         :type mu: np.ndarray
         """
-        with warnings.catch_warnings(): # log of < 0
+        with warnings.catch_warnings():  # log of < 0
             warnings.simplefilter("ignore")
             eta = np.log(mu)
 
         return eta
 
-    def fi(self,eta:np.ndarray) -> np.ndarray:
+    def fi(self, eta: np.ndarray) -> np.ndarray:
         """
         For the log link, :math:`\\boldsymbol{\\eta} = log(\\boldsymbol{\\mu})`, so :math:`exp(\\boldsymbol{\\eta})=\\boldsymbol{\\mu}`.
         see Faraway (2016)
@@ -247,13 +251,13 @@ class LOG(Link):
         :param eta: A numpy array containing the model prediction corresponding to each observation.
         :type eta: np.ndarray
         """
-        with warnings.catch_warnings(): # Overflow
+        with warnings.catch_warnings():  # Overflow
             warnings.simplefilter("ignore")
             mu = np.exp(eta)
 
         return mu
 
-    def dy1(self,mu:np.ndarray) -> np.ndarray:
+    def dy1(self, mu: np.ndarray) -> np.ndarray:
         """
         First derivative of :math:`f(\\boldsymbol{\\mu})` with respect to :math:`\\boldsymbol{\\mu}`. Needed for Fisher scoring/PIRLS (Wood, 2017).
 
@@ -263,13 +267,13 @@ class LOG(Link):
         :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
         :type mu: np.ndarray
         """
-        with warnings.catch_warnings(): # Divide by 0
+        with warnings.catch_warnings():  # Divide by 0
             warnings.simplefilter("ignore")
-            d = 1/mu
+            d = 1 / mu
 
         return d
 
-    def dy2(self,mu:np.ndarray) -> np.ndarray:
+    def dy2(self, mu: np.ndarray) -> np.ndarray:
         """
         Second derivative of :math:`f(\\boldsymbol{\\mu})` with respect to :math:`\\boldsymbol{\\mu}`. Needed for GAMMLSS models (Wood, 2017).
 
@@ -281,11 +285,12 @@ class LOG(Link):
         :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
         :type mu: np.ndarray
         """
-        with warnings.catch_warnings(): # Divide by 0
+        with warnings.catch_warnings():  # Divide by 0
             warnings.simplefilter("ignore")
-            d2 = -1*(1/np.power(mu,2))
+            d2 = -1 * (1 / np.power(mu, 2))
 
         return d2
+
 
 class LOGb(Link):
     """
@@ -295,11 +300,11 @@ class LOGb(Link):
     :type b: float
     """
 
-    def __init__(self,b:float):
+    def __init__(self, b: float):
         super().__init__()
         self.b = b
 
-    def f(self,mu:np.ndarray) -> np.ndarray:
+    def f(self, mu: np.ndarray) -> np.ndarray:
         """
         :math:`log(\\boldsymbol{\\mu} + b) = \\boldsymbol{\\eta}`.
 
@@ -310,13 +315,13 @@ class LOGb(Link):
         :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
         :type mu: np.ndarray
         """
-        with warnings.catch_warnings(): # Log of < 0
+        with warnings.catch_warnings():  # Log of < 0
             warnings.simplefilter("ignore")
             eta = np.log(mu + self.b)
 
         return eta
 
-    def fi(self,eta:np.ndarray) -> np.ndarray:
+    def fi(self, eta: np.ndarray) -> np.ndarray:
         """
         For the logb link, :math:`\\boldsymbol{\\eta} = log(\\boldsymbol{\\mu} + b)`, so :math:`exp(\\boldsymbol{\\eta})-b =\\boldsymbol{\\mu}`
 
@@ -326,13 +331,13 @@ class LOGb(Link):
         :param eta: A numpy array containing the model prediction corresponding to each observation.
         :type eta: np.ndarray
         """
-        with warnings.catch_warnings(): # Overflow
+        with warnings.catch_warnings():  # Overflow
             warnings.simplefilter("ignore")
             mu = np.exp(eta) - self.b
 
         return mu
 
-    def dy1(self,mu:np.ndarray) -> np.ndarray:
+    def dy1(self, mu: np.ndarray) -> np.ndarray:
         """
         First derivative of :math:`f(\\boldsymbol{\\mu})` with respect to :math:`\\boldsymbol{\\mu}`. Needed for Fisher scoring/PIRLS (Wood, 2017).
 
@@ -342,13 +347,13 @@ class LOGb(Link):
         :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
         :type mu: np.ndarray
         """
-        with warnings.catch_warnings(): # Divide by 0
+        with warnings.catch_warnings():  # Divide by 0
             warnings.simplefilter("ignore")
-            d =  1/(self.b+mu)
+            d = 1 / (self.b + mu)
 
         return d
 
-    def dy2(self,mu:np.ndarray) -> np.ndarray:
+    def dy2(self, mu: np.ndarray) -> np.ndarray:
         """
         Second derivative of :math:`f(\\boldsymbol{\\mu})` with respect to :math:`\\boldsymbol{\\mu}`. Needed for GAMMLSS models (Wood, 2017).
 
@@ -360,13 +365,14 @@ class LOGb(Link):
         :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
         :type mu: np.ndarray
         """
-        with warnings.catch_warnings(): # Divide by 0
+        with warnings.catch_warnings():  # Divide by 0
             warnings.simplefilter("ignore")
-            d2 =  -1*(1/np.power(mu+self.b,2))
+            d2 = -1 * (1 / np.power(mu + self.b, 2))
 
         return d2
 
-def est_scale(res:np.ndarray,rows_X:int,total_edf:float) -> float:
+
+def est_scale(res: np.ndarray, rows_X: int, total_edf: float) -> float:
     """
     Scale estimate from Wood & Fasiolo (2017).
 
@@ -380,11 +386,12 @@ def est_scale(res:np.ndarray,rows_X:int,total_edf:float) -> float:
     :param total_edf: The expected degrees of freedom for the model.
     :type total_edf: float
     """
-    resDot = res.T.dot(res)[0,0]
+    resDot = res.T.dot(res)[0, 0]
 
     sigma = resDot / (rows_X - total_edf)
 
     return sigma
+
 
 class Family:
     """
@@ -398,13 +405,13 @@ class Family:
     :type scale: float or None, optional
     """
 
-    def __init__(self,link:Link,twopar:bool,scale:float=None) -> None:
+    def __init__(self, link: Link, twopar: bool, scale: float = None) -> None:
         self.link = link
         self.twopar = twopar
-        self.scale = scale # Known scale parameter!
-        self.is_canonical = False # Canonical link for generalized model?
+        self.scale = scale  # Known scale parameter!
+        self.is_canonical = False  # Canonical link for generalized model?
 
-    def init_mu(self,y:np.ndarray) -> np.ndarray | None:
+    def init_mu(self, y: np.ndarray) -> np.ndarray | None:
         """
         Convenience function to compute an initial :math:`\\boldsymbol{\\mu}` estimate passed to the GAMM/PIRLS estimation routine.
 
@@ -415,7 +422,7 @@ class Family:
         """
         return y
 
-    def V(self,mu:np.ndarray) -> np.ndarray:
+    def V(self, mu: np.ndarray) -> np.ndarray:
         """
         The variance function (of the mean; see Wood, 2017, 3.1.2). Different exponential families allow for different relationships
         between the variance in our random response variable and the mean of it. For the normal model this is assumed to be constant.
@@ -431,7 +438,7 @@ class Family:
         """
         pass
 
-    def dVy1(self,mu:np.ndarray) -> np.ndarray:
+    def dVy1(self, mu: np.ndarray) -> np.ndarray:
         """
         The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with respect ot the mean.
 
@@ -446,7 +453,7 @@ class Family:
         """
         pass
 
-    def llk(self,y:np.ndarray,mu:np.ndarray,**kwargs) -> float:
+    def llk(self, y: np.ndarray, mu: np.ndarray, **kwargs) -> float:
         """
         log-probability of :math:`\\mathbf{y}` under this family with mean = :math:`\\boldsymbol{\\mu}`. Essentially sum over all elements in the vector returned by the :func:`lp` method.
 
@@ -471,7 +478,7 @@ class Family:
         """
         pass
 
-    def lp(self,y:np.ndarray,mu:np.ndarray,**kwargs) -> np.ndarray:
+    def lp(self, y: np.ndarray, mu: np.ndarray, **kwargs) -> np.ndarray:
         """
         Log-probability of observing every value in :math:`\\mathbf{y}` under this family with mean = :math:`\\boldsymbol{\\mu}`.
 
@@ -496,7 +503,7 @@ class Family:
         """
         pass
 
-    def deviance(self,y:np.ndarray,mu:np.ndarray) -> float:
+    def deviance(self, y: np.ndarray, mu: np.ndarray) -> float:
         """
         Deviance of the model under this family: 2 * (llk_max - llk_c) * scale (Wood, 2017; Faraway, 2016).
 
@@ -513,7 +520,7 @@ class Family:
         """
         pass
 
-    def D(self,y:np.ndarray,mu:np.ndarray) -> np.ndarray:
+    def D(self, y: np.ndarray, mu: np.ndarray) -> np.ndarray:
         """
         Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
 
@@ -529,6 +536,7 @@ class Family:
         :rtype: np.ndarray
         """
         pass
+
 
 class Binomial(Family):
     """
@@ -549,13 +557,13 @@ class Binomial(Family):
     :type n: int or [int], optional
     """
 
-    def __init__(self, link: Link=Logit(), n: int | list[int] = 1) -> None:
-        super().__init__(link,False,1)
-        self.n:int | list[int] = n # Number of independent samples from Binomial!
-        self.__max_llk:float|None = None # Needed for Deviance calculation.
-        self.is_canonical:bool = isinstance(link,Logit)
+    def __init__(self, link: Link = Logit(), n: int | list[int] = 1) -> None:
+        super().__init__(link, False, 1)
+        self.n: int | list[int] = n  # Number of independent samples from Binomial!
+        self.__max_llk: float | None = None  # Needed for Deviance calculation.
+        self.is_canonical: bool = isinstance(link, Logit)
 
-    def init_mu(self,y:np.ndarray) -> np.ndarray:
+    def init_mu(self, y: np.ndarray) -> np.ndarray:
         """
         Function providing initial :math:`\\boldsymbol{\\mu}` vector for GAMM.
 
@@ -568,11 +576,11 @@ class Binomial(Family):
         :return: a N-dimensional vector of shape (-1,1) containing an initial estimate of the probability of success per observation
         :rtype: np.ndarray
         """
-        prop = (y+0.5)/(2)
-        self.__max_llk = self.llk(y,y)
+        prop = (y + 0.5) / (2)
+        self.__max_llk = self.llk(y, y)
         return prop
 
-    def V(self,mu:np.ndarray) -> np.ndarray:
+    def V(self, mu: np.ndarray) -> np.ndarray:
         """
         The variance function (of the mean; see Wood, 2017, 3.1.2) for the Binomial model. Variance is minimal for :math:`\\mu=1` and :math:`\\mu=0`, maximal for :math:`\\mu=0.5`.
 
@@ -586,9 +594,9 @@ class Binomial(Family):
         :rtype: np.ndarray
         """
         # Faraway (2016):
-        return mu * (1 - mu)/self.n
+        return mu * (1 - mu) / self.n
 
-    def dVy1(self,mu:np.ndarray) -> np.ndarray:
+    def dVy1(self, mu: np.ndarray) -> np.ndarray:
         """
         The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with respect ot the mean.
 
@@ -601,9 +609,9 @@ class Binomial(Family):
         :return: a N-dimensional vector of shape (-1,1) containing the first derivative of the variance function with respect to each mean
         :rtype: np.ndarray
         """
-        return (1 - 2*mu)/self.n
+        return (1 - 2 * mu) / self.n
 
-    def lp(self,y:np.ndarray,mu:np.ndarray) -> np.ndarray:
+    def lp(self, y: np.ndarray, mu: np.ndarray) -> np.ndarray:
         """
         Log-probability of observing every proportion in :math:`\\mathbf{y}` under their respective binomial with mean = :math:`\\boldsymbol{\\mu}`.
 
@@ -619,9 +627,9 @@ class Binomial(Family):
         :rtype: np.ndarray
         """
         # y is observed proportion of success
-        return scp.stats.binom.logpmf(k=y*self.n,p=mu,n=self.n)
+        return scp.stats.binom.logpmf(k=y * self.n, p=mu, n=self.n)
 
-    def llk(self,y:np.ndarray,mu:np.ndarray) -> float:
+    def llk(self, y: np.ndarray, mu: np.ndarray) -> float:
         """
         log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
 
@@ -637,9 +645,9 @@ class Binomial(Family):
         :rtype: float
         """
         # y is observed proportion of success
-        return sum(self.lp(y,mu))[0]
+        return sum(self.lp(y, mu))[0]
 
-    def deviance(self,y:np.ndarray,mu:np.ndarray) -> float:
+    def deviance(self, y: np.ndarray, mu: np.ndarray) -> float:
         """
         Deviance of the model under this family: 2 * (llk_max - llk_c) * scale (Wood, 2017; Faraway, 2016).
 
@@ -654,10 +662,10 @@ class Binomial(Family):
         :return: Deviance of the model
         :rtype: float
         """
-        dev = np.sum(self.D(y,mu))
+        dev = np.sum(self.D(y, mu))
         return dev
 
-    def D(self,y:np.ndarray,mu:np.ndarray) -> np.ndarray:
+    def D(self, y: np.ndarray, mu: np.ndarray) -> np.ndarray:
         """
         Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
 
@@ -673,19 +681,19 @@ class Binomial(Family):
         :rtype: np.ndarray
         """
         # Based on Table 3.1 in Wood (2017)
-        k = y*self.n
-        kmu = mu*self.n
+        k = y * self.n
+        kmu = mu * self.n
 
-        with warnings.catch_warnings(): # Divide by zero
+        with warnings.catch_warnings():  # Divide by zero
             warnings.simplefilter("ignore")
             ratio1 = np.log(k) - np.log(kmu)
-            ratio2 = np.log(self.n-k) - np.log(self.n-kmu)
+            ratio2 = np.log(self.n - k) - np.log(self.n - kmu)
 
         # Limiting behavior of y.. (see Wood, 2017)
         ratio1[np.isinf(ratio1) | np.isnan(ratio1)] = 0
         ratio2[np.isinf(ratio2) | np.isnan(ratio2)] = 0
 
-        return 2 * (k*(ratio1) + ((self.n-k) * ratio2))
+        return 2 * (k * (ratio1) + ((self.n - k) * ratio2))
 
 
 class Gaussian(Family):
@@ -705,11 +713,12 @@ class Gaussian(Family):
     :param scale: Known scale parameter for this family - by default set to None so that the scale parameter is estimated.
     :type scale: float or None, optional
     """
-    def __init__(self, link: Link=Identity(), scale: float = None) -> None:
-        super().__init__(link, True, scale)
-        self.is_canonical:bool = isinstance(link,Identity)
 
-    def V(self,mu:np.ndarray) -> np.ndarray:
+    def __init__(self, link: Link = Identity(), scale: float = None) -> None:
+        super().__init__(link, True, scale)
+        self.is_canonical: bool = isinstance(link, Identity)
+
+    def V(self, mu: np.ndarray) -> np.ndarray:
         """Variance function for the Normal family.
 
         Not really a function since the link between variance and mean of the RVs is assumed constant for this model.
@@ -728,7 +737,7 @@ class Gaussian(Family):
         # Faraway (2016)
         return np.ones_like(mu)
 
-    def dVy1(self,mu:np.ndarray) -> np.ndarray:
+    def dVy1(self, mu: np.ndarray) -> np.ndarray:
         """
         The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with respect ot the mean.
 
@@ -743,7 +752,7 @@ class Gaussian(Family):
         """
         return np.zeros_like(mu)
 
-    def lp(self,y:np.ndarray,mu:np.ndarray,sigma:float=1) -> np.ndarray:
+    def lp(self, y: np.ndarray, mu: np.ndarray, sigma: float = 1) -> np.ndarray:
         """Log-probability of observing every proportion in :math:`\\mathbf{y}` under their respective Normal with mean = :math:`\\boldsymbol{\\mu}`.
 
         References:
@@ -759,9 +768,9 @@ class Gaussian(Family):
         :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
         :rtype: np.ndarray
         """
-        return scp.stats.norm.logpdf(y,loc=mu,scale=math.sqrt(sigma))
+        return scp.stats.norm.logpdf(y, loc=mu, scale=math.sqrt(sigma))
 
-    def llk(self,y:np.ndarray,mu:np.ndarray,sigma:float = 1) -> float:
+    def llk(self, y: np.ndarray, mu: np.ndarray, sigma: float = 1) -> float:
         """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
 
         References:
@@ -777,9 +786,9 @@ class Gaussian(Family):
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
-        return sum(self.lp(y,mu,sigma))[0]
+        return sum(self.lp(y, mu, sigma))[0]
 
-    def deviance(self,y:np.ndarray,mu:np.ndarray) -> float:
+    def deviance(self, y: np.ndarray, mu: np.ndarray) -> float:
         """Deviance of the model under this family: 2 * (llk_max - llk_c) * scale (Wood, 2017; Faraway, 2016).
 
         References:
@@ -796,9 +805,9 @@ class Gaussian(Family):
         # Based on Faraway (2016)
         res = y - mu
         rss = res.T @ res
-        return rss[0,0]
+        return rss[0, 0]
 
-    def D(self,y:np.ndarray,mu:np.ndarray) -> np.ndarray:
+    def D(self, y: np.ndarray, mu: np.ndarray) -> np.ndarray:
         """Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
 
         References:
@@ -813,7 +822,8 @@ class Gaussian(Family):
         :rtype: np.ndarray
         """
         res = y - mu
-        return np.power(res,2)
+        return np.power(res, 2)
+
 
 class Gamma(Family):
     """Gamma Family.
@@ -832,11 +842,11 @@ class Gamma(Family):
     :type scale: float or None, optional
     """
 
-    def __init__(self, link: Link= LOG(), scale: float = None) -> None:
+    def __init__(self, link: Link = LOG(), scale: float = None) -> None:
         super().__init__(link, True, scale)
-        self.is_canonical:bool = False # Inverse link not implemented..
+        self.is_canonical: bool = False  # Inverse link not implemented..
 
-    def V(self,mu:np.ndarray) -> np.ndarray:
+    def V(self, mu: np.ndarray) -> np.ndarray:
         """Variance function for the Gamma family.
 
         The variance of random variable :math:`Y` is proportional to it's mean raised to the second power.
@@ -851,9 +861,9 @@ class Gamma(Family):
         :rtype: np.ndarray
         """
         # Faraway (2016)
-        return np.power(mu,2)
+        return np.power(mu, 2)
 
-    def dVy1(self,mu:np.ndarray) -> np.ndarray:
+    def dVy1(self, mu: np.ndarray) -> np.ndarray:
         """
         The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with respect ot the mean.
 
@@ -866,9 +876,9 @@ class Gamma(Family):
         :return: a N-dimensional vector of shape (-1,1) containing the first derivative of the variance function with respect to each mean
         :rtype: np.ndarray
         """
-        return 2*mu
+        return 2 * mu
 
-    def lp(self,y:np.ndarray,mu:np.ndarray,scale:float=1) -> np.ndarray:
+    def lp(self, y: np.ndarray, mu: np.ndarray, scale: float = 1) -> np.ndarray:
         """Log-probability of observing every proportion in :math:`\\mathbf{y}` under their respective Gamma with mean = :math:`\\boldsymbol{\\mu}`.
 
         References:
@@ -894,11 +904,11 @@ class Gamma(Family):
         # \beta = 1/\\phi/\\mu
         # scipy docs, say to set scale to 1/\beta.
         # see: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.gamma.html
-        alpha = 1/scale
-        beta = alpha/mu
-        return scp.stats.gamma.logpdf(y,a=alpha,scale=(1/beta))
+        alpha = 1 / scale
+        beta = alpha / mu
+        return scp.stats.gamma.logpdf(y, a=alpha, scale=(1 / beta))
 
-    def llk(self,y:np.ndarray,mu:np.ndarray,scale:float = 1) -> float:
+    def llk(self, y: np.ndarray, mu: np.ndarray, scale: float = 1) -> float:
         """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
 
         References:
@@ -914,9 +924,9 @@ class Gamma(Family):
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
-        return sum(self.lp(y,mu,scale))[0]
+        return sum(self.lp(y, mu, scale))[0]
 
-    def D(self,y:np.ndarray,mu:np.ndarray) -> np.ndarray:
+    def D(self, y: np.ndarray, mu: np.ndarray) -> np.ndarray:
         """Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
 
         References:
@@ -931,11 +941,11 @@ class Gamma(Family):
         :rtype: np.ndarray
         """
         # Based on Table 3.1 in Wood (2017)
-        diff = (y - mu)/mu
+        diff = (y - mu) / mu
         ratio = -(np.log(y) - np.log(mu))
         return 2 * (diff + ratio)
 
-    def deviance(self,y:np.ndarray,mu:np.ndarray) -> float:
+    def deviance(self, y: np.ndarray, mu: np.ndarray) -> float:
         """Deviance of the model under this family: 2 * (llk_max - llk_c) * scale (Wood, 2017; Faraway, 2016).
 
         References:
@@ -950,8 +960,9 @@ class Gamma(Family):
         :rtype: float
         """
         # Based on Table 3.1 in Wood (2017)
-        dev = np.sum(self.D(y,mu))
+        dev = np.sum(self.D(y, mu))
         return dev
+
 
 class InvGauss(Family):
     """Inverse Gaussian Family.
@@ -972,11 +983,11 @@ class InvGauss(Family):
     :type scale: float or None, optional
     """
 
-    def __init__(self, link: Link= LOG(), scale: float|None = None) -> None:
+    def __init__(self, link: Link = LOG(), scale: float | None = None) -> None:
         super().__init__(link, True, scale)
-        self.is_canonical:bool = False # Modified inverse link not implemented..
+        self.is_canonical: bool = False  # Modified inverse link not implemented..
 
-    def V(self,mu:np.ndarray) -> np.ndarray:
+    def V(self, mu: np.ndarray) -> np.ndarray:
         """Variance function for the Inverse Gaussian family.
 
         The variance of random variable :math:`Y` is proportional to it's mean raised to the third power.
@@ -991,9 +1002,9 @@ class InvGauss(Family):
         :rtype: np.ndarray
         """
         # Faraway (2016)
-        return np.power(mu,3)
+        return np.power(mu, 3)
 
-    def dVy1(self,mu:np.ndarray) -> np.ndarray:
+    def dVy1(self, mu: np.ndarray) -> np.ndarray:
         """
         The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with respect ot the mean.
 
@@ -1006,9 +1017,9 @@ class InvGauss(Family):
         :return: a N-dimensional vector of shape (-1,1) containing the first derivative of the variance function with respect to each mean
         :rtype: np.ndarray
         """
-        return 3*np.power(mu,2)
+        return 3 * np.power(mu, 2)
 
-    def lp(self,y:np.ndarray,mu:np.ndarray,scale:float=1) -> np.ndarray:
+    def lp(self, y: np.ndarray, mu: np.ndarray, scale: float = 1) -> np.ndarray:
         """Log-probability of observing every value in :math:`\\mathbf{y}` under their respective inverse Gaussian with mean = :math:`\\boldsymbol{\\mu}`.
 
         References:
@@ -1030,11 +1041,11 @@ class InvGauss(Family):
         # so \\lambda = 1/\\phi
         # From the density in https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.invgauss.html,
         # we have that \nu=\\mu
-        lam = 1/scale
+        lam = 1 / scale
         nu = mu
-        return scp.stats.invgauss.logpdf(y,mu=nu/lam,scale=lam)
+        return scp.stats.invgauss.logpdf(y, mu=nu / lam, scale=lam)
 
-    def llk(self,y:np.ndarray,mu:np.ndarray,scale:float = 1) -> float:
+    def llk(self, y: np.ndarray, mu: np.ndarray, scale: float = 1) -> float:
         """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
 
         References:
@@ -1050,9 +1061,9 @@ class InvGauss(Family):
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
-        return sum(self.lp(y,mu,scale))[0]
+        return sum(self.lp(y, mu, scale))[0]
 
-    def D(self,y:np.ndarray,mu:np.ndarray) -> np.ndarray:
+    def D(self, y: np.ndarray, mu: np.ndarray) -> np.ndarray:
         """Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
 
         References:
@@ -1067,11 +1078,11 @@ class InvGauss(Family):
         :rtype: np.ndarray
         """
         # Based on Table 3.1 in Wood (2017)
-        diff = np.power(y - mu,2)
-        prod = np.power(mu,2)*y
-        return diff/prod
+        diff = np.power(y - mu, 2)
+        prod = np.power(mu, 2) * y
+        return diff / prod
 
-    def deviance(self,y:np.ndarray,mu:np.ndarray) -> float:
+    def deviance(self, y: np.ndarray, mu: np.ndarray) -> float:
         """Deviance of the model under this family: 2 * (llk_max - llk_c) * scale (Wood, 2017; Faraway, 2016).
 
         References:
@@ -1086,8 +1097,9 @@ class InvGauss(Family):
         :rtype: float
         """
         # Based on Table 3.1 in Wood (2017)
-        dev = np.sum(self.D(y,mu))
+        dev = np.sum(self.D(y, mu))
         return dev
+
 
 class Poisson(Family):
     """Poisson Family.
@@ -1104,11 +1116,11 @@ class Poisson(Family):
     :type link: Link
     """
 
-    def __init__(self, link: Link= LOG()) -> None:
+    def __init__(self, link: Link = LOG()) -> None:
         super().__init__(link, False, 1)
-        self.is_canonical:bool = isinstance(link,LOG)
+        self.is_canonical: bool = isinstance(link, LOG)
 
-    def V(self,mu:np.ndarray) -> np.ndarray:
+    def V(self, mu: np.ndarray) -> np.ndarray:
         """Variance function for the Poisson family.
 
         The variance of random variable :math:`Y` is proportional to it's mean.
@@ -1125,7 +1137,7 @@ class Poisson(Family):
         # Wood (2017)
         return mu
 
-    def dVy1(self,mu:np.ndarray) -> np.ndarray:
+    def dVy1(self, mu: np.ndarray) -> np.ndarray:
         """
         The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with respect ot the mean.
 
@@ -1140,7 +1152,7 @@ class Poisson(Family):
         """
         return np.ones_like(mu)
 
-    def lp(self,y:np.ndarray,mu:np.ndarray) -> np.ndarray:
+    def lp(self, y: np.ndarray, mu: np.ndarray) -> np.ndarray:
         """Log-probability of observing every value in :math:`\\mathbf{y}` under their respective Poisson with mean = :math:`\\boldsymbol{\\mu}`.
 
         References:
@@ -1158,9 +1170,9 @@ class Poisson(Family):
         # From Wood (2017) and the density in https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.poisson.html,
         # we have that \\lam=\\mu
         lam = mu
-        return scp.stats.poisson.logpmf(y,mu=lam)
+        return scp.stats.poisson.logpmf(y, mu=lam)
 
-    def llk(self,y:np.ndarray,mu:np.ndarray) -> float:
+    def llk(self, y: np.ndarray, mu: np.ndarray) -> float:
         """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
 
         References:
@@ -1176,9 +1188,9 @@ class Poisson(Family):
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
-        return sum(self.lp(y,mu))[0]
+        return sum(self.lp(y, mu))[0]
 
-    def D(self,y:np.ndarray,mu:np.ndarray) -> np.ndarray:
+    def D(self, y: np.ndarray, mu: np.ndarray) -> np.ndarray:
         """Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
 
         References:
@@ -1195,15 +1207,15 @@ class Poisson(Family):
         # Based on Table 3.1 in Wood (2017)
         diff = y - mu
 
-        with warnings.catch_warnings(): # Divide by zero
+        with warnings.catch_warnings():  # Divide by zero
             warnings.simplefilter("ignore")
-            ratio = y*(np.log(y) - np.log(mu))
+            ratio = y * (np.log(y) - np.log(mu))
 
         ratio[np.isinf(ratio) | np.isnan(ratio)] = 0
 
-        return 2*ratio - 2*diff
+        return 2 * ratio - 2 * diff
 
-    def deviance(self,y:np.ndarray,mu:np.ndarray) -> float:
+    def deviance(self, y: np.ndarray, mu: np.ndarray) -> float:
         """Deviance of the model under this family: 2 * (llk_max - llk_c) * scale (Wood, 2017; Faraway, 2016).
 
         References:
@@ -1218,10 +1230,10 @@ class Poisson(Family):
         :rtype: float
         """
         # Based on Table 3.1 in Wood (2017)
-        dev = np.sum(self.D(y,mu))
+        dev = np.sum(self.D(y, mu))
         return dev
 
-    def init_mu(self,y:np.ndarray) -> np.ndarray:
+    def init_mu(self, y: np.ndarray) -> np.ndarray:
         """
         Function providing initial :math:`\\boldsymbol{\\mu}` vector for Poisson GAMM.
 
@@ -1265,17 +1277,25 @@ class GAMLSSFamily:
     :ivar [Callable] d2: A list holding ``n_par`` functions to evaluate the second (pure) partial derivatives of llk with respect to each parameter of the llk. Needs to be initialized when calling :func:`__init__`.
     :ivar [Callable] d2m: A list holding ``n_par*(n_par-1)/2`` functions to evaluate the second mixed partial derivatives of llk with respect to each parameter of the llk in **order**: ``d2m[0]`` = :math:`\\partial l/\\partial \\mu_1 \\partial \\mu_2`, ``d2m[1]`` = :math:`\\partial l/\\partial \\mu_1 \\partial \\mu_3`, ..., ``d2m[n_par-1]`` = :math:`\\partial l/\\partial \\mu_1 \\partial \\mu_{n_{par}}`, ``d2m[n_par]`` = :math:`\\partial l/\\partial \\mu_2 \\partial \\mu_3`, ``d2m[n_par+1]`` = :math:`\\partial l/\\partial \\mu_2 \\partial \\mu_4`, ... . Needs to be initialized when calling :func:`__init__`.
     """
-    def __init__(self,pars:int,links:list[Link]) -> None:
-        self.n_par:int = pars
-        self.links:list[Link] = links
-        self.d_eta:bool = False # Whether partial derivatives of llk are provided with respect to the linear predictor instead of parameters (i.e., the mean), defaults to False (derivatives are provided with respect to parameters)
-        self.d1:list[Callable] = [] # list with functions to evaluate derivative of llk with respect to corresponding mean
-        self.d2:list[Callable] = [] # list with function to evaluate pure second derivative of llk with respect to corresponding mean
-        self.d2m:list[Callable] = [] # list with functions to evaluate mixed second derivative of llk. Order is 12,13,1k,23,24,...
-        self.mean_init_fam: Family|None = None
 
+    def __init__(self, pars: int, links: list[Link]) -> None:
+        self.n_par: int = pars
+        self.links: list[Link] = links
+        self.d_eta: bool = (
+            False  # Whether partial derivatives of llk are provided with respect to the linear predictor instead of parameters (i.e., the mean), defaults to False (derivatives are provided with respect to parameters)
+        )
+        self.d1: list[Callable] = (
+            []
+        )  # list with functions to evaluate derivative of llk with respect to corresponding mean
+        self.d2: list[Callable] = (
+            []
+        )  # list with function to evaluate pure second derivative of llk with respect to corresponding mean
+        self.d2m: list[Callable] = (
+            []
+        )  # list with functions to evaluate mixed second derivative of llk. Order is 12,13,1k,23,24,...
+        self.mean_init_fam: Family | None = None
 
-    def llk(self,y:np.ndarray,*mus:list[np.ndarray]) -> float:
+    def llk(self, y: np.ndarray, *mus: list[np.ndarray]) -> float:
         """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
 
         References:
@@ -1290,7 +1310,7 @@ class GAMLSSFamily:
         """
         pass
 
-    def lp(self,y:np.ndarray,*mus:list[np.ndarray]) -> np.ndarray:
+    def lp(self, y: np.ndarray, *mus: list[np.ndarray]) -> np.ndarray:
         """Log-probability of observing every element in :math:`\\mathbf{y}` under their respective distribution parameterized by ``mus``.
 
         References:
@@ -1306,7 +1326,7 @@ class GAMLSSFamily:
         """
         pass
 
-    def lcp(self,y:np.ndarray,*mus:list[np.ndarray]) -> np.ndarray|None:
+    def lcp(self, y: np.ndarray, *mus: list[np.ndarray]) -> np.ndarray | None:
         """Log of the cumulative probability of observing a value as extreme or less extreme for every element in :math:`\\mathbf{y}` under their respective distribution parameterized by ``mus``.
 
         **Important:** Families for which this function is not implemented can return None.
@@ -1324,7 +1344,9 @@ class GAMLSSFamily:
         """
         return None
 
-    def get_resid(self,y:np.ndarray,*mus:list[np.ndarray],**kwargs) -> np.ndarray|None:
+    def get_resid(
+        self, y: np.ndarray, *mus: list[np.ndarray], **kwargs
+    ) -> np.ndarray | None:
         """Get standardized residuals for a GAMMLSS model (Rigby & Stasinopoulos, 2005).
 
         Any implementation of this function should return a vector that looks like what could be expected from taking ``len(y)`` independent draws from :math:`N(0,1)`.
@@ -1345,7 +1367,7 @@ class GAMLSSFamily:
         """
         pass
 
-    def init_coef(self,models:list[Callable]) -> np.ndarray:
+    def init_coef(self, models: list[Callable]) -> np.ndarray:
         """(Optional) Function to initialize the coefficients of the model.
 
         Can return ``None`` , in which case random initialization will be used.
@@ -1357,7 +1379,7 @@ class GAMLSSFamily:
         """
         return None
 
-    def init_lambda(self,penalties:list[Callable]) -> list[float]:
+    def init_lambda(self, penalties: list[Callable]) -> list[float]:
         """(Optional) Function to initialize the smoothing parameters of the model.
 
         Can return ``None`` , in which case random initialization will be used.
@@ -1388,29 +1410,35 @@ class GAUMLSS(GAMLSSFamily):
     :param links: Link functions for the mean and standard deviation. Standard would be ``links=[Identity(),LOG()]``.
     :type links: [Link]
     """
+
     def __init__(self, links: list[Link]) -> None:
         super().__init__(2, links)
 
         # All derivatives taken from gamlss.dist: https://github.com/gamlss-dev/gamlss.dist
         # see also: Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
         def d11(y, mu, sigma):
-            return (1/np.power(sigma,2))*(y-mu)
+            return (1 / np.power(sigma, 2)) * (y - mu)
+
         def d12(y, mu, sigma):
-            return (np.power(y-mu,2)-np.power(sigma,2))/(np.power(sigma,3))
-        self.d1:list[Callable] = [d11,d12]
+            return (np.power(y - mu, 2) - np.power(sigma, 2)) / (np.power(sigma, 3))
+
+        self.d1: list[Callable] = [d11, d12]
 
         def d21(y, mu, sigma):
-            return -(1/np.power(sigma,2))
+            return -(1 / np.power(sigma, 2))
+
         def d22(y, mu, sigma):
-            return -(2/np.power(sigma,2))
-        self.d2:list[Callable] = [d21,d22]
+            return -(2 / np.power(sigma, 2))
+
+        self.d2: list[Callable] = [d21, d22]
 
         def dm21(y, mu, sigma):
             return np.zeros_like(y)
-        self.d2m:list[Callable] = [dm21]
-        self.mean_init_fam:Family = Gaussian(link=links[0])
 
-    def lp(self,y:np.ndarray,mu:np.ndarray,sigma:np.ndarray) -> np.ndarray:
+        self.d2m: list[Callable] = [dm21]
+        self.mean_init_fam: Family = Gaussian(link=links[0])
+
+    def lp(self, y: np.ndarray, mu: np.ndarray, sigma: np.ndarray) -> np.ndarray:
         """Log-probability of observing every value in y under their respective Normal with observation-specific mean and standard deviation.
 
         References:
@@ -1426,9 +1454,9 @@ class GAUMLSS(GAMLSSFamily):
         :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
         :rtype: np.ndarray
         """
-        return scp.stats.norm.logpdf(y,loc=mu,scale=sigma)
+        return scp.stats.norm.logpdf(y, loc=mu, scale=sigma)
 
-    def lcp(self,y:np.ndarray,mu:np.ndarray,sigma:np.ndarray) -> np.ndarray:
+    def lcp(self, y: np.ndarray, mu: np.ndarray, sigma: np.ndarray) -> np.ndarray:
         """Log of the cumulative probability of observing every value in y under their respective Normal with observation-specific mean and standard deviation.
 
         References:
@@ -1444,9 +1472,9 @@ class GAUMLSS(GAMLSSFamily):
         :return: a N-dimensional vector containing the log of the cumulative probability of observing each data-point under the current model.
         :rtype: np.ndarray
         """
-        return scp.stats.norm.logcdf(y,loc=mu,scale=sigma)
+        return scp.stats.norm.logcdf(y, loc=mu, scale=sigma)
 
-    def llk(self,y:np.ndarray,mu:np.ndarray,sigma:np.ndarray) -> float:
+    def llk(self, y: np.ndarray, mu: np.ndarray, sigma: np.ndarray) -> float:
         """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
 
         References:
@@ -1462,9 +1490,9 @@ class GAUMLSS(GAMLSSFamily):
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
-        return sum(self.lp(y,mu,sigma))[0]
+        return sum(self.lp(y, mu, sigma))[0]
 
-    def get_resid(self,y:np.ndarray,mu:np.ndarray,sigma:np.ndarray) -> float:
+    def get_resid(self, y: np.ndarray, mu: np.ndarray, sigma: np.ndarray) -> float:
         """Get standardized residuals for a Normal GAMMLSS model (Rigby & Stasinopoulos, 2005).
 
         Essentially, each residual should reflect a realization of a normal with mean zero and observation-specific standard deviation.
@@ -1484,7 +1512,7 @@ class GAUMLSS(GAMLSSFamily):
         res /= sigma
         return res
 
-    def init_coef(self, models:list[Callable]) -> np.ndarray:
+    def init_coef(self, models: list[Callable]) -> np.ndarray:
         """Function to initialize the coefficients of the model.
 
         Fits a GAMM for the mean and initializes all coef. for the standard deviation to 1.
@@ -1499,10 +1527,16 @@ class GAUMLSS(GAMLSSFamily):
         mean_model.family = Gaussian(self.links[0])
         mean_model.fit(progress_bar=False)
 
-        m_coef,_ = mean_model.get_pars()
-        coef = np.concatenate((m_coef.reshape(-1,1),np.ones((models[1].formulas[0].n_coef)).reshape(-1,1)))
+        m_coef, _ = mean_model.get_pars()
+        coef = np.concatenate(
+            (
+                m_coef.reshape(-1, 1),
+                np.ones((models[1].formulas[0].n_coef)).reshape(-1, 1),
+            )
+        )
 
         return coef
+
 
 class MULNOMLSS(GAMLSSFamily):
     """Family for a Multinomial GAMMLSS model (Rigby & Stasinopoulos, 2005).
@@ -1525,40 +1559,49 @@ class MULNOMLSS(GAMLSSFamily):
     :param pars: K-1, i.e., 1- Number of classes or the number of linear predictors.
     :type pars: int
     """
+
     def __init__(self, pars: int) -> None:
         super().__init__(pars, [LOG() for _ in range(pars)])
 
         # All derivatives taken from gamlss.r in mgcv: https://github.com/cran/mgcv/blob/master/R/gamlss.r#L1224 and have been adapted to work in Python code
         # see also: Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
-        self.d_eta:bool = True # Derivatives below are implemented with respect to linear predictor.
+        self.d_eta: bool = (
+            True  # Derivatives below are implemented with respect to linear predictor.
+        )
 
-        self.d1:list[Callable] = []
+        self.d1: list[Callable] = []
         for ii in range(self.n_par):
-            def d1(y,*mus,i=ii):
-                dy1 = -(mus[i]/(np.sum(mus,axis=0)+1))
-                dy1[y == (i+1)] += 1
+
+            def d1(y, *mus, i=ii):
+                dy1 = -(mus[i] / (np.sum(mus, axis=0) + 1))
+                dy1[y == (i + 1)] += 1
                 return dy1
+
             self.d1.append(d1)
 
-        self.d2:list[Callable] = []
+        self.d2: list[Callable] = []
         for ii in range(self.n_par):
-            def d2(y,*mus,i=ii):
-                norm = np.sum(mus,axis=0)+1
-                dy1 = -(mus[i]/norm)
-                dy2 = dy1 + np.power(mus[i],2)/np.power(norm,2)
+
+            def d2(y, *mus, i=ii):
+                norm = np.sum(mus, axis=0) + 1
+                dy1 = -(mus[i] / norm)
+                dy2 = dy1 + np.power(mus[i], 2) / np.power(norm, 2)
                 return dy2
+
             self.d2.append(d2)
 
-        self.d2m:list[Callable] = []
+        self.d2m: list[Callable] = []
         for ii in range(self.n_par):
-            for jj in range(ii+1,self.n_par):
-                def d2m(y,*mus,i=ii,j=jj):
-                    norm = np.sum(mus,axis=0)+1
-                    dy2m = (mus[i]*mus[j])/np.power(norm,2)
+            for jj in range(ii + 1, self.n_par):
+
+                def d2m(y, *mus, i=ii, j=jj):
+                    norm = np.sum(mus, axis=0) + 1
+                    dy2m = (mus[i] * mus[j]) / np.power(norm, 2)
                     return dy2m
+
                 self.d2m.append(d2m)
 
-    def lp(self, y:np.ndarray, *mus:list[np.ndarray]) -> np.ndarray:
+    def lp(self, y: np.ndarray, *mus: list[np.ndarray]) -> np.ndarray:
         """Log-probability of observing class k under current model.
 
         Our DV consists of K classes but we essentially enforce a sum-to zero constraint on the DV so that we end up modeling only
@@ -1589,14 +1632,14 @@ class MULNOMLSS(GAMLSSFamily):
         """
         # Note, log(1) = 0, so we can simply initialize to -log(1 + \\sum_j^{K-1} mu_j)
         # and then add for the K-1 probs we actually modeled.
-        lp = -np.log(np.sum(mus,axis=0)+1)
+        lp = -np.log(np.sum(mus, axis=0) + 1)
 
         for pi in range(self.n_par):
-            lp[y == (pi+1)] += np.log(mus[pi])[y == (pi+1)]
+            lp[y == (pi + 1)] += np.log(mus[pi])[y == (pi + 1)]
 
         return lp
 
-    def llk(self, y:np.ndarray, *mus:list[np.ndarray]):
+    def llk(self, y: np.ndarray, *mus: list[np.ndarray]):
         """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
 
         References:
@@ -1610,9 +1653,9 @@ class MULNOMLSS(GAMLSSFamily):
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
-        return sum(self.lp(y,*mus))[0]
+        return sum(self.lp(y, *mus))[0]
 
-    def get_resid(self,y:np.ndarray,*mus:list[np.ndarray]) -> None:
+    def get_resid(self, y: np.ndarray, *mus: list[np.ndarray]) -> None:
         """Placeholder function for residuals of a Multinomial model - yet to be implemented.
 
         :param y: A numpy array containing each observed class, every element must be larger than or equal to 0 and smaller than `self.n_par + 1`.
@@ -1621,8 +1664,11 @@ class MULNOMLSS(GAMLSSFamily):
         :type mus: [np.ndarray]
         :return: Currently None - since no residuals are implemented
         """
-        warnings.warn("Getting residuals for multinomial model are currently not supported.")
+        warnings.warn(
+            "Getting residuals for multinomial model are currently not supported."
+        )
         return None
+
 
 class GAMMALS(GAMLSSFamily):
     """Family for a GAMMA GAMMLSS model (Rigby & Stasinopoulos, 2005).
@@ -1642,28 +1688,42 @@ class GAMMALS(GAMLSSFamily):
     :type links: [Link]
     """
 
-    def __init__(self,links: list[Link]) -> None:
+    def __init__(self, links: list[Link]) -> None:
         super().__init__(2, links)
         # All derivatives based on gamlss.dist: https://github.com/gamlss-dev/gamlss.dist, but adjusted so that \\phi (the scale) is \\sigma^2.
         # see also: Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
 
         def d11(y, mu, scale):
-            return (y-mu)/(scale*np.power(mu,2))
+            return (y - mu) / (scale * np.power(mu, 2))
+
         def d12(y, mu, scale):
-            return (1/np.power(scale,2))*((y/mu)-np.log(y)+np.log(mu)+np.log(scale)-1+scp.special.digamma(1/(scale)))
-        self.d1:list[Callable] = [d11,d12]
+            return (1 / np.power(scale, 2)) * (
+                (y / mu)
+                - np.log(y)
+                + np.log(mu)
+                + np.log(scale)
+                - 1
+                + scp.special.digamma(1 / (scale))
+            )
+
+        self.d1: list[Callable] = [d11, d12]
 
         def d21(y, mu, scale):
-            return-1/(scale*np.power(mu,2))
+            return -1 / (scale * np.power(mu, 2))
+
         def d22(y, mu, scale):
-            return (1/np.power(scale,3))-(1/np.power(scale,4))*scp.special.polygamma(1,1/scale)
-        self.d2:list[Callable] = [d21,d22]
+            return (1 / np.power(scale, 3)) - (
+                1 / np.power(scale, 4)
+            ) * scp.special.polygamma(1, 1 / scale)
 
-        def dm21(y,mu,scale):
+        self.d2: list[Callable] = [d21, d22]
+
+        def dm21(y, mu, scale):
             return np.zeros_like(y)
-        self.d2m:list[Callable] = [dm21]
 
-    def lp(self,y:np.ndarray,mu:np.ndarray,scale:np.ndarray) -> np.ndarray:
+        self.d2m: list[Callable] = [dm21]
+
+    def lp(self, y: np.ndarray, mu: np.ndarray, scale: np.ndarray) -> np.ndarray:
         """Log-probability of observing every proportion in :math:`\\mathbf{y}` under their respective Gamma with mean = :math:`\\boldsymbol{\\mu}` and scale = :math:`\\boldsymbol{\\phi}`.
 
         References:
@@ -1689,11 +1749,11 @@ class GAMMALS(GAMLSSFamily):
         # \beta = 1/\\phi/\\mu
         # scipy docs, say to set scale to 1/\beta.
         # see: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.gamma.html
-        alpha = 1/scale
-        beta = alpha/mu
-        return scp.stats.gamma.logpdf(y,a=alpha,scale=(1/beta))
+        alpha = 1 / scale
+        beta = alpha / mu
+        return scp.stats.gamma.logpdf(y, a=alpha, scale=(1 / beta))
 
-    def lcp(self,y:np.ndarray,mu:np.ndarray,scale:np.ndarray) -> np.ndarray:
+    def lcp(self, y: np.ndarray, mu: np.ndarray, scale: np.ndarray) -> np.ndarray:
         """Log of the cumulative probability of observing every value in y under their respective Gamma with mean = :math:`\\boldsymbol{\\mu}` and scale = :math:`\\boldsymbol{\\phi}`.
 
         References:
@@ -1709,11 +1769,11 @@ class GAMMALS(GAMLSSFamily):
         :return: a N-dimensional vector containing the log of the cumulative probability of observing each data-point under the current model.
         :rtype: np.ndarray
         """
-        alpha = 1/scale
-        beta = alpha/mu
-        return scp.stats.gamma.logcdf(y,a=alpha,scale=(1/beta))
+        alpha = 1 / scale
+        beta = alpha / mu
+        return scp.stats.gamma.logcdf(y, a=alpha, scale=(1 / beta))
 
-    def llk(self,y:np.ndarray,mu:np.ndarray,scale:np.ndarray) -> float:
+    def llk(self, y: np.ndarray, mu: np.ndarray, scale: np.ndarray) -> float:
         """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
 
         References:
@@ -1729,9 +1789,9 @@ class GAMMALS(GAMLSSFamily):
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
-        return sum(self.lp(y,mu,scale))[0]
+        return sum(self.lp(y, mu, scale))[0]
 
-    def get_resid(self,y:np.ndarray,mu:np.ndarray,scale:np.ndarray) -> np.ndarray:
+    def get_resid(self, y: np.ndarray, mu: np.ndarray, scale: np.ndarray) -> np.ndarray:
         """Get standardized residuals for a Gamma GAMMLSS model (Rigby & Stasinopoulos, 2005).
 
         Essentially, to get a standaridzed residual vector we first have to account for the mean-variance relationship of our RVs
@@ -1753,10 +1813,10 @@ class GAMMALS(GAMLSSFamily):
         :return: A list of standardized residuals that should be ~ N(0,1) if the model is correct.
         :rtype: np.ndarray
         """
-        res = np.sign(y - mu) * np.sqrt(Gamma().D(y,mu)/scale)
+        res = np.sign(y - mu) * np.sqrt(Gamma().D(y, mu) / scale)
         return res
 
-    def init_coef(self, models:list[Callable]) -> np.ndarray:
+    def init_coef(self, models: list[Callable]) -> np.ndarray:
         """Function to initialize the coefficients of the model.
 
         Fits a GAMM for the mean and initializes all coef. for the scale parameter to 1.
@@ -1769,10 +1829,15 @@ class GAMMALS(GAMLSSFamily):
 
         mean_model = models[0]
         mean_model.family = Gamma(self.links[0])
-        mean_model.fit(progress_bar=False,max_inner=1)
+        mean_model.fit(progress_bar=False, max_inner=1)
 
-        m_coef,_ = mean_model.get_pars()
-        coef = np.concatenate((m_coef.reshape(-1,1),np.ones((models[1].formulas[0].n_coef)).reshape(-1,1)))
+        m_coef, _ = mean_model.get_pars()
+        coef = np.concatenate(
+            (
+                m_coef.reshape(-1, 1),
+                np.ones((models[1].formulas[0].n_coef)).reshape(-1, 1),
+            )
+        )
         return coef
 
 
@@ -1796,13 +1861,20 @@ class GSMMFamily:
     :ivar int, optional extra_coef: Number of extra coefficients required by specific family or ``None``. By default set to ``None`` and changed to ``int`` by specific families requiring this.
 
     """
-    def __init__(self,pars:int,links:list[Link],*llkargs) -> None:
-        self.n_par:int = pars
-        self.links:list[Link] = links
-        self.llkargs = llkargs # Any arguments that need to be passed to evaluate the likelihood/gradiant/hessian
-        self.extra_coef:int|None = None
 
-    def llk(self,coef:np.ndarray,coef_split_idx:list[int],ys:list[np.ndarray | None],Xs:list[scp.sparse.csc_array | None]) -> float:
+    def __init__(self, pars: int, links: list[Link], *llkargs) -> None:
+        self.n_par: int = pars
+        self.links: list[Link] = links
+        self.llkargs = llkargs  # Any arguments that need to be passed to evaluate the likelihood/gradiant/hessian
+        self.extra_coef: int | None = None
+
+    def llk(
+        self,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray | None],
+        Xs: list[scp.sparse.csc_array | None],
+    ) -> float:
         """log-probability of data under given model.
 
         References:
@@ -1823,7 +1895,13 @@ class GSMMFamily:
         """
         pass
 
-    def gradient(self,coef:np.ndarray,coef_split_idx:list[int],ys:list[np.ndarray | None],Xs:list[scp.sparse.csc_array | None]) -> np.ndarray:
+    def gradient(
+        self,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray | None],
+        Xs: list[scp.sparse.csc_array | None],
+    ) -> np.ndarray:
         """Function to evaluate the gradient of the llk at current coefficient estimate ``coef``.
 
         By default relies on numerical differentiation as implemented in scipy to approximate the Gradient from the implemented log-likelihood function.
@@ -1845,12 +1923,18 @@ class GSMMFamily:
         :return: The Gradient of the log-likelihood evaluated at ``coef`` as numpy array of shape (-1,1).
         :rtype: np.ndarray
         """
-        llk_warp = lambda x: self.llk(x.reshape(-1,1),coef_split_idx,ys,Xs)
+        llk_warp = lambda x: self.llk(x.reshape(-1, 1), coef_split_idx, ys, Xs)
 
-        grad = scp.optimize.approx_fprime(coef.flatten(),llk_warp)
-        return grad.reshape(-1,1)
+        grad = scp.optimize.approx_fprime(coef.flatten(), llk_warp)
+        return grad.reshape(-1, 1)
 
-    def hessian(self,coef:np.ndarray,coef_split_idx:list[int],ys:list[np.ndarray | None],Xs:list[scp.sparse.csc_array | None]) -> scp.sparse.csc_array | None:
+    def hessian(
+        self,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray | None],
+        Xs: list[scp.sparse.csc_array | None],
+    ) -> scp.sparse.csc_array | None:
         """Function to evaluate the hessian of the llk at current coefficient estimate ``coef``.
 
         Only has to be implemented if full Newton is to be used to estimate coefficients. If the L-qEFS update by Krause et al. (in preparation) is
@@ -1874,7 +1958,14 @@ class GSMMFamily:
         """
         return None
 
-    def get_resid(self,coef:np.ndarray,coef_split_idx:list[int],ys:list[np.ndarray | None],Xs:list[scp.sparse.csc_array | None],**kwargs) -> np.ndarray | None:
+    def get_resid(
+        self,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray | None],
+        Xs: list[scp.sparse.csc_array | None],
+        **kwargs,
+    ) -> np.ndarray | None:
         """Get standardized residuals for a GSMM model.
 
         Any implementation of this function should return a vector that looks like what could be expected from taking independent draws from :math:`N(0,1)`.
@@ -1899,7 +1990,7 @@ class GSMMFamily:
         """
         pass
 
-    def init_coef(self,models:list[Callable]) -> np.ndarray:
+    def init_coef(self, models: list[Callable]) -> np.ndarray:
         """(Optional) Function to initialize the coefficients of the model.
 
         Can return ``None`` , in which case random initialization will be used.
@@ -1911,7 +2002,7 @@ class GSMMFamily:
         """
         return None
 
-    def init_lambda(self,penalties:list[Callable]) -> list[float]:
+    def init_lambda(self, penalties: list[Callable]) -> list[float]:
         """(Optional) Function to initialize the smoothing parameters of the model.
 
         Can return ``None`` , in which case random initialization will be used.
@@ -1922,6 +2013,7 @@ class GSMMFamily:
         :rtype: np.ndarray
         """
         return None
+
 
 class PropHaz(GSMMFamily):
     """Family for proportional Hazard model - a type of General Smooth model as discussed by Wood, Pya, & Säfken (2016).
@@ -1973,13 +2065,19 @@ class PropHaz(GSMMFamily):
 
     """
 
-    def __init__(self, ut:np.ndarray, r:np.ndarray):
+    def __init__(self, ut: np.ndarray, r: np.ndarray):
         super().__init__(1, [Identity()], ut, r)
         self.__hs = None
         self.__qs = None
         self.__avs = None
 
-    def llk(self,coef:np.ndarray,coef_split_idx:list[int],ys:list[np.ndarray],Xs:list[scp.sparse.csc_array]) -> float:
+    def llk(
+        self,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray],
+        Xs: list[scp.sparse.csc_array],
+    ) -> float:
         """Log-likelihood function as defined by Wood, Pya, & Säfken (2016).
 
         References:
@@ -2003,34 +2101,39 @@ class PropHaz(GSMMFamily):
         r = self.llkargs[1]
         nt = len(ut)
         X = Xs[0]
-        eta = X@coef
+        eta = X @ coef
 
-        with warnings.catch_warnings(): # Overflow
+        with warnings.catch_warnings():  # Overflow
             warnings.simplefilter("ignore")
             gamma = np.exp(eta)
 
         # Now compute first sum
-        llk = np.sum(delta*eta)
+        llk = np.sum(delta * eta)
 
         # and second sum
         gamma_p = 0
         for j in range(nt):
             ri = r == j
             dj = np.sum(delta[ri])
-            with warnings.catch_warnings(): # Overflow
+            with warnings.catch_warnings():  # Overflow
                 warnings.simplefilter("ignore")
                 gamma_p += np.sum(gamma[ri])
 
-            with warnings.catch_warnings(): # Divide by zero
+            with warnings.catch_warnings():  # Divide by zero
                 warnings.simplefilter("ignore")
                 log_gamma_p = np.log(gamma_p)
 
-
-            llk -= dj*log_gamma_p
+            llk -= dj * log_gamma_p
 
         return llk
 
-    def gradient(self, coef:np.ndarray,coef_split_idx:list[int],ys:list[np.ndarray],Xs:list[scp.sparse.csc_array]) -> np.ndarray:
+    def gradient(
+        self,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray],
+        Xs: list[scp.sparse.csc_array],
+    ) -> np.ndarray:
         """Gradient as defined by Wood, Pya, & Säfken (2016).
 
         References:
@@ -2054,15 +2157,15 @@ class PropHaz(GSMMFamily):
         r = self.llkargs[1]
         nt = len(ut)
         X = Xs[0]
-        eta = X@coef
+        eta = X @ coef
 
-        with warnings.catch_warnings(): # Overflow
+        with warnings.catch_warnings():  # Overflow
             warnings.simplefilter("ignore")
             gamma = np.exp(eta)
-        gamma = gamma.reshape(-1,1)
+        gamma = gamma.reshape(-1, 1)
 
         # Now compute first sum
-        g = delta.T@X
+        g = delta.T @ X
 
         # and second sum
         b_p = np.zeros_like(g)
@@ -2071,25 +2174,30 @@ class PropHaz(GSMMFamily):
         for j in range(nt):
             ri = r == j
             dj = np.sum(delta[ri])
-            gamma_i = (gamma[ri,0]).reshape(-1,1)
-            with warnings.catch_warnings(): # Overflow
+            gamma_i = (gamma[ri, 0]).reshape(-1, 1)
+            with warnings.catch_warnings():  # Overflow
                 warnings.simplefilter("ignore")
                 gamma_p += np.sum(gamma_i)
 
-            X_i = X[ri,:]
-            bi = gamma_i.T@X_i
+            X_i = X[ri, :]
+            bi = gamma_i.T @ X_i
             b_p += bi
 
-            with warnings.catch_warnings(): # Divide by zero
+            with warnings.catch_warnings():  # Divide by zero
                 warnings.simplefilter("ignore")
-                bpg = b_p/gamma_p
+                bpg = b_p / gamma_p
 
-            g -= dj*bpg
+            g -= dj * bpg
 
-        return g.reshape(-1,1)
+        return g.reshape(-1, 1)
 
-
-    def hessian(self, coef:np.ndarray,coef_split_idx:list[int],ys:list[np.ndarray],Xs:list[scp.sparse.csc_array]) -> scp.sparse.csc_array:
+    def hessian(
+        self,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray],
+        Xs: list[scp.sparse.csc_array],
+    ) -> scp.sparse.csc_array:
         """Hessian as defined by Wood, Pya, & Säfken (2016).
 
         References:
@@ -2113,42 +2221,49 @@ class PropHaz(GSMMFamily):
         r = self.llkargs[1]
         nt = len(ut)
         X = Xs[0]
-        eta = X@coef
+        eta = X @ coef
 
-        with warnings.catch_warnings(): # Overflow
+        with warnings.catch_warnings():  # Overflow
             warnings.simplefilter("ignore")
             gamma = np.exp(eta)
-        gamma = gamma.reshape(-1,1)
+        gamma = gamma.reshape(-1, 1)
 
         # Only sum over nt
-        b_p = np.zeros((1,X.shape[1]))
+        b_p = np.zeros((1, X.shape[1]))
 
         gamma_p = 0
-        A_p = scp.sparse.csc_array((X.shape[1],X.shape[1]))
-        H = scp.sparse.csc_array((X.shape[1],X.shape[1]))
+        A_p = scp.sparse.csc_array((X.shape[1], X.shape[1]))
+        H = scp.sparse.csc_array((X.shape[1], X.shape[1]))
         for j in range(nt):
             ri = r == j
             dj = np.sum(delta[ri])
-            gamma_i = (gamma[ri,0]).reshape(-1,1)
+            gamma_i = (gamma[ri, 0]).reshape(-1, 1)
             gamma_p += np.sum(gamma_i)
 
-            X_i = X[ri,:]
-            bi = gamma_i.T@X_i
+            X_i = X[ri, :]
+            bi = gamma_i.T @ X_i
             b_p += bi
 
-            A_i = (gamma_i * X_i).T@X_i
+            A_i = (gamma_i * X_i).T @ X_i
             A_p += A_i
 
-
-            with warnings.catch_warnings(): # Divide by zero or overflow
+            with warnings.catch_warnings():  # Divide by zero or overflow
                 warnings.simplefilter("ignore")
-                Hj = dj*b_p.T@b_p/np.power(gamma_p,2) - dj*A_p/gamma_p
+                Hj = dj * b_p.T @ b_p / np.power(gamma_p, 2) - dj * A_p / gamma_p
 
             H += Hj
 
         return scp.sparse.csc_array(H)
 
-    def get_resid(self, coef, coef_split_idx, ys, Xs, resid_type:str="Martingale", reorder:np.ndarray|None=None) -> np.ndarray:
+    def get_resid(
+        self,
+        coef,
+        coef_split_idx,
+        ys,
+        Xs,
+        resid_type: str = "Martingale",
+        reorder: np.ndarray | None = None,
+    ) -> np.ndarray:
         """Get Martingale or Deviance residuals for a proportional Hazard model.
 
         See the :func:`PropHaz.get_survival` function for examples.
@@ -2173,7 +2288,7 @@ class PropHaz(GSMMFamily):
         :rtype: np.ndarray
         """
 
-        if resid_type not in ["Martingale","Deviance"]:
+        if resid_type not in ["Martingale", "Deviance"]:
             raise ValueError("`resid_type` must be one of 'Martingale' or 'Deviance'.")
 
         # Extract all quantities needed to evaluate residuals
@@ -2185,26 +2300,31 @@ class PropHaz(GSMMFamily):
         # Following based on derivation by Wood, Pya, and Säfken (2016)
         res = np.zeros(X.shape[0])
         for idx, tidx in enumerate(r):
-            Xi = X[idx,:].toarray()
+            Xi = X[idx, :].toarray()
             ti = ut[tidx]
             di = delta[idx]
-            Si,_ = self.get_survival(coef,Xs,delta,ti,Xi,None,compute_var=False)
+            Si, _ = self.get_survival(coef, Xs, delta, ti, Xi, None, compute_var=False)
             mi = di + np.log(Si[0])
 
             if resid_type == "Martingale":
                 res[idx] = mi
             else:
                 # Deviance requires a bit more work
-                Di = np.sign(mi) * np.power(-2*(mi + di*np.log(-min(np.log(Si[0]),-np.finfo(float).eps))),0.5)
+                Di = np.sign(mi) * np.power(
+                    -2 * (mi + di * np.log(-min(np.log(Si[0]), -np.finfo(float).eps))),
+                    0.5,
+                )
                 res[idx] = Di
 
         # Return to order of original dataframe
         if reorder is not None:
             res = res[reorder]
 
-        return res.reshape(-1,1)
+        return res.reshape(-1, 1)
 
-    def __prepare_predictions(self,coef:np.ndarray,delta:np.ndarray,Xs:list[scp.sparse.csc_array]) -> None:
+    def __prepare_predictions(
+        self, coef: np.ndarray, delta: np.ndarray, Xs: list[scp.sparse.csc_array]
+    ) -> None:
         """Computes all the quantities defined by Wood, Pya, & Säfken (2016) that are necessary for predictions.
 
         This includes the cumulative base-line hazard, as well as the :math`\\mathbf{a}` vectors from WPS (2016). These are assigned to the instance of this family.
@@ -2224,14 +2344,14 @@ class PropHaz(GSMMFamily):
         r = self.llkargs[1]
         nt = len(ut)
         X = Xs[0]
-        eta = X@coef
+        eta = X @ coef
 
-        with warnings.catch_warnings(): # Overflow
+        with warnings.catch_warnings():  # Overflow
             warnings.simplefilter("ignore")
             gamma = np.exp(eta)
 
-        gamma[np.isnan(gamma) | np.isinf(gamma)] = np.power(np.finfo(float).max,0.9)
-        gamma = gamma.reshape(-1,1)
+        gamma[np.isnan(gamma) | np.isinf(gamma)] = np.power(np.finfo(float).max, 0.9)
+        gamma = gamma.reshape(-1, 1)
 
         # We need gamma_ps, b_ps, and djs
         gamma_ps = []
@@ -2239,7 +2359,7 @@ class PropHaz(GSMMFamily):
         b_ps = []
 
         gamma_p = 0
-        b_p = np.zeros((1,X.shape[1]))
+        b_p = np.zeros((1, X.shape[1]))
         for j in range(nt):
             ri = r == j
 
@@ -2248,18 +2368,18 @@ class PropHaz(GSMMFamily):
             djs.append(dj)
 
             # gamma_p
-            gamma_i = (gamma[ri,0]).reshape(-1,1)
-            with warnings.catch_warnings(): # Overflow
+            gamma_i = (gamma[ri, 0]).reshape(-1, 1)
+            with warnings.catch_warnings():  # Overflow
                 warnings.simplefilter("ignore")
                 gamma_p += np.sum(gamma_i)
 
             if np.isnan(gamma_p) | np.isinf(gamma_p):
-                gamma_p = np.power(np.finfo(float).max,0.9)
+                gamma_p = np.power(np.finfo(float).max, 0.9)
             gamma_ps.append(gamma_p)
 
             # b_p vector
-            X_i = X[ri,:]
-            bi = gamma_i.T@X_i
+            X_i = X[ri, :]
+            bi = gamma_i.T @ X_i
             b_p += bi
             b_ps.append(copy.deepcopy(b_p))
 
@@ -2268,23 +2388,24 @@ class PropHaz(GSMMFamily):
         qs = np.zeros(nt)
         avs = [np.zeros_like(b_p) for _ in range(nt)]
 
-        hs[-1] = djs[-1]/gamma_ps[-1]
-        qs[-1] = djs[-1]/np.power(gamma_ps[-1],2)
-        avs[-1] = b_ps[-1] * djs[-1]/np.power(gamma_ps[-1],2)
-        #print(hs[-1],qs[-1])
+        hs[-1] = djs[-1] / gamma_ps[-1]
+        qs[-1] = djs[-1] / np.power(gamma_ps[-1], 2)
+        avs[-1] = b_ps[-1] * djs[-1] / np.power(gamma_ps[-1], 2)
+        # print(hs[-1],qs[-1])
 
-        for j in range(nt-2,-1,-1):
-            #print(j,hs[j+1])
-            hs[j] = hs[j+1] + djs[j]/gamma_ps[j]
-            qs[j] = qs[j+1] + djs[j]/np.power(gamma_ps[j],2)
-            avs[j] = avs[j+1] + b_ps[j] * djs[j]/np.power(gamma_ps[j],2)
+        for j in range(nt - 2, -1, -1):
+            # print(j,hs[j+1])
+            hs[j] = hs[j + 1] + djs[j] / gamma_ps[j]
+            qs[j] = qs[j + 1] + djs[j] / np.power(gamma_ps[j], 2)
+            avs[j] = avs[j + 1] + b_ps[j] * djs[j] / np.power(gamma_ps[j], 2)
 
         self.__hs = hs
         self.__qs = qs
         self.__avs = avs
 
-
-    def get_baseline_hazard(self,coef:np.ndarray,delta:np.ndarray,Xs:list[scp.sparse.csc_array]) -> np.ndarray:
+    def get_baseline_hazard(
+        self, coef: np.ndarray, delta: np.ndarray, Xs: list[scp.sparse.csc_array]
+    ) -> np.ndarray:
         """Get the cumulative baseline hazard function as defined by Wood, Pya, & Säfken (2016).
 
         The function is evaluated for all ``k`` unique event times that were available in the data.
@@ -2341,11 +2462,20 @@ class PropHaz(GSMMFamily):
         """
 
         if self.__hs is None:
-            self.__prepare_predictions(coef,delta,Xs)
+            self.__prepare_predictions(coef, delta, Xs)
 
         return self.__hs
 
-    def get_survival(self,coef:np.ndarray,Xs:list[scp.sparse.csc_array],delta:np.ndarray,t:int,x:np.ndarray|scp.sparse.csc_array,V:scp.sparse.csc_array,compute_var:bool=True) -> tuple[np.ndarray, np.ndarray | None]:
+    def get_survival(
+        self,
+        coef: np.ndarray,
+        Xs: list[scp.sparse.csc_array],
+        delta: np.ndarray,
+        t: int,
+        x: np.ndarray | scp.sparse.csc_array,
+        V: scp.sparse.csc_array,
+        compute_var: bool = True,
+    ) -> tuple[np.ndarray, np.ndarray | None]:
         """Compute survival function + variance at time-point ``t``, given ``k`` optional covariate vector(s) x as defined by Wood, Pya, & Säfken (2016).
 
         Examples::
@@ -2453,12 +2583,12 @@ class PropHaz(GSMMFamily):
         """
 
         if self.__hs is None:
-            self.__prepare_predictions(coef,delta,Xs)
+            self.__prepare_predictions(coef, delta, Xs)
 
         # Extract and define all variables defined by WPS (2016)
         ut = self.llkargs[0]
-        eta = x@coef
-        #print(eta)
+        eta = x @ coef
+        # print(eta)
 
         # Find nearest larger time-point
         if not t in ut:
@@ -2467,7 +2597,7 @@ class PropHaz(GSMMFamily):
         # Find index in h corresponding to t
         ti = ut == t
         tiv = np.arange(len(ut))[ti][0]
-        #print(t,tiv)
+        # print(t,tiv)
 
         # Compute (log) survival
         lS = -self.__hs[ti] * np.exp(eta)
@@ -2476,12 +2606,18 @@ class PropHaz(GSMMFamily):
         varS = None
         if compute_var:
             # Compute variance
-            v =  - self.__hs[ti]*x + self.__avs[tiv]
+            v = -self.__hs[ti] * x + self.__avs[tiv]
 
-            varS = np.exp(eta) * S * np.power(self.__qs[ti] + np.sum(v@V * v,axis=1).reshape(-1,1),0.5)
+            varS = (
+                np.exp(eta)
+                * S
+                * np.power(
+                    self.__qs[ti] + np.sum(v @ V * v, axis=1).reshape(-1, 1), 0.5
+                )
+            )
         return S, varS
 
-    def init_coef(self,models:list[Callable]) -> np.ndarray:
+    def init_coef(self, models: list[Callable]) -> np.ndarray:
         """Function to initialize the coefficients of the model.
 
         :param models: A list of GAMMs, - each based on one of the formulas provided to a model.
@@ -2491,5 +2627,7 @@ class PropHaz(GSMMFamily):
         """
 
         # Just set to very small positive values
-        coef = np.array([1e-4 for _ in range(models[0].formulas[0].n_coef)]).reshape(-1,1)
+        coef = np.array([1e-4 for _ in range(models[0].formulas[0].n_coef)]).reshape(
+            -1, 1
+        )
         return coef

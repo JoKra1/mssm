@@ -1,7 +1,7 @@
 import warnings
 import numpy as np
 import scipy as scp
-from .custom_types import Constraint,ConstType,LambdaTerm,PenType
+from .custom_types import Constraint, ConstType, LambdaTerm, PenType
 from .matrix_solvers import translate_sparse
 from collections.abc import Callable
 import copy
@@ -9,7 +9,8 @@ import sys
 
 ##################################### Penalty functions #####################################
 
-def sort_penalties(penalties:list[LambdaTerm]) -> list[LambdaTerm]:
+
+def sort_penalties(penalties: list[LambdaTerm]) -> list[LambdaTerm]:
     """Sorts penalties by ``start_index`` in ascending order.
 
     :param penalties: A list of term-specific penalties.
@@ -22,7 +23,8 @@ def sort_penalties(penalties:list[LambdaTerm]) -> list[LambdaTerm]:
     sort_idx = np.argsort(idx)
     return [penalties[sidx] for sidx in sort_idx]
 
-def create_id_dict(penalties:list[LambdaTerm]) -> dict|None:
+
+def create_id_dict(penalties: list[LambdaTerm]) -> dict | None:
     """Identifies penalties that should share a lambda parameter and fills a dictionary holding penalty indices for each shared penalty (id).
 
     :param penalties: A list of term-specific penalties, some of which might have a ``id`` flag.
@@ -32,7 +34,7 @@ def create_id_dict(penalties:list[LambdaTerm]) -> dict|None:
     """
     id_dict = {}
 
-    for peni,pen in enumerate(penalties):
+    for peni, pen in enumerate(penalties):
         if pen.id is not None:
             if pen.id in id_dict:
                 id_dict[pen.id].append(peni)
@@ -44,7 +46,8 @@ def create_id_dict(penalties:list[LambdaTerm]) -> dict|None:
 
     return None
 
-def combine_shared_penalties(penalties:list[LambdaTerm]) -> list[LambdaTerm]:
+
+def combine_shared_penalties(penalties: list[LambdaTerm]) -> list[LambdaTerm]:
     """Identifies penalties that should share a lambda parameter and merges them into a single :class:`LambdaTerm`.
 
     :param penalties: A list of term-specific penalties, some of which might have a ``id`` flag.
@@ -58,43 +61,57 @@ def combine_shared_penalties(penalties:list[LambdaTerm]) -> list[LambdaTerm]:
     if id_dict is None:
         return penalties
     else:
-        merged_penalties = [pen for pen in penalties if (pen.id not in id_dict) or (len(id_dict[pen.id]) <= 1)]
+        merged_penalties = [
+            pen
+            for pen in penalties
+            if (pen.id not in id_dict) or (len(id_dict[pen.id]) <= 1)
+        ]
 
         for id in id_dict.keys():
             m_pens = [pen for pen in penalties if pen.id == id]
             S_J_emb = m_pens[0].S_J_emb
             D_J_emb = m_pens[0].D_J_emb
 
-            for peni in range(1,len(m_pens)):
+            for peni in range(1, len(m_pens)):
                 S_J_emb += m_pens[peni].S_J_emb
                 D_J_emb += m_pens[peni].D_J_emb
 
-            m_pen = LambdaTerm(S_J=S_J_emb[m_pens[0].start_index:(m_pens[-1].start_index+(m_pens[-1].S_J.shape[1]*m_pens[-1].rep_sj)),
-            m_pens[0].start_index:(m_pens[-1].start_index+(m_pens[-1].S_J.shape[1]*m_pens[-1].rep_sj))],
-                               S_J_emb=S_J_emb,
-                               D_J_emb=D_J_emb,
-                               lam=m_pens[0].lam,
-                               rep_sj=1,
-                               start_index=m_pens[0].start_index,
-                               type=PenType.SHARED,
-                               rank = np.sum([pen.rank for pen in m_pens]),
-                               term=[pen.term for pen in m_pens],
-                               dist_param = [pen.dist_param for pen in m_pens],
-                               S_Js = [pen.S_J for pen in m_pens],
-                               S_J_embs=[pen.S_J_emb for pen in m_pens],
-                               D_J_embs=[pen.D_J_emb for pen in m_pens],
-                               rep_sjs=[pen.rep_sj for pen in m_pens],
-                               start_indices=[pen.start_index for pen in m_pens],
-                               types = [pen.type for pen in m_pens],
-                               ranks = [pen.rank for pen in m_pens],
-                               id=id
-                               )
+            m_pen = LambdaTerm(
+                S_J=S_J_emb[
+                    m_pens[0].start_index : (
+                        m_pens[-1].start_index
+                        + (m_pens[-1].S_J.shape[1] * m_pens[-1].rep_sj)
+                    ),
+                    m_pens[0].start_index : (
+                        m_pens[-1].start_index
+                        + (m_pens[-1].S_J.shape[1] * m_pens[-1].rep_sj)
+                    ),
+                ],
+                S_J_emb=S_J_emb,
+                D_J_emb=D_J_emb,
+                lam=m_pens[0].lam,
+                rep_sj=1,
+                start_index=m_pens[0].start_index,
+                type=PenType.SHARED,
+                rank=np.sum([pen.rank for pen in m_pens]),
+                term=[pen.term for pen in m_pens],
+                dist_param=[pen.dist_param for pen in m_pens],
+                S_Js=[pen.S_J for pen in m_pens],
+                S_J_embs=[pen.S_J_emb for pen in m_pens],
+                D_J_embs=[pen.D_J_emb for pen in m_pens],
+                rep_sjs=[pen.rep_sj for pen in m_pens],
+                start_indices=[pen.start_index for pen in m_pens],
+                types=[pen.type for pen in m_pens],
+                ranks=[pen.rank for pen in m_pens],
+                id=id,
+            )
 
             merged_penalties.append(m_pen)
 
         return merged_penalties
 
-def split_shared_penalties(merged_penalties:list[LambdaTerm]) -> list[LambdaTerm]:
+
+def split_shared_penalties(merged_penalties: list[LambdaTerm]) -> list[LambdaTerm]:
     """Identifies penalties that share a lambda parameter and splits them into individual :class:`LambdaTerm`s - all having the same :math:`\\lambda` value.
 
     Basically inverts what is achieved by the :func:`combine_shared_penalties` function.
@@ -106,11 +123,15 @@ def split_shared_penalties(merged_penalties:list[LambdaTerm]) -> list[LambdaTerm
     """
 
     merged_idx = []
-    for peni,pen in enumerate(merged_penalties):
-        if isinstance(pen.S_Js,list):
+    for peni, pen in enumerate(merged_penalties):
+        if isinstance(pen.S_Js, list):
             merged_idx.append(peni)
 
-    penalties = [merged_penalties[peni] for peni in range(len(merged_penalties)) if peni not in merged_idx]
+    penalties = [
+        merged_penalties[peni]
+        for peni in range(len(merged_penalties))
+        if peni not in merged_idx
+    ]
 
     if len(merged_idx) == 0:
         return penalties
@@ -122,24 +143,30 @@ def split_shared_penalties(merged_penalties:list[LambdaTerm]) -> list[LambdaTerm
 
             for m in range(len(merged_pen.S_Js)):
 
-                penalties.append(LambdaTerm(S_J=merged_pen.S_Js[m],
-                                            S_J_emb=merged_pen.S_J_embs[m],
-                                            D_J_emb=merged_pen.D_J_embs[m],
-                                            lam=merged_pen.lam,
-                                            rep_sj=merged_pen.rep_sjs[m],
-                                            start_index=merged_pen.start_indices[m],
-                                            type=merged_pen.types[m],
-                                            rank = merged_pen.ranks[m],
-                                            term=merged_pen.term[m],
-                                            dist_param = merged_pen.dist_param[m],
-                                            id=merged_pen.id
-                                            ))
+                penalties.append(
+                    LambdaTerm(
+                        S_J=merged_pen.S_Js[m],
+                        S_J_emb=merged_pen.S_J_embs[m],
+                        D_J_emb=merged_pen.D_J_embs[m],
+                        lam=merged_pen.lam,
+                        rep_sj=merged_pen.rep_sjs[m],
+                        start_index=merged_pen.start_indices[m],
+                        type=merged_pen.types[m],
+                        rank=merged_pen.ranks[m],
+                        term=merged_pen.term[m],
+                        dist_param=merged_pen.dist_param[m],
+                        id=merged_pen.id,
+                    )
+                )
 
         # Sort back by start indices
         penalties = sort_penalties(penalties)
         return penalties
 
-def adjust_pen_drop(dat:list[float],rows:list[int],cols:list[int],drop:list[int],offset:int=0) -> tuple[list[float],list[int],list[int],int]:
+
+def adjust_pen_drop(
+    dat: list[float], rows: list[int], cols: list[int], drop: list[int], offset: int = 0
+) -> tuple[list[float], list[int], list[int], int]:
     """Adjusts penalty matrix (represented via ``dat``, ``rows``, and ``cols``) by dropping rows and columns indicated by ``drop``.
 
     Optionally, ``offset`` is added to the elements in ``rows`` and ``cols``, which is useful when indices in ``drop`` do not start at zero.
@@ -161,12 +188,12 @@ def adjust_pen_drop(dat:list[float],rows:list[int],cols:list[int],drop:list[int]
     cols = np.array(cols)
     dat = np.array(dat)
 
-    drop_idx = np.isin(drop,cols + offset)
+    drop_idx = np.isin(drop, cols + offset)
     dropped = np.sum(drop_idx)
     drop = np.array(drop)[drop_idx]
 
-    keep_col = ~np.isin(cols + offset,drop)
-    keep_row = ~np.isin(rows + offset,drop)
+    keep_col = ~np.isin(cols + offset, drop)
+    keep_row = ~np.isin(rows + offset, drop)
 
     keep = keep_col & keep_row
 
@@ -182,9 +209,18 @@ def adjust_pen_drop(dat:list[float],rows:list[int],cols:list[int],drop:list[int]
         cols_realign[cols + offset > d] -= 1
 
     # Now return
-    return list(dat[keep]),list(rows_realign[keep]),list(cols_realign[keep]),dropped
+    return list(dat[keep]), list(rows_realign[keep]), list(cols_realign[keep]), dropped
 
-def embed_in_S_sparse(pen_data:list[float],pen_rows:list[int],pen_cols:list[int],S_emb:scp.sparse.csc_array|None,S_col:int,SJ_col:int,cIndex:int) -> tuple[scp.sparse.csc_array,int]:
+
+def embed_in_S_sparse(
+    pen_data: list[float],
+    pen_rows: list[int],
+    pen_cols: list[int],
+    S_emb: scp.sparse.csc_array | None,
+    S_col: int,
+    SJ_col: int,
+    cIndex: int,
+) -> tuple[scp.sparse.csc_array, int]:
     """Embed a term-specific penalty matrix ``SJ`` (provided as three lists: ``pen_data``, ``pen_rows`` and ``pen_cols``) into the total penalty matrix ``S_emb`` (see Wood, 2017)
 
     :param pen_data: Data of ``SJ``
@@ -210,13 +246,24 @@ def embed_in_S_sparse(pen_data:list[float],pen_rows:list[int],pen_cols:list[int]
     c_embedding = np.array(pen_cols) + cIndex
 
     if S_emb is None:
-        S_emb = scp.sparse.csc_array((embedding,(r_embedding,c_embedding)),shape=(S_col,S_col))
+        S_emb = scp.sparse.csc_array(
+            (embedding, (r_embedding, c_embedding)), shape=(S_col, S_col)
+        )
     else:
-        S_emb += scp.sparse.csc_array((embedding,(r_embedding,c_embedding)),shape=(S_col,S_col))
+        S_emb += scp.sparse.csc_array(
+            (embedding, (r_embedding, c_embedding)), shape=(S_col, S_col)
+        )
 
-    return S_emb,cIndex+SJ_col
+    return S_emb, cIndex + SJ_col
 
-def embed_in_Sj_sparse(pen_data:list[float],pen_rows:list[int],pen_cols:list[int],Sj:scp.sparse.csc_array|None,SJ_col:int) -> scp.sparse.csc_array:
+
+def embed_in_Sj_sparse(
+    pen_data: list[float],
+    pen_rows: list[int],
+    pen_cols: list[int],
+    Sj: scp.sparse.csc_array | None,
+    SJ_col: int,
+) -> scp.sparse.csc_array:
     """Parameterize a term-specific penalty matrix ``SJ`` (provided as three lists: ``pen_data``, ``pen_rows`` and ``pen_cols``).
 
     :param pen_data: Data of ``SJ``
@@ -235,13 +282,20 @@ def embed_in_Sj_sparse(pen_data:list[float],pen_rows:list[int],pen_cols:list[int
     embedding = np.array(pen_data)
 
     if Sj is None:
-        Sj = scp.sparse.csc_array((embedding,(pen_rows,pen_cols)),shape=(SJ_col,SJ_col))
+        Sj = scp.sparse.csc_array(
+            (embedding, (pen_rows, pen_cols)), shape=(SJ_col, SJ_col)
+        )
     else:
-        Sj += scp.sparse.csc_array((embedding,(pen_rows,pen_cols)),shape=(SJ_col,SJ_col))
+        Sj += scp.sparse.csc_array(
+            (embedding, (pen_rows, pen_cols)), shape=(SJ_col, SJ_col)
+        )
 
     return Sj
 
-def embed_shared_penalties(shared_penalties:list[list[LambdaTerm]],formulas:list,extra_coef:int) -> list[LambdaTerm]:
+
+def embed_shared_penalties(
+    shared_penalties: list[list[LambdaTerm]], formulas: list, extra_coef: int
+) -> list[LambdaTerm]:
     """Embed penalties from individual formulas into overall penalties for GAMMLSS/GSMM models.
 
     :param shared_penalties: Nested list, with the inner one containing the penalties associated with an individual formula in ``formulas``.
@@ -258,57 +312,121 @@ def embed_shared_penalties(shared_penalties:list[list[LambdaTerm]],formulas:list
         for lterm in shared_penalties[fi]:
             lterm.dist_param = fi
 
-    for fi,form in enumerate(formulas):
-        for ofi,other_form in enumerate(formulas):
+    for fi, form in enumerate(formulas):
+        for ofi, other_form in enumerate(formulas):
             if fi == ofi:
                 continue
 
             if ofi < fi:
                 for lterm in shared_penalties[fi]:
-                    lterm.S_J_emb = scp.sparse.vstack([scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1])),
-                                                       lterm.S_J_emb]).tocsc()
-                    lterm.D_J_emb = scp.sparse.vstack([scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1])),
-                                                       lterm.D_J_emb]).tocsc()
+                    lterm.S_J_emb = scp.sparse.vstack(
+                        [
+                            scp.sparse.csc_array(
+                                (other_form.n_coef, lterm.S_J_emb.shape[1])
+                            ),
+                            lterm.S_J_emb,
+                        ]
+                    ).tocsc()
+                    lterm.D_J_emb = scp.sparse.vstack(
+                        [
+                            scp.sparse.csc_array(
+                                (other_form.n_coef, lterm.S_J_emb.shape[1])
+                            ),
+                            lterm.D_J_emb,
+                        ]
+                    ).tocsc()
 
-                    lterm.S_J_emb = scp.sparse.hstack([scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef)),
-                                                       lterm.S_J_emb]).tocsc()
+                    lterm.S_J_emb = scp.sparse.hstack(
+                        [
+                            scp.sparse.csc_array(
+                                (lterm.S_J_emb.shape[0], other_form.n_coef)
+                            ),
+                            lterm.S_J_emb,
+                        ]
+                    ).tocsc()
 
-                    lterm.D_J_emb = scp.sparse.hstack([scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef)),
-                                                       lterm.D_J_emb]).tocsc()
+                    lterm.D_J_emb = scp.sparse.hstack(
+                        [
+                            scp.sparse.csc_array(
+                                (lterm.S_J_emb.shape[0], other_form.n_coef)
+                            ),
+                            lterm.D_J_emb,
+                        ]
+                    ).tocsc()
 
                     lterm.start_index += other_form.n_coef
 
             elif ofi > fi:
                 for lterm in shared_penalties[fi]:
-                    lterm.S_J_emb = scp.sparse.vstack([lterm.S_J_emb,
-                                                       scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1]))]).tocsc()
+                    lterm.S_J_emb = scp.sparse.vstack(
+                        [
+                            lterm.S_J_emb,
+                            scp.sparse.csc_array(
+                                (other_form.n_coef, lterm.S_J_emb.shape[1])
+                            ),
+                        ]
+                    ).tocsc()
 
-                    lterm.D_J_emb = scp.sparse.vstack([lterm.D_J_emb,
-                                                       scp.sparse.csc_array((other_form.n_coef,lterm.S_J_emb.shape[1]))]).tocsc()
+                    lterm.D_J_emb = scp.sparse.vstack(
+                        [
+                            lterm.D_J_emb,
+                            scp.sparse.csc_array(
+                                (other_form.n_coef, lterm.S_J_emb.shape[1])
+                            ),
+                        ]
+                    ).tocsc()
 
-                    lterm.S_J_emb = scp.sparse.hstack([lterm.S_J_emb,
-                                                       scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef))]).tocsc()
+                    lterm.S_J_emb = scp.sparse.hstack(
+                        [
+                            lterm.S_J_emb,
+                            scp.sparse.csc_array(
+                                (lterm.S_J_emb.shape[0], other_form.n_coef)
+                            ),
+                        ]
+                    ).tocsc()
 
-                    lterm.D_J_emb = scp.sparse.hstack([lterm.D_J_emb,
-                                                       scp.sparse.csc_array((lterm.S_J_emb.shape[0],other_form.n_coef))]).tocsc()
+                    lterm.D_J_emb = scp.sparse.hstack(
+                        [
+                            lterm.D_J_emb,
+                            scp.sparse.csc_array(
+                                (lterm.S_J_emb.shape[0], other_form.n_coef)
+                            ),
+                        ]
+                    ).tocsc()
 
     if extra_coef is not None:
-        for fi,form in enumerate(formulas):
+        for fi, form in enumerate(formulas):
             for lterm in shared_penalties[fi]:
-                lterm.S_J_emb = scp.sparse.vstack([lterm.S_J_emb,
-                                                   scp.sparse.csc_array((extra_coef,lterm.S_J_emb.shape[1]))]).tocsc()
+                lterm.S_J_emb = scp.sparse.vstack(
+                    [
+                        lterm.S_J_emb,
+                        scp.sparse.csc_array((extra_coef, lterm.S_J_emb.shape[1])),
+                    ]
+                ).tocsc()
 
-                lterm.D_J_emb = scp.sparse.vstack([lterm.D_J_emb,
-                                                   scp.sparse.csc_array((extra_coef,lterm.S_J_emb.shape[1]))]).tocsc()
+                lterm.D_J_emb = scp.sparse.vstack(
+                    [
+                        lterm.D_J_emb,
+                        scp.sparse.csc_array((extra_coef, lterm.S_J_emb.shape[1])),
+                    ]
+                ).tocsc()
 
-                lterm.S_J_emb = scp.sparse.hstack([lterm.S_J_emb,
-                                                   scp.sparse.csc_array((lterm.S_J_emb.shape[0],extra_coef))]).tocsc()
+                lterm.S_J_emb = scp.sparse.hstack(
+                    [
+                        lterm.S_J_emb,
+                        scp.sparse.csc_array((lterm.S_J_emb.shape[0], extra_coef)),
+                    ]
+                ).tocsc()
 
-                lterm.D_J_emb = scp.sparse.hstack([lterm.D_J_emb,
-                                                   scp.sparse.csc_array((lterm.S_J_emb.shape[0],extra_coef))]).tocsc()
-
+                lterm.D_J_emb = scp.sparse.hstack(
+                    [
+                        lterm.D_J_emb,
+                        scp.sparse.csc_array((lterm.S_J_emb.shape[0], extra_coef)),
+                    ]
+                ).tocsc()
 
     return shared_penalties
+
 
 class Penalty:
     """Penalty base-class. Generates penalty matrices for smooth terms.
@@ -318,10 +436,14 @@ class Penalty:
     :ivar PenType pen_type: Type of the penalty matrix passed to the init method.
     """
 
-    def __init__(self,pen_type:PenType) -> None:
+    def __init__(self, pen_type: PenType) -> None:
         self.type = pen_type
 
-    def constructor(self,n:int,constraint:Constraint|None,*args,**kwargs) -> tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]:
+    def constructor(
+        self, n: int, constraint: Constraint | None, *args, **kwargs
+    ) -> tuple[
+        list[float], list[int], list[int], list[float], list[int], list[int], int
+    ]:
         """Creates penalty matrix + root of the penalty and returns both in list form (data, row indices, col indices).
 
         :param n: Dimension of square penalty matrix
@@ -333,6 +455,7 @@ class Penalty:
         """
         pass
 
+
 class DifferencePenalty(Penalty):
     """Difference Penalty class. Generates penalty matrices for smooth terms.
 
@@ -342,7 +465,11 @@ class DifferencePenalty(Penalty):
     def __init__(self):
         super().__init__(PenType.DIFFERENCE)
 
-    def constructor(self, n:int, constraint:Constraint|None, m:int=2) -> tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]:
+    def constructor(
+        self, n: int, constraint: Constraint | None, m: int = 2
+    ) -> tuple[
+        list[float], list[int], list[int], list[float], list[int], list[int], int
+    ]:
         """Creates difference (order=m) n*n penalty matrix + root of the penalty. Based on code in Eilers & Marx (1996) and Wood (2017).
 
         References:
@@ -358,9 +485,11 @@ class DifferencePenalty(Penalty):
         :return: penalty data,penalty row indices,penalty column indices,root of penalty data,root of penalty row indices,root of penalty column indices,rank of penalty
         :rtype: tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]
         """
-        D = np.diff(np.identity(n),m)
+        D = np.diff(np.identity(n), m)
         S = D @ D.T
-        rank = n - m # Eilers & Marx (1996): P-spline penalties consider m-degree polynomial as smooth, i.e., un-penalized!
+        rank = (
+            n - m
+        )  # Eilers & Marx (1996): P-spline penalties consider m-degree polynomial as smooth, i.e., un-penalized!
 
         # Absorb any identifiability constraints
         if constraint is not None:
@@ -369,28 +498,44 @@ class DifferencePenalty(Penalty):
                 S = Z.T @ S @ Z
                 D = Z.T @ D
             elif constraint.type == ConstType.DROP:
-                S = np.delete(np.delete(S,Z,axis=1),Z,axis=0)
-                D = np.delete(D,Z,axis=0)
+                S = np.delete(np.delete(S, Z, axis=1), Z, axis=0)
+                D = np.delete(D, Z, axis=0)
             elif constraint.type == ConstType.DIFF:
-                if (m == 0):
-                    raise ValueError("When using ConstType.DIFF, for a term with a difference penalty, `m` must be greater than zero!")
-                D = np.diff(np.concatenate((D[Z:D.shape[0],:],D[:Z,:]),axis=0),axis=0) # Correct for column differencing applied to X! See smoothCon help for mgcv (Wood, 2017)
-                D = np.concatenate((D[D.shape[0]-Z:,:],D[:D.shape[0]-Z,:]),axis=0)
+                if m == 0:
+                    raise ValueError(
+                        "When using ConstType.DIFF, for a term with a difference penalty, `m` must be greater than zero!"
+                    )
+                D = np.diff(
+                    np.concatenate((D[Z : D.shape[0], :], D[:Z, :]), axis=0), axis=0
+                )  # Correct for column differencing applied to X! See smoothCon help for mgcv (Wood, 2017)
+                D = np.concatenate(
+                    (D[D.shape[0] - Z :, :], D[: D.shape[0] - Z, :]), axis=0
+                )
                 S = D @ D.T
 
             if m == 0:
                 # Re-compute root
-                eig, U =scp.linalg.eigh(S)
-                D = U@np.diag([np.power(e,0.5) if e > np.power(sys.float_info.epsilon,0.7) else 0 for e in eig])
+                eig, U = scp.linalg.eigh(S)
+                D = U @ np.diag(
+                    [
+                        (
+                            np.power(e, 0.5)
+                            if e > np.power(sys.float_info.epsilon, 0.7)
+                            else 0
+                        )
+                        for e in eig
+                    ]
+                )
 
         S = scp.sparse.csc_array(S)
         D = scp.sparse.csc_array(D)
 
         # Data in S and D is in canonical format, for competability this is translated to data, rows, columns
-        pen_data,pen_rows,pen_cols = translate_sparse(S)
-        chol_data,chol_rows,chol_cols = translate_sparse(D)
+        pen_data, pen_rows, pen_cols = translate_sparse(S)
+        chol_data, chol_rows, chol_cols = translate_sparse(D)
 
-        return pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols,rank
+        return pen_data, pen_rows, pen_cols, chol_data, chol_rows, chol_cols, rank
+
 
 class IdentityPenalty(Penalty):
     """Difference Penalty class. Generates penalty matrices for smooth terms and random terms.
@@ -400,12 +545,18 @@ class IdentityPenalty(Penalty):
     :ivar PenType pen_type: Type of the penalty matrix passed to init method.
     """
 
-    def __init__(self, pen_type:PenType):
-        if pen_type not in [PenType.IDENTITY,PenType.DISTANCE]:
-            raise ValueError(f"pen_type must be PenType.IDENTITY or PenType.DISTANCE, but is {pen_type}")
+    def __init__(self, pen_type: PenType):
+        if pen_type not in [PenType.IDENTITY, PenType.DISTANCE]:
+            raise ValueError(
+                f"pen_type must be PenType.IDENTITY or PenType.DISTANCE, but is {pen_type}"
+            )
         super().__init__(pen_type)
 
-    def constructor(self, n:int, constraint:Constraint|None, f:Callable|None=None) -> tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]:
+    def constructor(
+        self, n: int, constraint: Constraint | None, f: Callable | None = None
+    ) -> tuple[
+        list[float], list[int], list[int], list[float], list[int], list[int], int
+    ]:
         """Creates identity matrix penalty + root in case ``f is None``.
 
         **Note**: This penalty never absorbs marginal constraints. It always returns an identity matrix but just decreases ``n`` by 1 if ``constraint is not None``
@@ -431,12 +582,27 @@ class IdentityPenalty(Penalty):
             if f is None:
                 elements[i] = 1.0
             else:
-                elements[i] = f(i+1)
+                elements[i] = f(i + 1)
             idx[i] = i
 
-        return elements,idx,idx,elements,idx,idx,n # I' @ I = I; also identity is full rank
+        return (
+            elements,
+            idx,
+            idx,
+            elements,
+            idx,
+            idx,
+            n,
+        )  # I' @ I = I; also identity is full rank
 
-def TP_pen(S_j:scp.sparse.csc_array,D_j:scp.sparse.csc_array,j:int,ks:list[int],constraint:Constraint|None) -> tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]:
+
+def TP_pen(
+    S_j: scp.sparse.csc_array,
+    D_j: scp.sparse.csc_array,
+    j: int,
+    ks: list[int],
+    constraint: Constraint | None,
+) -> tuple[list[float], list[int], list[int], list[float], list[int], list[int], int]:
     """Computes a tensor smooth penalty + root as defined in section 5.6 of Wood (2017) based on marginal penalty matrix ``S_j``.
 
     References:
@@ -463,16 +629,16 @@ def TP_pen(S_j:scp.sparse.csc_array,D_j:scp.sparse.csc_array,j:int,ks:list[int],
     else:
         S_TP = scp.sparse.identity(ks[0])
         D_TP = scp.sparse.identity(ks[0])
-        #m_rank *= ks[0] # Modify rank of marginal - identities are full-rank.
+        # m_rank *= ks[0] # Modify rank of marginal - identities are full-rank.
 
-    for i in range(1,len(ks)):
+    for i in range(1, len(ks)):
         if j == i:
-            S_TP = scp.sparse.kron(S_TP,S_j,format='csc')
-            D_TP = scp.sparse.kron(D_TP,D_j,format='csc')
+            S_TP = scp.sparse.kron(S_TP, S_j, format="csc")
+            D_TP = scp.sparse.kron(D_TP, D_j, format="csc")
         else:
-            S_TP = scp.sparse.kron(S_TP,scp.sparse.identity(ks[i]),format='csc')
-            D_TP = scp.sparse.kron(D_TP,scp.sparse.identity(ks[i]),format='csc')
-            #m_rank *= ks[i]
+            S_TP = scp.sparse.kron(S_TP, scp.sparse.identity(ks[i]), format="csc")
+            D_TP = scp.sparse.kron(D_TP, scp.sparse.identity(ks[i]), format="csc")
+            # m_rank *= ks[i]
 
     if constraint is not None:
         Z = constraint.Z
@@ -482,28 +648,48 @@ def TP_pen(S_j:scp.sparse.csc_array,D_j:scp.sparse.csc_array,j:int,ks:list[int],
             S_TP = scp.sparse.csc_array(S_TP)
             D_TP = scp.sparse.csc_array(D_TP)
         elif constraint.type == ConstType.DROP:
-            S_TP = scp.sparse.csc_array(np.delete(np.delete(S_TP.toarray(),Z,axis=1),Z,axis=0))
-            D_TP = scp.sparse.csc_array(np.delete(D_TP.toarray(),Z,axis=0))
+            S_TP = scp.sparse.csc_array(
+                np.delete(np.delete(S_TP.toarray(), Z, axis=1), Z, axis=0)
+            )
+            D_TP = scp.sparse.csc_array(np.delete(D_TP.toarray(), Z, axis=0))
         elif constraint.type == ConstType.DIFF:
             D_TP = D_TP.toarray()
-            D_TP = np.diff(np.concatenate((D_TP[Z:D_TP.shape[0],:],D_TP[:Z,:]),axis=0),axis=0) # Correct for column differencing applied to X! See smoothCon help for mgcv (Wood, 2017)
-            D_TP = np.concatenate((D_TP[D_TP.shape[0]-Z:,:],D_TP[:D_TP.shape[0]-Z,:]),axis=0)
+            D_TP = np.diff(
+                np.concatenate((D_TP[Z : D_TP.shape[0], :], D_TP[:Z, :]), axis=0),
+                axis=0,
+            )  # Correct for column differencing applied to X! See smoothCon help for mgcv (Wood, 2017)
+            D_TP = np.concatenate(
+                (D_TP[D_TP.shape[0] - Z :, :], D_TP[: D_TP.shape[0] - Z, :]), axis=0
+            )
             S_TP = D_TP @ D_TP.T
             S_TP = scp.sparse.csc_array(S_TP)
             D_TP = scp.sparse.csc_array(D_TP)
 
         # Check for full-rank marginal -> need new D_TP
-        _,_,chol_cols = translate_sparse(D_TP)
+        _, _, chol_cols = translate_sparse(D_TP)
 
         if (max(chol_cols) + 1) > D_TP.shape[0]:
             if constraint.type == ConstType.DIFF:
-                raise ValueError("Cannot compute tensor smooth penalty for constraint.type=ConstType.DIFF. Set a different constraint for the marginals or ensure that marginal penalties have a non-trivial kernel!")
+                raise ValueError(
+                    "Cannot compute tensor smooth penalty for constraint.type=ConstType.DIFF. Set a different constraint for the marginals or ensure that marginal penalties have a non-trivial kernel!"
+                )
 
             # Re-compute root
-            eig, U =scp.linalg.eigh(S_TP.toarray())
-            D_TP = scp.sparse.csc_array(U@np.diag([np.power(e,0.5) if e > np.power(sys.float_info.epsilon,0.7) else 0 for e in eig]))
+            eig, U = scp.linalg.eigh(S_TP.toarray())
+            D_TP = scp.sparse.csc_array(
+                U
+                @ np.diag(
+                    [
+                        (
+                            np.power(e, 0.5)
+                            if e > np.power(sys.float_info.epsilon, 0.7)
+                            else 0
+                        )
+                        for e in eig
+                    ]
+                )
+            )
 
-
-    pen_data,pen_rows,pen_cols = translate_sparse(S_TP)
-    chol_data,chol_rows,chol_cols = translate_sparse(D_TP)
-    return pen_data,pen_rows,pen_cols,chol_data,chol_rows,chol_cols
+    pen_data, pen_rows, pen_cols = translate_sparse(S_TP)
+    chol_data, chol_rows, chol_cols = translate_sparse(D_TP)
+    return pen_data, pen_rows, pen_cols, chol_data, chol_rows, chol_cols

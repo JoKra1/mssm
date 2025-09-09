@@ -3,7 +3,8 @@ import scipy as scp
 
 ##################################### Spline Convolution Code  #####################################
 
-def convolve_event(f:np.ndarray,pulse_location:int) -> np.ndarray:
+
+def convolve_event(f: np.ndarray, pulse_location: int) -> np.ndarray:
     """Convolution of function ``f`` with dirac delta spike centered around sample ``pulse_locations``.
 
     Based on code by Wierda et al. 2012
@@ -23,16 +24,18 @@ def convolve_event(f:np.ndarray,pulse_location:int) -> np.ndarray:
     # Based on code by Wierda et al. 2012
 
     # Create spike
-    spike = np.array([0 for _ in range(pulse_location+1)])
+    spike = np.array([0 for _ in range(pulse_location + 1)])
     spike[pulse_location] = 1
 
     # Convolve "spike" with function template f
-    o = scp.signal.fftconvolve(f,spike,mode="full")
+    o = scp.signal.fftconvolve(f, spike, mode="full")
     return o
+
 
 ##################################### B-spline functions #####################################
 
-def tpower(x:np.ndarray, t:np.ndarray, p:int) -> np.ndarray:
+
+def tpower(x: np.ndarray, t: np.ndarray, p: int) -> np.ndarray:
     """Computes truncated ``p-t`` power function of ``x``.
 
     Function taken from "Splines, Knots, and Penalties" by Eilers & Marx (2010)
@@ -49,9 +52,10 @@ def tpower(x:np.ndarray, t:np.ndarray, p:int) -> np.ndarray:
     :return: ``np.power(x - t,p) * (x > t)``
     :rtype: np.ndarray
     """
-    return np.power(x - t,p) * (x > t)
+    return np.power(x - t, p) * (x > t)
 
-def bbase(x:np.ndarray, knots:np.ndarray, dx:float, deg:int) -> np.ndarray:
+
+def bbase(x: np.ndarray, knots: np.ndarray, dx: float, deg: int) -> np.ndarray:
     """Computes B-spline basis of degree ``deg`` given ``knots`` and interval spacing ``dx``.
 
     Function taken from "Splines, Knots, and Penalties" by Eilers & Marx (2010)
@@ -70,13 +74,25 @@ def bbase(x:np.ndarray, knots:np.ndarray, dx:float, deg:int) -> np.ndarray:
     :return: numpy.array of shape (-1,``nk``)
     :rtype: np.ndarray
     """
-    P = tpower(x[:,None],knots,deg)
-    n = P.shape[1] # Actually n + 1 + 2*deg
-    D = np.diff(np.identity(n),n=deg+1) / (scp.special.gamma(deg + 1) * np.power(dx,deg))
+    P = tpower(x[:, None], knots, deg)
+    n = P.shape[1]  # Actually n + 1 + 2*deg
+    D = np.diff(np.identity(n), n=deg + 1) / (
+        scp.special.gamma(deg + 1) * np.power(dx, deg)
+    )
     B = np.power(-1, deg + 1) * P @ D
     return B
 
-def B_spline_basis(cov:np.ndarray, event_onset:int|None, nk:int, min_c:float|None=None, max_c:float|None=None, drop_outer_k:bool=False, convolve:bool=False, deg:int=3) -> np.ndarray:
+
+def B_spline_basis(
+    cov: np.ndarray,
+    event_onset: int | None,
+    nk: int,
+    min_c: float | None = None,
+    max_c: float | None = None,
+    drop_outer_k: bool = False,
+    convolve: bool = False,
+    deg: int = 3,
+) -> np.ndarray:
     """Computes B-spline basis of degree ``deg`` given ``knots``.
 
     Based on code and definitions in "Splines, Knots, and Penalties" by Eilers & Marx (2010) and adapted to allow for convolving B-spline bases.
@@ -125,26 +141,27 @@ def B_spline_basis(cov:np.ndarray, event_onset:int|None, nk:int, min_c:float|Non
     if convolve:
         # For the IR GAMM, the ***outer***-most knots should be close to min_c and max_c.
         # Hence, we simply provide n + 1 + 2*deg (see above) equally spaced knots from min_c to max_c.
-        dx = (xr-xl) / (ndx + 2 * deg)
+        dx = (xr - xl) / (ndx + 2 * deg)
         knots = np.linspace(min_c, max_c, ndx + 1 + 2 * deg)
     else:
-        dx = (xr-xl) / ndx
-        knots = np.linspace(xl - dx * deg, xr + dx * deg,ndx + 1 + 2 * deg)
+        dx = (xr - xl) / ndx
+        knots = np.linspace(xl - dx * deg, xr + dx * deg, ndx + 1 + 2 * deg)
 
-    B = bbase(cov,knots,dx,deg)
+    B = bbase(cov, knots, dx, deg)
 
     if convolve:
         o_restr = np.zeros(B.shape)
 
         for nki in range(nk):
-            o = convolve_event(B[:,nki],event_onset)
-            o_restr[:,nki] = o[0:len(cov)]
+            o = convolve_event(B[:, nki], event_onset)
+            o_restr[:, nki] = o[0 : len(cov)]
 
         B = o_restr
 
     return B
 
-def TP_basis_calc(cTP:np.ndarray,nB:np.ndarray) -> np.ndarray:
+
+def TP_basis_calc(cTP: np.ndarray, nB: np.ndarray) -> np.ndarray:
     """Computes row-wise Kroenecker product between ``cTP`` and ``nB``. Useful to create a Tensor smooth basis.
 
     See Wood(2017) 5.6.1 and B.4.
@@ -163,4 +180,4 @@ def TP_basis_calc(cTP:np.ndarray,nB:np.ndarray) -> np.ndarray:
     # Function performs col-wise Kron - we need row-wise for the Tensor smooths
     # see Wood(2017) 5.6.1 and B.4
     # ToDo: Sparse calculation might be desirable..
-    return scp.linalg.khatri_rao(cTP.T,nB.T).T
+    return scp.linalg.khatri_rao(cTP.T, nB.T).T
