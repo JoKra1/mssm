@@ -122,22 +122,22 @@ class GSMM():
         
         self.family = family
         self.formulas:list[Formula] = formulas
-        self.lvi:scp.sparse.csc_array = None
-        self.lvi_linop:scp.sparse.linalg.LinearOperator = None
-        self.coef:np.ndarray = None
-        self.preds:list[np.ndarray] = None # Linear predictors
-        self.mus:list[np.ndarray] = None # Estimated parameters of log-likelihood
-        self.hessian:scp.sparse.csc_array = None
+        self.lvi:scp.sparse.csc_array|None = None
+        self.lvi_linop:scp.sparse.linalg.LinearOperator|None = None
+        self.coef:np.ndarray|None = None
+        self.preds:list[np.ndarray]|None = None # Linear predictors
+        self.mus:list[np.ndarray]|None = None # Estimated parameters of log-likelihood
+        self.hessian:scp.sparse.csc_array|None = None
         self.scale = 1
 
-        self.edf:float = None
-        self.edf1:float = None
-        self.term_edf:list[float] = None
-        self.term_edf1:list[float] = None
+        self.edf:float|None = None
+        self.edf1:float|None = None
+        self.term_edf:list[float]|None = None
+        self.term_edf1:list[float]|None = None
 
         self.penalty = 0
-        self.overall_penalties:list[LambdaTerm] = None
-        self.info:Fit_info = None
+        self.overall_penalties:list[LambdaTerm]|None = None
+        self.info:Fit_info|None = None
     
     ##################################### Getters #####################################
     
@@ -944,7 +944,7 @@ class GAMMLSS(GSMM):
     """
     def __init__(self, formulas: list[Formula], family: GAMLSSFamily):
         super().__init__(formulas, family)
-        self.res:np.ndarray = None
+        self.res:np.ndarray|None = None
     
     ##################################### Getters #####################################
     
@@ -1616,11 +1616,11 @@ class GAMM(GAMMLSS):
 
         super().__init__([formula],family)
 
-        self.Wr = None
-        self.WN = None
-        self.hessian_obs = None
-        self.rho = None
-        self.res_ar = None
+        self.Wr:scp.sparse.csc_array|None = None
+        self.WN:scp.sparse.csc_array|None = None
+        self.hessian_obs:scp.sparse.csc_array|None = None
+        self.rho:float|None = None
+        self.res_ar:np.ndarray|None = None
 
 
     ##################################### Getters #####################################
