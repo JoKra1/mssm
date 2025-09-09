@@ -844,7 +844,7 @@ def approx_smooth_p_values(model,par:int=0,n_sel:int=1e5,edf1:bool=True,force_ap
 
                     # Eigen-decomposition:
                     s, U =scp.linalg.eigh(RVR)
-                    s = np.flip(s)
+                    s = np.flip(s) # Eigenvalues are in decreasing order now
                     U = np.flip(U,axis=1)
 
                     # get edf for this term and compute r,k,v, and p from Wood (2017)
@@ -854,6 +854,21 @@ def approx_smooth_p_values(model,par:int=0,n_sel:int=1e5,edf1:bool=True,force_ap
                         v = r-k
 
                         if v == 0: # Integer case - standard F-test
+
+                            # Simply form generalized inverse of rank k
+                            S = np.diag([1/lam if lami < k else 0 for lami,lam in enumerate(s)])
+
+                            sign = np.sign(U[0, :])
+                            U *= sign
+                            RVRI1 = U @ S @ U.T
+
+                            # Also compute inverse for alternative version of Eigen-vectors (see Wood, 2017):
+                            U *= sign
+                            RVRI2 = U @ S @ U.T
+
+                            # And the test statistic defined in Wood (2012)
+                            Tr1 = (s_coef.T @ R.T @ RVRI1 @ R @ s_coef)[0, 0]
+                            Tr2 = (s_coef.T @ R.T @ RVRI2 @ R @ s_coef)[0, 0]
                             
                             if isinstance(model.family,Family) and model.family.twopar:
                                 Tr1 /= k
