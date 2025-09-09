@@ -119,7 +119,7 @@ class GSMM():
     """
 
     def __init__(self, formulas: list[Formula], family: GSMMFamily):
-        
+
         self.family = family
         self.formulas:list[Formula] = formulas
         self.lvi:scp.sparse.csc_array|None = None
@@ -138,9 +138,9 @@ class GSMM():
         self.penalty = 0
         self.overall_penalties:list[LambdaTerm]|None = None
         self.info:Fit_info|None = None
-    
+
     ##################################### Getters #####################################
-    
+
     def get_pars(self) -> np.ndarray:
         """
         Returns a list containing all coefficients estimated for the model. Use ``self.coef_split_idx`` to split the vector into separate subsets per parameter of the log-likelihood.
@@ -151,7 +151,7 @@ class GSMM():
         :rtype: [float] or None
         """
         return self.coef
-    
+
     def get_mmat(self,use_terms:list[int]|None=None,drop_NA:bool=True,par:int|None=None) -> list[scp.sparse.csc_array] | scp.sparse.csc_array:
         """
         By default, returns a list containing exactly the model matrices used for fitting as a ``scipy.sparse.csc_array``. Will raise an error when fitting was not completed before calling this function.
@@ -207,18 +207,18 @@ class GSMM():
                                                          ltx,irstx,stx,rtx,var_types,var_map,
                                                          var_mins,var_maxs,factor_levels,
                                                          cov_flat,cov,use_only=use_terms)
-            
+
             if len(irstx) > 0 and drop_NA:
                 model_mat = model_mat[form.NOT_NA_flat,:]
-            
+
             mmat.append(model_mat)
-        
+
         # Return desired matrix / list of matrices
         if par is not None:
             return mmat[0]
         else:
             return mmat
-    
+
     def get_llk(self,penalized:bool=True,drop_NA:bool=True) -> float | None:
         """
         Get the (penalized) log-likelihood of the estimated model (float or None) given the trainings data.
@@ -240,7 +240,7 @@ class GSMM():
 
             ys = []
             for fi,form in enumerate(self.formulas):
-                
+
                 # Repeated y-variable - don't have to pass all of them
                 if fi > 0 and form.get_lhs().variable == self.formulas[0].get_lhs().variable:
                     ys.append(None)
@@ -255,7 +255,7 @@ class GSMM():
                 # Optionally apply function to dep. var.
                 if not form.get_lhs().f is None:
                     y = form.get_lhs().f(y)
-                
+
                 # And collect
                 ys.append(y)
 
@@ -284,16 +284,16 @@ class GSMM():
 
         if self.coef is None or self.hessian is None:
             raise ValueError("Model needs to be estimated before evaluating the REML score. Call model.fit()")
-        
+
         llk = self.get_llk(False,drop_NA=drop_NA)
 
         keep = None
         if self.info.dropped is not None:
             keep = [cidx for cidx in range(self.hessian.shape[1]) if cidx not in self.info.dropped]
-        
+
         reml = REML(llk,-1*self.hessian,self.coef,1,self.overall_penalties,keep)[0,0]
         return reml
-    
+
     def get_resid(self,drop_NA:bool=True,**kwargs) -> np.ndarray:
         """The computation of the residual vector will differ between different :class:`GSMM` models and is thus implemented
         as a method by each :class:`GSMMFamily` family. These should be consulted to get more details. In general, if the model is specified correctly,
@@ -316,11 +316,11 @@ class GSMM():
 
         if self.coef is None is None:
             raise ValueError("Model needs to be estimated before evaluating the residuals. Call model.fit()")
-        
+
         # Get observation vectors
         ys = []
         for fi,form in enumerate(self.formulas):
-            
+
             # Repeated y-variable - don't have to pass all of them
             if fi > 0 and form.get_lhs().variable == self.formulas[0].get_lhs().variable:
                 ys.append(None)
@@ -335,7 +335,7 @@ class GSMM():
             # Optionally apply function to dep. var.
             if not form.get_lhs().f is None:
                 y = form.get_lhs().f(y)
-            
+
             # And collect
             ys.append(y)
 
@@ -343,9 +343,9 @@ class GSMM():
         Xs = self.get_mmat(drop_NA=drop_NA)
 
         return self.family.get_resid(self.coef,self.coef_split_idx,ys,Xs,**kwargs)
-    
+
     ##################################### Summary #####################################
-    
+
     def print_parametric_terms(self):
         """Prints summary output for linear/parametric terms in the model, separately for each parameter of the family's distribution.
         
@@ -365,7 +365,7 @@ class GSMM():
         for formi, _ in enumerate(self.formulas):
             print(f"\nDistribution parameter: {formi + 1}\n")
             print_parametric_terms(self,par=formi)
-    
+
     def print_smooth_terms(self, pen_cutoff:float=0.2, p_values:bool=False, edf1:bool=True):
         """Prints the name of the smooth terms included in the model. After fitting, the estimated degrees of freedom per term are printed as well.
         Smooth terms with edf. < ``pen_cutoff`` will be highlighted. This only makes sense when extra Kernel penalties are placed on smooth terms to enable
@@ -387,14 +387,14 @@ class GSMM():
         Trs = None
         for formi, _ in enumerate(self.formulas):
             print(f"\nDistribution parameter: {formi + 1}\n")
-            
+
             if p_values:
                 ps, Trs = approx_smooth_p_values(self,par=formi,edf1=edf1)
 
             print_smooth_terms(self,par=formi,pen_cutoff=pen_cutoff,ps=ps,Trs=Trs)
-    
+
     ##################################### Fitting #####################################
-    
+
     def fit(self,init_coef:np.ndarray|None=None,max_outer:int=200,max_inner:int=500,min_inner:int|None=None,
             conv_tol:float=1e-7,extend_lambda:bool=False,extension_method_lam:str="nesterov2",
             control_lambda:int|None=None,restart:bool=False,optimizer:str="Newton",method:str="QR/Chol",
@@ -485,10 +485,10 @@ class GSMM():
                             "maxcor":30,
                             "maxls":20,
                             "maxfun":500}
-        
+
         if control_lambda is None:
             control_lambda = 2 if method != 'qEFS' else 1
-            
+
         if min_inner is None:
             min_inner = max_inner
 
@@ -498,25 +498,25 @@ class GSMM():
 
         if repara is None:
             repara = True if method != 'qEFS' else False
-        
+
         if init_bfgs_options is None:
             init_bfgs_options = copy.deepcopy(bfgs_options)
 
         # Some checks
         if not optimizer in ["Newton"]:
             raise ValueError("'optimizer' needs to be set to 'Newton'.")
-        
+
         if self.overall_penalties is None and restart == True:
             raise ValueError("Penalties were not initialized. ``Restart`` must be set to False.")
 
         if extend_lambda and method == 'qEFS':
             warnings.warn("Ignoring argument ``extend_lambda``, which is not supported for ``method='qEFS'``.")
             extend_lambda = False
-        
+
         # Get ys
         ys = []
         for fi,form in enumerate(self.formulas):
-            
+
             # Repeated y-variable - don't have to pass all of them
             if fi > 0 and form.get_lhs().variable == self.formulas[0].get_lhs().variable:
                 ys.append(None)
@@ -531,7 +531,7 @@ class GSMM():
             # Optionally apply function to dep. var. before fitting. Not sure why that would be desirable for this model class...
             if not form.get_lhs().f is None:
                 y = form.get_lhs().f(y)
-            
+
             # And collect
             ys.append(y)
 
@@ -542,7 +542,7 @@ class GSMM():
 
             if restart == False:
                 ind_penalties.append(build_penalties(form))
-            
+
             if build_mat is None or build_mat[fi]:
                 Xs.append(self.get_mmat(drop_NA=drop_NA,par=fi))
             else:
@@ -559,7 +559,7 @@ class GSMM():
             if extra_penalties is not None:
                 for pen in extra_penalties:
                     smooth_pen.append(pen)
-                
+
                 # Re-order penalties, taking into account extra ones
                 smooth_pen = sort_penalties(smooth_pen)
 
@@ -570,11 +570,11 @@ class GSMM():
             # Clean up
             shared_penalties = None
             ind_penalties = None
-        
+
             # Check for family-wide initialization of lambda values
             if init_lambda is None:
                 init_lambda = self.family.init_lambda(smooth_pen)
-            
+
             # Otherwise initialize with provided values or simply with somewhat stronger penalty than for GAMs
             for pen_i in range(len(smooth_pen)):
                 if init_lambda is None:
@@ -598,11 +598,11 @@ class GSMM():
         # Again check first for family wide initialization
         if init_coef is None:
             init_coef = self.family.init_coef([GAMM(form,family=Gaussian()) for form in self.formulas])
-        
+
         # Otherwise again initialize with provided values or randomly
         if not init_coef is None:
             coef = np.array(init_coef).reshape(-1,1)
-            
+
             if self.family.extra_coef is not None:
                 coef = np.concatenate((coef,np.ones(self.family.extra_coef).reshape(-1,1)),axis=0)
         else:
@@ -613,14 +613,14 @@ class GSMM():
         if len(self.formulas) > 1:
             for coef_i in range(1,len(coef_split_idx)):
                 coef_split_idx[coef_i] += coef_split_idx[coef_i-1]
-        
+
         # Now fit model
         coef,H,LV,LV_linop,total_edf,term_edfs,penalty,smooth_pen,fit_info = solve_generalSmooth_sparse(self.family,ys,Xs,form_n_coef,form_up_coef,coef,coef_split_idx,smooth_pen,
-                                                                                    max_outer,max_inner,min_inner,conv_tol,extend_lambda,extension_method_lam,
-                                                                                    control_lambda,optimizer,method,check_cond,piv_tol,repara,should_keep_drop,form_VH,
-                                                                                    use_grad,gamma,qEFSH,overwrite_coef,max_restarts,qEFS_init_converge,prefit_grad,
-                                                                                    progress_bar,n_cores,callback,init_bfgs_options,bfgs_options)
-        
+                                                                                                        max_outer,max_inner,min_inner,conv_tol,extend_lambda,extension_method_lam,
+                                                                                                        control_lambda,optimizer,method,check_cond,piv_tol,repara,should_keep_drop,form_VH,
+                                                                                                        use_grad,gamma,qEFSH,overwrite_coef,max_restarts,qEFS_init_converge,prefit_grad,
+                                                                                                        progress_bar,n_cores,callback,init_bfgs_options,bfgs_options)
+
         self.overall_penalties = smooth_pen
         self.coef = coef
         self.edf = total_edf
@@ -640,7 +640,7 @@ class GSMM():
             split_coef = np.split(coef,coef_split_idx)
             self.preds = [X@spcoef for X,spcoef in zip(Xs,split_coef)]
             self.mus = [link.fi(pred) for link,pred in zip(self.family.links,self.preds)]
-    
+
     ##################################### Prediction #####################################
 
     def sample_post(self, n_ps:int, use_post:list[int]|None=None, deviations:bool=False, seed:int|None=None, par:int=0) -> np.ndarray:
@@ -670,7 +670,7 @@ class GSMM():
         :returns: An np.ndarray of dimension ``[len(use_post),n_ps]`` containing the posterior samples. If ``use_post is None``, ``len(use_post)`` will match the number of coefficients associated with parameter ``par`` of the log-likelihood instead. Can simply be post-multiplied with (the subset of columns indicated by ``use_post`` of) the model matrix :math:`\\mathbf{X}^m` associated with the parameter :math:`m` of the log-likelihood to generate posterior **sample curves**.
         :rtype: np.ndarray
         """
-        
+
         # Extract coef and cols of lvi associated with par
         if len(self.formulas) > 1:
             split_coef = np.split(self.coef,self.coef_split_idx)
@@ -735,7 +735,7 @@ class GSMM():
             else:
                 if k not in n_dat.columns:
                     raise IndexError(f"Variable {k} is missing in new data.")
-        
+
         # Extract coef and cols of lvi associated with par  
         if len(self.formulas) > 1:
             split_coef = np.split(self.coef,self.coef_split_idx)
@@ -745,7 +745,7 @@ class GSMM():
         else:
             coef = self.coef.flatten()
             lvi = self.lvi
-        
+
         # Encode test data
         _,pred_cov_flat,_,_,pred_cov,_,_ = form.encode_data(n_dat,prediction=True)
 
@@ -771,7 +771,7 @@ class GSMM():
                                                      var_mins,var_maxs,factor_levels,
                                                      pred_cov_flat,pred_cov,
                                                      use_only=use_terms)
-        
+
         # Now we calculate the prediction
         pred = predi_mat @ coef
 
@@ -791,7 +791,7 @@ class GSMM():
             return pred,predi_mat,b
 
         return pred,predi_mat,None
-    
+
     def predict_diff(self, dat1:pd.DataFrame, dat2:pd.DataFrame, use_terms:list[int]|None, alpha:float=0.05, whole_interval:bool=False, n_ps:int=10000, seed:int|None=None, par:int=0) -> tuple[np.ndarray,np.ndarray]:
         """
         Get the difference in the predictions for two datasets and for parameter ``par`` of the log-likelihood. Useful to compare a smooth estimated for
@@ -827,7 +827,7 @@ class GSMM():
         :return: A tuple with 2 entries. The first entry is the predicted difference (between the two data sets ``dat1`` & ``dat2``) ``diff``. The second entry is the standard error ``se`` of the predicted difference. The difference CI is then [``diff`` - ``se``, ``diff`` + ``se``]
         :rtype: (np.ndarray,np.ndarray)
         """
-        
+
         _,pmat1,_ = self.predict(use_terms,dat1,par=par)
         _,pmat2,_ = self.predict(use_terms,dat2,par=par)
 
@@ -843,10 +843,10 @@ class GSMM():
             coef = self.coef.flatten()
             lvi = self.lvi
 
-        
+
         # Predicted difference
         diff = pmat_diff @ coef
-        
+
         # Difference CI
         c = pmat_diff @ lvi.T @ lvi * self.scale @ pmat_diff.T
         c = c.diagonal()
@@ -945,9 +945,9 @@ class GAMMLSS(GSMM):
     def __init__(self, formulas: list[Formula], family: GAMLSSFamily):
         super().__init__(formulas, family)
         self.res:np.ndarray|None = None
-    
+
     ##################################### Getters #####################################
-    
+
     def get_pars(self) -> np.ndarray:
         """
         Returns a list containing all coefficients estimated for the model. Use ``self.coef_split_idx`` to split the vector into separate subsets per distribution parameter.
@@ -958,7 +958,7 @@ class GAMMLSS(GSMM):
         :rtype: [float] or None
         """
         return super.get_pars()
-    
+
     def get_mmat(self,use_terms:list[int]|None=None,par:int|None=None) -> list[scp.sparse.csc_array]|scp.sparse.csc_array:
         """
         Returns a list containing exaclty the model matrices used for fitting as a ``scipy.sparse.csc_array``. Will raise an error when fitting was not completed before calling this function.
@@ -1001,7 +1001,7 @@ class GAMMLSS(GSMM):
             return self.family.llk(y,*mus) - pen
 
         return None
-                        
+
     def get_reml(self) -> float:
         """
         Get's the Laplcae approximate REML (Restrcited Maximum Likelihood) score for the estimated lambda values (see Wood, 2011).
@@ -1018,16 +1018,16 @@ class GAMMLSS(GSMM):
 
         if self.coef is None or self.hessian is None:
             raise ValueError("Model needs to be estimated before evaluating the REML score. Call model.fit()")
-        
+
         llk = self.get_llk(False)
 
         keep = None
         if self.info.dropped is not None:
             keep = [cidx for cidx in range(self.hessian.shape[1]) if cidx not in self.info.dropped]
-        
+
         reml = REML(llk,-1*self.hessian,self.coef,1,self.overall_penalties,keep)[0,0]
         return reml
-    
+
     def get_resid(self,**kwargs) -> np.ndarray:
         """ Returns standarized residuals for GAMMLSS models (Rigby & Stasinopoulos, 2005).
 
@@ -1056,11 +1056,11 @@ class GAMMLSS(GSMM):
 
         if isinstance(self.family,MULNOMLSS):
             raise NotImplementedError("Residual computation for Multinomial model is not currently supported.")
-        
+
         return self.family.get_resid(self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat],*self.mus,**kwargs)
 
     ##################################### Summary #####################################
-    
+
     def print_parametric_terms(self):
         """Prints summary output for linear/parametric terms in the model, separately for each parameter of the family's distribution.
         
@@ -1077,7 +1077,7 @@ class GAMMLSS(GSMM):
         :raises NotImplementedError: Will throw an error when called for a model for which the model matrix was never former completely.
         """
         super().print_parametric_terms()
-    
+
     def print_smooth_terms(self, pen_cutoff:float=0.2, p_values:bool=False, edf1:bool = True):
         """Prints the name of the smooth terms included in the model. After fitting, the estimated degrees of freedom per term are printed as well.
         Smooth terms with edf. < ``pen_cutoff`` will be highlighted. This only makes sense when extra Kernel penalties are placed on smooth terms to enable
@@ -1096,9 +1096,9 @@ class GAMMLSS(GSMM):
         :type edf1: bool, optional
         """
         super().print_smooth_terms(pen_cutoff,p_values,edf1)
-    
+
     ##################################### Fitting #####################################
-        
+
     def fit(self,max_outer:int=200,max_inner:int=500,min_inner:int|None=None,conv_tol:float=1e-7,extend_lambda:bool=False,
             extension_method_lam:str="nesterov2",control_lambda:int=2,restart:bool=False,method:str="QR/Chol",check_cond:int=1,
             piv_tol:float=np.power(np.finfo(float).eps,0.04),should_keep_drop:bool=True,prefit_grad:bool=True,repara:bool=True,
@@ -1187,7 +1187,7 @@ class GAMMLSS(GSMM):
         # Some checks
         if self.overall_penalties is None and restart == True:
             raise ValueError("Penalties were not initialized. ``Restart`` must be set to False.")
-        
+
         # Get y
         y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
 
@@ -1218,7 +1218,7 @@ class GAMMLSS(GSMM):
             # Clean up
             shared_penalties = None
             ind_penalties = None
-        
+
             # Check for family-wide initialization of lambda values
             if init_lambda is None:
                 init_lambda = self.family.init_lambda(gamlss_pen)
@@ -1239,7 +1239,7 @@ class GAMMLSS(GSMM):
             coef = scp.stats.norm.rvs(size=sum(form_n_coef),random_state=seed).reshape(-1,1)
 
         form_up_coef = [form.unpenalized_coef for form in self.formulas]
-        
+
         # Now get split index
         coef_split_idx = form_n_coef[:-1]
 
@@ -1248,10 +1248,10 @@ class GAMMLSS(GSMM):
                 coef_split_idx[coef_i] += coef_split_idx[coef_i-1]
 
         coef,etas,mus,wres,H,LV,total_edf,term_edfs,penalty,gamlss_pen,fit_info = solve_gammlss_sparse(self.family,y,Xs,form_n_coef,form_up_coef,coef,coef_split_idx,
-                                                                                            gamlss_pen,max_outer,max_inner,min_inner,conv_tol,
-                                                                                            extend_lambda,extension_method_lam,control_lambda,
-                                                                                            method,check_cond,piv_tol,repara,should_keep_drop,prefit_grad,progress_bar,n_cores)
-        
+                                                                                                       gamlss_pen,max_outer,max_inner,min_inner,conv_tol,
+                                                                                                       extend_lambda,extension_method_lam,control_lambda,
+                                                                                                       method,check_cond,piv_tol,repara,should_keep_drop,prefit_grad,progress_bar,n_cores)
+
         self.overall_penalties = gamlss_pen
         self.coef = coef
         self.preds = etas
@@ -1267,9 +1267,9 @@ class GAMMLSS(GSMM):
             warnings.warn(f"model.info.eps > 0 ({np.round(fit_info.eps,decimals=2)}). Perturbing Hessian of log-likelihood to ensure that negative Hessian of penalized log-likelihood is invertible.")
             self.hessian -= fit_info.eps*scp.sparse.identity(H.shape[1],format='csc')
         self.info = fit_info
-    
+
     ##################################### Prediction #####################################
-    
+
     def sample_post(self, n_ps:int, use_post:list[int]|None=None, deviations:bool=False, seed:int|None=None, par:int=0) -> np.ndarray:
         """
         Obtain ``n_ps`` samples from posterior :math:`[\\boldsymbol{\\beta}_m - \\hat{\\boldsymbol{\\beta}}_m] | \\mathbf{y},\\boldsymbol{\\lambda} \\sim N(0,\\mathbf{V})`,
@@ -1450,7 +1450,7 @@ class GAMMLSS(GSMM):
         :rtype: (np.ndarray,scp.sparse.csc_array,np.ndarray or None)
         """
         return super().predict(use_terms,n_dat,alpha,ci,whole_interval,n_ps,seed,par)
-    
+
     def predict_diff(self, dat1:pd.DataFrame, dat2:pd.DataFrame, use_terms:list[int]|None, alpha:float=0.05, whole_interval:bool=False, n_ps:int=10000, seed:int|None=None, par:int=0) -> tuple[np.ndarray,np.ndarray]:
         """
         Get the difference in the predictions for two datasets and for distribution parameter ``par``. Useful to compare a smooth estimated for
@@ -1528,7 +1528,7 @@ class GAMMLSS(GSMM):
         :rtype: (np.ndarray,np.ndarray)
         """
         return super().predict_diff(dat1,dat2,use_terms,alpha,whole_interval,n_ps,seed,par)
-    
+
 ##################################### GAMM class #####################################
 
 class GAMM(GAMMLSS):
@@ -1651,12 +1651,12 @@ class GAMM(GAMMLSS):
         :return: Model matrix :math:`\\mathbf{X}` used for fitting.
         :rtype: scp.sparse.csc_array
         """
-        
+
         if len(self.formulas[0].file_paths) != 0:
             raise NotImplementedError("Cannot return the model-matrix if X.T@X was formed iteratively.")
-        
+
         return super().get_mmat(use_terms,par=0)
-    
+
     def get_llk(self,penalized:bool=True,ext_scale:float|None=None) -> float|None:
         """
         Get the (penalized) log-likelihood of the estimated model (float or None) given the trainings data. LLK can optionally be evaluated for an external scale parameter ``ext_scale``.
@@ -1682,7 +1682,7 @@ class GAMM(GAMMLSS):
             mu = self.preds[0]
             if isinstance(self.family,Gaussian) == False or isinstance(self.family.link,Identity) == False:
                 mu = self.family.link.fi(self.preds[0])
-            
+
             y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
             if not self.formulas[0].get_lhs().f is None:
                 y = self.formulas[0].get_lhs().f(y)
@@ -1723,14 +1723,14 @@ class GAMM(GAMMLSS):
         """
         if (not isinstance(self.family,Gaussian) or isinstance(self.family.link,Identity) == False) and self.Wr is None:
             raise TypeError("Model is not Normal and pseudo-dat weights are not avilable. Call model.fit() first!")
-        
+
         if self.coef is None or self.overall_penalties is None:
             raise ValueError("Model needs to be estimated before evaluating the REML score. Call model.fit()")
-        
+
         scale = self.family.scale
         if self.family.twopar:
             scale = self.scale # Estimated scale
-        
+
         llk = self.get_llk(False)
 
         # Compute negative Hessian of llk (Wood, 2011)
@@ -1739,11 +1739,11 @@ class GAMM(GAMMLSS):
         keep = None
         if self.info.dropped is not None:
             keep = [cidx for cidx in range(self.hessian.shape[1]) if cidx not in self.info.dropped]
-            
+
         reml = REML(llk,nH,self.coef,scale,self.overall_penalties,keep)[0,0]
-        
+
         return reml
-    
+
     def get_resid(self,type:str='Pearson') -> np.ndarray:
         """
         Get different types of residuals from the estimated model.
@@ -1770,19 +1770,19 @@ class GAMM(GAMMLSS):
         """
         if self.res is None or self.preds is None:
             raise ValueError("Model needs to be estimated before evaluating the residuals. Call model.fit()")
-        
+
         if type not in ["Pearson", "Deviance", "ar1", "family"]:
             raise ValueError("Type must be one of 'Pearson','Deviance', or 'ar1'.")
-        
+
         if type == "ar1" and self.rho is None:
             raise ValueError("ar1 residuals are only available if the model was estimated with ``model.fit(..., rho=<some value>)``.")
-        
+
         if type == "Pearson":
             return self.res
-        
+
         elif type == "ar1":
             return self.res_ar
-        
+
         elif type == "Deviance":
             # Deviance residual requires computing quantity D_i, which is the amount each data-point contributes to
             # overall deviance. Implemented by the family members.
@@ -1793,9 +1793,9 @@ class GAMM(GAMMLSS):
                 mu = self.family.link.fi(mu)
 
             return np.sign(y - mu) * np.sqrt(self.family.D(y,mu))
-    
+
     ##################################### Summary #####################################
-        
+
     def print_parametric_terms(self):
         """Prints summary output for linear/parametric terms in the model, not unlike the one returned in R when using the ``summary`` function
         for ``mgcv`` models.
@@ -1815,7 +1815,7 @@ class GAMM(GAMMLSS):
         :raises NotImplementedError: Will throw an error when called for a model for which the model matrix was never former completely.
         """
         print_parametric_terms(self)
-    
+
     def print_smooth_terms(self, pen_cutoff:float=0.2, p_values:bool=False, edf1:bool=True):
         """Prints the name of the smooth terms included in the model. After fitting, the estimated degrees of freedom per term are printed as well.
         Smooth terms with edf. < ``pen_cutoff`` will be highlighted. This only makes sense when extra Kernel penalties are placed on smooth terms to enable
@@ -1839,9 +1839,9 @@ class GAMM(GAMMLSS):
             ps, Trs = approx_smooth_p_values(self,edf1=edf1)
 
         print_smooth_terms(self,pen_cutoff=pen_cutoff,ps=ps,Trs=Trs)
-                
+
     ##################################### Fitting #####################################
-    
+
     def fit(self,max_outer:int=200,max_inner:int=None,conv_tol:float=1e-7,extend_lambda:bool=False,control_lambda:int=2,exclude_lambda:bool=False,
             extension_method_lam:str = "nesterov",restart:bool=False,method:str="QR",check_cond:int=1,progress_bar:bool=True,n_cores:int=10,
             offset:float|np.ndarray|None = None,rho:float|None=None):
@@ -1965,20 +1965,20 @@ class GAMM(GAMMLSS):
                 warnings.warn("Resetting penalties. If you don't want that, set ``restart=True``.")
             self.overall_penalties = combine_shared_penalties(build_penalties(self.formulas[0]))
         penalties = self.overall_penalties
-        
+
         # Some checks
         if penalties is None and restart:
             raise ValueError("Penalties were not initialized. ``Restart`` must be set to False.")
-        
+
         if len(self.formulas[0].discretize) != 0 and method != "Chol":
             raise ValueError("When discretizing derivative code, the method argument must be set to 'Chol'.")
-        
+
         if len(self.formulas[0].file_paths) != 0 and rho is not None:
             raise ValueError("ar1 model of the residuals is not supported when iteratviely building the model matrix.")
-        
+
         if max_inner > 1 and rho is not None:
             raise ValueError("ar1 model of the residuals only supported for ``max_inner=1``.")
-        
+
         self.offset = 0
 
         if len(self.formulas[0].file_paths) == 0:
@@ -1996,7 +1996,7 @@ class GAMM(GAMMLSS):
             factor_levels = self.formulas[0].get_factor_levels()
 
             cov_flat = self.formulas[0].cov_flat[self.formulas[0].NOT_NA_flat]
-            
+
             if len(irstx) > 0:
                 cov_flat = self.formulas[0].cov_flat # Need to drop NA rows **after** building!
                 cov = self.formulas[0].cov
@@ -2028,13 +2028,13 @@ class GAMM(GAMMLSS):
             # Build the model matrix with all information from the formula
             if self.formulas[0].file_loading_nc == 1:
                 model_mat = build_sparse_matrix_from_formula(terms,has_intercept,
-                                                            ltx,irstx,stx,rtx,var_types,var_map,
-                                                            var_mins,var_maxs,factor_levels,
-                                                            cov_flat,cov)
-            
+                                                             ltx,irstx,stx,rtx,var_types,var_map,
+                                                             var_mins,var_maxs,factor_levels,
+                                                             cov_flat,cov)
+
             else:
                 # Build row sets of model matrix in parallel:
-                
+
                 cov_split = np.array_split(cov_flat,self.formulas[0].file_loading_nc,axis=0)
                 with mp.Pool(processes=self.formulas[0].file_loading_nc) as pool:
                     # Build the model matrix with all information from the formula - but only for sub-set of rows
@@ -2043,7 +2043,7 @@ class GAMM(GAMMLSS):
                                                                            repeat(var_types),repeat(var_map),repeat(var_mins),
                                                                            repeat(var_maxs),repeat(factor_levels),cov_split,
                                                                            repeat(cov)))
-                    
+
                     model_mat = scp.sparse.vstack(Xs,format='csc')
 
             if len(irstx) > 0:
@@ -2057,17 +2057,17 @@ class GAMM(GAMMLSS):
             if rho is not None:
                 self.rho = rho
                 Lrhoi,_ = computeAr1Chol(self.formulas[0],rho)
-            
+
             # Now we have to estimate the model
             coef,eta,wres,Wr,WN,scale,LVI,edf,term_edf,penalty,fit_info = solve_gamm_sparse(init_mu_flat,y_flat,
-                                                                                      model_mat,penalties,self.formulas[0].n_coef,
-                                                                                      self.family,max_outer,max_inner,"svd",
-                                                                                      conv_tol,extend_lambda,control_lambda,
-                                                                                      exclude_lambda,extension_method_lam,
-                                                                                      len(self.formulas[0].discretize) == 0,
-                                                                                      method,check_cond,progress_bar,n_cores,
-                                                                                      self.offset,Lrhoi)
-            
+                                                                                            model_mat,penalties,self.formulas[0].n_coef,
+                                                                                            self.family,max_outer,max_inner,"svd",
+                                                                                            conv_tol,extend_lambda,control_lambda,
+                                                                                            exclude_lambda,extension_method_lam,
+                                                                                            len(self.formulas[0].discretize) == 0,
+                                                                                            method,check_cond,progress_bar,n_cores,
+                                                                                            self.offset,Lrhoi)
+
             self.Wr = Wr
             self.WN = WN
 
@@ -2106,25 +2106,25 @@ class GAMM(GAMMLSS):
                     self.offset = offset
                     y_flat += offset
                     eta += offset
-        
+
         else:
             # Iteratively build model matrix.
             # Follows steps in "Generalized additive models for large data sets" (2015) by Wood, Goude, and Shaw
             if not self.formulas[0].get_lhs().f is None:
                 raise ValueError("Cannot apply function to dep. var. when building model matrix iteratively. Consider creating a modified variable in the data-frame.")
-            
+
             if isinstance(self.family,Gaussian) == False or isinstance(self.family.link,Identity) == False:
                 raise ValueError("Iteratively building the model matrix is currently only supported for Normal models.")
-            
+
             coef,eta,wres,XX,scale,LVI,edf,term_edf,penalty,fit_info = solve_gamm_sparse2(self.formulas[0],penalties,self.formulas[0].n_coef,
                                                                                           self.family,max_outer,"svd",
                                                                                           conv_tol,extend_lambda,control_lambda,
                                                                                           exclude_lambda,extension_method_lam,
                                                                                           len(self.formulas[0].discretize) == 0,
                                                                                           progress_bar,n_cores)
-            
+
             self.hessian = -1*(XX/scale)
-        
+
         self.coef = coef.reshape(-1,1)
         self.scale = scale
         self.preds = [eta]
@@ -2135,7 +2135,7 @@ class GAMM(GAMMLSS):
         self.penalty = penalty
         self.info = fit_info
         self.lvi = LVI
-    
+
     ##################################### Prediction #####################################
 
     def sample_post(self,n_ps:int,use_post:list[int]|None=None,deviations:bool=False,seed:int|None=None,par:int=0) -> np.ndarray:
@@ -2265,7 +2265,7 @@ class GAMM(GAMMLSS):
         :rtype: (np.ndarray,scp.sparse.csc_array,np.ndarray or None)
         """
         return super().predict(use_terms,n_dat,alpha,ci,whole_interval,n_ps,seed,0)
-        
+
     def predict_diff(self,dat1:pd.DataFrame,dat2:pd.DataFrame,use_terms:list[int]|None,alpha:float=0.05,whole_interval:bool=False,n_ps:int=10000,seed:int|None=None,par:int=0) -> tuple[np.ndarray,np.ndarray]:
         """Get the difference in the predictions for two datasets.
         

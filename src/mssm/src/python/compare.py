@@ -27,7 +27,7 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
                 recompute_H:bool|None=None,
                 compute_Vcc:bool|None=None,
                 bfgs_options:dict={}) -> dict:
-    
+
     """ Computes the AIC difference and (optionally) performs an approximate GLRT on twice the difference in unpenalized likelihood between models ``model1`` and ``model2`` (see Wood et al., 2016).
     
     For the GLRT to be appropriate ``model1`` should be set to the model containing more effects and ``model2`` should be a nested, simpler, variant of ``model1``.
@@ -197,7 +197,7 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
             correct_t1 = True
         else:
             correct_t1 = False
-    
+
     # Strictly Gaussian or lack of cores or many coef -> grid = 'JJJ1'
     # Strictly Gaussian, many cores, many coef -> grid = 'JJJ2'
     # Rest: grid = 'JJJ3'
@@ -210,17 +210,17 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
 
         elif (n_c <= 5) or (len(model1.coef) > 2000):
             grid = 'JJJ1'
-        
+
         else:
             grid = 'JJJ3'
-    
+
     # Handle very big additive models
     if only_expected_edf is None:
         if grid == 'JJJ2' and len(model1.coef) > 4000 and perform_GLRT == False and correct_t1 == False:
             only_expected_edf = True
         else:
             only_expected_edf = False
-    
+
     # Handle big models
     if compute_Vcc is None:
         if len(model1.coef) > 2000:
@@ -244,28 +244,28 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
 
     if type(model1.family) != type(model2.family):
         raise ValueError("Both models should be estimated using the same family.")
-    
+
     if perform_GLRT and isinstance(model1.family,Family) and model1.formulas[0].n_coef < model2.formulas[0].n_coef:
         raise ValueError("For the GLRT, model1 needs to be set to the more complex model (i.e., needs to have more coefficients than model2).")
-    
+
     if perform_GLRT and (isinstance(model1.family,Family) == False) and len(model1.coef) < len(model2.coef):
         raise ValueError("For the GLRT, model1 needs to be set to the more complex model (i.e., needs to have more coefficients than model2).")
-    
+
     # Collect total DOF for uncertainty in \\lambda using correction proposed by Greven & Scheipl (2016)
     aic_DOF1 = None
     aic_DOF2 = None
     if correct_V:
         if verbose:
             print("Correcting for uncertainty in lambda estimates...\n")
-        
+
         #V,LV,Vp,Vpr,edf,total_edf,edf2,total_edf2,upper_edf
         _,_,_,_,_,DOF1,_,DOF12,expected_edf1,_ = correct_VB(model1,nR=nR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,only_expected_edf=only_expected_edf,Vp_fidiff=Vp_fidiff,use_importance_weights=use_importance_weights,prior=prior,recompute_H=recompute_H,compute_Vcc=compute_Vcc,seed=seed,**bfgs_options)
         _,_,_,_,_,DOF2,_,DOF22,expected_edf2,_ = correct_VB(model2,nR=nR,n_c=n_c,form_t1=correct_t1,grid_type=grid,a=a,b=b,df=df,verbose=verbose,drop_NA=drop_NA,method=method,only_expected_edf=only_expected_edf,Vp_fidiff=Vp_fidiff,use_importance_weights=use_importance_weights,prior=prior,recompute_H=recompute_H,compute_Vcc=compute_Vcc,seed=seed,**bfgs_options)
-        
+
         if only_expected_edf:
             DOF1 = expected_edf1
             DOF2 = expected_edf2
-        
+
         if correct_t1:
             # Section 6.12.4 suggests replacing t (edf) with t1 (2*t - (F@F).trace()) with F=(X.T@X+S_\\llambda)^{-1}@X.T@X for GLRT - with the latter also being corrected for
             # uncertainty in lambda. However, Wood et al., (2016) suggest that the aic should be computed based on t - so some book-keeping is necessary.
@@ -277,7 +277,7 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
     else:
         DOF1 = model1.edf
         DOF2 = model2.edf
-        
+
         if correct_t1:
             # Compute uncertainty un-corrected but smoothness bias corrected edf (t1 in section 6.1.2 of Wood, 2017)
             V1 = model1.lvi.T @ model1.lvi
@@ -317,7 +317,7 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
     # Compute Chi-square statistic...
     stat = 2 * (llk1 - llk2)
     test_stat = stat
-    
+
     # ... and degrees of freedom under NULL (see Wood, 2017)
     DOF_diff = DOF1-DOF2
     test_DOF_diff = abs(DOF_diff)
@@ -327,12 +327,12 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
     # 2) LLK1 < LLK2, DOF1 > DOF2; This makes no sense. Model 1 - the more complex one - has worse llk but more DOF.
     # 3) LLK1 > LLK2, DOF1 < DOF2; Notationally correct: model1 should after all be more complex. But in terms of edf makes little sense (as pointed out by Wood, 2017).
     # 4) LLK1 > LLK2, DOF1 > DOF2; Valid, inverse of case 1.
-    
+
     # Personally, I think cases 2 & 3 should both return NAs for p-values.. But anova.gam for mgcv returns a p-value for case 3 so we will do the same here
     # and just raise a warning. For case 1, we need to take -1*test_stat.
     if  llk1 < llk2 and DOF1 < DOF2:
         test_stat = -1*test_stat
-    
+
     # Compute p-value under reference distribution.
     if perform_GLRT == False or test_stat < 0: # Correct for aforementioned possibility 2: model 1 has lower llk and higher edf.
         H1 = np.nan
@@ -371,5 +371,5 @@ def compare_CDL(model1:GAMM | GAMMLSS | GSMM,
               "aic1":aic1,
               "aic2":aic2,
               "aic_diff":aic1-aic2}
-    
+
     return result

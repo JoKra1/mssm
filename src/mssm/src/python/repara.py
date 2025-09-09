@@ -8,492 +8,492 @@ import copy
 import sys
 
 def reparam(X:scp.sparse.csc_array|None,S:list[LambdaTerm],cov:np.ndarray|None,option:int=1,n_bins:int=30,QR:bool=False,identity:bool=False,scale:bool=False,form_inverse:int=0,form_root:bool=False,n_c:int=10) -> tuple:
-   """Options 1 - 3 are natural reparameterization discussed in Wood (2017; 5.4.2)
-   with different strategies for the QR computation of :math:`\\mathbf{X}`. Option 4 helps with stabilizing the REML computation
-   and is from Appendix B of Wood (2011) and section 6.2.7 in Wood (2017):
+    """Options 1 - 3 are natural reparameterization discussed in Wood (2017; 5.4.2)
+    with different strategies for the QR computation of :math:`\\mathbf{X}`. Option 4 helps with stabilizing the REML computation
+    and is from Appendix B of Wood (2011) and section 6.2.7 in Wood (2017):
 
-      1. Form complete matrix :math:`\\mathbf{X}` based on entire covariate.
-      2. Form matrix :math:`\\mathbf{X}` only based on unique covariate values.
-      3. Form matrix :math:`\\mathbf{X}` on a sample of values making up covariate. Covariate
-         is split up into ``n_bins`` equally wide bins. The number of covariate values
-         per bin is then calculated. Subsequently, the ratio relative to minimum bin size is
-         computed and each ratio is rounded to the nearest integer. Then ``ratio`` samples
-         are obtained from each bin. That way, imbalance in the covariate is approximately preserved when
-         forming the QR.
-      4. Transform term-specific :math:`\\mathbf{S}_{\\boldsymbol{\\lambda}}` based on Appendix B of Wood (2011) and section 6.2.7 in Wood (2017)
-         so that they are full-rank and their log-determinant can be computed safely. In that case, only ``S`` needs
-         to be provided and has to be a list holding the penalties to be transformed. If the transformation is to be applied to
-         model matrices, coefficients, hessian, and covariance matrices X should be set to something other than ``None`` (does not matter what, can
-         for example be the first model matrix.) The :func:`mssm.src.python.gamm_solvers.reparam_model` function can be used to apply the transformation and also
-         returns the required transformation matrices to reverse it.
-   
-   For Options 1-3:
+       1. Form complete matrix :math:`\\mathbf{X}` based on entire covariate.
+       2. Form matrix :math:`\\mathbf{X}` only based on unique covariate values.
+       3. Form matrix :math:`\\mathbf{X}` on a sample of values making up covariate. Covariate
+          is split up into ``n_bins`` equally wide bins. The number of covariate values
+          per bin is then calculated. Subsequently, the ratio relative to minimum bin size is
+          computed and each ratio is rounded to the nearest integer. Then ``ratio`` samples
+          are obtained from each bin. That way, imbalance in the covariate is approximately preserved when
+          forming the QR.
+       4. Transform term-specific :math:`\\mathbf{S}_{\\boldsymbol{\\lambda}}` based on Appendix B of Wood (2011) and section 6.2.7 in Wood (2017)
+          so that they are full-rank and their log-determinant can be computed safely. In that case, only ``S`` needs
+          to be provided and has to be a list holding the penalties to be transformed. If the transformation is to be applied to
+          model matrices, coefficients, hessian, and covariance matrices X should be set to something other than ``None`` (does not matter what, can
+          for example be the first model matrix.) The :func:`mssm.src.python.gamm_solvers.reparam_model` function can be used to apply the transformation and also
+          returns the required transformation matrices to reverse it.
 
-      If ``QR==True`` then :math:`\\mathbf{X}` is decomposed into :math:`\\mathbf{Q}\\mathbf{R}` directly via QR decomposition. Alternatively, we first
-      form :math:`\\mathbf{X}^T\\mathbf{X}` and then compute the cholesky :math:`\\mathbf{L}` of this product - note that :math:`\\mathbf{L}^T = \\mathbf{R}`. Overall the latter
-      strategy is much faster (in particular if ``option==1``), but the increased loss of precision in :math:`\\mathbf{L}^T = \\mathbf{R}` might not be ok for some.
+    For Options 1-3:
 
-      After transformation S only contains elements on it's diagonal and :math:`\\mathbf{X}` the transformed functions. As discussed
-      in Wood (2017), the transformed functions are decreasingly flexible - so the elements on :math:`\\mathbf{S}` diagonal become smaller
-      and eventually zero, for elements that are in the kernel of the original :math:`\\mathbf{S}` (un-penalized == not flexible).
+       If ``QR==True`` then :math:`\\mathbf{X}` is decomposed into :math:`\\mathbf{Q}\\mathbf{R}` directly via QR decomposition. Alternatively, we first
+       form :math:`\\mathbf{X}^T\\mathbf{X}` and then compute the cholesky :math:`\\mathbf{L}` of this product - note that :math:`\\mathbf{L}^T = \\mathbf{R}`. Overall the latter
+       strategy is much faster (in particular if ``option==1``), but the increased loss of precision in :math:`\\mathbf{L}^T = \\mathbf{R}` might not be ok for some.
 
-      For a similar transformation (based solely on :math:`\\mathbf{S}`), Wood et al. (2013) show how to further reduce the diagonally
-      transformed :math:`\\mathbf{S}` to an even simpler identity penalty. As discussed also in Wood (2017) the same behavior of decreasing
-      flexibility if all entries on the diagonal of :math:`\\mathbf{S}` are 1 can only be maintained if the transformed functions are
-      multiplied by a weight related to their wiggliness. Specifically, more flexible functions need to become smaller in
-      amplitude - so that for the same level of penalization they are removed earlier than less flexible ones. To achieve this
-      Wood further post-multiply the transformed matrix :math:`\\mathbf{X}'` with a matrix that contains on it's diagonal the reciprocal of the
-      square root of the transformed penalty matrix (and 1s in the last cells corresponding to the kernel). This is done here
-      if ``identity=True``.
+       After transformation S only contains elements on it's diagonal and :math:`\\mathbf{X}` the transformed functions. As discussed
+       in Wood (2017), the transformed functions are decreasingly flexible - so the elements on :math:`\\mathbf{S}` diagonal become smaller
+       and eventually zero, for elements that are in the kernel of the original :math:`\\mathbf{S}` (un-penalized == not flexible).
 
-      In ``mgcv`` the transformed model matrix and penalty can optionally be scaled by the root mean square value of the transformed
-      model matrix (see the nat.param function in mgcv). This is done here if ``scale=True``.
+       For a similar transformation (based solely on :math:`\\mathbf{S}`), Wood et al. (2013) show how to further reduce the diagonally
+       transformed :math:`\\mathbf{S}` to an even simpler identity penalty. As discussed also in Wood (2017) the same behavior of decreasing
+       flexibility if all entries on the diagonal of :math:`\\mathbf{S}` are 1 can only be maintained if the transformed functions are
+       multiplied by a weight related to their wiggliness. Specifically, more flexible functions need to become smaller in
+       amplitude - so that for the same level of penalization they are removed earlier than less flexible ones. To achieve this
+       Wood further post-multiply the transformed matrix :math:`\\mathbf{X}'` with a matrix that contains on it's diagonal the reciprocal of the
+       square root of the transformed penalty matrix (and 1s in the last cells corresponding to the kernel). This is done here
+       if ``identity=True``.
 
-   For Option 4:
+       In ``mgcv`` the transformed model matrix and penalty can optionally be scaled by the root mean square value of the transformed
+       model matrix (see the nat.param function in mgcv). This is done here if ``scale=True``.
 
-      Option 4 enforces re-parameterization of term-specific :math:`\\mathbf{S}_{\\boldsymbol{\\lambda}}` based on section Wood (2011) and section 6.2.7 in Wood (2017).
-      In ``mssm`` multiple penalties can be placed on individual terms (i.e., tensor terms, random smooths, Kernel penalty) but
-      it is not always the case that the term-specific :math:`\\mathbf{S}_{\\boldsymbol{\\lambda}}` - i.e., the sum over all those individual penalties multiplied with
-      their :math:`\\lambda` parameters, is of full rank. If we need to form the inverse of the term-specific :math:`\\mathbf{S}_{\\boldsymbol{\\lambda}}` this is problematic.
-      It is also problematic, as discussed by Wood (2011), if the different :math:`\\lambda` are all of different magnitude in which case forming
-      the term-specific :math:`log(|\\mathbf{S}_{\\boldsymbol{\\lambda}}|+)` becomes numerically difficult.
+    For Option 4:
 
-      The re-parameterization implemented by option 4, based on Appendix B in Wood (2011), solves these issues. After this re-parameterization a
-      term-specific :math:`\\mathbf{S}_{\\boldsymbol{\\lambda}}` has been formed that is full rank. And :math:`log(|\\mathbf{S}_{\\boldsymbol{\\lambda}}|)` - no longer just a generalized determinant - can be
-      computed without running into numerical problems.
+       Option 4 enforces re-parameterization of term-specific :math:`\\mathbf{S}_{\\boldsymbol{\\lambda}}` based on section Wood (2011) and section 6.2.7 in Wood (2017).
+       In ``mssm`` multiple penalties can be placed on individual terms (i.e., tensor terms, random smooths, Kernel penalty) but
+       it is not always the case that the term-specific :math:`\\mathbf{S}_{\\boldsymbol{\\lambda}}` - i.e., the sum over all those individual penalties multiplied with
+       their :math:`\\lambda` parameters, is of full rank. If we need to form the inverse of the term-specific :math:`\\mathbf{S}_{\\boldsymbol{\\lambda}}` this is problematic.
+       It is also problematic, as discussed by Wood (2011), if the different :math:`\\lambda` are all of different magnitude in which case forming
+       the term-specific :math:`log(|\\mathbf{S}_{\\boldsymbol{\\lambda}}|+)` becomes numerically difficult.
 
-      The strategy by Wood (2011) could be applied to form an overall - not just term-specific - :math:`\\mathbf{S}_{\\boldsymbol{\\lambda}}` with these properties. However, this
-      does not work for general smooth models as defined by Wood et al. (2016). Hence, mssm opts for the blockwise strategy.
-      However, in ``mssm`` penalties currently cannot overlap, so this is not necessary at the moment.
+       The re-parameterization implemented by option 4, based on Appendix B in Wood (2011), solves these issues. After this re-parameterization a
+       term-specific :math:`\\mathbf{S}_{\\boldsymbol{\\lambda}}` has been formed that is full rank. And :math:`log(|\\mathbf{S}_{\\boldsymbol{\\lambda}}|)` - no longer just a generalized determinant - can be
+       computed without running into numerical problems.
 
-   References:
-      - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
-      - Wood, S. N., Scheipl, F., & Faraway, J. J. (2013). Straightforward intermediate rank tensor product smoothing in mixed models.
-      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-      - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-      - mgcv source code (accessed 2024). smooth.R file, nat.param function.
+       The strategy by Wood (2011) could be applied to form an overall - not just term-specific - :math:`\\mathbf{S}_{\\boldsymbol{\\lambda}}` with these properties. However, this
+       does not work for general smooth models as defined by Wood et al. (2016). Hence, mssm opts for the blockwise strategy.
+       However, in ``mssm`` penalties currently cannot overlap, so this is not necessary at the moment.
 
-   :param X: Model/Term matrix or None
-   :type X: scp.sparse.csc_array | None
-   :param S: List of penalties
-   :type S: list[LambdaTerm]
-   :param cov: covariate array associated with a specific term or None
-   :type cov: np.ndarray | None
-   :param option: Which re-parameterization to compute, defaults to 1
-   :type option: int, optional
-   :param n_bins: Number of bins to use as part of option 3, defaults to 30
-   :type n_bins: int, optional
-   :param QR: Whether to rely on a QR decomposition or not (then a Cholesky is used) as part of options 1-3, defaults to False
-   :type QR: bool, optional
-   :param identity: Whether the penalty matrix should be transformed to identity as part of options 1-3, defaults to False
-   :type identity: bool, optional
-   :param scale: Whether the penalty matrix and term matrix should be scaled as part of options 1-3, defaults to False
-   :type scale: bool, optional
-   :return: Return object content depends on ``option`` but will usually hold informations to apply/undo the required re-parameterization as well as already re-parameterized objects.
-   :rtype: tuple
-   """
+    References:
+       - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
+       - Wood, S. N., Scheipl, F., & Faraway, J. J. (2013). Straightforward intermediate rank tensor product smoothing in mixed models.
+       - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+       - mgcv source code (accessed 2024). smooth.R file, nat.param function.
 
-   if option < 4:
+    :param X: Model/Term matrix or None
+    :type X: scp.sparse.csc_array | None
+    :param S: List of penalties
+    :type S: list[LambdaTerm]
+    :param cov: covariate array associated with a specific term or None
+    :type cov: np.ndarray | None
+    :param option: Which re-parameterization to compute, defaults to 1
+    :type option: int, optional
+    :param n_bins: Number of bins to use as part of option 3, defaults to 30
+    :type n_bins: int, optional
+    :param QR: Whether to rely on a QR decomposition or not (then a Cholesky is used) as part of options 1-3, defaults to False
+    :type QR: bool, optional
+    :param identity: Whether the penalty matrix should be transformed to identity as part of options 1-3, defaults to False
+    :type identity: bool, optional
+    :param scale: Whether the penalty matrix and term matrix should be scaled as part of options 1-3, defaults to False
+    :type scale: bool, optional
+    :return: Return object content depends on ``option`` but will usually hold informations to apply/undo the required re-parameterization as well as already re-parameterized objects.
+    :rtype: tuple
+    """
 
-      # For option 1 just use provided basis matrix
-      if option != 1:
-         unq,idx,c = np.unique(cov,return_counts=True,return_index=True)
-         if option == 2:
-            # Form basis based on unique values in cov
-            sample = idx
-         elif option == 3:
-            # Form basis based on re-sampled values of cov to keep row number small but hopefully imbalance
-            # in the data preserved.
-            weights,values = np.histogram(cov,bins=n_bins)
-            ratio = np.round(weights/min(weights),decimals=0).astype(int)
+    if option < 4:
 
-            sample = []
-            for bi in range(n_bins-1):
-               sample_val = np.random.choice(unq[(unq >= values[bi]) & (unq < values[bi+1])],size=ratio[bi],replace=True)
-               sample_idx = [idx[unq == sample_val[svi]][0] for svi in range(ratio[bi])]
-               sample.extend(sample_idx)
-            sample.append(idx[-1])
-            sample = np.array(sample)
-            
-         # Now re-form basis
-         X = X[sample,:]
-      
-      # Now decompose X = Q @ R
-      if QR:
-         _,R = scp.linalg.qr(X.toarray(),mode='economic')
-         R = scp.sparse.csr_array(R)
-         
-      else:
-         XX = (X.T @ X).tocsc()
-         
-         L,code = eigen_solvers.chol(*map_csc_to_eigen(XX))
+        # For option 1 just use provided basis matrix
+        if option != 1:
+            unq,idx,c = np.unique(cov,return_counts=True,return_index=True)
+            if option == 2:
+                # Form basis based on unique values in cov
+                sample = idx
+            elif option == 3:
+                # Form basis based on re-sampled values of cov to keep row number small but hopefully imbalance
+                # in the data preserved.
+                weights,values = np.histogram(cov,bins=n_bins)
+                ratio = np.round(weights/min(weights),decimals=0).astype(int)
 
-         if code != 0:
-            raise ValueError("Cholesky failed during reparameterization.")
+                sample = []
+                for bi in range(n_bins-1):
+                    sample_val = np.random.choice(unq[(unq >= values[bi]) & (unq < values[bi+1])],size=ratio[bi],replace=True)
+                    sample_idx = [idx[unq == sample_val[svi]][0] for svi in range(ratio[bi])]
+                    sample.extend(sample_idx)
+                sample.append(idx[-1])
+                sample = np.array(sample)
 
-         R = L.T
+            # Now re-form basis
+            X = X[sample,:]
 
-      # Now form B and proceed with eigen decomposition of it (see Wood, 2017)
-      # see also smooth.R nat.param function in mgcv.
-      # R.T @ A = S.T
-      # A = Rinv.T @ S.T
-      # R.T @ B = A.T
-      # A.T = S @ Rinv ## Transpose order reverses!
-      # B = Rinv.T @ A.T
-      # B = Rinv.T @ S @ Rinv
-      
-      B = eigen_solvers.solve_tr(*map_csc_to_eigen(R.T),eigen_solvers.solve_tr(*map_csc_to_eigen(R.T),S.T).T)
+        # Now decompose X = Q @ R
+        if QR:
+            _,R = scp.linalg.qr(X.toarray(),mode='economic')
+            R = scp.sparse.csr_array(R)
 
-      s, U =scp.linalg.eigh(B.toarray())
+        else:
+            XX = (X.T @ X).tocsc()
 
-      # Decreasing magnitude for ease of indexing..
-      s = np.flip(s)
-      U = scp.sparse.csc_array(np.flip(U,axis=1))
+            L,code = eigen_solvers.chol(*map_csc_to_eigen(XX))
 
-      rank = len(s[s > 1e-7])
+            if code != 0:
+                raise ValueError("Cholesky failed during reparameterization.")
 
-      # First rank elements are non-zero - corresponding to penalized functions, last S.shape[1] - rank
-      # are zero corresponding to dimensionality of kernel of S
-      Srp = scp.sparse.diags([s[i] if s[i] > 1e-7 else 0 for i in range(S.shape[1])],offsets=0,format='csc')
-      Drp = scp.sparse.diags([s[i]**0.5 if s[i] > 1e-7 else 0 for i in range(S.shape[1])],offsets=0,format='csc')
+            R = L.T
 
-      # Now compute matrix to transform basis functions. The transformed functions are decreasingly flexible. I.e.,
-      # Xrp[:,i] is more flexible than Xrp[:,i+1]. According to Wood (2017) Xrp = Q @ U. Now we want to be able to
-      # evaluate the basis for new data resulting in Xpred. So we also have to transform Xpred. Following Wood (2017),
-      # based on QR decomposition we have X = Q @ R, so we form matrix C so that R @ C = U to have Xrp = Q @ R @ C = Q @ U.
-      # Then Xpred_rp = X_pred @ C can similarly be obtained.
-      # see smooth.R nat.param function in mgcv.
-      
-      C = eigen_solvers.backsolve_tr(*map_csc_to_eigen(R.tocsc()),U)
+        # Now form B and proceed with eigen decomposition of it (see Wood, 2017)
+        # see also smooth.R nat.param function in mgcv.
+        # R.T @ A = S.T
+        # A = Rinv.T @ S.T
+        # R.T @ B = A.T
+        # A.T = S @ Rinv ## Transpose order reverses!
+        # B = Rinv.T @ A.T
+        # B = Rinv.T @ S @ Rinv
 
-      IRrp = None
-      if identity:
-         # Transform S to identity as described in Wood et al. (2013). Form inverse of root of transformed S for
-         # all cells not covering a kernel function. For those simply insert 1. Then post-multiply transformed X (or equivalently C) by it.
-         IRrp = [1/s[i]**0.5 if s[i] > 1e-7 else 1 for i in range(S.shape[1])]
-         Srp = scp.sparse.diags([1 if s[i] > 1e-7 else 0 for i in range(S.shape[1])],offsets=0,format='csc')
-         Drp = copy.deepcopy(Srp)
+        B = eigen_solvers.solve_tr(*map_csc_to_eigen(R.T),eigen_solvers.solve_tr(*map_csc_to_eigen(R.T),S.T).T)
 
-         C = C @ scp.sparse.diags(IRrp,offsets=0,format='csc')
+        s, U =scp.linalg.eigh(B.toarray())
 
-      rms1 = rms2 = None
-      if scale:
-         # mgcv optionally scales the transformed model & penalty matrices (separately per range and kernel space columns of S) by the root mean square of the model matrix.
-         # see smooth.R nat.param function in mgcv.
-         Xrp = X @ C
-         rms1 = math.sqrt((Xrp[:,:rank]).power(2).mean())
+        # Decreasing magnitude for ease of indexing..
+        s = np.flip(s)
+        U = scp.sparse.csc_array(np.flip(U,axis=1))
 
-         # Scale transformation matrix
-         C[:,:rank] /= rms1
-         
-         # Now apply the separate scaling for Kernel of S as done by mgcv
-         if X.shape[1] - rank > 0:
-            rms2 = math.sqrt((Xrp[:,rank:]).power(2).mean())
-            C[:,rank:] /= rms2
-         
-         # Scale penalty
-         Srp /= rms1**2
-         Drp /= rms1
+        rank = len(s[s > 1e-7])
 
-      # Done, return
-      return C, Srp, Drp, IRrp, rms1, rms2, rank
-   
-   elif option == 4:
-      # Reparameterize S_\\lambda for safe REML evaluation - based on section 6.2.7 in Wood (2017) and Appendix B of Wood (2011).
-      # S needs to be list holding penalties.
+        # First rank elements are non-zero - corresponding to penalized functions, last S.shape[1] - rank
+        # are zero corresponding to dimensionality of kernel of S
+        Srp = scp.sparse.diags([s[i] if s[i] > 1e-7 else 0 for i in range(S.shape[1])],offsets=0,format='csc')
+        Drp = scp.sparse.diags([s[i]**0.5 if s[i] > 1e-7 else 0 for i in range(S.shape[1])],offsets=0,format='csc')
 
-      # Reparam is best performed based on term-specific penalties rather than lambda-specific penalties
-      S = split_shared_penalties(S)
+        # Now compute matrix to transform basis functions. The transformed functions are decreasingly flexible. I.e.,
+        # Xrp[:,i] is more flexible than Xrp[:,i+1]. According to Wood (2017) Xrp = Q @ U. Now we want to be able to
+        # evaluate the basis for new data resulting in Xpred. So we also have to transform Xpred. Following Wood (2017),
+        # based on QR decomposition we have X = Q @ R, so we form matrix C so that R @ C = U to have Xrp = Q @ R @ C = Q @ U.
+        # Then Xpred_rp = X_pred @ C can similarly be obtained.
+        # see smooth.R nat.param function in mgcv.
 
-      # We first sort S into term-specific groups of penalties
-      SJs = [] # SJs groups per term
-      ljs = [] # Lambda groups per term
-      SJ_reps = [] # How often should SJ be stacked
-      SJ_term_idx = [] # Penalty index of every SJ
-      SJ_idx = [] # start index of every SJ
-      SJ_coef = [] # Number of coef in the term penalized by a (sum of) SJ
-      SJ_idx_max = 0 # Max starting index - used to decide whether a new SJ should be added.
-      SJ_idx_len = 0 # Number of separate SJ blocks.
-      n_coef = S[0].S_J_emb.shape[1] if len(S) > 0 else 0
+        C = eigen_solvers.backsolve_tr(*map_csc_to_eigen(R.tocsc()),U)
 
-      # Build S_emb and collect every block for pinv(S_emb)
-      for lti,lTerm in enumerate(S):
-         #print(f"pen: {lti}")
+        IRrp = None
+        if identity:
+            # Transform S to identity as described in Wood et al. (2013). Form inverse of root of transformed S for
+            # all cells not covering a kernel function. For those simply insert 1. Then post-multiply transformed X (or equivalently C) by it.
+            IRrp = [1/s[i]**0.5 if s[i] > 1e-7 else 1 for i in range(S.shape[1])]
+            Srp = scp.sparse.diags([1 if s[i] > 1e-7 else 0 for i in range(S.shape[1])],offsets=0,format='csc')
+            Drp = copy.deepcopy(Srp)
 
-         # Now collect the S_J for the pinv calculation in the next step.
-         if lti == 0 or lTerm.start_index > SJ_idx_max:
-            SJs.append([lTerm.S_J])
-            ljs.append([lTerm.lam])
-            SJ_term_idx.append([lti])
-            SJ_reps.append(lTerm.rep_sj)
-            SJ_coef.append(lTerm.S_J.shape[1])
-            SJ_idx.append(lTerm.start_index)
-            SJ_idx_max = lTerm.start_index
-            SJ_idx_len += 1
+            C = C @ scp.sparse.diags(IRrp,offsets=0,format='csc')
 
-         else: # A term with the same starting index exists already - so add the Sjs to the corresponding list
-            idx_match = [idx for idx in range(SJ_idx_len) if SJ_idx[idx] == lTerm.start_index]
-            #print(idx_match,lTerm.start_index)
-            if len(idx_match) > 1:
-               raise ValueError("Penalty index matches multiple previous locations.")
-            
-            SJs[idx_match[0]].append(lTerm.S_J)
-            ljs[idx_match[0]].append(lTerm.lam)
-            SJ_term_idx[idx_match[0]].append(lti)
+        rms1 = rms2 = None
+        if scale:
+            # mgcv optionally scales the transformed model & penalty matrices (separately per range and kernel space columns of S) by the root mean square of the model matrix.
+            # see smooth.R nat.param function in mgcv.
+            Xrp = X @ C
+            rms1 = math.sqrt((Xrp[:,:rank]).power(2).mean())
 
-            if SJ_reps[idx_match[0]] != lTerm.rep_sj:
-               raise ValueError("Repeat Number for penalty does not match previous penalties repeat number.")
-      
-      # Now we can re-parameterize SJ groups of length > 1
-      Sj_reps = [] # Will hold transformed S_J
-      Q_reps = []
-      for pen in S:
-         Sj_reps.append(LambdaTerm(S_J=copy.deepcopy(pen.S_J),
-                                   S_J_emb=copy.deepcopy(pen.S_J_emb),
-                                   D_J_emb=copy.deepcopy(pen.D_J_emb),
-                                   rep_sj=pen.rep_sj,
-                                   lam=pen.lam,
-                                   type=pen.type,
-                                   rank=pen.rank,
-                                   term=pen.term,
-                                   start_index=pen.start_index,
-                                   dist_param=pen.dist_param,
-                                   id=pen.id))
+            # Scale transformation matrix
+            C[:,:rank] /= rms1
 
-      S_reps = [] # Term specific S_\\lambda
-      eps = sys.float_info.epsilon**0.7
-      Mp = Sj_reps[0].start_index # Number of un-penalized dimensions (Kernel space dimension of total S_\\lambda; Wood, 2011)
-      for grp_idx,SJgroup,LJgroup in zip(SJ_term_idx,SJs,ljs):
+            # Now apply the separate scaling for Kernel of S as done by mgcv
+            if X.shape[1] - rank > 0:
+                rms2 = math.sqrt((Xrp[:,rank:]).power(2).mean())
+                C[:,rank:] /= rms2
 
-         for rpidx in range(len(SJgroup)):
-            Sj_reps[grp_idx[rpidx]].rp_idx = len(S_reps)
+            # Scale penalty
+            Srp /= rms1**2
+            Drp /= rms1
 
-         normed_SJ = [SJ_mat/scp.sparse.linalg.norm(SJ_mat,ord='fro') for SJ_mat in SJgroup]
-         normed_S = normed_SJ[0]
-         for j in range(1,len(normed_SJ)):
-            normed_S += normed_SJ[j]
+        # Done, return
+        return C, Srp, Drp, IRrp, rms1, rms2, rank
 
-         D, U = scp.linalg.eigh(normed_S.toarray())
+    elif option == 4:
+        # Reparameterize S_\\lambda for safe REML evaluation - based on section 6.2.7 in Wood (2017) and Appendix B of Wood (2011).
+        # S needs to be list holding penalties.
 
-         # Decreasing magnitude for ease of indexing..
-         D = np.flip(D)
-         U = scp.sparse.csc_array(np.flip(U,axis=1))
+        # Reparam is best performed based on term-specific penalties rather than lambda-specific penalties
+        S = split_shared_penalties(S)
 
-         Ur = U[:,D > max(D)*eps]
-         r = Ur.shape[1] # Range dimension
-         Mp += (normed_S.shape[1] - r)
+        # We first sort S into term-specific groups of penalties
+        SJs = [] # SJs groups per term
+        ljs = [] # Lambda groups per term
+        SJ_reps = [] # How often should SJ be stacked
+        SJ_term_idx = [] # Penalty index of every SJ
+        SJ_idx = [] # start index of every SJ
+        SJ_coef = [] # Number of coef in the term penalized by a (sum of) SJ
+        SJ_idx_max = 0 # Max starting index - used to decide whether a new SJ should be added.
+        SJ_idx_len = 0 # Number of separate SJ blocks.
+        n_coef = S[0].S_J_emb.shape[1] if len(S) > 0 else 0
 
-         # Initial re-parameterization as discussed by Wood (2011)
-         if r < normed_S.shape[1]:
-            SJbar = [(Ur.T@SJ_mat@Ur).tocsc() for SJ_mat in SJgroup]
-            Q_rep0 = copy.deepcopy(U) # Need to account for this when computing Q matrix.
-         else:
-            SJbar = copy.deepcopy(SJgroup)
-            Q_rep0 = None
-            
-         if len(SJgroup) == 1: # No further re-parameterization necessary
-            Sj_reps[grp_idx[0]].S_J = SJbar[0]
-            S_reps.append(SJbar[0]*LJgroup[0])
+        # Build S_emb and collect every block for pinv(S_emb)
+        for lti,lTerm in enumerate(S):
+            #print(f"pen: {lti}")
 
-            if not Q_rep0 is None:
-               Q_reps.append(scp.sparse.csc_array(Q_rep0))
-            else:
-               Q_reps.append(scp.sparse.eye(r,format='csc'))
+            # Now collect the S_J for the pinv calculation in the next step.
+            if lti == 0 or lTerm.start_index > SJ_idx_max:
+                SJs.append([lTerm.S_J])
+                ljs.append([lTerm.lam])
+                SJ_term_idx.append([lti])
+                SJ_reps.append(lTerm.rep_sj)
+                SJ_coef.append(lTerm.S_J.shape[1])
+                SJ_idx.append(lTerm.start_index)
+                SJ_idx_max = lTerm.start_index
+                SJ_idx_len += 1
 
-            continue
+            else: # A term with the same starting index exists already - so add the Sjs to the corresponding list
+                idx_match = [idx for idx in range(SJ_idx_len) if SJ_idx[idx] == lTerm.start_index]
+                #print(idx_match,lTerm.start_index)
+                if len(idx_match) > 1:
+                    raise ValueError("Penalty index matches multiple previous locations.")
 
-         S_Jrep = copy.deepcopy(SJbar) # Original S_J transformed 
-         S_rep = None
-         Q_rep = None
+                SJs[idx_match[0]].append(lTerm.S_J)
+                ljs[idx_match[0]].append(lTerm.lam)
+                SJ_term_idx[idx_match[0]].append(lti)
 
-         # Initialization as described by Wood (2011)
-         K = 0
-         Q = r
-         rem_idx = np.arange(0,len(SJbar),dtype=int)
+                if SJ_reps[idx_match[0]] != lTerm.rep_sj:
+                    raise ValueError("Repeat Number for penalty does not match previous penalties repeat number.")
 
-         while True:
-            # Find max norm
-            norm_group = [scp.sparse.linalg.norm(SJ_mat*SJ_lam,ord='fro') for SJ_mat,SJ_lam in zip([SJbar[idx] for idx in rem_idx],[LJgroup[idx] for idx in rem_idx])]
-            
-            am_norm = np.argmax(norm_group)
+        # Now we can re-parameterize SJ groups of length > 1
+        Sj_reps = [] # Will hold transformed S_J
+        Q_reps = []
+        for pen in S:
+            Sj_reps.append(LambdaTerm(S_J=copy.deepcopy(pen.S_J),
+                                      S_J_emb=copy.deepcopy(pen.S_J_emb),
+                                      D_J_emb=copy.deepcopy(pen.D_J_emb),
+                                      rep_sj=pen.rep_sj,
+                                      lam=pen.lam,
+                                      type=pen.type,
+                                      rank=pen.rank,
+                                      term=pen.term,
+                                      start_index=pen.start_index,
+                                      dist_param=pen.dist_param,
+                                      id=pen.id))
 
-            # Find Sk = S_J with max norm, in Wood (2011) this can be multiple but we just use the max. as discussed in Wood (2017)
-            Sk = SJbar[rem_idx[am_norm]]*LJgroup[rem_idx[am_norm]]
+        S_reps = [] # Term specific S_\\lambda
+        eps = sys.float_info.epsilon**0.7
+        Mp = Sj_reps[0].start_index # Number of un-penalized dimensions (Kernel space dimension of total S_\\lambda; Wood, 2011)
+        for grp_idx,SJgroup,LJgroup in zip(SJ_term_idx,SJs,ljs):
 
-            # De-compose Sk - form Ur and Un
-            D, U =scp.linalg.eigh(Sk.toarray())
+            for rpidx in range(len(SJgroup)):
+                Sj_reps[grp_idx[rpidx]].rp_idx = len(S_reps)
+
+            normed_SJ = [SJ_mat/scp.sparse.linalg.norm(SJ_mat,ord='fro') for SJ_mat in SJgroup]
+            normed_S = normed_SJ[0]
+            for j in range(1,len(normed_SJ)):
+                normed_S += normed_SJ[j]
+
+            D, U = scp.linalg.eigh(normed_S.toarray())
 
             # Decreasing magnitude for ease of indexing..
             D = np.flip(D)
             U = scp.sparse.csc_array(np.flip(U,axis=1))
-            r = len(D[D > max(D)*eps]) # r is known in advance here almost every-time but we need to de-compose anyway..
-            
-            if r == Q:
-               break
-            
-            # Seperate U into kernel and rank space of Sk
-            n = U.shape[1] - r
-            Un = U[:,r:]
-            Un = Un.reshape(Sk.shape[1],-1)
 
-            Ur = U[:,:r]
-            Ur = Ur.reshape(Sk.shape[1],-1)
+            Ur = U[:,D > max(D)*eps]
+            r = Ur.shape[1] # Range dimension
+            Mp += (normed_S.shape[1] - r)
 
-            Dr = np.diag(D[:r])
-            
-            # Sum up Sjk - remaining S_J not Sk
-            Sjk = None
-            for j in rem_idx:
-                  if j == rem_idx[am_norm]:
-                     continue
-
-                  if Sjk is None:
-                     Sjk = SJbar[j]*LJgroup[j]
-                  else:
-                     Sjk += SJbar[j]*LJgroup[j]
-            
-            if not Sjk is None:
-                  Sjk = Sjk.toarray()
+            # Initial re-parameterization as discussed by Wood (2011)
+            if r < normed_S.shape[1]:
+                SJbar = [(Ur.T@SJ_mat@Ur).tocsc() for SJ_mat in SJgroup]
+                Q_rep0 = copy.deepcopy(U) # Need to account for this when computing Q matrix.
             else:
-                  raise ValueError("Problem during re-parameterization.")
-                  
-            # Compute C' in Wood (2011)
+                SJbar = copy.deepcopy(SJgroup)
+                Q_rep0 = None
 
-            # Transform Sk
-            Sk = Dr + Ur.T@Sjk@Ur
-            
-            # Fill C' in Wood (2011)
-            #print(Sk.shape,(Ur.T@Sjk@Un).shape,(Un.T@Sjk@Ur).shape,(Un.T@Sjk@Un).shape)
+            if len(SJgroup) == 1: # No further re-parameterization necessary
+                Sj_reps[grp_idx[0]].S_J = SJbar[0]
+                S_reps.append(SJbar[0]*LJgroup[0])
 
-            C = np.concatenate((np.concatenate((Sk,Un.T@Sjk@Ur),axis=0),
-                                np.concatenate((Ur.T@Sjk@Un,Un.T@Sjk@Un),axis=0)),axis=1)
-            
-            #print(C.shape)
+                if not Q_rep0 is None:
+                    Q_reps.append(scp.sparse.csc_array(Q_rep0))
+                else:
+                    Q_reps.append(scp.sparse.eye(r,format='csc'))
 
-            # Form S' in Wood (2011)
-            if S_rep is None:
-                  S_rep = C
-                  Ta = np.concatenate((Ur.toarray(),np.zeros((Ur.shape[0],n))),axis=1)
-                  Tg = U.toarray()
-                  
-                  if Q_rep0 is None:
-                     Q_rep = U.toarray()
-                  else:
-                     init_drop = Q_rep0.shape[1] - U.shape[1]
-                     
-                     Q_rep = np.concatenate((np.concatenate((U.toarray(),np.zeros((U.shape[0],init_drop))),axis=1),
-                                             np.concatenate((np.zeros((init_drop,U.shape[1])),np.identity(init_drop)),axis=1)),axis=0)
+                continue
+
+            S_Jrep = copy.deepcopy(SJbar) # Original S_J transformed
+            S_rep = None
+            Q_rep = None
+
+            # Initialization as described by Wood (2011)
+            K = 0
+            Q = r
+            rem_idx = np.arange(0,len(SJbar),dtype=int)
+
+            while True:
+                # Find max norm
+                norm_group = [scp.sparse.linalg.norm(SJ_mat*SJ_lam,ord='fro') for SJ_mat,SJ_lam in zip([SJbar[idx] for idx in rem_idx],[LJgroup[idx] for idx in rem_idx])]
+
+                am_norm = np.argmax(norm_group)
+
+                # Find Sk = S_J with max norm, in Wood (2011) this can be multiple but we just use the max. as discussed in Wood (2017)
+                Sk = SJbar[rem_idx[am_norm]]*LJgroup[rem_idx[am_norm]]
+
+                # De-compose Sk - form Ur and Un
+                D, U =scp.linalg.eigh(Sk.toarray())
+
+                # Decreasing magnitude for ease of indexing..
+                D = np.flip(D)
+                U = scp.sparse.csc_array(np.flip(U,axis=1))
+                r = len(D[D > max(D)*eps]) # r is known in advance here almost every-time but we need to de-compose anyway..
+
+                if r == Q:
+                    break
+
+                # Seperate U into kernel and rank space of Sk
+                n = U.shape[1] - r
+                Un = U[:,r:]
+                Un = Un.reshape(Sk.shape[1],-1)
+
+                Ur = U[:,:r]
+                Ur = Ur.reshape(Sk.shape[1],-1)
+
+                Dr = np.diag(D[:r])
+
+                # Sum up Sjk - remaining S_J not Sk
+                Sjk = None
+                for j in rem_idx:
+                    if j == rem_idx[am_norm]:
+                        continue
+
+                    if Sjk is None:
+                        Sjk = SJbar[j]*LJgroup[j]
+                    else:
+                        Sjk += SJbar[j]*LJgroup[j]
+
+                if not Sjk is None:
+                    Sjk = Sjk.toarray()
+                else:
+                    raise ValueError("Problem during re-parameterization.")
+
+                # Compute C' in Wood (2011)
+
+                # Transform Sk
+                Sk = Dr + Ur.T@Sjk@Ur
+
+                # Fill C' in Wood (2011)
+                #print(Sk.shape,(Ur.T@Sjk@Un).shape,(Un.T@Sjk@Ur).shape,(Un.T@Sjk@Un).shape)
+
+                C = np.concatenate((np.concatenate((Sk,Un.T@Sjk@Ur),axis=0),
+                                    np.concatenate((Ur.T@Sjk@Un,Un.T@Sjk@Un),axis=0)),axis=1)
+
+                #print(C.shape)
+
+                # Form S' in Wood (2011)
+                if S_rep is None:
+                    S_rep = C
+                    Ta = np.concatenate((Ur.toarray(),np.zeros((Ur.shape[0],n))),axis=1)
+                    Tg = U.toarray()
+
+                    if Q_rep0 is None:
+                        Q_rep = U.toarray()
+                    else:
+                        init_drop = Q_rep0.shape[1] - U.shape[1]
+
+                        Q_rep = np.concatenate((np.concatenate((U.toarray(),np.zeros((U.shape[0],init_drop))),axis=1),
+                                                np.concatenate((np.zeros((init_drop,U.shape[1])),np.identity(init_drop)),axis=1)),axis=0)
+                else:
+                    A = S_rep[:K,:K] # From partitioning step 6 in Wood, 2011
+                    B = S_rep[:K,K:] # From partitioning step 6 in Wood, 2011
+                    BU = B @ U
+                    S_rep = np.concatenate((np.concatenate((A,BU.T),axis=0),
+                                            np.concatenate((BU,C),axis=0)),axis=1)
+
+                    Ta = np.concatenate((np.concatenate((np.identity(K),np.zeros((K,r+n))),axis=1),
+                                         np.concatenate((np.zeros((Ur.shape[0],K)),Ur.toarray(),np.zeros((Ur.shape[0],n))),axis=1)),axis=0)
+
+                    Tg = np.concatenate((np.concatenate((np.identity(K),np.zeros((K,r+n))),axis=1),
+                                         np.concatenate((np.zeros((U.shape[0],K)),U.toarray()),axis=1)),axis=0)
+
+                    if Q_rep0 is None:
+                        Q_rep = Q_rep @ Tg
+                    else:
+                        init_drop = Q_rep0.shape[1] - Tg.shape[1]
+                        Q_rep = Q_rep @ np.concatenate((np.concatenate((Tg,np.zeros((Tg.shape[0],init_drop))),axis=1),
+                                                        np.concatenate((np.zeros((init_drop,Tg.shape[1])),np.identity(init_drop)),axis=1)),axis=0)
+
+                #print(Ta.shape,Tg.shape)
+                # Transform remaining terms that made up Sjk
+                for j in rem_idx:
+                    if j == rem_idx[am_norm]:
+                        S_Jrep[j] = Ta.T@S_Jrep[j]@Ta
+                        continue
+                    SJbar[j] = scp.sparse.csc_array(Un.T@SJbar[j]@Un)
+                    S_Jrep[j] = Tg.T@S_Jrep[j]@Tg
+
+                K += r
+                Q -= r
+                rem_idx = np.delete(rem_idx,am_norm)
+
+
+            for j in range(len(grp_idx)):
+
+                Sj_reps[grp_idx[j]].S_J = scp.sparse.csc_array(S_Jrep[j])
+
+            if S_rep is None: # Fix r==Q in first iteration
+                S_rep = SJbar[0]*LJgroup[0]
+                Q_rep = scp.sparse.eye(r,format='csc')
+
+            S_reps.append(scp.sparse.csc_array(S_rep))
+
+            if not Q_rep0 is None:
+                Q_rep = scp.sparse.csc_array(Q_rep0@Q_rep)
             else:
-                  A = S_rep[:K,:K] # From partitioning step 6 in Wood, 2011
-                  B = S_rep[:K,K:] # From partitioning step 6 in Wood, 2011
-                  BU = B @ U
-                  S_rep = np.concatenate((np.concatenate((A,BU.T),axis=0),
-                                          np.concatenate((BU,C),axis=0)),axis=1)
-                  
-                  Ta = np.concatenate((np.concatenate((np.identity(K),np.zeros((K,r+n))),axis=1),
-                                       np.concatenate((np.zeros((Ur.shape[0],K)),Ur.toarray(),np.zeros((Ur.shape[0],n))),axis=1)),axis=0)
-                  
-                  Tg = np.concatenate((np.concatenate((np.identity(K),np.zeros((K,r+n))),axis=1),
-                                       np.concatenate((np.zeros((U.shape[0],K)),U.toarray()),axis=1)),axis=0)
-                  
-                  if Q_rep0 is None:
-                     Q_rep = Q_rep @ Tg
-                  else:
-                     init_drop = Q_rep0.shape[1] - Tg.shape[1]
-                     Q_rep = Q_rep @ np.concatenate((np.concatenate((Tg,np.zeros((Tg.shape[0],init_drop))),axis=1),
-                                                      np.concatenate((np.zeros((init_drop,Tg.shape[1])),np.identity(init_drop)),axis=1)),axis=0)
+                Q_rep = scp.sparse.csc_array(Q_rep)
 
-            #print(Ta.shape,Tg.shape)
-            # Transform remaining terms that made up Sjk
-            for j in rem_idx:
-                  if j == rem_idx[am_norm]:
-                     S_Jrep[j] = Ta.T@S_Jrep[j]@Ta
-                     continue
-                  SJbar[j] = scp.sparse.csc_array(Un.T@SJbar[j]@Un)
-                  S_Jrep[j] = Tg.T@S_Jrep[j]@Tg
+            Q_reps.append(Q_rep)
 
-            K += r
-            Q -= r
-            rem_idx = np.delete(rem_idx,am_norm)
+        # Can now update re-parameterized penalties
+        S_emb_rp = None # Overall transformed penalty
+        S_inv_rp = None # Inverse of overall penalty
+        S_root_rp = None # root of overall penalty
 
+        for Si,(Q_rep,S_rep,grp_idx,S_coef) in enumerate(zip(Q_reps,S_reps,SJ_term_idx,SJ_coef)):
 
-         for j in range(len(grp_idx)):
-            
-            Sj_reps[grp_idx[j]].S_J = scp.sparse.csc_array(S_Jrep[j])
+            for j in range(len(grp_idx)):
+                S_J = Sj_reps[grp_idx[j]].S_J
 
-         if S_rep is None: # Fix r==Q in first iteration
-            S_rep = SJbar[0]*LJgroup[0]
-            Q_rep = scp.sparse.eye(r,format='csc')
+                # Update embedded S_J
+                S_J_emb_rp,_ = embed_in_S_sparse(*translate_sparse(S_J),None,n_coef,S_coef,SJ_idx[Si])
+                Q_J_emb,c_idx_j = embed_in_S_sparse(*translate_sparse(Q_rep),None,n_coef,S_coef,SJ_idx[Si])
+                for _ in range(1,SJ_reps[Si]):
+                    S_J_emb_rp,_ = embed_in_S_sparse(*translate_sparse(S_J),S_J_emb_rp,n_coef,S_coef,c_idx_j)
+                    Q_J_emb,c_idx_j = embed_in_S_sparse(*translate_sparse(Q_rep),Q_J_emb,n_coef,S_coef,c_idx_j)
 
-         S_reps.append(scp.sparse.csc_array(S_rep))
+                Sj_reps[grp_idx[j]].S_J_emb = S_J_emb_rp
 
-         if not Q_rep0 is None:
-            Q_rep = scp.sparse.csc_array(Q_rep0@Q_rep)
-         else:
-            Q_rep = scp.sparse.csc_array(Q_rep)
+                # And root
+                Sj_reps[grp_idx[j]].D_J_emb = (Q_J_emb.T @ Sj_reps[grp_idx[j]].D_J_emb).tocsc()
 
-         Q_reps.append(Q_rep)
-      
-      # Can now update re-parameterized penalties
-      S_emb_rp = None # Overall transformed penalty
-      S_inv_rp = None # Inverse of overall penalty
-      S_root_rp = None # root of overall penalty
+                # Also pad S_J (not embedded) with zeros so that shapes remain consistent compared to original parameterization
+                S_J_rp,_ = embed_in_S_sparse(*translate_sparse(S_J),None,S_coef,S_coef,0)
+                Sj_reps[grp_idx[j]].S_J = S_J_rp
 
-      for Si,(Q_rep,S_rep,grp_idx,S_coef) in enumerate(zip(Q_reps,S_reps,SJ_term_idx,SJ_coef)):
-          
-         for j in range(len(grp_idx)):
-            S_J = Sj_reps[grp_idx[j]].S_J
+            # Update total penalty and optionally root and inverse
 
-            # Update embedded S_J
-            S_J_emb_rp,_ = embed_in_S_sparse(*translate_sparse(S_J),None,n_coef,S_coef,SJ_idx[Si])
-            Q_J_emb,c_idx_j = embed_in_S_sparse(*translate_sparse(Q_rep),None,n_coef,S_coef,SJ_idx[Si])
-            for _ in range(1,SJ_reps[Si]):
-               S_J_emb_rp,_ = embed_in_S_sparse(*translate_sparse(S_J),S_J_emb_rp,n_coef,S_coef,c_idx_j)
-               Q_J_emb,c_idx_j = embed_in_S_sparse(*translate_sparse(Q_rep),Q_J_emb,n_coef,S_coef,c_idx_j)
-
-            Sj_reps[grp_idx[j]].S_J_emb = S_J_emb_rp
-
-            # And root
-            Sj_reps[grp_idx[j]].D_J_emb = (Q_J_emb.T @ Sj_reps[grp_idx[j]].D_J_emb).tocsc()
-
-            # Also pad S_J (not embedded) with zeros so that shapes remain consistent compared to original parameterization
-            S_J_rp,_ = embed_in_S_sparse(*translate_sparse(S_J),None,S_coef,S_coef,0)
-            Sj_reps[grp_idx[j]].S_J = S_J_rp
-
-         # Update total penalty and optionally root and inverse
-         
-         # Compute inverse of S_rep
-         if ((form_inverse == 1) and (len(grp_idx) > 1)) or form_root or form_inverse == 2:
-               L,code = cpp_chol(S_rep)
-               if code != 0:
-                  raise ValueError("Inverse of transformed penalty could not be computed.")
-               
-               S_root_rp,_ = embed_in_S_sparse(*translate_sparse(L),S_root_rp,n_coef,S_coef,SJ_idx[Si])
-         
-         # Form inverse - only if this is not a single penalty term
-         if ((form_inverse == 1) and (len(grp_idx) > 1)) or form_inverse == 2:
-               Linv = compute_Linv(L,n_c)
-               S_inv = (Linv.T@Linv).tocsc()
-
-               S_inv_rp,_ = embed_in_S_sparse(*translate_sparse(S_inv),S_inv_rp,n_coef,S_coef,SJ_idx[Si])
-            
-         # Total penalty
-         S_emb_rp,c_idx = embed_in_S_sparse(*translate_sparse(S_rep),S_emb_rp,n_coef,S_coef,SJ_idx[Si])
-
-         for _ in range(1,SJ_reps[Si]):
+            # Compute inverse of S_rep
             if ((form_inverse == 1) and (len(grp_idx) > 1)) or form_root or form_inverse == 2:
-               S_root_rp,_ = embed_in_S_sparse(*translate_sparse(L),S_root_rp,n_coef,S_coef,c_idx)
+                L,code = cpp_chol(S_rep)
+                if code != 0:
+                    raise ValueError("Inverse of transformed penalty could not be computed.")
 
+                S_root_rp,_ = embed_in_S_sparse(*translate_sparse(L),S_root_rp,n_coef,S_coef,SJ_idx[Si])
+
+            # Form inverse - only if this is not a single penalty term
             if ((form_inverse == 1) and (len(grp_idx) > 1)) or form_inverse == 2:
-               S_inv_rp,_ = embed_in_S_sparse(*translate_sparse(S_inv),S_inv_rp,n_coef,S_coef,c_idx)
-            
-            S_emb_rp,c_idx = embed_in_S_sparse(*translate_sparse(S_rep),S_emb_rp,n_coef,S_coef,c_idx)
-         
-      return Sj_reps,S_emb_rp,S_inv_rp,S_root_rp,S_reps,SJ_term_idx,SJ_idx,SJ_coef,Q_reps,Mp
-         
-   else:
-      raise NotImplementedError(f"Requested option {option} for reparameterization is not implemented.")
-   
+                Linv = compute_Linv(L,n_c)
+                S_inv = (Linv.T@Linv).tocsc()
+
+                S_inv_rp,_ = embed_in_S_sparse(*translate_sparse(S_inv),S_inv_rp,n_coef,S_coef,SJ_idx[Si])
+
+            # Total penalty
+            S_emb_rp,c_idx = embed_in_S_sparse(*translate_sparse(S_rep),S_emb_rp,n_coef,S_coef,SJ_idx[Si])
+
+            for _ in range(1,SJ_reps[Si]):
+                if ((form_inverse == 1) and (len(grp_idx) > 1)) or form_root or form_inverse == 2:
+                    S_root_rp,_ = embed_in_S_sparse(*translate_sparse(L),S_root_rp,n_coef,S_coef,c_idx)
+
+                if ((form_inverse == 1) and (len(grp_idx) > 1)) or form_inverse == 2:
+                    S_inv_rp,_ = embed_in_S_sparse(*translate_sparse(S_inv),S_inv_rp,n_coef,S_coef,c_idx)
+
+                S_emb_rp,c_idx = embed_in_S_sparse(*translate_sparse(S_rep),S_emb_rp,n_coef,S_coef,c_idx)
+
+        return Sj_reps,S_emb_rp,S_inv_rp,S_root_rp,S_reps,SJ_term_idx,SJ_idx,SJ_coef,Q_reps,Mp
+
+    else:
+        raise NotImplementedError(f"Requested option {option} for reparameterization is not implemented.")
+
 def reparam_model(dist_coef:list[int], dist_up_coef:list[int], coef:np.ndarray, split_coef_idx:list[int], Xs:list[scp.sparse.csc_array], penalties:list[LambdaTerm], form_inverse:bool=True, form_root:bool=True, form_balanced:bool=True, n_c:int=1) -> tuple[np.ndarray, list[scp.sparse.csc_array], list[LambdaTerm], scp.sparse.csc_array, scp.sparse.csc_array | None, scp.sparse.csc_array | None, scp.sparse.csc_array | None, scp.sparse.csc_array, list[scp.sparse.csc_array]]:
     """Relies on the transformation strategy from Appendix B of Wood (2011) to re-parameterize the model.
 
@@ -543,7 +543,7 @@ def reparam_model(dist_coef:list[int], dist_up_coef:list[int], coef:np.ndarray, 
     cd_idx = c_idx
 
     for Si,(S_rep,S_coef) in enumerate(zip(S_reps,S_coefs)):
-        
+
         # Create new Q if we move to a new parameter
         if Sj_reps[SJ_term_idx[Si][0]].dist_param != dist_idx:
             dist_idx += 1
@@ -566,8 +566,8 @@ def reparam_model(dist_coef:list[int], dist_up_coef:list[int], coef:np.ndarray, 
 
     # Fill remaining cells of Q_emb in case final dist. parameter/linear predictor has only unpenalized coef
     if c_idx != len(coef):
-       Q_emb,c_idx = embed_in_S_sparse(*translate_sparse(scp.sparse.identity(len(coef)-c_idx,format='csc')),Q_emb,len(coef),len(coef)-c_idx,c_idx)
-    
+        Q_emb,c_idx = embed_in_S_sparse(*translate_sparse(scp.sparse.identity(len(coef)-c_idx,format='csc')),Q_emb,len(coef),len(coef)-c_idx,c_idx)
+
     # Collect final Q
     Qs.append(Qd_emb)
 

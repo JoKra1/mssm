@@ -85,7 +85,7 @@ def read_cov(y:str,x:str,files:list[str],nc:int,file_loading_kwargs:dict) -> np.
 
     with mp.Pool(processes=nc) as pool:
         cov = pool.starmap(read_cor_cov_single,zip(repeat(y),repeat(x),files,repeat(file_loading_kwargs)))
-    
+
     # Flatten
     cov = np.array([cv for cs in cov for cv in cs])
     return cov
@@ -123,7 +123,7 @@ def read_cov_no_cor(x:str,files:list[str],nc:int,file_loading_kwargs:dict) -> np
 
     with mp.Pool(processes=nc) as pool:
         cov = pool.starmap(read_no_cor_cov_single,zip(repeat(x),files,repeat(file_loading_kwargs)))
-    
+
     # Flatten
     cov = np.array([cv for cs in cov for cv in cs])
     return cov
@@ -143,7 +143,7 @@ def read_dtype(column:str,file:str,file_loading_kwargs:dict) -> np.dtype:
     dtype = None
     dat = pd.read_csv(file,**file_loading_kwargs)
     dtype = dat[column].dtype
-    
+
     return dtype
 
 def setup_cache(cache_dir:str,should_cache:bool) -> None:
