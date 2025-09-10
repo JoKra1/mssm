@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-import scipy as scp
 import os
 import warnings
 import multiprocessing as mp
@@ -73,7 +72,7 @@ def read_cor_cov_single(
     """
     dat = pd.read_csv(file, **file_loading_kwargs)
     x_f = dat[x].values
-    return x_f[np.isnan(dat[y]) == False]
+    return x_f[np.isnan(dat[y]) == False]  # noqa: E712
 
 
 def read_cov(
@@ -185,7 +184,11 @@ def setup_cache(cache_dir: str, should_cache: bool) -> None:
             os.makedirs(cache_dir)
         else:
             raise ValueError(
-                f"Cache directory {cache_dir} already exists. That either means it was not properly removed (maybe fitting crashed?) or a directory with the name already exists. Please delete/remove the directory '{cache_dir}' manually."
+                (
+                    f"Cache directory {cache_dir} already exists. That either means it was not "
+                    "properly removed (maybe fitting crashed?) or a directory with the name "
+                    "already exists. Please delete/remove the directory '{cache_dir}' manually."
+                )
             )
 
 

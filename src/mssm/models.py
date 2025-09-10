@@ -2,7 +2,7 @@ import numpy as np
 import scipy as scp
 import copy
 from collections.abc import Callable
-from .src.python.formula import (
+from .src.python.formula import (  # noqa: F401
     Formula,
     build_sparse_matrix_from_formula,
     lhs,
@@ -10,7 +10,7 @@ from .src.python.formula import (
     warnings,
     build_penalties,
 )
-from .src.python.exp_fam import (
+from .src.python.exp_fam import (  # noqa: F401
     Link,
     Logit,
     Identity,
@@ -29,7 +29,7 @@ from .src.python.exp_fam import (
     PropHaz,
     Poisson,
 )
-from .src.python.gamm_solvers import (
+from .src.python.gamm_solvers import (  # noqa: F401
     solve_gamm_sparse,
     mp,
     repeat,
@@ -41,15 +41,26 @@ from .src.python.gamm_solvers import (
     solve_gammlss_sparse,
     solve_generalSmooth_sparse,
 )
-from .src.python.terms import TermType, GammTerm, i, f, fs, irf, l, li, ri, rs
-from .src.python.penalties import (
+from .src.python.terms import (  # noqa: F401
+    TermType,
+    GammTerm,
+    i,
+    f,
+    fs,
+    irf,
+    l,
+    li,
+    ri,
+    rs,
+)
+from .src.python.penalties import (  # noqa: F401
     embed_shared_penalties,
     IdentityPenalty,
     DifferencePenalty,
     sort_penalties,
     combine_shared_penalties,
 )
-from .src.python.utils import (
+from .src.python.utils import (  # noqa: F401
     sample_MVN,
     REML,
     adjust_CI,
@@ -60,7 +71,7 @@ from .src.python.utils import (
     GAMLSSGSMMFamily,
     computeAr1Chol,
 )
-from .src.python.custom_types import (
+from .src.python.custom_types import (  # noqa: F401
     VarType,
     ConstType,
     Constraint,
@@ -69,7 +80,7 @@ from .src.python.custom_types import (
     Fit_info,
 )
 
-##################################### GSMM class #####################################
+##################################### GSMM class #####################################  # noqa: E266
 
 
 class GSMM:
@@ -235,7 +246,7 @@ class GSMM:
         self.info: Fit_info | None = None
         self.coef_split_idx: list[int] | None = None
 
-    ##################################### Getters #####################################
+    ##################################### Getters ####################################  # noqa: E266
 
     def get_pars(self) -> np.ndarray:
         """
@@ -292,10 +303,12 @@ class GSMM:
         for fidx in iterator:
             form = self.formulas[fidx]
 
-            if form.built_penalties == False:
+            if form.built_penalties is False:
                 raise ValueError(
-                    "Model matrix cannot be returned if penalties have not been initialized. \
-                    Call model.fit() first."
+                    (
+                        "Model matrix cannot be returned if penalties have not been initialized. "
+                        "Call model.fit() first."
+                    )
                 )
 
             terms = form.terms
@@ -509,7 +522,7 @@ class GSMM:
 
         return self.family.get_resid(self.coef, self.coef_split_idx, ys, Xs, **kwargs)
 
-    ##################################### Summary #####################################
+    #################################### Summary #####################################  # noqa: E266
 
     def print_parametric_terms(self):
         """Prints summary output for linear/parametric terms in the model, separately for each
@@ -573,7 +586,7 @@ class GSMM:
 
             print_smooth_terms(self, par=formi, pen_cutoff=pen_cutoff, ps=ps, Trs=Trs)
 
-    ##################################### Fitting #####################################
+    #################################### Fitting #####################################  # noqa: E266
 
     def fit(
         self,
@@ -795,8 +808,10 @@ class GSMM:
 
         if repara and extra_penalties is not None:
             warnings.warn(
-                "Ignoring argument ``repara``, which is currently not supported in the presence of \
-                ``extra_penalties``."
+                (
+                    "Ignoring argument ``repara``, which is currently not supported in the "
+                    "presence of ``extra_penalties``."
+                )
             )
             repara = False
 
@@ -807,10 +822,10 @@ class GSMM:
             init_bfgs_options = copy.deepcopy(bfgs_options)
 
         # Some checks
-        if not optimizer in ["Newton"]:
+        if optimizer not in ["Newton"]:
             raise ValueError("'optimizer' needs to be set to 'Newton'.")
 
-        if self.overall_penalties is None and restart == True:
+        if self.overall_penalties is None and restart:
             raise ValueError(
                 "Penalties were not initialized. ``Restart`` must be set to False."
             )
@@ -852,7 +867,7 @@ class GSMM:
         ind_penalties = []
         for fi, form in enumerate(self.formulas):
 
-            if restart == False:
+            if restart is False:
                 ind_penalties.append(build_penalties(form))
 
             if build_mat is None or build_mat[fi]:
@@ -861,7 +876,7 @@ class GSMM:
                 Xs.append(None)
 
         # Get all penalties
-        if restart == False:
+        if restart is False:
             shared_penalties = embed_shared_penalties(
                 ind_penalties, self.formulas, self.family.extra_coef
             )
@@ -917,7 +932,7 @@ class GSMM:
             )
 
         # Otherwise again initialize with provided values or randomly
-        if not init_coef is None:
+        if init_coef is not None:
             coef = np.array(init_coef).reshape(-1, 1)
 
             if self.family.extra_coef is not None:
@@ -984,9 +999,11 @@ class GSMM:
         self.hessian = H
         if fit_info.eps > 0:  # Make sure -H + S_emb is invertible
             warnings.warn(
-                f"model.info.eps > 0 ({np.round(fit_info.eps,decimals=2)}). Perturbing Hessian of \
-                the log-likelihood to ensure that negative Hessian of penalized log-likelihood is \
-                invertible."
+                (
+                    f"model.info.eps > 0 ({np.round(fit_info.eps, decimals=2)}). Perturbing "
+                    "Hessian of the log-likelihood to ensure that negative Hessian of penalized "
+                    "log-likelihood is invertible."
+                )
             )
             self.hessian -= fit_info.eps * scp.sparse.identity(H.shape[1], format="csc")
         self.info = fit_info
@@ -999,7 +1016,7 @@ class GSMM:
                 link.fi(pred) for link, pred in zip(self.family.links, self.preds)
             ]
 
-    ##################################### Prediction #####################################
+    ################################### Prediction ###################################  # noqa: E266
 
     def sample_post(
         self,
@@ -1332,7 +1349,7 @@ class GSMM:
         return diff, b
 
 
-##################################### GAMMLSS class #####################################
+#################################### GAMMLSS class ###################################  # noqa: E266
 
 
 class GAMMLSS(GSMM):
@@ -1446,7 +1463,7 @@ class GAMMLSS(GSMM):
         super().__init__(formulas, family)
         self.res: np.ndarray | None = None
 
-    ##################################### Getters #####################################
+    #################################### Getters #####################################  # noqa: E266
 
     def get_pars(self) -> np.ndarray:
         """
@@ -1509,7 +1526,8 @@ class GAMMLSS(GSMM):
             pen = 0.5 * self.penalty
         if self.preds is not None:
             mus = [
-                self.family.links[i].fi(self.preds[i]) for i in range(self.family.n_par)
+                self.family.links[lidx].fi(self.preds[lidx])
+                for lidx in range(self.family.n_par)
             ]
 
             y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
@@ -1602,7 +1620,7 @@ class GAMMLSS(GSMM):
             self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat], *self.mus, **kwargs
         )
 
-    ##################################### Summary #####################################
+    ##################################### Summary ####################################  # noqa: E266
 
     def print_parametric_terms(self):
         """Prints summary output for linear/parametric terms in the model, separately for each
@@ -1655,7 +1673,7 @@ class GAMMLSS(GSMM):
         """
         super().print_smooth_terms(pen_cutoff, p_values, edf1)
 
-    ##################################### Fitting #####################################
+    ##################################### Fitting ####################################  # noqa: E266
 
     def fit(
         self,
@@ -1793,7 +1811,7 @@ class GAMMLSS(GSMM):
             min_inner = max_inner
 
         # Some checks
-        if self.overall_penalties is None and restart == True:
+        if self.overall_penalties is None and restart:
             raise ValueError(
                 "Penalties were not initialized. ``Restart`` must be set to False."
             )
@@ -1810,7 +1828,7 @@ class GAMMLSS(GSMM):
         Xs = []
         ind_penalties = []
         for fi, form in enumerate(self.formulas):
-            if restart == False:
+            if restart is False:
                 ind_penalties.append(build_penalties(form))
             Xs.append(self.get_mmat(par=fi))
 
@@ -1820,7 +1838,7 @@ class GAMMLSS(GSMM):
         )
 
         # Get GAMMLSS penalties
-        if restart == False:
+        if restart is False:
             shared_penalties = embed_shared_penalties(
                 ind_penalties, self.formulas, None
             )
@@ -1915,14 +1933,16 @@ class GAMMLSS(GSMM):
         self.hessian = H
         if fit_info.eps > 0:  # Make sure -H + S_emb is invertible
             warnings.warn(
-                f"model.info.eps > 0 ({np.round(fit_info.eps,decimals=2)}). Perturbing Hessian of \
-                log-likelihood to ensure that negative Hessian of penalized log-likelihood is \
-                invertible."
+                (
+                    f"model.info.eps > 0 ({np.round(fit_info.eps, decimals=2)}). Perturbing "
+                    "Hessian of log-likelihood to ensure that negative Hessian of penalized "
+                    "log-likelihood is invertible."
+                )
             )
             self.hessian -= fit_info.eps * scp.sparse.identity(H.shape[1], format="csc")
         self.info = fit_info
 
-    ##################################### Prediction #####################################
+    ################################### Prediction ###################################  # noqa: E266
 
     def sample_post(
         self,
@@ -2112,7 +2132,7 @@ class GAMMLSS(GSMM):
             eta_sd,_,b_sd = model.predict(None,new_dat,ci=True,par=1)
 
             # Index to `links` is 1 because the sd is the second parameter!
-            mu_sd = model.family.links[1].fi(eta_sd) 
+            mu_sd = model.family.links[1].fi(eta_sd)
 
             # These can be used for approximate confidence intervals:
             sd_upper_CI = model.family.links[1].fi(eta_sd + b_sd)
@@ -2281,7 +2301,7 @@ class GAMMLSS(GSMM):
         )
 
 
-##################################### GAMM class #####################################
+##################################### GAMM class #####################################  # noqa: E266
 
 
 class GAMM(GAMMLSS):
@@ -2401,7 +2421,7 @@ class GAMM(GAMMLSS):
         self.rho: float | None = None
         self.res_ar: np.ndarray | None = None
 
-    ##################################### Getters #####################################
+    ##################################### Getters ####################################  # noqa: E266
 
     def get_pars(self) -> tuple[np.ndarray | None, float | None]:
         """
@@ -2449,7 +2469,7 @@ class GAMM(GAMMLSS):
         self, penalized: bool = True, ext_scale: float | None = None
     ) -> float | None:
         """
-        Get the (penalized) log-likelihood of the estimated model (float or None) given the trainings
+        Get the (penalized) log-likelihood of the estimated model (float or None) given the training
         data. LLK can optionally be evaluated for an external scale parameter ``ext_scale``.
 
         Will instead return ``None`` if called before fitting.
@@ -2477,8 +2497,8 @@ class GAMM(GAMMLSS):
         if self.preds is not None:
             mu = self.preds[0]
             if (
-                isinstance(self.family, Gaussian) == False
-                or isinstance(self.family.link, Identity) == False
+                isinstance(self.family, Gaussian) is False
+                or isinstance(self.family.link, Identity) is False
             ):
                 mu = self.family.link.fi(self.preds[0])
 
@@ -2496,7 +2516,7 @@ class GAMM(GAMMLSS):
 
             if self.family.twopar:
                 scale = self.scale
-                if not ext_scale is None:
+                if ext_scale is not None:
                     scale = ext_scale
 
                 if (
@@ -2533,18 +2553,22 @@ class GAMM(GAMMLSS):
         :rtype: float
         """
         if (
-            not isinstance(self.family, Gaussian)
-            or isinstance(self.family.link, Identity) == False
+            isinstance(self.family, Gaussian) is False
+            or isinstance(self.family.link, Identity) is False
         ) and self.Wr is None:
             raise TypeError(
-                "Model is not Normal and pseudo-dat weights are not avilable. \
-                Call model.fit() first!"
+                (
+                    "Model is not Normal and pseudo-dat weights are not avilable. "
+                    "Call model.fit() first!"
+                )
             )
 
         if self.coef is None or self.overall_penalties is None:
             raise ValueError(
-                "Model needs to be estimated before evaluating the REML score. \
-                Call model.fit()"
+                (
+                    "Model needs to be estimated before evaluating the REML score. "
+                    "Call model.fit()"
+                )
             )
 
         scale = self.family.scale
@@ -2614,8 +2638,10 @@ class GAMM(GAMMLSS):
 
         if type == "ar1" and self.rho is None:
             raise ValueError(
-                "ar1 residuals are only available if the model was estimated with \
-                ``model.fit(..., rho=<some value>)``."
+                (
+                    "ar1 residuals are only available if the model was estimated with "
+                    "``model.fit(..., rho=<some value>)``."
+                )
             )
 
         if type == "Pearson":
@@ -2631,14 +2657,14 @@ class GAMM(GAMMLSS):
             y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
 
             if (
-                not isinstance(self.family, Gaussian)
-                or isinstance(self.family.link, Identity) == False
+                isinstance(self.family, Gaussian) is False
+                or isinstance(self.family.link, Identity) is False
             ):
                 mu = self.family.link.fi(mu)
 
             return np.sign(y - mu) * np.sqrt(self.family.D(y, mu))
 
-    ##################################### Summary #####################################
+    ##################################### Summary ####################################  # noqa: E266
 
     def print_parametric_terms(self):
         """Prints summary output for linear/parametric terms in the model, not unlike the one
@@ -2700,7 +2726,7 @@ class GAMM(GAMMLSS):
 
         print_smooth_terms(self, pen_cutoff=pen_cutoff, ps=ps, Trs=Trs)
 
-    ##################################### Fitting #####################################
+    ##################################### Fitting ####################################  # noqa: E266
 
     def fit(
         self,
@@ -2732,7 +2758,9 @@ class GAMM(GAMMLSS):
             from mssmViz.plot import *
 
             ########## Big Model ##########
-            dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat.csv')
+            dat = pd.read_csv(
+                'https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat.csv'
+                )
 
             # mssm requires that the data-type for variables used as factors is 'O'=object
             dat = dat.astype({'series': 'O',
@@ -2743,10 +2771,17 @@ class GAMM(GAMMLSS):
             formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
                                 terms=[i(), # The intercept, a
                                         l(["cond"]), # For cond='b'
-                                        f(["time"],by="cond",constraint=ConstType.QR), # to-way interaction between time and cond; one smooth over time per cond level
-                                        f(["x"],by="cond",constraint=ConstType.QR), # to-way interaction between x and cond; one smooth over x per cond level
-                                        f(["time","x"],by="cond",constraint=ConstType.QR,nk=9), # three-way interaction
-                                        fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
+                                         # to-way interaction between time and cond;
+                                         # one smooth over time per cond level
+                                        f(["time"],by="cond",constraint=ConstType.QR),
+                                         # to-way interaction between x and cond;
+                                         # one smooth over x per cond level
+                                        f(["x"],by="cond",constraint=ConstType.QR),
+                                         # three-way interaction
+                                        f(["time","x"],by="cond",constraint=ConstType.QR,nk=9),
+                                         # Random non-linear effect of time - one smooth per level
+                                         # of factor sub
+                                        fs(["time"],rf="sub")],
                                 data=dat,
                                 print_warn=False,find_nested=False)
 
@@ -2907,8 +2942,10 @@ class GAMM(GAMMLSS):
 
         if len(self.formulas[0].file_paths) != 0 and rho is not None:
             raise ValueError(
-                "ar1 model of the residuals is not supported when iteratviely building the model \
-                matrix."
+                (
+                    "ar1 model of the residuals is not supported when iteratviely building the "
+                    "model matrix."
+                )
             )
 
         if max_inner > 1 and rho is not None:
@@ -2953,8 +2990,8 @@ class GAMM(GAMMLSS):
                     offset = offset[self.formulas[0].NOT_NA_flat]
 
                 if (
-                    not isinstance(self.family, Gaussian)
-                    or isinstance(self.family.link, Identity) == False
+                    isinstance(self.family, Gaussian) is False
+                    or isinstance(self.family.link, Identity) is False
                 ):
                     self.offset = offset
                 else:
@@ -3066,8 +3103,8 @@ class GAMM(GAMMLSS):
 
             # Compute (expected) Hessian of llk (Wood, 2011)
             if (
-                not isinstance(self.family, Gaussian)
-                or isinstance(self.family.link, Identity) == False
+                isinstance(self.family, Gaussian) is False
+                or isinstance(self.family.link, Identity) is False
             ):
 
                 if rho is not None:
@@ -3109,20 +3146,25 @@ class GAMM(GAMMLSS):
 
         else:
             # Iteratively build model matrix.
-            # Follows steps in "Generalized additive models for large data sets" (2015) by Wood, Goude, and Shaw
+            # Follows steps in "Generalized additive models for large data sets" (2015) by
+            # Wood, Goude, and Shaw
             if not self.formulas[0].get_lhs().f is None:
                 raise ValueError(
-                    "Cannot apply function to dep. var. when building model matrix iteratively. \
-                    Consider creating a modified variable in the data-frame."
+                    (
+                        "Cannot apply function to dep. var. when building model matrix "
+                        "iteratively. Consider creating a modified variable in the data-frame."
+                    )
                 )
 
             if (
-                isinstance(self.family, Gaussian) == False
-                or isinstance(self.family.link, Identity) == False
+                isinstance(self.family, Gaussian) is False
+                or isinstance(self.family.link, Identity) is False
             ):
                 raise ValueError(
-                    "Iteratively building the model matrix is currently only supported for Normal \
-                    models."
+                    (
+                        "Iteratively building the model matrix is currently only supported for "
+                        "Normal models."
+                    )
                 )
 
             coef, eta, wres, XX, scale, LVI, edf, term_edf, penalty, fit_info = (
@@ -3157,7 +3199,7 @@ class GAMM(GAMMLSS):
         self.info = fit_info
         self.lvi = LVI
 
-    ##################################### Prediction #####################################
+    #################################### Prediction ################################### # noqa: E266
 
     def sample_post(
         self,

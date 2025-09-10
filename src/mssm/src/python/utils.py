@@ -2,7 +2,7 @@ import numpy as np
 import scipy as scp
 import math
 import warnings
-from itertools import permutations, product, repeat
+from itertools import repeat
 import copy
 from ..python.gamm_solvers import (
     cpp_backsolve_tr,
@@ -12,10 +12,8 @@ from ..python.gamm_solvers import (
     update_scale_edf,
     compute_Linv,
     apply_eigen_perm,
-    tqdm,
     managers,
     shared_memory,
-    cpp_solve_coefXX,
     update_PIRLS,
     PIRLS_pdat_weights,
     correct_coef_step,
@@ -36,7 +34,7 @@ from ..python.gamm_solvers import (
 from ..python.terms import fs, rs
 from .file_loading import mp
 from .repara import reparam
-from ..python.exp_fam import Family, Gaussian, Identity, GAMLSSFamily, GSMMFamily, Link
+from ..python.exp_fam import Family, Gaussian, Identity, GAMLSSFamily, GSMMFamily
 from ..python.formula import Formula, LambdaTerm
 from ..python.penalties import split_shared_penalties, combine_shared_penalties
 import davies
@@ -51,7 +49,8 @@ def computeAr1Chol(formula: Formula, rho: float) -> tuple[scp.sparse.csc_array, 
     :type formula: Formula
     :param rho: ar1 weight.
     :type rho: float
-    :return: Tuple, containing banded inverse Cholesky as a scipy array and the correction needed to get the likelihood of the ar1 model.
+    :return: Tuple, containing banded inverse Cholesky as a scipy array and the correction needed
+        to get the likelihood of the ar1 model.
     :rtype: tuple[scp.sparse.csc_array,float]
     """
 
@@ -73,7 +72,8 @@ def computeAr1Chol(formula: Formula, rho: float) -> tuple[scp.sparse.csc_array, 
 
     Lrhoi = scp.sparse.diags_array([d0, d1], format="csr", offsets=[0, 1])
 
-    # Likelihood correction computed as done by mgcv. see: https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/bam.r#L2761
+    # Likelihood correction computed as done by mgcv. see:
+    # https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/bam.r#L2761
     llc = (n_y - (np.sum(start) if formula.series_id is not None else 1)) * np.log(
         1 / np.sqrt(1 - np.power(rho, 2))
     )
@@ -82,7 +82,8 @@ def computeAr1Chol(formula: Formula, rho: float) -> tuple[scp.sparse.csc_array, 
 
 
 class GAMLSSGSMMFamily(GSMMFamily):
-    """Implementation of the ``GSMMFamily`` class that uses only information about the likelihood to estimate any implemented GAMMLSS model.
+    """Implementation of the ``GSMMFamily`` class that uses only information about the likelihood to
+    estimate any implemented GAMMLSS model.
 
     Allows to estimate any GAMMLSS as a GSMM via the L-qEFS & Newton update. Example::
 
@@ -116,7 +117,8 @@ class GAMLSSGSMMFamily(GSMMFamily):
 
         model.fit(init_coef=None,method='qEFS',extend_lambda=False,
                 control_lambda=0,max_outer=200,max_inner=500,min_inner=500,
-                seed=0,qEFSH='SR1',max_restarts=5,overwrite_coef=False,qEFS_init_converge=False,prefit_grad=True,
+                seed=0,qEFSH='SR1',max_restarts=5,overwrite_coef=False,
+                qEFS_init_converge=False,prefit_grad=True,
                 progress_bar=True,**bfgs_opt)
 
         ################### Or for a multinomial model: ###################
@@ -144,16 +146,19 @@ class GAMLSSGSMMFamily(GSMMFamily):
 
         model.fit(init_coef=None,method='qEFS',extend_lambda=False,
                 control_lambda=0,max_outer=200,max_inner=500,min_inner=500,
-                seed=0,qEFSH='SR1',max_restarts=0,overwrite_coef=False,qEFS_init_converge=False,prefit_grad=True,
+                seed=0,qEFSH='SR1',max_restarts=0,overwrite_coef=False,
+                qEFS_init_converge=False,prefit_grad=True,
                 progress_bar=True,**bfgs_opt)
 
     References:
-        - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+        - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth \
+            Models.
         - Nocedal & Wright (2006). Numerical Optimization. Springer New York.
 
     :param pars: Number of parameters of the likelihood.
     :type pars: int
-    :param gammlss_family: Any implemented member of the :class:`GAMLSSFamily` class. Available in ``self.llkargs[0]``.
+    :param gammlss_family: Any implemented member of the :class:`GAMLSSFamily` class. Available
+        in ``self.llkargs[0]``.
     :type gammlss_family: GAMLSSFamily
     """
 
@@ -170,11 +175,17 @@ class GAMLSSGSMMFamily(GSMMFamily):
         """
         Function to evaluate log-likelihood of GAMM(LSS) model when estimated via GSMM.
 
-        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be flattened!).
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must
+            not be flattened!).
         :type coef: np.ndarray
-        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each paramter of the llk.
         :type coef_split_idx: [int]
-        :param ys: List containing the vectors of observations passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
+        :param ys: List containing the vectors of observations passed as ``lhs.variable`` to the
+            formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is
+            passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas
+            have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at
+            their indices to save memory.
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter.
         :type Xs: [scp.sparse.csc_array]
@@ -204,15 +215,22 @@ class GAMLSSGSMMFamily(GSMMFamily):
         """
         Function to evaluate gradient of GAMM(LSS) model when estimated via GSMM.
 
-        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be flattened!).
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so
+            it must not be flattened!).
         :type coef: np.ndarray
-        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each paramter of the llk.
         :type coef_split_idx: [int]
-        :param ys: List containing the vectors of observations passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
+        :param ys: List containing the vectors of observations passed as ``lhs.variable`` to the
+            formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is
+            passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas
+            have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at
+            their indices to save memory.
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter.
         :type Xs: [scp.sparse.csc_array]
-        :return: The Gradient of the log-likelihood evaluated at ``coef`` as numpy array) of shape (-1,1).
+        :return: The Gradient of the log-likelihood evaluated at ``coef`` as numpy array) of
+            shape (-1,1).
         :rtype: np.ndarray
         """
         y = ys[0]
@@ -223,7 +241,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
         # Get the Gamlss family
         gammlss_family = self.llkargs[0]
 
-        if gammlss_family.d_eta == False:
+        if gammlss_family.d_eta is False:
 
             d1eta, d2eta, d2meta = deriv_transform_mu_eta(y, mus, gammlss_family)
         else:
@@ -246,11 +264,17 @@ class GAMLSSGSMMFamily(GSMMFamily):
         """
         Function to evaluate Hessian of GAMM(LSS) model when estimated via GSMM.
 
-        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be flattened!).
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must
+            not be flattened!).
         :type coef: np.ndarray
-        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each paramter of the llk.
         :type coef_split_idx: [int]
-        :param ys: List containing the vectors of observations passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
+        :param ys: List containing the vectors of observations passed as ``lhs.variable`` to the
+            formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is
+            passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas
+            have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at
+            their indices to save memory.
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter.
         :type Xs: [scp.sparse.csc_array]
@@ -265,7 +289,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
         # Get the Gamlss family
         gammlss_family = self.llkargs[0]
 
-        if gammlss_family.d_eta == False:
+        if gammlss_family.d_eta is False:
 
             d1eta, d2eta, d2meta = deriv_transform_mu_eta(y, mus, gammlss_family)
         else:
@@ -289,27 +313,42 @@ def sample_MVN(
     use: list[int] | None = None,
     seed: int | None = None,
 ) -> np.ndarray:
-    """Draw ``n`` samples from multivariate normal with mean :math:`\\boldsymbol{\\mu}` (``mu``) and covariance matrix :math:`\\boldsymbol{\\Sigma}`.
+    """Draw ``n`` samples from multivariate normal with mean :math:`\\boldsymbol{\\mu}` (``mu``)
+    and covariance matrix :math:`\\boldsymbol{\\Sigma}`.
 
-    :math:`\\boldsymbol{\\Sigma}` does not need to be provided. Rather the function expects either ``L`` (:math:`\\mathbf{L}` in what follows) or ``LI`` (:math:`\\mathbf{L}^{-1}` in what follows) and ``scale`` (:math:`\\phi` in what follows).
-    These relate to :math:`\\boldsymbol{\\Sigma}` so that :math:`\\boldsymbol{\\Sigma}/\\phi = \\mathbf{L}^{-T}\\mathbf{L}^{-1}` or :math:`\\mathbf{L}\\mathbf{L}^T = [\\boldsymbol{\\Sigma}/\\phi]^{-1}`
-    so that :math:`\\mathbf{L}*(1/\\phi)^{0.5}` is the Cholesky of the precision matrix of :math:`\\boldsymbol{\\Sigma}`.
+    :math:`\\boldsymbol{\\Sigma}` does not need to be provided. Rather the function expects either
+    ``L`` (:math:`\\mathbf{L}` in what follows) or ``LI`` (:math:`\\mathbf{L}^{-1}` in what follows)
+    and ``scale`` (:math:`\\phi` in what follows). These relate to :math:`\\boldsymbol{\\Sigma}` so
+    that :math:`\\boldsymbol{\\Sigma}/\\phi = \\mathbf{L}^{-T}\\mathbf{L}^{-1}` or
+    :math:`\\mathbf{L}\\mathbf{L}^T = [\\boldsymbol{\\Sigma}/\\phi]^{-1}` so that
+    :math:`\\mathbf{L}*(1/\\phi)^{0.5}` is the Cholesky of the precision matrix of
+    :math:`\\boldsymbol{\\Sigma}`.
 
-    Notably, for models available in ``mssm`` ``L`` (and ``LI``) have usually be computed for a permuted matrix, e.g., :math:`\\mathbf{P}[\\mathbf{X}^T\\mathbf{X} + \\mathbf{S}_{\\lambda}]\\mathbf{P}^T` (see Wood \\& Fasiolo, 2017).
-    Hence for sampling we often need to correct for permutation matrix :math:`\\mathbf{P}` (``P``). if ``LI`` is provided, then ``P`` can be omitted and is assumed to have been used to un-pivot ``LI`` already.
+    Notably, for models available in ``mssm`` ``L`` (and ``LI``) have usually be computed for a
+    permuted matrix, e.g., :math:`\\mathbf{P}[\\mathbf{X}^T\\mathbf{X} + \\mathbf{S}_{\\lambda}]\
+    \\mathbf{P}^T` (see Wood \\& Fasiolo, 2017).
+    Hence for sampling we often need to correct for permutation matrix :math:`\\mathbf{P}` (``P``).
+    if ``LI`` is provided, then ``P`` can be omitted and is assumed to have been used to un-pivot
+    ``LI`` already.
 
-    Used for example sample the uncorrected posterior :math:`\\boldsymbol{\\beta} | \\mathbf{y}, \\boldsymbol{\\lambda} \\sim N(\\boldsymbol{\\mu} = \\hat{\\boldsymbol{\\beta}},[\\mathbf{X}^T\\mathbf{X} + \\mathbf{S}_{\\lambda}]^{-1}\\phi)` for a GAMM (see Wood, 2017).
-    Based on section 7.4 in Gentle (2009), assuming :math:`\\boldsymbol{\\Sigma}` is :math:`p*p` and covariance matrix of uncorrected posterior, samples :math:`\\boldsymbol{\\beta}` are then obtained by computing:
+    Used for example sample the uncorrected posterior :math:`\\boldsymbol{\\beta} | \\mathbf{y}, \
+    \\boldsymbol{\\lambda} \\sim N(\\boldsymbol{\\mu} = \\hat{\\boldsymbol{\\beta}},[\\mathbf{X}^T\
+    \\mathbf{X} + \\mathbf{S}_{\\lambda}]^{-1}\\phi)` for a GAMM (see Wood, 2017).
+    Based on section 7.4 in Gentle (2009), assuming :math:`\\boldsymbol{\\Sigma}` is :math:`p*p`
+    and covariance matrix of uncorrected posterior, samples :math:`\\boldsymbol{\\beta}` are then
+    obtained by computing:
 
     .. math::
 
-        \\boldsymbol{\\beta} = \\hat{\\boldsymbol{\\beta}} + [\\mathbf{P}^T \\mathbf{L}^{-T}*\\phi^{0.5}]\\mathbf{z}\\ \\text{where}\\ z_i \\sim N(0,1)\\ \\forall i = 1,...,p
+        \\boldsymbol{\\beta} = \\hat{\\boldsymbol{\\beta}} + [\\mathbf{P}^T \\mathbf{L}^{-T}*\
+        \\phi^{0.5}]\\mathbf{z}\\ \\text{where}\\ z_i \\sim N(0,1)\\ \\forall i = 1,...,p
 
     Alternatively, relying on the fact of equivalence that:
 
     .. math::
 
-        [\\mathbf{L}^T*(1/\\phi)^{0.5}]\\mathbf{P}[\\boldsymbol{\\beta} - \\hat{\\boldsymbol{\\beta}}] = \\mathbf{z}
+        [\\mathbf{L}^T*(1/\\phi)^{0.5}]\\mathbf{P}[\\boldsymbol{\\beta} - \
+        \\hat{\\boldsymbol{\\beta}}] = \\mathbf{z}
 
     we can first solve for :math:`\\mathbf{y}` in:
 
@@ -326,18 +365,25 @@ def sample_MVN(
         \\boldsymbol{\\beta} = \\hat{\\boldsymbol{\\beta}} + \\mathbf{P}^T\\mathbf{y}
 
 
-    The latter avoids forming :math:`\\mathbf{L}^{-1}` (which unlike :math:`\\mathbf{L}` might not benefit from the sparsity preserving permutation :math:`\\mathbf{P}`). If ``LI is None``,
+    The latter avoids forming :math:`\\mathbf{L}^{-1}` (which unlike :math:`\\mathbf{L}` might not
+    benefit from the sparsity preserving permutation :math:`\\mathbf{P}`). If ``LI is None``,
     ``L`` will thus be used for sampling as outlined in these alternative steps.
 
-    Often we care only about a handfull of elements in ``mu`` (e.g., the first ones corresponding to "fixed effects'" in a GAMM). In that case we
-    can generate samles only for this sub-set of interest by only using a sub-block of rows of :math:`\\mathbf{L}` or :math:`\\mathbf{L}^{-1}` (all columns remain). Argument ``use`` can be a ``np.array``
-    containg the indices of elements in ``mu`` that should be sampled. Because this only works efficiently when ``LI`` is available an error is raised when ``not use is None and LI is None``.
+    Often we care only about a handfull of elements in ``mu`` (e.g., the first ones corresponding
+    to "fixed effects'" in a GAMM). In that case we can generate samles only for this sub-set of
+    interest by only using a sub-block of rows of :math:`\\mathbf{L}` or :math:`\\mathbf{L}^{-1}`
+    (all columns remain). Argument ``use`` can be a ``np.array`` containg the indices of elements
+    in ``mu`` that should be sampled. Because this only works efficiently when ``LI`` is available
+    an error is raised when ``not use is None and LI is None``.
 
-    If ``mu`` is set to **any integer** (i.e., not a Numpy array/list) it is automatically treated as 0. For :class:`mssm.models.GAMMLSS` or :class:`mssm.models.GSMM` models, ``scale`` can be set to 1.
+    If ``mu`` is set to **any integer** (i.e., not a Numpy array/list) it is automatically treated
+    as 0. For :class:`mssm.models.GAMMLSS` or :class:`mssm.models.GSMM` models, ``scale`` can be set
+    to 1.
 
     References:
 
-     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
      - Gentle, J. (2009). Computational Statistics.
 
     :param n: Number of samples to generate
@@ -350,29 +396,33 @@ def sample_MVN(
     :type P: scp.sparse.csc_array | None
     :param L: Cholesky of precision of scaled covariance matrix as described above.
     :type L: scp.sparse.csc_array | None
-    :param LI: Inverse of cholesky factor of precision of scaled covariance matrix as described above.
+    :param LI: Inverse of cholesky factor of precision of scaled covariance matrix as described
+        above.
     :type LI: scp.sparse.csc_array | None, optional
-    :param use: Indices of parameters in ``mu`` for which to generate samples, defaults to None in which case all parameters will be sampled
+    :param use: Indices of parameters in ``mu`` for which to generate samples, defaults to None in
+        which case all parameters will be sampled
     :type use: list[int] | None, optional
     :param seed: Seed to use for random sample generation, defaults to None
     :type seed: int | None, optional
-    :return: Samples from multi-variate normal distribution. In case ``use`` is not provided, the returned array will be of shape ``(p,n)`` where ``p==LI.shape[1]``. Otherwise, the returned array will be of shape ``(len(use),n)``.
+    :return: Samples from multi-variate normal distribution. In case ``use`` is not provided, the
+        returned array will be of shape ``(p,n)`` where ``p==LI.shape[1]``. Otherwise, the returned
+        array will be of shape ``(len(use),n)``.
     :rtype: np.ndarray
     """
     if L is None and LI is None:
         raise ValueError("Either ``L`` or ``LI`` have to be provided.")
 
-    if not L is None and not LI is None:
+    if (L is not None) and (LI is not None):
         warnings.warn("Both ``L`` and ``LI`` were provided, will rely on ``LI``.")
 
-    if not L is None and LI is None and P is None:
+    if (L is not None) and LI is None and P is None:
         raise ValueError("When sampling with ``L`` ``P`` must be provided.")
 
-    if not use is None and LI is None:
+    if use is not None and LI is None:
         raise ValueError("If ``use`` is not None ``LI`` must be provided.")
 
     # Correct for scale
-    if not LI is None:
+    if LI is not None:
         Cs = LI.T * math.sqrt(scale)
     else:
         Cs = L.T * math.sqrt(1 / scale)
@@ -395,16 +445,16 @@ def sample_MVN(
 
     else:
         # Sample with LI
-        if not P is None:
+        if P is not None:
             Cs = P.T @ Cs
 
-        if not use is None:
+        if use is not None:
             Cs = Cs[use, :]
 
         if isinstance(mu, int):
             return Cs @ z
 
-        if not use is None:
+        if use is not None:
             mus = mu[use, None]
         else:
             mus = mu[:, None]
@@ -413,37 +463,46 @@ def sample_MVN(
 
 
 def print_parametric_terms(model, par: int = 0) -> None:
-    """Prints summary output for linear/parametric terms in the model of a specific parameter, not unlike the one returned in R when using the ``summary`` function for ``mgcv`` models.
+    """Prints summary output for linear/parametric terms in the model of a specific parameter, not
+    unlike the one returned in R when using the ``summary`` function for ``mgcv`` models.
 
     If the model has not been estimated yet, it prints the term names instead.
 
-    For each coefficient, the named identifier and estimated value are returned. In addition, for each coefficient a p-value is returned, testing
-    the null-hypothesis that the corresponding coefficient :math:`\\beta=0`. Under the assumption that this is true, the Null distribution follows
-    a t-distribution for models in which an additional scale parameter was estimated (e.g., Gaussian, Gamma) and a standardized normal distribution for
-    models in which the scale parameter is known or was fixed (e.g., Binomial). For the former case, the t-statistic, Degrees of freedom of the Null
-    distribution (DoF.), and the p-value are printed as well. For the latter case, only the z-statistic and the p-value are printed.
-    See Wood (2017) section 6.12 and 1.3.3 for more details.
+    For each coefficient, the named identifier and estimated value are returned. In addition, for
+    each coefficient a p-value is returned, testing the null-hypothesis that the corresponding
+    coefficient :math:`\\beta=0`. Under the assumption that this is true, the Null distribution
+    follows a t-distribution for models in which an additional scale parameter was estimated (e.g.,
+    Gaussian, Gamma) and a standardized normal distribution for models in which the scale parameter
+    is known or was fixed (e.g., Binomial). For the former case, the t-statistic, Degrees of freedom
+    of the Null distribution (DoF.), and the p-value are printed as well. For the latter case, only
+    the z-statistic and the p-value are printed. See Wood (2017) section 6.12 and 1.3.3 for more
+    details.
 
-    Note that, un-penalized coefficients that are part of a smooth function are not covered by this function.
+    Note that, un-penalized coefficients that are part of a smooth function are not covered by this
+    function.
 
     References:
-        - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
 
     :param model: GSMM, GAMMLSS, or GAMM model
     :type model: mssm.models.GSMM | mssm.models.GAMMLSS | mssm.models.GAMM
     :param par: Parameter of the likelihood/family for which to print terms, defaults to 0
     :type par: int, optional
-    :raises NotImplementedError: Will throw an error when called for a model for which the model matrix was never former completely.
+    :raises NotImplementedError: Will throw an error when called for a model for which the model
+        matrix was never former completely.
     :rtype: None
     """
-    # Wood (2017) section 6.12 defines that b_j.T@[V_{b_j}]^{-1}@b_j is the test-statistic following either
-    # an F distribution or a Chi-square distribution (the latter if we have a known scale parameter).
-    # Here we want to report single parameter tests for all un-penalized coefficients, so V_b_j is actually the
-    # diagonal elements of the initial n_j_coef*n_j_coef sub-block of V_b. Where n_j_coef is the number of un-penalized
-    # coefficients present in the model. We can form this block efficiently from L, where L.T@L = V, by taking only the
-    # first n_j_coef columns of L. 1 over the diagonal of the resulting sub-block then gives the desired inverse to compute
-    # the test-statistic for a single test. Note that for a single test we need to take the root of the F/Chi-square statistic
-    # to go to a t/N statistic. As a consequence, sqrt(b_j.T@[V_{b_j}]^{-1}@b_j) is actually abs(b_j/sqrt(V_{b_j})) as shown in
+    # Wood (2017) section 6.12 defines that b_j.T@[V_{b_j}]^{-1}@b_j is the test-statistic following
+    # either an F distribution or a Chi-square distribution (the latter if we have a known scale
+    # parameter). Here we want to report single parameter tests for all un-penalized coefficients,
+    # so V_b_j is actually the diagonal elements of the initial n_j_coef*n_j_coef sub-block of V_b.
+    # Where n_j_coef is the number of un-penalized coefficients present in the model. We can form
+    # this block efficiently from L, where L.T@L = V, by taking only the first n_j_coef columns of
+    # L. 1 over the diagonal of the resulting sub-block then gives the desired inverse to compute
+    # the test-statistic for a single test. Note that for a single test we need to take the root of
+    # the F/Chi-square statistic to go to a t/N statistic. As a consequence,
+    # sqrt(b_j.T@[V_{b_j}]^{-1}@b_j) is actually abs(b_j/sqrt(V_{b_j})) as shown in
     # section 1.3.3 of Wood (2017). So we can just compute that directly.
 
     if isinstance(model.family, Family):  # GAMM case
@@ -513,17 +572,21 @@ def print_parametric_terms(model, par: int = 0) -> None:
         ps *= 2  # Correct for abs
 
         for coef_name, coef, t, p in zip(coef_j_names, coef_j, ts, ps):
-            t_str = coef_name + f": {round(coef,ndigits=3)}, "
+            t_str = coef_name + f": {round(coef, ndigits=3)}, "
 
             if isinstance(model.family, Family) and model.family.twopar:
-                t_str += f"t: {round(np.sign(coef)*t,ndigits=3)}, DoF.: {int(len(form.y_flat[form.NOT_NA_flat]) - form.n_coef)}, P(|T| > |t|): "
+                t_str += f"t: {round(np.sign(coef)*t, ndigits=3)}"
+                t_str += (
+                    f", DoF.: {int(len(form.y_flat[form.NOT_NA_flat]) - form.n_coef)}, "
+                )
+                t_str += "P(|T| > |t|): "
             else:
-                t_str += f"z: {round(np.sign(coef)*t,ndigits=3)}, P(|Z| > |z|): "
+                t_str += f"z: {round(np.sign(coef)*t, ndigits=3)}, P(|Z| > |z|): "
 
             if p < 0.001:
-                t_str += "{:.3e}".format(p, ndigits=3)
+                t_str += "{:.3e}".format(p)
             else:
-                t_str += f"{round(p,ndigits=5)}"
+                t_str += f"{round(p, ndigits=5)}"
 
             if p < 0.001:
                 t_str += " ***"
@@ -548,22 +611,28 @@ def print_smooth_terms(
     """Prints the name of the smooth terms included in the model of a given parameter.
 
     After fitting, the estimated degrees of freedom per term are printed as well.
-    Smooth terms with edf. < ``pen_cutoff`` will be highlighted. This only makes sense when extra Kernel penalties are placed on smooth terms to enable
-    penalizing them to a constant zero. In that case edf. < ``pen_cutoff`` can then be taken as evidence that the smooth has all but notationally disappeared
-    from the model, i.e., it does not contribute meaningfully to the model fit. This can be used as an alternative form of model selection - see Marra & Wood (2011).
+    Smooth terms with edf. < ``pen_cutoff`` will be highlighted. This only makes sense when extra
+    Kernel penalties are placed on smooth terms to enable penalizing them to a constant zero. In
+    that case edf. < ``pen_cutoff`` can then be taken as evidence that the smooth has all but
+    notationally disappeared from the model, i.e., it does not contribute meaningfully to the model
+    fit. This can be used as an alternative form of model selection - see Marra & Wood (2011).
 
     References:
         - Marra & Wood (2011). Practical variable selection for generalized additive models.
 
     :param model: GSMM, GAMMLSS, or GAMM model
     :type model: mssm.models.GSMM | mssm.models.GAMMLSS | mssm.models.GAMM
-    :param par: Distribution parameter for which to compute p-values. Ignored when ``model`` is a GAMM. Defaults to 0
+    :param par: Distribution parameter for which to compute p-values. Ignored when ``model`` is a
+        GAMM. Defaults to 0
     :type par: int, optional
-    :param pen_cutoff: At which edf. cut-off smooth terms should be marked as "effectively removed", defaults to None
+    :param pen_cutoff: At which edf. cut-off smooth terms should be marked as "effectively removed",
+        defaults to None
     :type pen_cutoff: float, optional
-    :param ps: Optional list of p-values per smooth term if these should be printed, defaults to None
+    :param ps: Optional list of p-values per smooth term if these should be printed,
+        defaults to None
     :type ps: [float], optional
-    :param Trs: Optional list of test statistics (based on which the ``ps`` were computed) per smooth term if these should be printed, defaults to None
+    :param Trs: Optional list of test statistics (based on which the ``ps`` were computed) per
+        smooth term if these should be printed, defaults to None
     :type Trs: [float], optional
     :rtype: None
     """
@@ -627,7 +696,7 @@ def print_smooth_terms(
         pen_out = 0
         for sti in form.get_smooth_term_idx():
             sterm = terms[sti]
-            if not sterm.by is None and sterm.id is None:
+            if sterm.by is not None and sterm.id is None:
                 for li in range(len(form.get_factor_levels()[sterm.by])):
                     t_edf = round(term_edf[edf_idx], ndigits=3)
                     e_str = (
@@ -638,16 +707,16 @@ def print_smooth_terms(
                         # Term has effectively been removed from the model
                         e_str += " *"
                         pen_out += 1
-                    if ps is not None and (isinstance(sterm, fs) == False):
+                    if ps is not None and (isinstance(sterm, fs) is False):
                         if isinstance(model.family, Family) and model.family.twopar:
-                            e_str += f" f: {round(Trs[p_idx],ndigits=3)} P(F > f) = "
+                            e_str += f" f: {round(Trs[p_idx], ndigits=3)} P(F > f) = "
                         else:
-                            e_str += f" chi^2: {round(Trs[p_idx],ndigits=3)} P(Chi^2 > chi^2) = "
+                            e_str += f" chi^2: {round(Trs[p_idx], ndigits=3)} P(Chi^2 > chi^2) = "
 
                         if ps[p_idx] < 0.001:
-                            e_str += "{:.3e}".format(ps[p_idx], ndigits=3)
+                            e_str += "{:.3e}".format(ps[p_idx])
                         else:
-                            e_str += f"{round(ps[p_idx],ndigits=5)}"
+                            e_str += f"{round(ps[p_idx], ndigits=5)}"
 
                         if ps[p_idx] < 0.001:
                             e_str += " ***"
@@ -669,18 +738,16 @@ def print_smooth_terms(
                     # Term has effectively been removed from the model
                     e_str += " *"
                     pen_out += 1
-                if ps is not None and (isinstance(sterm, fs) == False):
+                if ps is not None and (isinstance(sterm, fs) is False):
                     if isinstance(model.family, Family) and model.family.twopar:
-                        e_str += f" f: {round(Trs[p_idx],ndigits=3)} P(F > f) = "
+                        e_str += f" f: {round(Trs[p_idx], ndigits=3)} P(F > f) = "
                     else:
-                        e_str += (
-                            f" chi^2: {round(Trs[p_idx],ndigits=3)} P(Chi^2 > chi^2) = "
-                        )
+                        e_str += f" chi^2: {round(Trs[p_idx], ndigits=3)} P(Chi^2 > chi^2) = "
 
                     if ps[p_idx] < 0.001:
-                        e_str += "{:.3e}".format(ps[p_idx], ndigits=3)
+                        e_str += "{:.3e}".format(ps[p_idx])
                     else:
-                        e_str += f"{round(ps[p_idx],ndigits=5)}"
+                        e_str += f"{round(ps[p_idx], ndigits=5)}"
 
                     if ps[p_idx] < 0.001:
                         e_str += " ***"
@@ -705,26 +772,29 @@ def print_smooth_terms(
                     for li in range(rterm.var_coef):
                         print(
                             smooth_names[name_idx]
-                            + f":{li}; edf: {round(term_edf[edf_idx],ndigits=3)}"
+                            + f":{li}; edf: {round(term_edf[edf_idx], ndigits=3)}"
                         )
                         edf_idx += 1
                 else:
                     print(
                         smooth_names[name_idx]
-                        + f"; edf: {round(term_edf[edf_idx],ndigits=3)}"
+                        + f"; edf: {round(term_edf[edf_idx], ndigits=3)}"
                     )
                     edf_idx += 1
             else:
                 print(
                     smooth_names[name_idx]
-                    + f"; edf: {round(term_edf[edf_idx],ndigits=3)}"
+                    + f"; edf: {round(term_edf[edf_idx], ndigits=3)}"
                 )
                 edf_idx += 1
             name_idx += 1
 
         if ps is not None:
             print(
-                "\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!"
+                (
+                    "\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . "
+                    "p-values are approximate!"
+                )
             )
 
         if pen_out == 1:
@@ -733,23 +803,30 @@ def print_smooth_terms(
             )
         elif pen_out > 1:
             print(
-                f"\n{pen_out} terms have been effectively penalized to zero and are marked with a '*'"
+                (
+                    f"\n{pen_out} terms have been effectively penalized to zero and are marked "
+                    "with a '*'"
+                )
             )
 
 
 def compute_bias_corrected_edf(model, overwrite: bool = False) -> None:
-    """This function computes and assigns smoothing bias corrected (term-wise) estimated degrees of freedom.
+    """This function computes and assigns smoothing bias corrected (term-wise) estimated degrees of
+    freedom.
 
     For a definition of smoothing bias-corrected estimated degrees of freedom see Wood (2017).
 
     **Note:** This function modifies ``model``, setting ``edf1`` and ``term_edf1`` attributes.
 
     References:
-     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
 
     :param model: Model for which to compute p values.
     :type model: mssm.models.GSMM | mssm.models.GAMMLSS | mssm.models.GAMM
-    :param overwrite: Whether previously computed bias corrected edf should be overwritten. Otherwise this function immediately terminates if ``model.edf1 is not None``, defaults to False
+    :param overwrite: Whether previously computed bias corrected edf should be overwritten.
+        Otherwise this function immediately terminates if ``model.edf1 is not None``,
+        defaults to False
     :type overwrite: bool, optional
     :rtype: None
     """
@@ -813,49 +890,77 @@ def approx_smooth_p_values(
     force_approx: bool = False,
     seed: int = 0,
 ) -> tuple[list[float], list[float]]:
-    """Function to compute approximate p-values for smooth terms, testing whether :math:`\\mathbf{f}=\\mathbf{X}\\boldsymbol{\\beta} = \\mathbf{0}` based on the algorithm by Wood (2013).
+    """Function to compute approximate p-values for smooth terms, testing whether
+    :math:`\\mathbf{f}=\\mathbf{X}\\boldsymbol{\\beta} = \\mathbf{0}` based on the
+    algorithmby Wood (2013).
 
-    Wood (2013, 2017) generalize the :math:`\\boldsymbol{\\beta}_j^T\\mathbf{V}_{\\boldsymbol{\\beta}_j}^{-1}\\boldsymbol{\\beta}_j` test-statistic for parametric terms
-    (computed by function :func:`mssm.models.print_parametric_terms`) to the coefficient vector :math:`\\boldsymbol{\\beta}_j` parameterizing smooth functions. :math:`\\mathbf{V}` here is the
-    covariance matrix of the posterior distribution for :math:`\\boldsymbol{\\beta}` (see Wood, 2017). The idea is to replace
-    :math:`\\mathbf{V}_{\\boldsymbol{\\beta}_j}^{-1}` with a rank :math:`r` pseudo-inverse (smooth blocks in :math:`\\mathbf{V}` are usually
-    rank deficient). Wood (2013, 2017) suggest to base :math:`r` on the estimated degrees of freedom for the smooth term in question - but that :math:`r`  is usually not integer.
+    Wood (2013, 2017) generalize the
+    :math:`\\boldsymbol{\\beta}_j^T\\mathbf{V}_{\\boldsymbol{\\beta}_j}^{-1}\\boldsymbol{\\beta}_j`
+    test-statistic for parametric terms (computed by function
+    :func:`mssm.models.print_parametric_terms`) to the coefficient vector
+    :math:`\\boldsymbol{\\beta}_j` parameterizing smooth functions. :math:`\\mathbf{V}` here is the
+    covariance matrix of the posterior distribution for :math:`\\boldsymbol{\\beta}` (see
+    Wood, 2017). The idea is to replace :math:`\\mathbf{V}_{\\boldsymbol{\\beta}_j}^{-1}` with a
+    rank :math:`r` pseudo-inverse (smooth blocks in :math:`\\mathbf{V}` are usually rank deficient).
+    Wood (2013, 2017) suggest to base :math:`r` on the estimated degrees of freedom for the smooth
+    term in question - but that :math:`r`  is usually not integer.
 
-    They provide a generalization that addresses the realness of :math:`r`, resulting in a test statistic :math:`T_r`, which follows a weighted
-    Chi-square distribution under the Null. Following the recommendation in Wood (2013) we here approximate the reference distribution under the Null by means of the computations outlined in
-    the paper by Davies (1980). If this fails, we fall back on a Gamma distribution with :math:`\\alpha=r/2` and :math:`\\phi=2`.
+    They provide a generalization that addresses the realness of :math:`r`, resulting in a test
+    statistic :math:`T_r`, which follows a weighted Chi-square distribution under the Null.
+    Following the recommendation in Wood (2013) we here approximate the reference distribution
+    under the Null by means of the computations outlined in the paper by Davies (1980). If this
+    fails, we fall back on a Gamma distribution with :math:`\\alpha=r/2` and :math:`\\phi=2`.
 
-    In case of a two-parameter distribution (i.e., estimated scale parameter :math:`\\phi`), the Chi-square reference distribution needs to be corrected, again resulting in a
-    weighted chi-square distribution which should behave something like a F distribution with DoF1 = :math:`r` and DoF2 = :math:`\\epsilon_{DoF}` (i.e., the residual degrees of freedom),
-    which would be the reference distribution for :math:`T_r/r` if :math:`r` were integer and :math:`\\mathbf{V}_{\\boldsymbol{\\beta}_j}` full rank. We again follow the recommendations by Wood (2013)
-    and rely on the methods by Davies (1980) to compute the p-value under this reference distribution. If this fails, we approximate the reference distribution for :math:`T_r/r` with a Beta distribution, with
-    :math:`\\alpha=r/2` and :math:`\\beta=\\epsilon_{DoF}/2` (see Wikipedia for the specific transformation applied to :math:`T_r/r` so that the resulting transformation is approximately beta
-    distributed) - which is similar to the Gamma approximation used for the Chi-square distribution in the no-scale parameter case.
+    In case of a two-parameter distribution (i.e., estimated scale parameter :math:`\\phi`), the
+    Chi-square reference distribution needs to be corrected, again resulting in a weighted
+    chi-square distribution which should behave something like a F distribution with
+    DoF1 = :math:`r` and DoF2 = :math:`\\epsilon_{DoF}` (i.e., the residual degrees of freedom),
+    which would be the reference distribution for :math:`T_r/r` if :math:`r` were integer and
+    :math:`\\mathbf{V}_{\\boldsymbol{\\beta}_j}` full rank. We again follow the recommendations
+    by Wood (2013) and rely on the methods by Davies (1980) to compute the p-value under this
+    reference distribution. If this fails, we approximate the reference distribution for
+    :math:`T_r/r` with a Beta distribution, with :math:`\\alpha=r/2` and
+    :math:`\\beta=\\epsilon_{DoF}/2` (see Wikipedia for the specific transformation applied to
+    :math:`T_r/r` so that the resulting transformation is approximately beta distributed) - which is
+    similar to the Gamma approximation used for the Chi-square distribution in the no-scale
+    parameter case.
 
-    **Warning:** The resulting p-values are **approximate**. They should only be treated as indicative.
+    **Warning:** The resulting p-values are **approximate**. They should only be treated as
+    indicative.
 
-    **Note:** Just like in ``mgcv``, the returned p-value is an average: two p-values are computed because of an ambiguity in forming :math:`T_r` and averaged to get the final one. For :math:`T_r` we return the max of the two
-    alternatives.
+    **Note:** Just like in ``mgcv``, the returned p-value is an average: two p-values are computed
+    because of an ambiguity in forming :math:`T_r` and averaged to get the final one. For
+    :math:`T_r` we return the max of the two alternatives.
 
     References:
-     - Davies, R. B. (1980). Algorithm AS 155: The Distribution of a Linear Combination of χ2 Random Variables.
-     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-     - Wood, S. N. (2013). On p-values for smooth components of an extended generalized additive model.
+     - Davies, R. B. (1980). Algorithm AS 155: The Distribution of a Linear Combination of χ2 \
+        Random Variables.
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
+     - Wood, S. N. (2013). On p-values for smooth components of an extended generalized additive \
+        model.
      - ``testStat`` function in mgcv, see: https://github.com/cran/mgcv/blob/master/R/mgcv.r#L3780
 
     :param model: Model for which to compute p values.
     :type model: mssm.models.GSMM | mssm.models.GAMMLSS | mssm.models.GAMM
-    :param par: Distribution parameter for which to compute p-values. Ignored when ``model`` is a GAMM. Defaults to 0
+    :param par: Distribution parameter for which to compute p-values. Ignored when ``model`` is
+        a GAMM. Defaults to 0
     :type par: int, optional
-    :param n_sel: Maximum number of rows of model matrix. For models with more observations a random sample of ``n_sel`` rows is obtained. Defaults to 1e5
+    :param n_sel: Maximum number of rows of model matrix. For models with more observations a
+        random sample of ``n_sel`` rows is obtained. Defaults to 1e5
     :type n_sel: int, optional
-    :param edf1: Whether or not the estimated degrees of freedom should be corrected for smoothnes bias. Doing so results in more accurate p-values but can be expensive for large models for which the difference is anyway likely to be marginal. Defaults to True
+    :param edf1: Whether or not the estimated degrees of freedom should be corrected for smoothnes
+        bias. Doing so results in more accurate p-values but can be expensive for large models for
+        which the difference is anyway likely to be marginal. Defaults to True
     :type edf1: bool, optional
-    :param force_approx: Whether or not the p-value should be forced to be approximated based on a Gamma/Beta distribution. Only use for testing - in practice you want to keep this at ``False``. Defaults to False
+    :param force_approx: Whether or not the p-value should be forced to be approximated based on a
+        Gamma/Beta distribution. Only use for testing - in practice you want to keep this at
+        ``False``. Defaults to False
     :type force_approx: bool, optional
     :param seed: Random seed determining the random sample computation. Defaults to 0
     :type seed: int, optional
-    :return: Tuple conatining two lists: first list holds approximate p-values for all smooth terms, second list holds test statistic.
+    :return: Tuple conatining two lists: first list holds approximate p-values for all smooth terms,
+        second list holds test statistic.
     :rtype: tuple[list[float],list[float]]
     """
 
@@ -934,7 +1039,7 @@ def approx_smooth_p_values(
     start_coef = form.unpenalized_coef  # Start indexing V_b after un-penalized coef
     edf_idx = 0
     for sti in st_idx:
-        if isinstance(terms[sti], fs) == False:
+        if isinstance(terms[sti], fs) is False:
 
             n_s_coef = form.coef_per_term[sti]
             enumerator = range(1)
@@ -989,7 +1094,8 @@ def approx_smooth_p_values(
                         U *= sign
                         RVRI1 = U @ S @ U.T
 
-                        # Also compute inverse for alternative version of Eigen-vectors (see Wood, 2017):
+                        # Also compute inverse for alternative version of Eigen-vectors
+                        # (see Wood, 2017):
                         U *= sign
                         RVRI2 = U @ S @ U.T
 
@@ -1015,11 +1121,13 @@ def approx_smooth_p_values(
                         # Take only eigen-vectors need for the actual product for the test-statistic
                         U = U[:, : k + 1]
 
-                        # Fix sign of Eigen-vectors to sign of first row (based on testStat function in mgcv)
+                        # Fix sign of Eigen-vectors to sign of first row
+                        # (based on testStat function in mgcv)
                         sign = np.sign(U[0, :])
                         U *= sign
 
-                        # Now we can reform the diagonal matrix needed for inverting RVR (computation follows Wood, 2012)
+                        # Now we can reform the diagonal matrix needed for inverting RVR
+                        # (computation follows Wood, 2012)
                         S = np.zeros((U.shape[1], U.shape[1]))
                         for ilam, lam in enumerate(s[: k - 1]):
                             S[ilam, ilam] = 1 / lam
@@ -1032,12 +1140,13 @@ def approx_smooth_p_values(
 
                         B = Lb @ Bb @ Lb.T
 
-                        S[k - 1 : k + 1, k - 1 : k + 1] = B
+                        S[k - 1 : k + 1, k - 1 : k + 1] = B  # noqa
 
                         # And finally compute the inverse
                         RVRI1 = U @ S @ U.T
 
-                        # Also compute inverse for alternative version of Eigen-vectors (see Wood, 2017):
+                        # Also compute inverse for alternative version of Eigen-vectors
+                        # (see Wood, 2017):
                         U *= sign
                         RVRI2 = U @ S @ U.T
 
@@ -1053,8 +1162,10 @@ def approx_smooth_p_values(
                         if isinstance(model.family, Family) and model.family.twopar:
                             # First try Davies as discussed by Wood (2013)
 
-                            # We have: v > 0. Based on Wood (2013), if k == 1 we need only 2 weighted chi-square variables.
-                            # When k > 1, we need 3 chi-square variables where the first one is unweighted with k-2+1 dof.
+                            # We have: v > 0. Based on Wood (2013), if k == 1 we need only
+                            # 2 weighted chi-square variables.
+                            # When k > 1, we need 3 chi-square variables where the first
+                            # one is unweighted with k-2+1 dof.
 
                             # So start with unweighted variable
                             n = []
@@ -1067,7 +1178,8 @@ def approx_smooth_p_values(
                             n.extend([1, 1, rs_df])
                             lb.extend([v1, v2])
 
-                            # cast to np.array - not lb since we still need to add weight for last variable
+                            # cast to np.array - not lb since we still need to add weight for
+                            # last variable
                             nc = np.array([0 for _ in range(len(n))], dtype=np.float64)
                             n = np.array(n)
 
@@ -1095,7 +1207,8 @@ def approx_smooth_p_values(
                             p1 = 1 - p1
                             p2 = 1 - p2
 
-                            # Since this approximates an F statistic we need to adjust Tr (see below):
+                            # Since this approximates an F statistic we need to adjust Tr
+                            # (see below):
                             Tr1 /= r
                             Tr2 /= r
 
@@ -1103,16 +1216,24 @@ def approx_smooth_p_values(
 
                                 if code1 == 2 or code2 == 2:
                                     warnings.warn(
-                                        "Round-off error in p-value computation might be problematic. Proceed with caution."
+                                        (
+                                            "Round-off error in p-value computation might be "
+                                            "problematic. Proceed with caution."
+                                        )
                                     )
 
                                 if code1 != 2 or code2 != 2:
                                     warnings.warn(
-                                        f"Falling back to approximate p-value computation. Error codes: {code1}, {code2}"
+                                        (
+                                            "Falling back to approximate p-value computation. "
+                                            f"Error codes: {code1}, {code2}"
+                                        )
                                     )
-                                    # Davies failed... Now, in case of an estimated scale parameter and integer r: Tr/r \\sim F(r,rs_df)
-                                    # So to approximate the case where r is real, we can use a Beta (see Wikipedia):
-                                    # if X \\sim F(d1,d2) then (d1*X/d2) / (1 + (d1*X/d2)) \\sim Beta(d1/2,d2/2)
+                                    # Davies failed... Now, in case of an estimated scale parameter
+                                    # and integer r: Tr/r \\sim F(r,rs_df) So to approximate the
+                                    # case where r is real, we can use a Beta (see Wikipedia):
+                                    # if X \\sim F(d1,d2) then
+                                    # (d1*X/d2) / (1 + (d1*X/d2)) \\sim Beta(d1/2,d2/2)
 
                                     p1 = 1 - scp.stats.beta.cdf(
                                         (r * Tr1 / rs_df) / (1 + (r * Tr1 / rs_df)),
@@ -1159,15 +1280,22 @@ def approx_smooth_p_values(
 
                                 if code1 == 2 or code2 == 2:
                                     warnings.warn(
-                                        "Round-off error in p-value computation might be problematic. Proceed with caution."
+                                        (
+                                            "Round-off error in p-value computation might be "
+                                            "problematic. Proceed with caution."
+                                        )
                                     )
 
                                 if code1 != 2 or code2 != 2:
                                     warnings.warn(
-                                        f"Falling back to approximate p-value computation. Error codes: {code1}, {code2}"
+                                        (
+                                            "Falling back to approximate p-value computation. "
+                                            f"Error codes: {code1}, {code2}"
+                                        )
                                     )
-                                    # Davies failed... Now, Wood (2013) suggest that the Chi-square distribution of
-                                    # the Null can be approximated with a gamma with alpha=r/2 and scale=2:
+                                    # Davies failed... Now, Wood (2013) suggest that the Chi-square
+                                    # distribution of the Null can be approximated with a gamma with
+                                    # alpha=r/2 and scale=2:
 
                                     p1 = 1 - scp.stats.gamma.cdf(Tr1, a=r / 2, scale=2)
                                     p2 = 1 - scp.stats.gamma.cdf(Tr2, a=r / 2, scale=2)
@@ -1177,7 +1305,10 @@ def approx_smooth_p_values(
 
                 else:
                     warnings.warn(
-                        f"Function {sti} appears to be fully penalized. This function does not support such terms. Setting p=1 and Tr=-1."
+                        (
+                            f"Function {sti} appears to be fully penalized. This function does not "
+                            "support such terms. Setting p=1 and Tr=-1."
+                        )
                     )
                     p = 1
                     Tr = -1
@@ -1206,25 +1337,35 @@ def adjust_CI(
     seed: int | None,
     par: int = 0,
 ) -> np.ndarray:
-    """Internal function to adjust point-wise CI to behave like whole-function interval (based on Wood, 2017; section 6.10.2 and Simpson, 2016):
+    """Internal function to adjust point-wise CI to behave like whole-function interval (based on
+    Wood, 2017; section 6.10.2 and Simpson, 2016):
 
-    ``model.coef +- b`` gives point-wise interval, and for the interval to cover the whole-function, ``1-alpha`` % of posterior samples should
-    be expected to fall completely within these boundaries.
+    ``model.coef +- b`` gives point-wise interval, and for the interval to cover the whole-function,
+    ``1-alpha`` % of posterior samples should be expected to fall completely within these
+    boundaries.
 
-    From section 6.10 in Wood (2017) we have that :math:`\\boldsymbol{\\beta} | \\mathbf{y}, \\boldsymbol{\\lambda} \\sim N(\\hat{\\boldsymbol{\\beta}},\\mathbf{V})`.
-    :math:`\\mathbf{V}` is the covariance matrix of this conditional posterior, and can be obtained by evaluating ``model.lvi.T @ model.lvi * model.scale`` (``model.scale`` should be
+    From section 6.10 in Wood (2017) we have that :math:`\\boldsymbol{\\beta} | \\mathbf{y}, \
+    \\boldsymbol{\\lambda} \\sim N(\\hat{\\boldsymbol{\\beta}},\\mathbf{V})`. :math:`\\mathbf{V}`
+    is the covariance matrix of this conditional posterior, and can be obtained by evaluating
+    ``model.lvi.T @ model.lvi * model.scale`` (``model.scale`` should be
     set to 1 for :class:`msssm.models.GAMMLSS` and :class:`msssm.models.GSMM`).
 
-    The implication of this result is that we can also expect the deviations :math:`\\boldsymbol{\\beta} - \\hat{\\boldsymbol{\\beta}}`  to follow
-    :math:`\\boldsymbol{\\beta} - \\hat{\\boldsymbol{\\beta}} | \\mathbf{y}, \\boldsymbol{\\lambda} \\sim N(0,\\mathbf{V})`. In line with the whole-function interval definition above, ``1-alpha`` % of
-    ``predi_mat@[*coef - coef]`` (where ``[*coef - coef]`` representes the deviations :math:`\\boldsymbol{\\beta} - \\hat{\\boldsymbol{\\beta}}`) should fall within ``[b,-b]``.
-    Wood (2017) suggests to find ``a`` so that ``[a*b,a*-b]`` achieves this.
+    The implication of this result is that we can also expect the deviations
+    :math:`\\boldsymbol{\\beta} - \\hat{\\boldsymbol{\\beta}}`  to follow
+    :math:`\\boldsymbol{\\beta} - \\hat{\\boldsymbol{\\beta}} | \\mathbf{y}, \
+    \\boldsymbol{\\lambda} \\sim N(0,\\mathbf{V})`. In line with the whole-function interval
+    definition above, ``1-alpha`` % of ``predi_mat@[*coef - coef]`` (where ``[*coef - coef]``
+    representes the deviations :math:`\\boldsymbol{\\beta} - \\hat{\\boldsymbol{\\beta}}`)
+    should fall within ``[b,-b]``. Wood (2017) suggests to find ``a`` so that ``[a*b,a*-b]``
+    achieves this.
 
-    To do this, we find ``a`` for every ``predi_mat@[*coef - coef]`` and then select the final one so that ``1-alpha`` % of samples had an equal or lower
-    one. The consequence: ``1-alpha`` % of samples drawn should fall completely within the modified boundaries.
+    To do this, we find ``a`` for every ``predi_mat@[*coef - coef]`` and then select the final one
+    so that ``1-alpha`` % of samples had an equal or lower one. The consequence: ``1-alpha`` % of
+    samples drawn should fall completely within the modified boundaries.
 
     References:
-     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
      - Simpson, G. (2016). Simultaneous intervals for smooths revisited.
 
     :param model: Model for which to compute p values.
@@ -1233,22 +1374,26 @@ def adjust_CI(
     :type n_ps: int
     :param b: Ci boundary of point-wise CI.
     :type b: np.ndarray
-    :param predi_mat: Model matrix for a particular smooth term or additive combination of parameters evaluated usually at a representative sample of predictor variables.
+    :param predi_mat: Model matrix for a particular smooth term or additive combination of
+        parameters evaluated usually at a representative sample of predictor variables.
     :type predi_mat: scp.sparse.csc_array
-    :param use_terms: The indices corresponding to the terms that should be used to obtain the prediction or ``None`` in which case all terms will be used.
+    :param use_terms: The indices corresponding to the terms that should be used to obtain the
+        prediction or ``None`` in which case all terms will be used.
     :type use_terms: list[int] | None
-    :param alpha: The alpha level to use for the whole-function interval adjustment calculation as outlined above.
+    :param alpha: The alpha level to use for the whole-function interval adjustment calculation as
+        outlined above.
     :type alpha: float
     :param seed: Can be used to provide a seed for the posterior sampling.
     :type seed: int | None
-    :param par: The index corresponding to the parameter of the log-likelihood for which samples are to be obtained for the coefficients, defaults to 0.
+    :param par: The index corresponding to the parameter of the log-likelihood for which samples
+        are to be obtained for the coefficients, defaults to 0.
     :type par: int, optional
     :return: The adjusted vector ``b``
     :rtype: np.ndarray
     """
 
     use_post = None
-    if not use_terms is None:
+    if use_terms is not None:
         # If we have many random factor levels, but want to make predictions only
         # for fixed effects, it's wasteful to sample all coefficients from posterior.
         # The code below performs a selection of the coefficients to be sampled.
@@ -1258,9 +1403,10 @@ def adjust_CI(
     # Sample deviations [*coef - coef] from posterior of model
     post = model.sample_post(n_ps, use_post, deviations=True, seed=seed, par=par)
 
-    # To make computations easier take the abs of predi_mat@[*coef - coef], because [b,-b] is symmetric we can
-    # simply check whether abs(predi_mat@[*coef - coef]) < b by computing abs(predi_mat@[*coef - coef])/b. The max of
-    # this ratio, over rows of predi_mat, is a for this sample. If a<=1, no extension is necessary for this series.
+    # To make computations easier take the abs of predi_mat@[*coef - coef], because [b,-b] is
+    # symmetric we can simply check whether abs(predi_mat@[*coef - coef]) < b by computing
+    # abs(predi_mat@[*coef - coef])/b. The max of this ratio, over rows of predi_mat, is a for
+    # this sample. If a<=1, no extension is necessary for this series.
     if use_post is None:
         fpost = np.abs(predi_mat @ post)
     else:
@@ -1269,11 +1415,11 @@ def adjust_CI(
     # Compute ratio between abs(predi_mat@[*coef - coef])/b for every sample.
     fpost = fpost / b[:, None]
 
-    # Then compute max of this ratio, over rows of predi_mat, for every sample. np.max(fpost,axis=0) now is a vector
-    # with n_ps elements, holding for each sample the multiplicative adjustment a, necessary to ensure that predi_mat@[*coef - coef]
-    # falls completely between [a*b,a*-b].
-    # The final multiplicative adjustment bmadq is selected from this vector to be high enough so that in 1-(alpha) simulations
-    # we have an equal or lower a.
+    # Then compute max of this ratio, over rows of predi_mat, for every sample. np.max(fpost,axis=0)
+    # now is a vector with n_ps elements, holding for each sample the multiplicative adjustment a,
+    # necessary to ensure that predi_mat@[*coef - coef] falls completely between [a*b,a*-b].
+    # The final multiplicative adjustment bmadq is selected from this vector to be high enough so
+    # that in 1-(alpha) simulations we have an equal or lower a.
     bmadq = np.quantile(np.max(fpost, axis=0), 1 - alpha)
 
     # Then adjust b
@@ -1303,9 +1449,11 @@ def compute_reml_candidate_GAMM(
     float,
     float,
 ]:
-    """Allows to evaluate REML criterion (e.g., Wood, 2011; Wood, 2016) efficiently for a set of \\lambda values for a GAMM model.
+    """Allows to evaluate REML criterion (e.g., Wood, 2011; Wood, 2016) efficiently for a set of
+    \\lambda values for a GAMM model.
 
-    Internal function used for computing the correction applied to the edf for the GLRT - based on Wood (2017) and Wood et al., (2016).
+    Internal function used for computing the correction applied to the edf for the GLRT - based on
+    Wood (2017) and Wood et al., (2016).
 
     See :func:`REML` function for more details.
 
@@ -1325,12 +1473,16 @@ def compute_reml_candidate_GAMM(
     :type init_eta: np.ndarray | None, optional
     :param method: Method to use to solve for coefficients, defaults to 'Chol'
     :type method: str, optional
-    :param compute_inv: Whether to compute the inverse of the pivoted Cholesky of the negative hessian of the penalized llk, defaults to False
+    :param compute_inv: Whether to compute the inverse of the pivoted Cholesky of the negative
+        hessian of the penalized llk, defaults to False
     :type compute_inv: bool, optional
     :param origNH: Optional external scale parameter, defaults to None
     :type origNH: float | None, optional
-    :return: reml criterion, un-pivoted inverse of the pivoted Cholesky of the negative hessian of the penalized llk, pivoted Cholesky, pivot column indices, coefficients, estimated scale, total edf, llk
-    :rtype: tuple[float, scp.sparse.csc_array|None, scp.sparse.csc_array, list[int], np.ndarray, float, float, float]
+    :return: reml criterion, un-pivoted inverse of the pivoted Cholesky of the negative hessian of
+        the penalized llk, pivoted Cholesky, pivot column indices, coefficients, estimated scale,
+        total edf, llk
+    :rtype: tuple[float, scp.sparse.csc_array|None, scp.sparse.csc_array, list[int], np.ndarray,
+        float, float, float]
     """
 
     S_emb, _, S_root, _ = compute_S_emb_pinv_det(
@@ -1371,7 +1523,7 @@ def compute_reml_candidate_GAMM(
 
             # Now repeat until convergence
             inval = np.isnan(mu).flatten()
-            dev = family.deviance(y[inval == False], mu[inval == False])
+            dev = family.deviance(y[inval == False], mu[inval == False])  # noqa
             pen_dev = dev + coef.T @ S_emb @ coef
 
             for newt_iter in range(500):
@@ -1380,10 +1532,10 @@ def compute_reml_candidate_GAMM(
                 if newt_iter > 0:
                     dev, pen_dev, mu, eta, coef = correct_coef_step(
                         coef,
-                        n_coef,
+                        n_coef,  # noqa
                         dev,
                         pen_dev,
-                        c_dev_prev,
+                        c_dev_prev,  # noqa
                         family,
                         eta,
                         mu,
@@ -1403,11 +1555,11 @@ def compute_reml_candidate_GAMM(
 
                 # Convergence check for inner loop
                 if newt_iter > 0:
-                    dev_diff_inner = abs(pen_dev - c_dev_prev)
+                    dev_diff_inner = abs(pen_dev - c_dev_prev)  # noqa
                     if dev_diff_inner < 1e-9 * pen_dev or newt_iter == 499:
                         break
 
-                c_dev_prev = pen_dev
+                c_dev_prev = pen_dev  # noqa
 
                 # Now propose next set of coefficients
                 eta, mu, n_coef, Pr, _, LP, keep, drop = update_coef(
@@ -1416,12 +1568,14 @@ def compute_reml_candidate_GAMM(
 
                 # Update deviance & penalized deviance
                 inval = np.isnan(mu).flatten()
-                dev = family.deviance(y[inval == False], mu[inval == False])
+                dev = family.deviance(
+                    y[inval == False], mu[inval == False]  # noqa: E712
+                )
                 pen_dev = dev + n_coef.T @ S_emb @ n_coef
 
-            # At this point, Wr/z might not match the dimensions of y and X, because observations might be
-            # excluded at convergence. eta and mu are of correct dimension, so we need to re-compute Wr - this
-            # time with a weight of zero for any dropped obs.
+            # At this point, Wr/z might not match the dimensions of y and X, because observations
+            # might be excluded at convergence. eta and mu are of correct dimension, so we need to
+            # re-compute Wr - this time with a weight of zero for any dropped obs.
             inval_check = np.any(np.isnan(z))
 
             if inval_check:
@@ -1443,7 +1597,8 @@ def compute_reml_candidate_GAMM(
                 nH[:, drop] = 0
                 nH[drop, :] = 0
 
-        # Get edf and optionally estimate scale (scale will be kept at fixed (e.g., 1) for Generalized case)
+        # Get edf and optionally estimate scale (scale will be kept at fixed (e.g., 1) for
+        # Generalized case)
         # InvCholXXSP = compute_Linv(LP,n_c)
         _, _, edf, _, _, scale = update_scale_edf(
             y,
@@ -1470,12 +1625,16 @@ def compute_reml_candidate_GAMM(
             if mu_inval is None:
                 llk = family.llk(y, mu, scale)
             else:
-                llk = family.llk(y[mu_inval == False], mu[mu_inval == False], scale)
+                llk = family.llk(
+                    y[mu_inval == False], mu[mu_inval == False], scale  # noqa: E712
+                )
         else:
             if mu_inval is None:
                 llk = family.llk(y, mu)
             else:
-                llk = family.llk(y[mu_inval == False], mu[mu_inval == False])
+                llk = family.llk(
+                    y[mu_inval == False], mu[mu_inval == False]  # noqa: E712
+                )
 
         # Now compute REML for candidate
         reml = REML(llk, nH / scale, coef, scale, penalties)
@@ -1503,7 +1662,7 @@ def compute_reml_candidate_GAMM(
             else:
                 edf = (Linv @ origNH @ Linv.T).trace() * scale
 
-    except:
+    except:  # noqa: E722
         return (
             -np.inf,
             scp.sparse.csc_matrix((len(coef), len(coef))),
@@ -1532,9 +1691,11 @@ def compute_REML_candidate_GSMM(
     bfgs_options: dict = {},
     origNH: scp.sparse.csc_array | None = None,
 ) -> tuple[float, scp.sparse.csc_array, scp.sparse.csc_array, np.ndarray, float, float]:
-    """Allows to evaluate REML criterion (e.g., Wood, 2011; Wood, 2016) efficiently for a set of \\lambda values for a GSMM or GAMMLSS.
+    """Allows to evaluate REML criterion (e.g., Wood, 2011; Wood, 2016) efficiently for a set of
+    \\lambda values for a GSMM or GAMMLSS.
 
-    Internal function used for computing the correction applied to the edf for the GLRT - based on Wood (2017) and Wood et al., (2016).
+    Internal function used for computing the correction applied to the edf for the GLRT - based on
+    Wood (2017) and Wood et al., (2016).
 
     See :func:`REML` function for more details.
 
@@ -1550,19 +1711,24 @@ def compute_REML_candidate_GSMM(
     :type coef: np.ndarray
     :param n_coef: Number of coefficients
     :type n_coef: int
-    :param coef_split_idx: The indices at which to split the overall coefficient vector into separate lists - one per parameter.
+    :param coef_split_idx: The indices at which to split the overall coefficient vector into
+        separate lists - one per parameter.
     :type coef_split_idx: list[int]
-    :param method: Method to use to solve for the coefficients (lambda parameters in case this is set to 'qEFS'), defaults to "Chol"
+    :param method: Method to use to solve for the coefficients (lambda parameters in case this is
+        set to 'qEFS'), defaults to "Chol"
     :type method: str, optional
     :param conv_tol: Tolerance, defaults to 1e-7
     :type conv_tol: float, optional
     :param n_c: Number of cores to use, defaults to 10
     :type n_c: int, optional
-    :param bfgs_options: An optional dictionary holding arguments that should be passed on to the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``, defaults to {}
+    :param bfgs_options: An optional dictionary holding arguments that should be passed on to the
+        call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``, defaults to {}
     :type bfgs_options: dict, optional
     :param origNH: Optional external hessian matrix, defaults to None
     :type origNH: scp.sparse.csc_array | None, optional
-    :return: reml criterion,conditional covariance matrix of coefficients for this lambda, un-pivoted inverse of the pivoted Cholesky of the negative hessian of the penalized llk, coefficients, total edf, llk
+    :return: reml criterion,conditional covariance matrix of coefficients for this lambda,
+        un-pivoted inverse of the pivoted Cholesky of the negative hessian of the penalized llk,
+        coefficients, total edf, llk
     :rtype: tuple[float, scp.sparse.csc_array, scp.sparse.csc_array, np.ndarray, float, float]
     """
 
@@ -1619,7 +1785,7 @@ def compute_REML_candidate_GSMM(
                         scp.sparse.identity(len(coef), format="csc") * LV.omega,
                         omega=LV.omega,
                         make_psd=True,
-                        explicit=True
+                        explicit=True,
                     )
                 else:
                     H = -1 * computeH(
@@ -1627,7 +1793,7 @@ def compute_REML_candidate_GSMM(
                         LV.yk,
                         LV.rho,
                         scp.sparse.identity(len(coef), format="csc") * LV.omega,
-                        True
+                        True,
                     )
 
                 # Get Cholesky factor of approximate inverse of penalized hessian (needed for CIs)
@@ -1702,7 +1868,7 @@ def compute_REML_candidate_GSMM(
             # Compute trace for tau2
             total_edf = (LV @ origNH @ LV.T).trace()
 
-    except:
+    except:  # noqa: E722
         return (
             -np.inf,
             scp.sparse.csc_matrix((len(coef), len(coef))),
@@ -1724,14 +1890,19 @@ def REML(
     keep: list[int] | None = None,
 ) -> float | np.ndarray:
     """
-    Based on Wood (2011). Exact REML for Gaussian GAM, Laplace approximate (Wood, 2016) for everything else.
-    Evaluated after applying stabilizing reparameterization discussed by Wood (2011).
+    Based on Wood (2011). Exact REML for Gaussian GAM, Laplace approximate (Wood, 2016) for
+    everything else. Evaluated after applying stabilizing reparameterization discussed by Wood
+    (2011).
 
-    **Important**: the dimension of the output depend on the shape of ``coef``. If ``coef`` is flattened, then the output will be a float. If ``coef`` is of shape (-1,1), the output will be [[float]].
+    **Important**: the dimension of the output depend on the shape of ``coef``. If ``coef`` is
+    flattened, then the output will be a float. If ``coef`` is of shape (-1,1), the output will
+    be [[float]].
 
     References:
-     - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
-     - Wood, S. N., Pya, N., Saefken, B., (2016). Smoothing Parameter and Model Selection for General Smooth Models
+     - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood \
+        estimation of semiparametric generalized linear models.
+     - Wood, S. N., Pya, N., Saefken, B., (2016). Smoothing Parameter and Model Selection for \
+        General Smooth Models
 
     :param llk: log-likelihood of model
     :type llk: float
@@ -1743,7 +1914,10 @@ def REML(
     :type scale: float
     :param penalties: List of penalties that were part of the model.
     :type penalties: [LambdaTerm]
-    :param keep: Optional List of indices corresponding to identifiable coefficients. Coefficients not in this list (not identifiable) are dropped from the negative hessian of the penalized log-likelihood. Can also be set to ``None`` (default) in which case all coefficients are treated as identifiable.
+    :param keep: Optional List of indices corresponding to identifiable coefficients. Coefficients
+        not in this list (not identifiable) are dropped from the negative hessian of the penalized
+        log-likelihood. Can also be set to ``None`` (default) in which case all coefficients are
+        treated as identifiable.
     :type keep: list[int]|None, optional
     :return: (Approximate) REML score
     :rtype: float|np.ndarray
@@ -1763,7 +1937,8 @@ def REML(
     # c_idx = S_idx[0]
     # for Si,(S_rep,S_coef) in enumerate(zip(S_reps,S_coefs)):
     #     for _ in range(Sj_reps[SJ_term_idx[Si][0]].rep_sj):
-    #         Q_emb,_ = embed_in_S_sparse(*translate_sparse(Q_reps[Si]),Q_emb,len(coef),S_coef,c_idx)
+    #         Q_emb,_ = embed_in_S_sparse(*translate_sparse(Q_reps[Si]),Q_emb,len(coef),S_coef,
+    #                       c_idx)
     #         S_emb,c_idx = embed_in_S_sparse(*translate_sparse(S_rep),S_emb,len(coef),S_coef,c_idx)
     # #print(Q_emb @ S_emb @ QT_emb - S_emb1)
     # Xq = X@Q_emb
@@ -1774,12 +1949,14 @@ def REML(
     # to get l_r.
     reml = llk - (coef.T @ S_emb @ coef) / scale / 2
 
-    # Now we need to compute log(|S_\\lambda|+), Wood shows that after the re-parameterization log(|S_\\lambda|)
-    # can be computed separately from the diagonal or R if Q@R=S_reps[i] for all terms i. Below we compute from
-    # the diagonal of the cholesky of the term specific S_reps[i], applying conditioning as shown in Appendix B of Wood (2011).
+    # Now we need to compute log(|S_\\lambda|+), Wood shows that after the re-parameterization
+    # log(|S_\\lambda|) can be computed separately from the diagonal or R if Q@R=S_reps[i] for all
+    # terms i. Below we compute from the diagonal of the cholesky of the term specific S_reps[i],
+    # applying conditioning as shown in Appendix B of Wood (2011).
     lgdetS = 0
     for Si, S_rep in enumerate(S_reps):
-        # We need to evaluate log(|S_\\lambda/\\phi|+) after re-parameterization of S_\\lambda (so this will be a regular determinant).
+        # We need to evaluate log(|S_\\lambda/\\phi|+) after re-parameterization of S_\\lambda
+        # (so this will be a regular determinant).
         # We have that (https://en.wikipedia.org/wiki/Determinant):
         #   det(S_\\lambda * 1/\\phi) = (1/\\phi)^p * det(S_\\lambda)
         # taking logs:
@@ -1807,10 +1984,10 @@ def REML(
 
         lgdetS += ldetSI
 
-    # Now log(|nH+S_\\lambda|)... Wood (2011) shows stable computation based on QR decomposition, but
-    # we will generally not be able to compute a QR decomposition of X so that X.T@X=H efficiently.
-    # Hence, we simply rely on the pivoted cholesky (again pre-conditioned) used for fitting (based on S_\\lambda before
-    # re-parameterization).
+    # Now log(|nH+S_\\lambda|)... Wood (2011) shows stable computation based on QR decomposition,
+    # but we will generally not be able to compute a QR decomposition of X so that X.T@X=H
+    # efficiently. Hence, we simply rely on the pivoted cholesky (again pre-conditioned) used for
+    # fitting (based on S_\\lambda before re-parameterization).
     H_pen = nH + S_emb / scale
 
     # Drop unidentifiable parameters
@@ -1853,10 +2030,13 @@ def estimateVp(
     seed: int | None = None,
     **bfgs_options,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Estimate covariance matrix :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` of posterior for :math:`\\boldsymbol{\\rho} = log(\\boldsymbol{\\lambda})`.
+    """Estimate covariance matrix :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` of posterior for
+    :math:`\\boldsymbol{\\rho} = log(\\boldsymbol{\\lambda})`.
 
-    Either :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` is based on finite difference approximation or on a PQL approximation (see ``grid_type`` parameter), or it is estimated via numerical
-    integration similar to what is done in the :func:`correct_VB` function (this is done when ``grid_type=='JJJ2'``; see the aforementioned function for details).
+    Either :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` is based on finite difference approximation or
+    on a PQL approximation (see ``grid_type`` parameter), or it is estimated via numerical
+    integration similar to what is done in the :func:`correct_VB` function (this is done when
+    ``grid_type=='JJJ2'``; see the aforementioned function for details).
 
     Example::
 
@@ -1865,7 +2045,11 @@ def estimateVp(
 
         # Now fit nested models
         sim_fit_formula = Formula(lhs("y"),
-                                    [i(),f(["x0"],nk=20,rp=0),f(["x1"],nk=20,rp=0),f(["x2"],nk=20,rp=0),f(["x3"],nk=20,rp=0)],
+                                    [i(),
+                                     f(["x0"],nk=20,rp=0),
+                                     f(["x1"],nk=20,rp=0),
+                                     f(["x2"],nk=20,rp=0),
+                                     f(["x3"],nk=20,rp=0)],
                                     data=sim_fit_dat,
                                     print_warn=False)
 
@@ -1877,57 +2061,104 @@ def estimateVp(
         # Vpr is regularized version of the former
         # Ri is a root of covariance matrix of log regularization parameters
         # Rir is a root of regularized version of covariance matrix of log regularization parameters
-        # ep will be an estimate of the mean of the marginal posterior of log regularization parameters (for ``grid_type="JJJ1"`` this will simply be the log of the estimated regularization parameters)
+        # ep will be an estimate of the mean of the marginal posterior of log regularization
+        # parameters (for ``grid_type="JJJ1"`` this will simply be the log of the estimated
+        # regularization parameters)
         Vp, Vpr, Ri, Rir, ep = estimateVp(model,grid_type="JJJ1",verbose=True,seed=20)
 
 
         # Compute MC estimate for generic model and given prior
         prior = DummyRhoPrior(b=np.log(1e12)) # Set up uniform prior
-        Vp_MC, Vpr_MC, Ri_MC, Rir_MC, ep_MC = estimateVp(model,strategy="JJJ2",verbose=True,seed=20,use_importance_weights=True,prior=prior)
+        Vp_MC, Vpr_MC, Ri_MC, Rir_MC, ep_MC = estimateVp(model,
+            strategy="JJJ2",verbose=True,seed=20,use_importance_weights=True,prior=prior)
 
 
     References:
      - https://en.wikipedia.org/wiki/Estimation_of_covariance_matrices
-     - Greven, S., & Scheipl, F. (2016). Comment on: Smoothing Parameter and Model Selection for General Smooth Models
+     - Greven, S., & Scheipl, F. (2016). Comment on: Smoothing Parameter and Model Selection for \
+        General Smooth Models
 
-    :param model: GAMM, GAMMLSS, or GSMM model (which has been fitted) for which to estimate :math:`\\mathbf{V}`
+    :param model: GAMM, GAMMLSS, or GSMM model (which has been fitted) for which to estimate
+        :math:`\\mathbf{V}`
     :type model: mssm.models.GSMM | mssm.models.GAMMLSS | mssm.models.GAMM
-    :param nR: In case ``grid!="JJJ1"``, ``nR`` samples/reml scores are generated/computed to numerically evaluate the expectations necessary for the uncertainty correction, defaults to 250
+    :param nR: In case ``grid!="JJJ1"``, ``nR`` samples/reml scores are generated/computed to
+        numerically evaluate the expectations necessary for the uncertainty correction,
+        defaults to 250
     :type nR: int, optional
-    :param grid_type: How to compute the smoothness uncertainty correction. Setting ``grid_type="JJJ1"`` means a PQL or finite difference approximation is obtained. Setting ``grid_type="JJJ2"`` means numerical integration is performed - see :func:`correct_VB` for details , defaults to 'JJJ1'
+    :param grid_type: How to compute the smoothness uncertainty correction. Setting
+        ``grid_type="JJJ1"`` means a PQL or finite difference approximation is obtained.
+        Setting ``grid_type="JJJ2"`` means numerical integration is performed -
+        see :func:`correct_VB` for details , defaults to 'JJJ1'
     :type grid_type: str, optional
-    :param a: Any of the :math:`\\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{\\rho}|y \\sim N(log(\\hat{\\boldsymbol{\\rho}}),\\mathbf{V}^{\\boldsymbol{\\rho}})` used to sample ``nR`` candidates) which are smaller than this are set to this value as well, defaults to 1e-7 the minimum possible estimate
+    :param a: Any of the :math:`\\lambda` estimates obtained from ``model`` (used to define the
+        mean for the posterior of
+        :math:`\\boldsymbol{\\rho}|y \\sim N(log(\\hat{\\boldsymbol{\\rho}}),
+        \\mathbf{V}^{\\boldsymbol{\\rho}})` used to sample ``nR`` candidates) which are smaller than
+        this are set to this value as well, defaults to 1e-7 the minimum possible estimate
     :type a: float, optional
-    :param b: Any of the :math:`\\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{\\rho}|y \\sim N(log(\\hat{\\boldsymbol{\\rho}}),\\mathbf{V}^{\\boldsymbol{\\rho}})` used to sample ``nR`` candidates) which are larger than this are set to this value as well, defaults to 1e7 the maximum possible estimate
+    :param b: Any of the :math:`\\lambda` estimates obtained from ``model`` (used to define the
+        mean for the posterior of
+        :math:`\\boldsymbol{\\rho}|y \\sim N(log(\\hat{\\boldsymbol{\\rho}}),\
+        \\mathbf{V}^{\\boldsymbol{\\rho}})` used to sample ``nR`` candidates) which are larger than
+        this are set to this value as well, defaults to 1e7 the maximum possible estimate
     :type b: float, optional
-    :param df: Degrees of freedom used for the multivariate t distribution used to sample the next set of candidates. Setting this to ``np.inf`` means a multivariate normal is used for sampling, defaults to 40
+    :param df: Degrees of freedom used for the multivariate t distribution used to sample the next
+        set of candidates. Setting this to ``np.inf`` means a multivariate normal is used for
+        sampling, defaults to 40
     :type df: int, optional
     :param n_c: Number of cores to use during parallel parts of the correction, defaults to 10
     :type n_c: int, optional
-    :param drop_NA: Whether to drop rows in the **model matrices** corresponding to NAs in the dependent variable vector. Defaults to True.
+    :param drop_NA: Whether to drop rows in the **model matrices** corresponding to NAs in the
+        dependent variable vector. Defaults to True.
     :type drop_NA: bool,optional
-    :param method: Which method to use to solve for the coefficients (and smoothing parameters). The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR/Chol". In that case a QR decomposition is used - which is first pivoted to maximize sparsity in the resulting decomposition but also pivots for stability in order to get an estimate of rank defficiency. A Cholesky is than used using the combined pivoting strategy obtained from the QR. This takes substantially longer. If this is set to ``'qEFS'``, then the coefficients are estimated via quasi netwon and the smoothing penalties are estimated from the quasi newton approximation to the hessian. This only requieres first derviative information. Defaults to "Chol".
+    :param method: Which method to use to solve for the coefficients (and smoothing parameters).
+        The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in
+        principle less stable, numerically speaking. For a maximum of numerical stability set this
+        to "QR/Chol". In that case a QR decomposition is used - which is first pivoted to maximize
+        sparsity in the resulting decomposition but also pivots for stability in order to get an
+        estimate of rank defficiency. A Cholesky is than used using the combined pivoting strategy
+        obtained from the QR. This takes substantially longer. If this is set to ``'qEFS'``, then
+        the coefficients are estimated via quasi netwon and the smoothing penalties are estimated
+        from the quasi newton approximation to the hessian. This only requieres first derviative
+        information. Defaults to "Chol".
     :type method: str,optional
-    :param Vp_fidiff: Whether to rely on a finite difference approximation to compute :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` or on a PQL approximation. The latter is exact for Gaussian and canonical GAMs and far cheaper if many penalties are to be estimated. Defaults to False (PQL approximation)
+    :param Vp_fidiff: Whether to rely on a finite difference approximation to compute
+        :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` or on a PQL approximation. The latter is exact for
+        Gaussian and canonical GAMs and far cheaper if many penalties are to be estimated. Defaults
+        to False (PQL approximation)
     :type Vp_fidiff: bool,optional
-    :param use_importance_weights: Whether to rely importance weights to compute the numerical integration when ``grid_type != 'JJJ1'`` or on the log-densities of :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` - the latter assumes that the unconditional posterior is normal. Defaults to True (Importance weights are used)
+    :param use_importance_weights: Whether to rely importance weights to compute the numerical
+        integration when ``grid_type != 'JJJ1'`` or on the log-densities of
+        :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` - the latter assumes that the unconditional
+        posterior is normal. Defaults to True (Importance weights are used)
     :type use_importance_weights: bool,optional
-    :param prior: An (optional) instance of an arbitrary class that has a ``.logpdf()`` method to compute the prior log density of a sampled candidate. If this is set to ``None``, the prior is assumed to coincide with the proposal distribution, simplifying the importance weight computation. Ignored when ``use_importance_weights=False``. Defaults to None
+    :param prior: An (optional) instance of an arbitrary class that has a ``.logpdf()`` method to
+        compute the prior log density of a sampled candidate. If this is set to ``None``, the prior
+        is assumed to coincide with the proposal distribution, simplifying the importance weight
+        computation. Ignored when ``use_importance_weights=False``. Defaults to None
     :type prior: Callable|None, optional
-    :param recompute_H: Whether or not to re-compute the Hessian of the log-likelihood at an estimate of the mean of the Bayesian posterior :math:`\\boldsymbol{\\beta}|y` before computing the (uncertainty/bias corrected) edf. Defaults to False
+    :param recompute_H: Whether or not to re-compute the Hessian of the log-likelihood at an
+        estimate of the mean of the Bayesian posterior :math:`\\boldsymbol{\\beta}|y` before
+        computing the (uncertainty/bias corrected) edf. Defaults to False
     :type recompute_H: bool, optional
     :param seed: Seed to use for random parts of the correction. Defaults to None
     :type seed: int|None,optional
-    :param bfgs_options: Any additional keyword arguments that should be passed on to the call of ``scipy.optimize.minimize``. If none are provided, the ``gtol`` argument will be initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100. Defaults to None.
+    :param bfgs_options: Any additional keyword arguments that should be passed on to the call of
+        ``scipy.optimize.minimize``. If none are provided, the ``gtol`` argument will be initialized
+        to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100.
+        Defaults to None.
     :type bfgs_options: key=value,optional
-    :return: A tuple with 5 elements: an estimate of the covariance matrix of the posterior for :math:`\\boldsymbol{\\rho} = log(\\boldsymbol{\\lambda})`, a regularized version of the former, a root of the covariance matrix, a root of the regularized covariance matrix, and an estimate of the mean of the posterior
+    :return: A tuple with 5 elements: an estimate of the covariance matrix of the posterior for
+        :math:`\\boldsymbol{\\rho} = log(\\boldsymbol{\\lambda})`, a regularized version of the
+        former, a root of the covariance matrix, a root of the regularized covariance matrix, and
+        an estimate of the mean of the posterior
     :rtype: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
     """
-    np_gen = np.random.default_rng(seed)
+    # np_gen = np.random.default_rng(seed)
 
     family = model.family
 
-    if not grid_type in ["JJJ1", "JJJ2"]:
+    if grid_type not in ["JJJ1", "JJJ2"]:
         raise ValueError("'grid_type' has to be set to one of 'JJJ1', 'JJJ2'.")
 
     if isinstance(family, Family) and model.rho is not None and grid_type != "JJJ1":
@@ -1939,7 +2170,7 @@ def estimateVp(
         if not bfgs_options:
             bfgs_options = {"ftol": 1e-9, "maxcor": 30, "maxls": 100}
 
-    nPen = len(model.overall_penalties)
+    # nPen = len(model.overall_penalties)
     rPen = copy.deepcopy(model.overall_penalties)
     S_emb, _, _, _ = compute_S_emb_pinv_det(
         model.hessian.shape[1], model.overall_penalties, "svd"
@@ -1962,7 +2193,8 @@ def estimateVp(
             y = model.formulas[0].y_flat[model.formulas[0].NOT_NA_flat]
 
             if not model.formulas[0].get_lhs().f is None:
-                # Optionally apply function to dep. var. before fitting. Not sure why that would be desirable for this model class...
+                # Optionally apply function to dep. var. before fitting. Not sure why that
+                # would be desirable for this model class...
                 y = model.formulas[0].get_lhs().f(y)
 
             Xs = model.get_mmat()
@@ -1985,7 +2217,8 @@ def estimateVp(
                 else:
                     y = form.y_flat
 
-                # Optionally apply function to dep. var. before fitting. Not sure why that would be desirable for this model class...
+                # Optionally apply function to dep. var. before fitting. Not sure why that would
+                # be desirable for this model class...
                 if not form.get_lhs().f is None:
                     y = form.get_lhs().f(y)
 
@@ -2044,7 +2277,10 @@ def estimateVp(
 
             if False in nHp.success.flatten():
                 warnings.warn(
-                    f"Finite differencing step failed to reach tolerance. Consider setting ``Vp_fidiff=False`. Element-wise error:\n {nHp.error}."
+                    (
+                        f"Finite differencing step failed to reach tolerance. Consider setting "
+                        f"``Vp_fidiff=False`. Element-wise error:\n {nHp.error}."
+                    )
                 )
             if -3 in nHp.status.flatten():
                 raise ValueError(
@@ -2053,23 +2289,26 @@ def estimateVp(
             nHp = nHp.ddf
 
             # Vp is now simply [nHp]^{-1}
-            # but we should rely on an eigen decomposition so that we can naturally produce a generalized inverse as discussed by
+            # but we should rely on an eigen decomposition so that we can naturally produce a
+            # generalized inverse as discussed by
             # WPS (2016).
 
             eig, U = scp.linalg.eigh(nHp)
             ire = np.zeros_like(eig)
             # fmt: off
-            # Only compute inverse for eig values larger than zero, setting rem. ones to zero yields generalized invserse.
+            # Only compute inverse for eig values larger than zero, setting rem. ones to zero
+            # yields generalized invserse.
             ire[eig > 0] = 1 / np.sqrt(eig[eig > 0])
             # fmt: on
             Ri = np.diag(ire) @ U.T  # Root of Vp
 
             Vp = Ri.T @ Ri
 
-            # Now, in mgcv a regularized version is computed as well, which essentially sets all positive eigenvalues
-            # to a positive minimum. This regularized version is utilized in the smoothness uncertainty correction, so we compute it
+            # Now, in mgcv a regularized version is computed as well, which essentially sets all
+            # positive eigenvalues to a positive minimum. This regularized version is utilized in
+            # the smoothness uncertainty correction, so we compute it
             # as well.
-            # See: https://github.com/cran/mgcv/blob/aff4560d187dfd7d98c7bd367f5a0076faf129b7/R/gam.fit3.r#L1010
+            # See: https://github.com/cran/mgcv/blob/aff4560d187dfd7d98c7bd367f5a0076faf129b7/R/gam.fit3.r#L1010 # noqa
             ire2 = np.zeros_like(eig)
             ire2[eig > 0] = 1 / np.sqrt(eig[eig > 0] + 0.1)
             Rir = np.diag(ire2) @ U.T  # Root of regularized Vp
@@ -2130,12 +2369,9 @@ def estimateVp(
 
         minDiag = 0.1 * min(np.sqrt(Vpr.diagonal()))
         # Make sure actual estimate is included once.
-        if (
-            np.any(
-                np.max(np.abs(p_sample - np.array([pen2.lam for pen2 in rPen])), axis=1)
-                < minDiag
-            )
-            == False
+        if not np.any(
+            np.max(np.abs(p_sample - np.array([pen2.lam for pen2 in rPen])), axis=1)
+            < minDiag
         ):
             p_sample = np.concatenate(
                 (np.array([pen2.lam for pen2 in rPen]).reshape(1, -1), p_sample), axis=0
@@ -2290,7 +2526,7 @@ def estimateVp(
                         sample_edfs,
                         sample_llks,
                     ) = zip(*pool.starmap(compute_REML_candidate_GSMM, args))
-                sample_scales = np.ones(p_sample.shape[0])
+                # sample_scales = np.ones(p_sample.shape[0])
 
             remls.extend(list(sample_remls))
             rGrid = p_sample
@@ -2321,12 +2557,9 @@ def estimateVp(
 
         # Make sure actual estimate is included once.
         minDiag = 0.1 * min(np.sqrt(Vpr.diagonal()))
-        if (
-            np.any(
-                np.max(np.abs(p_sample - np.array([pen2.lam for pen2 in rPen])), axis=1)
-                < minDiag
-            )
-            == False
+        if not np.any(
+            np.max(np.abs(p_sample - np.array([pen2.lam for pen2 in rPen])), axis=1)
+            < minDiag
         ):
             p_sample = np.concatenate(
                 (np.array([pen2.lam for pen2 in rPen]).reshape(1, -1), p_sample), axis=0
@@ -2362,7 +2595,7 @@ def estimateVp(
                         method=method,
                         bfgs_options=bfgs_options,
                     )
-                except:
+                except:  # noqa: E722
                     warnings.warn(
                         f"Unable to compute REML score for sample {np.exp(ps)}. Skipping."
                     )
@@ -2376,7 +2609,8 @@ def estimateVp(
                 rGrid = np.concatenate((rGrid, ps.reshape(1, -1)), axis=0)
 
     # Compute weights
-    # Compute weights proposed by Greven & Scheipl (2017) - still work under importance sampling case instead of grid case if we assume Vp
+    # Compute weights proposed by Greven & Scheipl (2017) - still work under importance sampling
+    # case instead of grid case if we assume Vp
     # is prior for \rho|\mathbf{y}.
     if use_importance_weights and prior is None:
         ws = scp.special.softmax(remls)
@@ -2414,10 +2648,11 @@ def estimateVp(
 
     Vp = Ri.T @ Ri  # Make sure Vp is PSD
 
-    # Now, in mgcv a regularized version is computed as well, which essentially sets all positive eigenvalues
-    # to a positive minimum. This regularized version is utilized in the smoothness uncertainty correction, so we compute it
+    # Now, in mgcv a regularized version is computed as well, which essentially sets all positive
+    # eigenvalues to a positive minimum. This regularized version is utilized in the smoothness
+    # uncertainty correction, so we compute it
     # as well.
-    # See: https://github.com/cran/mgcv/blob/aff4560d187dfd7d98c7bd367f5a0076faf129b7/R/gam.fit3.r#L1010
+    # See: https://github.com/cran/mgcv/blob/aff4560d187dfd7d98c7bd367f5a0076faf129b7/R/gam.fit3.r#L1010 # noqa
     ire2 = np.zeros_like(eig)
     ire2[eig > 0] = 1 / ((1 / np.sqrt(eig[eig > 0])) + 0.1)
     Rir = np.diag(ire2) @ U.T  # Root of regularized Vp
@@ -2428,20 +2663,24 @@ def estimateVp(
 
 
 def updateVp(ep: np.ndarray, ws: np.ndarray, rGrid: np.ndarray) -> np.ndarray:
-    """Update covariance matrix of posterior for :math:`\\boldsymbol{\\rho} = log(\\boldsymbol{\\lambda})`. REML scores are used to
-    approximate expectation, similar to what was suggested by Greven & Scheipl (2016).
+    """Update covariance matrix of posterior for :math:`\\boldsymbol{\\rho} = \
+    log(\\boldsymbol{\\lambda})`. REML scores are used to approximate expectation, similar to what
+    was suggested by Greven & Scheipl (2016).
 
     References:
      - https://en.wikipedia.org/wiki/Estimation_of_covariance_matrices
-     - Greven, S., & Scheipl, F. (2016). Comment on: Smoothing Parameter and Model Selection for General Smooth Models
+     - Greven, S., & Scheipl, F. (2016). Comment on: Smoothing Parameter and Model Selection for \
+        General Smooth Models
 
     :param ep: Model estimate log(\\lambda), i.e., the expectation over rGrid
     :type ep: np.ndarray
     :param ws: weight associated with each log(\\lambda) value used for numerical integration
     :type ws: np.ndarray
-    :param rGrid: A 2d array, holding all \\lambda samples considered so far. Each row is one sample
+    :param rGrid: A 2d array, holding all \\lambda samples considered so far.
+        Each row is one sample
     :type rGrid: np.ndarray
-    :return: An estimate of the covariance matrix of log(\\lambda) - 2d array of shape len(mp)*len(mp).
+    :return: An estimate of the covariance matrix of log(\\lambda) - 2d array of shape
+        len(mp)*len(mp).
     :rtype: np.ndarray
     """
 
@@ -2475,7 +2714,8 @@ def _compute_VB_corr_terms_MP(
     offset: float | np.ndarray,
     r: np.ndarray,
 ) -> tuple[scp.sparse.csc_array, np.ndarray, float, float, float, float]:
-    """Multi-processing code for Grevel & Scheipl correction for Gaussian additive model - see ``correct_VB`` for details.
+    """Multi-processing code for Grevel & Scheipl correction for Gaussian additive
+    model - see ``correct_VB`` for details.
 
     :param family: Family of model
     :type family: Gaussian
@@ -2513,7 +2753,8 @@ def _compute_VB_corr_terms_MP(
     :type offset: float | np.ndarray
     :param r: List of log(lambda) values for which to evaluate the reml score.
     :type r: np.ndarray
-    :return: Un-pivoted inverse of pivoted Cholesky of negative penalized hessian,coefficients,reml score,scale etimate,total edf,llk
+    :return: Un-pivoted inverse of pivoted Cholesky of negative penalized hessian, coefficients,
+        reml score, scale etimate, total edf, llk
     :rtype: tuple[scp.sparse.csc_array,np.ndarray,float,float,float,float]
     """
     dat_shared = shared_memory.SharedMemory(name=address_dat, create=False)
@@ -2541,7 +2782,8 @@ def _compute_VB_corr_terms_MP(
     for ridx, rc in enumerate(r):
         rPen[ridx].lam = rc
 
-    # Now compute REML - and all other terms needed for correction proposed by Greven & Scheipl (2017)
+    # Now compute REML - and all other terms needed for correction proposed
+    # by Greven & Scheipl (2017)
     S_emb, _, _, _ = compute_S_emb_pinv_det(X.shape[1], rPen, "svd")
     LP, Pr, coef, code = cpp_solve_coef(y - offset, X, S_emb)
 
@@ -2594,19 +2836,29 @@ def compute_Vp_WPS(
     coef: np.ndarray,
     scale: float = 1,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Computes the inverse of what is approximately the negative Hessian of the Laplace approximate REML criterion with respect to the log smoothing penalties.
+    """Computes the inverse of what is approximately the negative Hessian of the Laplace
+    approximate REML criterion with respect to the log smoothing penalties.
 
-    The derivatives computed are only exact for Gaussian additive models and canonical generalized additive models. For all other models they are in-exact in that they
-    assume that the hessian of the log-likelihood does not depend on :math:`\\lambda` (or :math:`log(\\lambda)`), so they are essentially the PQL derivatives of Wood et al. (2017).
-    The inverse computed here acts as an approximation to the covariance matrix of the log smoothing parameters.
+    The derivatives computed are only exact for Gaussian additive models and canonical generalized
+    additive models. For all other models they are in-exact in that they
+    assume that the hessian of the log-likelihood does not depend on :math:`\\lambda`
+    (or :math:`log(\\lambda)`), so they are essentially the PQL derivatives of Wood et al. (2017).
+    The inverse computed here acts as an approximation to the covariance matrix of the log
+    smoothing parameters.
 
     References:
-     - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
-     - Wood, S. N., Pya, N., Saefken, B., (2016). Smoothing Parameter and Model Selection for General Smooth Models
-     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-     - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models for Gigadata: Modeling the U.K. Black Smoke Network Daily Data.
+     - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood \
+        estimation of semiparametric generalized linear models.
+     - Wood, S. N., Pya, N., Saefken, B., (2016). Smoothing Parameter and Model Selection for \
+        General Smooth Models
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
+     - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models \
+        for Gigadata: Modeling the U.K. Black Smoke Network Daily Data.
 
-    :param Vbr: Transpose of root for the estimate for the (unscaled) covariance matrix of :math:`\\boldsymbol{\\beta} | y, \\boldsymbol{\\lambda}` - the coefficients estimated by the model.
+    :param Vbr: Transpose of root for the estimate for the (unscaled) covariance matrix of
+        :math:`\\boldsymbol{\\beta} | y, \\boldsymbol{\\lambda}` - the coefficients estimated
+        by the model.
     :type Vbr: scp.sparse.csc_array
     :param H: The Hessian of the log-likelihood
     :type H: scp.sparse.csc_array
@@ -2616,12 +2868,18 @@ def compute_Vp_WPS(
     :type penalties: [LambdaTerm]
     :param coef: An array holding the estimated regression coefficients. Has to be of shape (-1,1)
     :type coef: np.ndarray
-    :param scale: Any scale parameter estimated as part of the model. Can be omitted for more generic models beyond GAMMs. Defaults to 1.
+    :param scale: Any scale parameter estimated as part of the model. Can be omitted for more
+        generic models beyond GAMMs. Defaults to 1.
     :type scale: float
-    :return: Generalized inverse of negative hessian of approximate REML criterion, regularized version of the former, root of generalized inverse, root of regularized generalized inverse, hessian of approximate REML criterion, np.array of shape ((len(coef),len(penalties))) containing in each row the partial derivative of the coefficients with respect to an individual lambda parameter
+    :return: Generalized inverse of negative hessian of approximate REML criterion, regularized
+        version of the former, root of generalized inverse, root of regularized generalized inverse,
+        hessian of approximate REML criterion, np.array of shape ((len(coef),len(penalties)))
+        containing in each row the partial derivative of the coefficients with respect to an
+        individual lambda parameter
     :rtype: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
     """
-    # Form nH - the negative hessian of the penalized llk - note, H is scaled by \\phi for GAMMs, so have to do the same for S_emb:
+    # Form nH - the negative hessian of the penalized llk - note, H is scaled by \\phi for GAMMs,
+    # so have to do the same for S_emb:
     nH = (-1 * H) + S_emb / scale
 
     # Get partial derivatives of coef with respect to log(lambda) - see Wood (2017):
@@ -2686,7 +2944,8 @@ def compute_Vp_WPS(
                     @ coef
                 )
 
-            # Now derivative of the log-determinant of S_emb. Only defined if peni==penj or both are in the same group
+            # Now derivative of the log-determinant of S_emb. Only defined if peni==penj or
+            # both are in the same group
             t3 = 0
             if gamma or (penalties[peni].start_index == penalties[penj].start_index):
                 t3 = (
@@ -2711,7 +2970,8 @@ def compute_Vp_WPS(
 
                 t3 = 0.5 * t3
 
-            # Now second partial derivative of hessian of negative penalized likelihood with respect to log(lambda) - assuming that H does not
+            # Now second partial derivative of hessian of negative penalized likelihood with respect
+            # to log(lambda) - assuming that H does not
             # depend on log(lambda)
             t4 = (
                 0.5
@@ -2738,7 +2998,8 @@ def compute_Vp_WPS(
             if peni != penj:
                 Vp[penj, peni] = Vpij
 
-    # Vp is now simply inv(-Vp) but we should rely on an eigen decomposition so that we can naturally produce a generalized inverse as discussed by
+    # Vp is now simply inv(-Vp) but we should rely on an eigen decomposition so that we can
+    # naturally produce a generalized inverse as discussed by
     # WPS (2016).
     Hp = copy.deepcopy(Vp)
 
@@ -2746,18 +3007,20 @@ def compute_Vp_WPS(
     ire = np.zeros_like(eig)
 
     # fmt: off
-    # Only compute inverse for eig values larger than zero, setting rem. ones to zero yields generalized invserse.
-    ire[eig > 0] = 1 / np.sqrt(eig[eig > 0]) 
+    # Only compute inverse for eig values larger than zero, setting rem. ones to zero yields
+    # generalized invserse.
+    ire[eig > 0] = 1 / np.sqrt(eig[eig > 0])
     # fmt: on
-    
+
     Ri = np.diag(ire) @ U.T  # Root of Vp
 
     Vp = Ri.T @ Ri
 
-    # Now, in mgcv a regularized version is computed as well, which essentially sets all positive eigenvalues
-    # to a positive minimum. This regularized version is utilized in the smoothness uncertainty correction, so we compute it
+    # Now, in mgcv a regularized version is computed as well, which essentially sets all
+    # positive eigenvalues to a positive minimum. This regularized version is utilized in the
+    # smoothness uncertainty correction, so we compute it
     # as well.
-    # See: https://github.com/cran/mgcv/blob/aff4560d187dfd7d98c7bd367f5a0076faf129b7/R/gam.fit3.r#L1010
+    # See: https://github.com/cran/mgcv/blob/aff4560d187dfd7d98c7bd367f5a0076faf129b7/R/gam.fit3.r#L1010 # noqa
     ire2 = np.zeros_like(eig)
     ire2[eig > 0] = 1 / np.sqrt(eig[eig > 0] + 0.1)
     Rir = np.diag(ire2) @ U.T  # Root of regularized Vp
@@ -2777,19 +3040,29 @@ def compute_Vb_corr_WPS(
     coef: np.ndarray,
     scale: float = 1,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Computes both correction terms for ``Vb`` or :math:`\\mathbf{V}_{\\boldsymbol{\\beta}}`, which is the co-variance matrix for the conditional posterior of :math:`\\boldsymbol{\\beta}` so that
-    :math:`\\boldsymbol{\\beta} | y, \\boldsymbol{\\lambda} \\sim N(\\hat{\\boldsymbol{\\beta}},\\mathbf{V}_{\\boldsymbol{\\beta}})`, described by Wood, Pya, & Säfken (2016).
+    """Computes both correction terms for ``Vb`` or :math:`\\mathbf{V}_{\\boldsymbol{\\beta}}`,
+    which is the co-variance matrix for the conditional posterior of :math:`\\boldsymbol{\\beta}`
+    so that :math:`\\boldsymbol{\\beta} | y, \\boldsymbol{\\lambda} \
+    \\sim N(\\hat{\\boldsymbol{\\beta}},\\mathbf{V}_{\\boldsymbol{\\beta}})`, described by Wood,
+    Pya, & Säfken (2016).
 
     References:
-     - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
-     - Wood, S. N., Pya, N., Saefken, B., (2016). Smoothing Parameter and Model Selection for General Smooth Models
-     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+     - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood \
+        estimation of semiparametric generalized linear models.
+     - Wood, S. N., Pya, N., Saefken, B., (2016). Smoothing Parameter and Model Selection for \
+        General Smooth Models
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
 
-    :param Vbr: Transpose of root for the estimate for the (unscaled) covariance matrix of :math:`\\boldsymbol{\\beta} | y, \\boldsymbol{\\lambda}` - the coefficients estimated by the model.
+    :param Vbr: Transpose of root for the estimate for the (unscaled) covariance matrix of
+        :math:`\\boldsymbol{\\beta} | y, \\boldsymbol{\\lambda}` - the coefficients estimated
+        by the model.
     :type Vbr: scp.sparse.csc_array
-    :param Vpr: A (regularized) estimate of the covariance matrix of :math:`\\boldsymbol{\\rho}` - the log smoothing penalties.
+    :param Vpr: A (regularized) estimate of the covariance matrix of
+        :math:`\\boldsymbol{\\rho}` - the log smoothing penalties.
     :type Vpr: np.ndarray
-    :param Vr: Transpose of root of **un-regularized** covariance matrix of :math:`\\boldsymbol{\\rho}` - the log smoothing penalties.
+    :param Vr: Transpose of root of **un-regularized** covariance matrix of
+        :math:`\\boldsymbol{\\rho}` - the log smoothing penalties.
     :type Vr: np.ndarray
     :param H: The Hessian of the log-likelihood
     :type H: scp.sparse.csc_array
@@ -2799,10 +3072,13 @@ def compute_Vb_corr_WPS(
     :type penalties: [LambdaTerm]
     :param coef: An array holding the estimated regression coefficients. Has to be of shape (-1,1)
     :type coef: np.ndarray
-    :param scale: Any scale parameter estimated as part of the model. Can be omitted for more generic models beyond GAMMs. Defaults to 1.
+    :param scale: Any scale parameter estimated as part of the model. Can be omitted for more
+        generic models beyond GAMMs. Defaults to 1.
     :type scale: float
-    :raises ArithmeticError: Will throw an error when the negative Hessian of the penalized likelihood is ill-scaled so that a Cholesky decomposition fails.
-    :return: A tuple containing: ``Vc`` and ``Vcc``. ``Vbr.T@Vbr*scale`` + ``Vc`` + ``Vcc`` is then approximately the correction devised by WPS (2016).
+    :raises ArithmeticError: Will throw an error when the negative Hessian of the penalized
+        likelihood is ill-scaled so that a Cholesky decomposition fails.
+    :return: A tuple containing: ``Vc`` and ``Vcc``. ``Vbr.T@Vbr*scale`` + ``Vc`` + ``Vcc`` is
+        then approximately the correction devised by WPS (2016).
     :rtype: tuple[np.ndarray, np.ndarray]
     """
 
@@ -2845,9 +3121,10 @@ def compute_Vb_corr_WPS(
     Vcr = Vr @ dBetadRhos.T
     Vc = Vcr.T @ Vcr
 
-    # Now second correction term. First need partial derivatives of elements in R^{-1} with respect to each \rho
-    # Supplementary materials D in WPS (2016) show how to obtain those from partial derivatives of elements in R
-    # with respect to each \rho, obtaining the latter is implemented in cpp_dchol.
+    # Now second correction term. First need partial derivatives of elements in R^{-1} with
+    # respect to each \rho Supplementary materials D in WPS (2016) show how to obtain those from
+    # partial derivatives of elements in R with respect to each \rho, obtaining the latter is
+    # implemented in cpp_dchol.
     dRdRhos = []
 
     for pen in penalties:
@@ -2864,7 +3141,8 @@ def compute_Vb_corr_WPS(
         # Hence: R' = R^{-T}
         # and:   R'.T = R^{-1}
         # So: dR'.Td\rho = dR^{-1}d\rho = R^{-1}@dRd\rho@R^{-1}
-        # and we either have to take the transpose or change the flip the indexing in the 5 term sum!
+        # and we either have to take the transpose or change the flip the indexing in the 5 term
+        # sum!
         dRdRhos.append(
             np.asfortranarray((Rinv @ dRdRho) @ Rinv)
         )  # Must make sure this is Fortran array order, as expected by dChol.computeV2
@@ -2878,7 +3156,8 @@ def compute_Vb_corr_WPS(
 
 class RhoPrior:
     """
-    Base class to demonstrate the functionlaity that any prior passed to the correct_VB function has to implement.
+    Base class to demonstrate the functionlaity that any prior passed to the correct_VB function
+    has to implement.
     """
 
     def __init__(self, *args, **kwargs):
@@ -2886,9 +3165,11 @@ class RhoPrior:
         self.kwargs = kwargs
 
     def logpdf(self, rho: np.ndarray):
-        """Compute log density for log smoothing penalty parameters included in rho under this prior.
+        """Compute log density for log smoothing penalty parameters included in rho under this
+        prior.
 
-        :param rho: Numpy array of shape (nR,nrho) containing nR proposed candidate vectors for the nrho log-smoothing parameters.
+        :param rho: Numpy array of shape (nR,nrho) containing nR proposed candidate vectors for the
+            nrho log-smoothing parameters.
         :type rho: np.ndarray
         """
         pass
@@ -2903,7 +3184,8 @@ class DummyRhoPrior(RhoPrior):
         super().__init__(a=a, b=b)
 
     def logpdf(self, rho: np.ndarray) -> np.ndarray:
-        """Returns an array holding zeroes for all log(lambda) parameters within ``self.a`` and ``self.b``, otherwise ``-np.inf``.
+        """Returns an array holding zeroes for all log(lambda) parameters within ``self.a`` and
+        ``self.b``, otherwise ``-np.inf``.
 
         :param rho: Array of log(lambda) parameters
         :type rho: np.ndarray
@@ -2950,24 +3232,44 @@ def correct_VB(
     float,
     np.ndarray,
 ]:
-    """Estimate :math:`\\tilde{\\mathbf{V}}`, the covariance matrix of the marginal posterior :math:`\\boldsymbol{\\beta} | y` to account for smoothness uncertainty.
-    
-    Wood et al. (2016) and Wood (2017) show that when basing conditional versions of model selection criteria or hypothesis
-    tests on :math:`\\mathbf{V}`, which is the co-variance matrix for the normal approximation to the conditional posterior of :math:`\\boldsymbol{\\beta}` so that
-    :math:`\\boldsymbol{\\beta} | y, \\boldsymbol{\\lambda} \\sim N(\\hat{\\boldsymbol{\\beta}},\\mathbf{V})`, the tests are severely biased. To correct for this they
-    show that uncertainty in :math:`\\boldsymbol{\\lambda}` needs to be accounted for. Hence they suggest to base these tests on :math:`\\tilde{\\mathbf{V}}`, the covariance matrix
-    of the normal approximation to the **marginal posterior** :math:`\\boldsymbol{\\beta} | y`. They show how to obtain an estimate of :math:`\\tilde{\\mathbf{V}}`,
-    but this requires :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` - an estimate of the covariance matrix of the normal approximation to the posterior of :math:`\\boldsymbol{\\rho}=log(\\boldsymbol{\\lambda})`. Computing :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` requires derivatives that are not available
-    when using the efs update.
+    """Estimate :math:`\\tilde{\\mathbf{V}}`, the covariance matrix of the marginal posterior
+    :math:`\\boldsymbol{\\beta} | y` to account for smoothness uncertainty.
 
-    This function implements multiple strategies to approximately correct for smoothing parameter uncertainty, based on the proposals by  Wood et al. (2016) and Greven & Scheipl (2017). The most straightforward strategy
-    (``grid_type = 'JJJ1'``) is to obtain a PQL or finite difference approximation for :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` and to then compute approximately the Wood et al. (2016) correction assuming that higher-order derivatives of the llk are zero (this will be exact
-    for Gaussian additive or canonical Generalized models). This is too costly for large sparse multi-level models and not exact for more generic models. The MC based alternative available via ``grid_type = 'JJJ2'`` addresses the first problem (**Important**, set: ``use_importance_weights=False`` and ``only_expected_edf=True``.). The second MC based alternative
-    available via ``grid_type = 'JJJ3'`` is most appropriate for more generic models (The ``prior`` argument can be used to specify any prior to be placed on :math:`\\boldsymbol{\\rho}` also you will need to set: ``use_importance_weights=True`` and ``only_expected_edf=False``).
-    Both strategies use a PQL or finite difference approximation to :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` to obtain ``nR`` samples from the (normal approximation) to the posterior of :math:`\\boldsymbol{\\rho}`.
-    From these samples mssm then estimates :math:`\\tilde{\\mathbf{V}}` as described in more detail by Krause et al. (in preparation).
+    Wood et al. (2016) and Wood (2017) show that when basing conditional versions of model
+    selection criteria or hypothesis
+    tests on :math:`\\mathbf{V}`, which is the co-variance matrix for the normal approximation to
+    the conditional posterior of :math:`\\boldsymbol{\\beta}` so that
+    :math:`\\boldsymbol{\\beta} | y, \\boldsymbol{\\lambda} \\sim N(\\hat{\\boldsymbol{\\beta}},\
+    \\mathbf{V})`, the tests are severely biased. To correct for this they show that uncertainty in
+    :math:`\\boldsymbol{\\lambda}` needs to be accounted for. Hence they suggest to base these tests
+    on :math:`\\tilde{\\mathbf{V}}`, the covariance matrix of the normal approximation to the
+    **marginal posterior** :math:`\\boldsymbol{\\beta} | y`. They show how to obtain an estimate of
+    :math:`\\tilde{\\mathbf{V}}`, but this requires :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` - an
+    estimate of the covariance matrix of the normal approximation to the posterior of
+    :math:`\\boldsymbol{\\rho}=log(\\boldsymbol{\\lambda})`. Computing
+    :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` requires derivatives that are not available when using
+    the efs update.
 
-    **Note:** If you set ``only_expected_edf=True``, only the last two output arguments will be non-zero.
+    This function implements multiple strategies to approximately correct for smoothing parameter
+    uncertainty, based on the proposals by  Wood et al. (2016) and Greven & Scheipl (2017). The
+    most straightforward strategy (``grid_type = 'JJJ1'``) is to obtain a PQL or finite difference
+    approximation for :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` and to then compute approximately
+    the Wood et al. (2016) correction assuming that higher-order derivatives of the llk are zero
+    (this will be exact for Gaussian additive or canonical Generalized models). This is too costly
+    for large sparse multi-level models and not exact for more generic models. The MC based
+    alternative available via ``grid_type = 'JJJ2'`` addresses the first problem
+    (**Important**, set: ``use_importance_weights=False`` and ``only_expected_edf=True``.).
+    The second MC based alternative available via ``grid_type = 'JJJ3'`` is most appropriate for
+    more generic models (The ``prior`` argument can be used to specify any prior to be placed on
+    :math:`\\boldsymbol{\\rho}` also you will need to set: ``use_importance_weights=True`` and
+    ``only_expected_edf=False``). Both strategies use a PQL or finite difference approximation to
+    :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` to obtain ``nR`` samples from the
+    (normal approximation) to the posterior of :math:`\\boldsymbol{\\rho}`. From these samples mssm
+    then estimates :math:`\\tilde{\\mathbf{V}}` as described in more detail by Krause et al.
+    (in preparation).
+
+    **Note:** If you set ``only_expected_edf=True``, only the last two output arguments will be
+    non-zero.
 
     Example::
 
@@ -2994,83 +3296,135 @@ def correct_VB(
         # Vp is approximate covariance matrix of log regularization parameters
         # Vpr is regularized version of the former
         # edf is vector of estimated degrees of freedom (uncertainty corrected) per coefficient
-        # total_edf is sum of former (but subjected to upper bounds so might not be exactly the same)
+        # total_edf is sum of former (subjected to upper bounds so might not be exactly the same)
         # ed2 is optionally smoothness bias corrected version of edf
         # total_edf2 is optionally bias corrected version of total_edf (subjected to upper bounds)
         # expected_edf is None here but for MC strategies (i.e., ``grid!=1``) will be an estimate
         # of total_edf (**without being subjected to upper bounds**) that does not require forming
-        # V (only computed when ``only_expected_edf=True``). 
+        # V (only computed when ``only_expected_edf=True``).
         # mean_coef is None here but for MC strategies will be an estimate of the mean of the
         # marginal posterior of coefficients, only computed when setting ``recompute_H=True``
 
         V,LV,Vp,Vpr,edf,total_edf,edf2,total_edf2,expected_edf,mean_coef = correct_VB(model,
-                                                                                      grid_type="JJJ1",
-                                                                                      verbose=True,
-                                                                                      seed=20)
+            grid_type="JJJ1",verbose=True,seed=20)
 
         # Compute MC estimate for generic model and given prior
         prior = DummyRhoPrior(b=np.log(1e12)) # Set up uniform prior
         V_MC,LV_MC,Vp_MC,Vpr_MC,edf_MC,\
         total_edf_MC,edf2_MC,total_edf2_MC,expected_edf_MC,mean_coef_MC = correct_VB(model2,
-                                                                                     grid_type="JJJ3",
-                                                                                     verbose=True,
-                                                                                     seed=20,
-                                                                                     df=10,
-                                                                                     prior=prior,
-                                                                                     recompute_H=True)
+            grid_type="JJJ3", verbose=True, seed=20, df=10, prior=prior, recompute_H=True)
 
     References:
-     - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models.
-     - Wood, S. N., Pya, N., Saefken, B., (2016). Smoothing Parameter and Model Selection for General Smooth Models
-     - Greven, S., & Scheipl, F. (2016). Comment on: Smoothing Parameter and Model Selection for General Smooth Models
-     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+     - Wood, S. N., (2011). Fast stable restricted maximum likelihood and marginal likelihood \
+        estimation of semiparametric generalized linear models.
+     - Wood, S. N., Pya, N., Saefken, B., (2016). Smoothing Parameter and Model Selection for \
+        General Smooth Models
+     - Greven, S., & Scheipl, F. (2016). Comment on: Smoothing Parameter and Model Selection for \
+        General Smooth Models
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
 
-    :param model: GAMM, GAMMLSS, or GSMM model (which has been fitted) for which to estimate :math:`\\mathbf{V}`
-    :type model: mssm.models.GSMM | mssm.models.GAMMLSS | mssm.models.GAMM 
-    :param nR: In case ``grid!="JJJ1"``, ``nR`` samples/reml scores are generated/computed to numerically evaluate the expectations necessary for the uncertainty correction, defaults to 250
+    :param model: GAMM, GAMMLSS, or GSMM model (which has been fitted) for which to estimate
+        :math:`\\mathbf{V}`
+    :type model: mssm.models.GSMM | mssm.models.GAMMLSS | mssm.models.GAMM
+    :param nR: In case ``grid!="JJJ1"``, ``nR`` samples/reml scores are generated/computed to
+        numerically evaluate the expectations necessary for the uncertainty correction,
+        defaults to 250
     :type nR: int, optional
-    :param grid_type: How to compute the smoothness uncertainty correction - see above for details, defaults to 'JJJ1'
+    :param grid_type: How to compute the smoothness uncertainty correction - see above for details,
+        defaults to 'JJJ1'
     :type grid_type: str, optional
-    :param a: Any of the :math:`\\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{\\rho}|y \\sim N(log(\\hat{\\boldsymbol{\\rho}}),\\mathbf{V}^{\\boldsymbol{\\rho}})` used to sample ``nR`` candidates) which are smaller than this are set to this value as well, defaults to 1e-7 the minimum possible estimate
+    :param a: Any of the :math:`\\lambda` estimates obtained from ``model`` (used to define the mean
+        for the posterior of :math:`\\boldsymbol{\\rho}|y \\sim N(log(\\hat{\\boldsymbol{\\rho}}),\
+        \\mathbf{V}^{\\boldsymbol{\\rho}})` used to sample ``nR`` candidates) which are smaller than
+        this are set to this value as well, defaults to 1e-7 the minimum possible estimate
     :type a: float, optional
-    :param b: Any of the :math:`\\lambda` estimates obtained from ``model`` (used to define the mean for the posterior of :math:`\\boldsymbol{\\rho}|y \\sim N(log(\\hat{\\boldsymbol{\\rho}}),\\mathbf{V}^{\\boldsymbol{\\rho}})` used to sample ``nR`` candidates) which are larger than this are set to this value as well, defaults to 1e7 the maximum possible estimate
+    :param b: Any of the :math:`\\lambda` estimates obtained from ``model`` (used to define the mean
+        for the posterior of :math:`\\boldsymbol{\\rho}|y \\sim N(log(\\hat{\\boldsymbol{\\rho}}),\
+        \\mathbf{V}^{\\boldsymbol{\\rho}})` used to sample ``nR`` candidates) which are larger than
+        this are set to this value as well, defaults to 1e7 the maximum possible estimate
     :type b: float, optional
-    :param df: Degrees of freedom used for the multivariate t distribution used to sample the next set of candidates. Setting this to ``np.inf`` means a multivariate normal is used for sampling, defaults to 40
+    :param df: Degrees of freedom used for the multivariate t distribution used to sample the next
+        set of candidates. Setting this to ``np.inf`` means a multivariate normal is used for
+        sampling, defaults to 40
     :type df: int, optional
     :param n_c: Number of cores to use during parallel parts of the correction, defaults to 10
     :type n_c: int, optional
-    :param form_t1: Whether or not the smoothness uncertainty + smoothness bias corrected edf should be computed, defaults to False
+    :param form_t1: Whether or not the smoothness uncertainty + smoothness bias corrected edf should
+        be computed, defaults to False
     :type form_t1: bool, optional
     :param verbose: Whether to print progress information or not, defaults to False
     :type verbose: bool, optional
-    :param drop_NA: Whether to drop rows in the **model matrices** corresponding to NAs in the dependent variable vector. Defaults to True.
+    :param drop_NA: Whether to drop rows in the **model matrices** corresponding to NAs in the
+        dependent variable vector. Defaults to True.
     :type drop_NA: bool,optional
-    :param method: Which method to use to solve for the coefficients (and smoothing parameters). The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in principle less stable, numerically speaking. For a maximum of numerical stability set this to "QR/Chol". In that case a QR decomposition is used - which is first pivoted to maximize sparsity in the resulting decomposition but also pivots for stability in order to get an estimate of rank defficiency. A Cholesky is than used using the combined pivoting strategy obtained from the QR. This takes substantially longer. If this is set to ``'qEFS'``, then the coefficients are estimated via quasi netwon and the smoothing penalties are estimated from the quasi newton approximation to the hessian. This only requieres first derviative information. Defaults to "Chol".
+    :param method: Which method to use to solve for the coefficients (and smoothing parameters).
+        The default ("Chol") relies on Cholesky decomposition. This is extremely efficient but in
+        principle less stable, numerically speaking. For a maximum of numerical stability set this
+        to "QR/Chol". In that case a QR decomposition is used - which is first pivoted to maximize
+        sparsity in the resulting decomposition but also pivots for stability in order to get an
+        estimate of rank defficiency. A Cholesky is than used using the combined pivoting strategy
+        obtained from the QR. This takes substantially longer. If this is set to ``'qEFS'``, then
+        the coefficients are estimated via quasi netwon and the smoothing penalties are estimated
+        from the quasi newton approximation to the hessian. This only requieres first derviative
+        information. Defaults to "Chol".
     :type method: str,optional
-    :param only_expected_edf: Whether to compute edf. by explicitly forming covariance matrix (``only_expected_edf=False``) or not. The latter is much more efficient for sparse models at the cost of access to the covariance matrix and the ability to compute an upper bound on the smoothness uncertainty corrected edf. Only makes sense when ``grid_type!='JJJ1'``. Defaults to False
+    :param only_expected_edf: Whether to compute edf. by explicitly forming covariance matrix
+        (``only_expected_edf=False``) or not. The latter is much more efficient for sparse models at
+        the cost of access to the covariance matrix and the ability to compute an upper bound on the
+        smoothness uncertainty corrected edf. Only makes sense when ``grid_type!='JJJ1'``.
+        Defaults to False
     :type only_expected_edf: bool,optional
-    :param Vp_fidiff: Whether to rely on a finite difference approximation to compute :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` or on a PQL approximation. The latter is exact for Gaussian and canonical GAMs and far cheaper if many penalties are to be estimated. Defaults to False (PQL approximation)
+    :param Vp_fidiff: Whether to rely on a finite difference approximation to compute
+        :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` or on a PQL approximation. The latter is exact for
+        Gaussian and canonical GAMs and far cheaper if many penalties are to be estimated. Defaults
+        to False (PQL approximation)
     :type Vp_fidiff: bool,optional
-    :param use_importance_weights: Whether to rely importance weights to compute the numerical integration when ``grid_type != 'JJJ1'`` or on the log-densities of :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` - the latter assumes that the unconditional posterior is normal. Defaults to True (Importance weights are used)
+    :param use_importance_weights: Whether to rely importance weights to compute the numerical
+        integration when ``grid_type != 'JJJ1'`` or on the log-densities of
+        :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` - the latter assumes that the unconditional
+        posterior is normal. Defaults to True (Importance weights are used)
     :type use_importance_weights: bool,optional
-    :param prior: An (optional) instance of an arbitrary class that has a ``.logpdf()`` method to compute the prior log density of a sampled candidate. If this is set to ``None``, the prior is assumed to coincide with the proposal distribution, simplifying the importance weight computation. Ignored when ``use_importance_weights=False``. Defaults to None
+    :param prior: An (optional) instance of an arbitrary class that has a ``.logpdf()`` method to
+        compute the prior log density of a sampled candidate. If this is set to ``None``, the
+        prior is assumed to coincide with the proposal distribution, simplifying the importance
+        weight computation. Ignored when ``use_importance_weights=False``. Defaults to None
     :type prior: Callable|None, optional
-    :param recompute_H: Whether or not to re-compute the Hessian of the log-likelihood at an estimate of the mean of the Bayesian posterior :math:`\\boldsymbol{\\beta}|y` before computing the (uncertainty/bias corrected) edf. Defaults to False
+    :param recompute_H: Whether or not to re-compute the Hessian of the log-likelihood at an
+        estimate of the mean of the Bayesian posterior :math:`\\boldsymbol{\\beta}|y` before
+        computing the (uncertainty/bias corrected) edf. Defaults to False
     :type recompute_H: bool, optional
-    :param compute_Vcc: Whether to compute the second correction term when `strategy='JJJ1'` (or when computing the lower-bound for the remaining strategies) or only the first one. In contrast to the second one, the first correction term is substantially cheaper to compute - so setting this to False for larger models will speed up the correction considerably. Defaults to True
+    :param compute_Vcc: Whether to compute the second correction term when `strategy='JJJ1'`
+        (or when computing the lower-bound for the remaining strategies) or only the first one.
+        In contrast to the second one, the first correction term is substantially cheaper to compute
+        - so setting this to False for larger models will speed up the correction considerably.
+        Defaults to True
     :type compute_Vcc: bool, optional
     :param seed: Seed to use for random parts of the correction. Defaults to None
     :type seed: int|None,optional
-    :param bfgs_options: Any additional keyword arguments that should be passed on to the call of :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100. Defaults to None.
+    :param bfgs_options: Any additional keyword arguments that should be passed on to the call of
+        :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be
+        initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically
+        set to 100. Defaults to None.
     :type bfgs_options: key=value,optional
-    :return: A tuple containing: ``V`` - an estimate of the unconditional covariance matrix, ``LV`` - the Cholesky of the former, ``Vp`` - an estimate of the covariance matrix for :math:`\\boldsymbol{\\rho}`, ``Vpr`` - a regularized version of the former, ``edf`` - smoothness uncertainty corrected coefficient-wise edf, ``total_edf`` - smoothness uncertainty corrected total (i.e., model) edf, ``edf2`` - smoothness uncertainty + smoothness bias corrected coefficient-wise edf, ``total_edf2`` - smoothness uncertainty + smoothness bias corrected total (i.e., model) edf, ``expected_edf`` - an optional estimate of total_edf that does not require forming ``V``, ``mean_coef`` - an optional estimate of the mean of the posterior of the coefficients
-    :rtype: tuple[scp.sparse.csc_array|None, scp.sparse.csc_array|None, np.ndarray|None ,np.ndarray|None, np.ndarray|None, float|None, np.ndarray|None, float|None, float, np.ndarray]
+    :return: A tuple containing: ``V`` - an estimate of the unconditional covariance matrix, ``LV``
+        - the Cholesky of the former, ``Vp`` - an estimate of the covariance matrix for
+        :math:`\\boldsymbol{\\rho}`, ``Vpr`` - a regularized version of the former, ``edf`` -
+        smoothness uncertainty corrected coefficient-wise edf, ``total_edf`` - smoothness
+        uncertainty corrected total (i.e., model) edf, ``edf2`` - smoothness uncertainty +
+        smoothness bias corrected coefficient-wise edf, ``total_edf2`` - smoothness uncertainty +
+        smoothness bias corrected total (i.e., model) edf, ``expected_edf`` - an optional estimate
+        of total_edf that does not require forming ``V``, ``mean_coef`` - an optional estimate of
+        the mean of the posterior of the coefficients
+    :rtype: tuple[scp.sparse.csc_array|None, scp.sparse.csc_array|None, np.ndarray|None,
+        np.ndarray|None, np.ndarray|None, float|None, np.ndarray|None, float|None, float,
+        np.ndarray]
     """
-    np_gen = np.random.default_rng(seed)
+    # np_gen = np.random.default_rng(seed)
 
     family = model.family
 
-    if not grid_type in ["JJJ1", "JJJ2", "JJJ3"]:
+    if grid_type not in ["JJJ1", "JJJ2", "JJJ3"]:
         raise ValueError(
             "'grid_type' has to be set to one of 'JJJ1', 'JJJ2', or 'JJJ3'."
         )
@@ -3080,9 +3434,12 @@ def correct_VB(
             "For models with an ar1 model only grid_type='JJJ1' is supported."
         )
 
-    if compute_Vcc == False and Vp_fidiff:
+    if compute_Vcc is False and Vp_fidiff:
         warnings.warn(
-            "Ignoring request to rely on finite differencing to obtain covariance matrix of $\\rho$, because `compute_Vcc` was set to False."
+            (
+                "Ignoring request to rely on finite differencing to obtain covariance matrix of "
+                "$\\rho$, because `compute_Vcc` was set to False."
+            )
         )
         Vp_fidiff = False
 
@@ -3090,7 +3447,7 @@ def correct_VB(
         if not bfgs_options:
             bfgs_options = {"ftol": 1e-9, "maxcor": 30, "maxls": 100}
 
-    nPen = len(model.overall_penalties)
+    # nPen = len(model.overall_penalties)
     rPen = copy.deepcopy(model.overall_penalties)
     S_emb, _, _, _ = compute_S_emb_pinv_det(
         model.hessian.shape[1], model.overall_penalties, "svd"
@@ -3113,7 +3470,8 @@ def correct_VB(
             y = model.formulas[0].y_flat[model.formulas[0].NOT_NA_flat]
 
             if not model.formulas[0].get_lhs().f is None:
-                # Optionally apply function to dep. var. before fitting. Not sure why that would be desirable for this model class...
+                # Optionally apply function to dep. var. before fitting. Not sure why that would be
+                # desirable for this model class...
                 y = model.formulas[0].get_lhs().f(y)
 
             Xs = model.get_mmat()
@@ -3136,7 +3494,8 @@ def correct_VB(
                 else:
                     y = form.y_flat
 
-                # Optionally apply function to dep. var. before fitting. Not sure why that would be desirable for this model class...
+                # Optionally apply function to dep. var. before fitting. Not sure why that would be
+                # desirable for this model class...
                 if not form.get_lhs().f is None:
                     y = form.get_lhs().f(y)
 
@@ -3170,7 +3529,7 @@ def correct_VB(
             )
 
         # Compute approximate WPS (2016) correction
-        if grid_type == "JJJ1" or (grid_type == "JJJ3" and only_expected_edf == False):
+        if grid_type == "JJJ1" or (grid_type == "JJJ3" and only_expected_edf is False):
 
             if compute_Vcc:
                 if isinstance(family, Family):
@@ -3258,14 +3617,9 @@ def correct_VB(
 
             minDiag = 0.1 * min(np.sqrt(Vpr.diagonal()))
             # Make sure actual estimate is included once.
-            if (
-                np.any(
-                    np.max(
-                        np.abs(p_sample - np.array([pen2.lam for pen2 in rPen])), axis=1
-                    )
-                    < minDiag
-                )
-                == False
+            if not np.any(
+                np.max(np.abs(p_sample - np.array([pen2.lam for pen2 in rPen])), axis=1)
+                < minDiag
             ):
                 p_sample = np.concatenate(
                     (np.array([pen2.lam for pen2 in rPen]).reshape(1, -1), p_sample),
@@ -3368,7 +3722,7 @@ def correct_VB(
                         sample_llks,
                     ) = zip(*pool.starmap(_compute_VB_corr_terms_MP, args))
 
-                    if only_expected_edf == False:
+                    if only_expected_edf is False:
                         Linvs.extend(list(sample_Linvs))
                     scales.extend(list(sample_scales))
                     coefs.extend(list(sample_coefs))
@@ -3446,7 +3800,7 @@ def correct_VB(
                         ) = zip(*pool.starmap(compute_REML_candidate_GSMM, args))
                     sample_scales = np.ones(p_sample.shape[0])
 
-                if only_expected_edf == False:
+                if only_expected_edf is False:
                     Linvs.extend(list(sample_Linvs))
                 scales.extend(list(sample_scales))
                 coefs.extend(list(sample_coefs))
@@ -3485,14 +3839,9 @@ def correct_VB(
 
             # Make sure actual estimate is included once.
             minDiag = 0.1 * min(np.sqrt(Vpr.diagonal()))
-            if (
-                np.any(
-                    np.max(
-                        np.abs(p_sample - np.array([pen2.lam for pen2 in rPen])), axis=1
-                    )
-                    < minDiag
-                )
-                == False
+            if not np.any(
+                np.max(np.abs(p_sample - np.array([pen2.lam for pen2 in rPen])), axis=1)
+                < minDiag
             ):
                 p_sample = np.concatenate(
                     (np.array([pen2.lam for pen2 in rPen]).reshape(1, -1), p_sample),
@@ -3539,7 +3888,7 @@ def correct_VB(
                             method=method,
                             bfgs_options=bfgs_options,
                         )
-                    except:
+                    except:  # noqa: E722
                         warnings.warn(
                             f"Unable to compute REML score for sample {np.exp(ps)}. Skipping."
                         )
@@ -3555,7 +3904,7 @@ def correct_VB(
                 remls.append(reml)
                 edfs.append(edf)
                 llks.append(llk)
-                if only_expected_edf == False:
+                if only_expected_edf is False:
                     Vs.append(Vb)
 
                 if len(rGrid) == 0:
@@ -3563,10 +3912,11 @@ def correct_VB(
                 else:
                     rGrid = np.concatenate((rGrid, ps.reshape(1, -1)), axis=0)
 
-    ###################################################### Prepare computation of tau ######################################################
+    # Prepare computation of tau #
 
     if grid_type != "JJJ1":
-        # Compute weights proposed by Greven & Scheipl (2017) - still work under importance sampling case instead of grid case if we assume Vp
+        # Compute weights proposed by Greven & Scheipl (2017) - still work under importance
+        # sampling case instead of grid case if we assume Vp
         # is prior for \rho|\mathbf{y}.
         if use_importance_weights and prior is None:
             ws = scp.special.softmax(remls)
@@ -3589,7 +3939,7 @@ def correct_VB(
         Vcr = Vr @ dBetadRhos.T
 
         # Optionally re-compute negative Hessian at posterior mean for coef.
-        if recompute_H and (only_expected_edf == False):
+        if recompute_H and (only_expected_edf is False):
 
             # Estimate mean of posterior beta|y
             mean_coef = ws[0] * coefs[0]
@@ -3680,7 +4030,7 @@ def correct_VB(
                     mus = [family.links[i].fi(etas[i]) for i in range(family.n_par)]
 
                     # Get derivatives with respect to eta
-                    if family.d_eta == False:
+                    if family.d_eta is False:
                         d1eta, d2eta, d2meta = deriv_transform_mu_eta(y, mus, family)
                     else:
                         d1eta = [fd1(y, *mus) for fd1 in family.d1]
@@ -3699,14 +4049,18 @@ def correct_VB(
 
             if verbose:
                 print(
-                    f"Recomputed negative Hessian. 2 Norm of coef. difference: {np.linalg.norm(mean_coef-model.coef)}. F. Norm of n. Hessian difference: {scp.sparse.linalg.norm(nH + model.hessian)}"
+                    (
+                        f"Recomputed negative Hessian. 2 Norm of coef. difference: "
+                        f"{np.linalg.norm(mean_coef-model.coef)}. F. Norm of n. Hessian "
+                        f"difference: {scp.sparse.linalg.norm(nH + model.hessian)}"
+                    )
                 )
 
         else:
             mean_coef = None
             nH = -1 * model.hessian
 
-        ###################################################### Compute tau ######################################################
+        # Compute tau #
 
         if only_expected_edf:
             # Compute correction of edf directly..
@@ -3716,7 +4070,8 @@ def correct_VB(
                 # Can now add remaining correction term
 
                 # Now have Vc = Vcr.T @ Vcr, so:
-                # tr(Vc@(-1*model.hessian)) = tr(Vcr.T @ Vcr@(-1*model.hessian)) = tr(Vcr@ (-1*model.hessian)@Vcr.T)
+                # tr(Vc@(-1*model.hessian)) = tr(Vcr.T @ Vcr@(-1*model.hessian)) =
+                # tr(Vcr@ (-1*model.hessian)@Vcr.T)
                 # expected_edf += (Vc@(-1*model.hessian)).trace()
                 expected_edf += (Vcr @ (nH) @ Vcr.T).trace()
 
@@ -3756,12 +4111,13 @@ def correct_VB(
         else:
             expected_edf = None
 
-        ###################################################### Compute tau and full covariance matrix ######################################################
+        # Compute tau and full covariance matrix #
 
         if grid_type == "JJJ2":
 
             if n_c > 1:
-                # E_{p|y}[V_\boldsymbol{\beta}(\\lambda)] + E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] in Greven & Scheipl (2017)
+                # E_{p|y}[V_\boldsymbol{\beta}(\\lambda)] +
+                # E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] in Greven & Scheipl (2017)
                 Vr1 = ws[0] * (Linvs[0].T @ Linvs[0] * scales[0])
 
                 # Now sum over remaining r
@@ -3788,7 +4144,8 @@ def correct_VB(
 
             # Now compute \\hat{cov(\boldsymbol{\beta}|y)}
             if n_c > 1:
-                # E_{p|y}[V_\boldsymbol{\beta}(\\lambda)] + E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] in Greven & Scheipl (2017)
+                # E_{p|y}[V_\boldsymbol{\beta}(\\lambda)] +
+                # E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] in Greven & Scheipl (2017)
                 Vr1 = ws[0] * (Linvs[0].T @ Linvs[0] * scales[0])
                 Vr2 = ws[0] * (coefs[0] @ coefs[0].T)
                 # E_{p|y}[\boldsymbol{\beta}] in Greven & Scheipl (2017)
@@ -3819,7 +4176,9 @@ def correct_VB(
             #        Vr1 = model.lvi.T@model.lvi
 
             # Now, Greven & Scheipl provide final estimate =
-            # E_{p|y}[V_\boldsymbol{\beta}(\\lambda)] + E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] - E_{p|y}[\boldsymbol{\beta}] E_{p|y}[\boldsymbol{\beta}]^T
+            # E_{p|y}[V_\boldsymbol{\beta}(\\lambda)] +
+            # E_{p|y}[\boldsymbol{\beta}\boldsymbol{\beta}^T] -
+            # E_{p|y}[\boldsymbol{\beta}] E_{p|y}[\boldsymbol{\beta}]^T
             # Enforce lower bound of JJJ2 again
             # if (Vcr @ (nH) @ Vcr.T).trace() > ((Vr2 - (Vr3@Vr3.T)) @ (nH)).trace():
             #    V = Vr1 + Vcr.T @ Vcr
@@ -3849,7 +4208,8 @@ def correct_VB(
     edf = F.diagonal()
     total_edf = F.trace()
 
-    # In mgcv, an upper limit is enforced on edf and total_edf when they are uncertainty corrected - based on t1 in section 6.1.2 of Wood (2017)
+    # In mgcv, an upper limit is enforced on edf and total_edf when they are uncertainty corrected
+    # - based on t1 in section 6.1.2 of Wood (2017)
     # so the same is done here.
     if isinstance(family, Family):
         ucF = model.lvi.T @ model.lvi @ ((-1 * model.hessian) * orig_scale)
@@ -3866,7 +4226,8 @@ def correct_VB(
         total_edf = total_edf2
         edf = edf2
 
-    # Compute uncertainty corrected smoothness bias corrected edf (t1 in section 6.1.2 of Wood, 2017)
+    # Compute uncertainty corrected smoothness bias corrected edf (t1 in section 6.1.2 of Wood,
+    # 2017)
     if form_t1:
         total_edf2 += total_edf - model.edf
         edf2 += edf - ucF.diagonal()

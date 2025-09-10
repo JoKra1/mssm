@@ -16,21 +16,15 @@ from .file_loading import (
     read_dtype,
     mp,
     repeat,
-    setup_cache,
-    clear_cache,
-    os,
 )
 from .custom_types import (
     PenType,
     LambdaTerm,
-    Reparameterization,
     ConstType,
     Constraint,
     VarType,
 )
 from .matrix_solvers import translate_sparse, eigen_solvers
-import math
-import sys
 
 
 class lhs:
@@ -39,9 +33,14 @@ class lhs:
 
     See the :class:`Formula` class for examples.
 
-    :param variable: The name of the dependent/response variable in the dataframe passed to a :class:`Formula`. Can point to continuous and categorical variables. For :class:`mssm..models.GSMM` models, the variable can also be set to any placeholder variable in the data, since not every :class:`Formula` will be associated with a particular response variable.
+    :param variable: The name of the dependent/response variable in the dataframe passed to a
+        :class:`Formula`. Can point to continuous and categorical variables. For
+        :class:`mssm..models.GSMM` models, the variable can also be set to any placeholder
+        variable in the data, since not every :class:`Formula` will be associated with a
+        particular response variable.
     :type variable: str
-    :param f: A function that will be applied to the ``variable`` before fitting. For example: np.log(). By default no function is applied to the ``variable``.
+    :param f: A function that will be applied to the ``variable`` before fitting. For example:
+        np.log(). By default no function is applied to the ``variable``.
     :type f: Callable, optional
     """
 
@@ -59,12 +58,14 @@ def _compute_constraint_single_MP(
     var_maxs: dict,
     file_loading_kwargs: dict,
 ) -> np.ndarray:
-    """Internal function to compute QR identifiability constraint based on reading model matrix data from file
+    """Internal function to compute QR identifiability constraint based on reading model matrix
+    data from file
 
     Wood (2017) has an overview over identifiability constraintsfor smooth terms.
 
     References:
-       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
 
     :param sterm: Smooth term to make identifiable
     :type sterm: f
@@ -86,7 +87,7 @@ def _compute_constraint_single_MP(
 
     C = 0
 
-    if len(vars) > 1 and sterm.te == False:
+    if len(vars) > 1 and sterm.te is False:
         C = [0 for _ in range(len(vars))]
 
     matrix_term = None  # for Te basis
@@ -99,7 +100,7 @@ def _compute_constraint_single_MP(
         else:
             id_nk = sterm.nk
 
-        if sterm.te == False:
+        if sterm.te is False:
             id_nk += 1
 
         var_cov_flat = read_cor_cov_single(lhs_var, vars[vi], file, file_loading_kwargs)
@@ -113,7 +114,7 @@ def _compute_constraint_single_MP(
             **sterm.basis_kwargs,
         )
 
-        if sterm.te == False:
+        if sterm.te is False:
             if len(vars) > 1:
                 C[vi] += np.sum(matrix_term_v, axis=0).reshape(-1, 1)
             else:
@@ -134,8 +135,9 @@ def _compute_constraint_single_MP(
 class Formula:
     """The formula of a regression equation.
 
-    **Note:** The class implements multiple ``get_*`` functions to access attributes stored in instance variables. The get functions always return a copy of the
-    instance variable and the results are thus safe to manipulate.
+    **Note:** The class implements multiple ``get_*`` functions to access attributes stored in
+    instance variables. The get functions always return a copy of the instance variable and the
+    results are thus safe to manipulate.
 
     Examples::
 
@@ -152,12 +154,16 @@ class Formula:
       formula = Formula(lhs("y"),[i(),f(["x0","x1"],te=True),f(["x2"]),f(["x3"])],data=Binomdat)
 
       # Now with a tensor smooth anova style
-      formula = Formula(lhs("y"),[i(),f(["x0"]),f(["x1"]),f(["x0","x1"]),f(["x2"]),f(["x3"])],data=Binomdat)
+      formula = Formula(lhs("y"),[i(),f(["x0"]),f(["x1"]),f(["x0","x1"]),f(["x2"]),f(["x3"])],
+        data=Binomdat)
 
 
       ######## Stream data from file and set up custom codebook #########
 
-      file_paths = [f'https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat_cond_{cond}.csv' for cond in ["a","b"]]
+      file_paths = [
+        f'https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat_cond_{cond}.csv' \
+        for cond in ["a","b"]
+        ]
 
       # Set up specific coding for factor 'cond'
       codebook = {'cond':{'a': 0, 'b': 1}}
@@ -165,10 +171,17 @@ class Formula:
       formula = Formula(lhs=lhs("y"), # The dependent variable - here y!
                         terms=[i(), # The intercept, a
                                  l(["cond"]), # For cond='b'
-                                 f(["time"],by="cond"), # to-way interaction between time and cond; one smooth over time per cond level
-                                 f(["x"],by="cond"), # to-way interaction between x and cond; one smooth over x per cond level
-                                 f(["time","x"],by="cond"), # three-way interaction
-                                 fs(["time"],rf="sub")], # Random non-linear effect of time - one smooth per level of factor sub
+                                 # to-way interaction between time and cond;
+                                 # one smooth over time per cond level
+                                 f(["time"],by="cond"),
+                                 # to-way interaction between x and cond;
+                                 # one smooth over x per cond level
+                                 f(["x"],by="cond"),
+                                 # three-way interaction
+                                 f(["time","x"],by="cond"),
+                                 # Random non-linear effect of time - one
+                                 # smooth per level of factor sub
+                                 fs(["time"],rf="sub")],
                         data=None, # No data frame!
                         file_paths=file_paths, # Just a list with paths to files.
                         print_warn=False,
@@ -188,9 +201,11 @@ class Formula:
                               keep_cov=True, # Keep encoded data structure in memory
                               codebook=codebook)
 
-      ########## preparing for ar1 model (with resets per time-series) and data type requirements ##########
+      # preparing for ar1 model (with resets per time-series) and data type requirements
 
-      dat = pd.read_csv('https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat.csv')
+      dat = pd.read_csv(
+        'https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat.csv'
+        )
 
       # mssm requires that the data-type for variables used as factors is 'O'=object
       dat = dat.astype({'series': 'O',
@@ -210,36 +225,88 @@ class Formula:
 
     :param lhs: The lhs object defining the dependent variable.
     :type variable: lhs
-    :param terms: A list of the terms which should be added to the model. See :py:mod:`mssm.src.python.terms` for info on which terms can be added.
+    :param terms: A list of the terms which should be added to the model.
+        See :py:mod:`mssm.src.python.terms` for info on which terms can be added.
     :type terms: [GammTerm]
-    :param data: A pandas dataframe (with header!) of the data which should be used to estimate the model. The variable specified for ``lhs`` as well as all variables included for a ``term`` in ``terms`` need to be present in the data, otherwise the call to Formula will throw an error.
+    :param data: A pandas dataframe (with header!) of the data which should be used to estimate the
+        model. The variable specified for ``lhs`` as well as all variables included for a ``term``
+        in ``terms`` need to be present in the data, otherwise the call to Formula will throw an
+        error.
     :type data: pd.DataFrame or None
-    :param series_id: A string identifying the individual experimental units. Usually a unique trial identifier. Only necessary if approximate derivative computations are to be utilized for random smooth terms or if you need to estimate an 'ar1' model for multiple time-series data.
+    :param series_id: A string identifying the individual experimental units. Usually a unique
+        trial identifier. Only necessary if approximate derivative computations are to be utilized
+        for random smooth terms or if you need to estimate an 'ar1' model for multiple time-series
+        data.
     :type series_id: str, optional
-    :param codebook: Codebook - keys should correspond to factor variable names specified in terms. Values should again be a ``dict``, with keys for each of K levels of the factor and value corresponding to an integer in {0,K}.
+    :param codebook: Codebook - keys should correspond to factor variable names specified in terms.
+        Values should again be a ``dict``, with keys for each of K levels of the factor and value
+        corresponding to an integer in {0,K}.
     :type codebook: dict or None
-    :param print_warn: Whether warnings should be printed. Useful when fitting models from terminal. Defaults to True.
+    :param print_warn: Whether warnings should be printed. Useful when fitting models from terminal.
+        Defaults to True.
     :type print_warn: bool,optional
-    :param keep_cov: Whether or not the internal encoding structure of all predictor variables should be created when forming :math:`\\mathbf{X}^T\\mathbf{X}` iteratively instead of forming :math:`\\mathbf{X}` directly. Can speed up estimation but increases memory footprint. Defaults to True.
+    :param keep_cov: Whether or not the internal encoding structure of all predictor variables
+        should be created when forming :math:`\\mathbf{X}^T\\mathbf{X}` iteratively instead of
+        forming :math:`\\mathbf{X}` directly. Can speed up estimation but increases memory
+        footprint. Defaults to True.
     :type keep_cov: bool,optional
-    :param find_nested: Whether or not to check for nested smooth terms. This only has an effect if you include at least one smooth term with more than two variables. Additionally, this check is often not necessary if you correctly use the ``te`` key-word of smooth terms and ensure that the marginals used to construct ti smooth terms have far fewer basis functions than the "main effect" univariate smooths. Thus, if you know what you're doing and you're working with large models, you might want to disable this (i.e., set to False) because this check can get quite expensive for larger models. Defaults to True.
+    :param find_nested: Whether or not to check for nested smooth terms. This only has an effect if
+        you include at least one smooth term with more than two variables. Additionally, this check
+        is often not necessary if you correctly use the ``te`` key-word of smooth terms and ensure
+        that the marginals used to construct ti smooth terms have far fewer basis functions than
+        the "main effect" univariate smooths. Thus, if you know what you're doing and you're
+        working with large models, you might want to disable this (i.e., set to False) because this
+        check can get quite expensive for larger models. Defaults to True.
     :type find_nested: bool,optional
-    :param file_paths: A list of paths to .csv files from which :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}` should be created iteratively. Setting this to a non-empty list will prevent fitting X as a whole. ``data`` should then be set to ``None``. Defaults to an empty list.
+    :param file_paths: A list of paths to .csv files from which :math:`\\mathbf{X}^T\\mathbf{X}`
+        and :math:`\\mathbf{X}^T\\mathbf{y}` should be created iteratively. Setting this to a
+        non-empty list will prevent fitting X as a whole. ``data`` should then be set to ``None``.
+        Defaults to an empty list.
     :type file_paths: [str],optional
-    :param file_loading_nc: How many cores to use to a) accumulate :math:`\\mathbf{X}` in parallel (if ``data`` is not ``None`` and ``file_paths`` is an empty list) or b) to accumulate :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}` (and :math:`\\mathbf{\\eta}` during estimation) (if ``data`` is ``None`` and ``file_paths`` is a non-empty list). For case b, this should really be set to the maimum number of cores available. For a this only really speeds up accumulating :math:`\\mathbf{X}` if :math:`\\mathbf{X}` has many many columns and/or rows. Defaults to 1.
+    :param file_loading_nc: How many cores to use to a) accumulate :math:`\\mathbf{X}` in parallel
+        (if ``data`` is not ``None`` and ``file_paths`` is an empty list) or b) to accumulate
+        :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}`
+        (and :math:`\\mathbf{\\eta}` during estimation) (if ``data`` is ``None`` and ``file_paths``
+        is a non-empty list). For case b, this should really be set to the maimum number of cores
+        available. For a this only really speeds up accumulating :math:`\\mathbf{X}` if
+        :math:`\\mathbf{X}` has many many columns and/or rows. Defaults to 1.
     :type file_loading_nc: int,optional
-    :param file_loading_kwargs: Any key-word arguments to pass to pandas.read_csv when :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}` should be created iteratively (if ``data`` is ``None`` and ``file_paths`` is a non-empty list). Defaults to ``{"header":0,"index_col":False}``.
+    :param file_loading_kwargs: Any key-word arguments to pass to pandas.read_csv when
+        :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}` should be created
+        iteratively (if ``data`` is ``None`` and ``file_paths`` is a non-empty list).
+        Defaults to ``{"header":0,"index_col":False}``.
     :type file_loading_kwargs: dict,optional
-    :ivar lhs lhs: The left-hand side object of the regression formula passed to the constructor. Initialized at construction.
-    :ivar [GammTerm] terms: The list of terms passed to the constructor. Initialized at construction.
-    :ivar pd.DataFrame data: The dataframe passed to the constructor. Initialized at construction.
-    :ivar [int] coef_per_term: A list containing the number of coefficients corresponding to each term included in ``terms``. Initialized at construction.
-    :ivar [str] coef_names: A list containing a named identifier (e.g., "Intercept") for each coefficient estimated by the model. Initialized at construction.
-    :ivar int n_coef: The number of coefficients estimated by the model in total. Initialized at construction.
-    :ivar int unpenalized_coef: The number of un-penalized coefficients estimated by the model. Initialized at construction.
-    :ivar np.ndarray or None y_flat: An array, containing all values on the dependent variable (i.e., specified by ``lhs.variable``) in order of the data-frame passed to ``data``. This variable will be initialized at construction but only if ``file_paths=None``, i.e., in case :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}` are **not** created iteratively.
-    :ivar np.ndarray or None cov_flat: An array, containing all (encoded, in case of categorical predictors) values on each predictor (each columns of ``cov_flat`` corresponds to a different predictor) variable included in any of the ``terms`` in order of the data-frame passed to ``data``. This variable will be initialized at construction but only if ``file_paths=None``, i.e., in case :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}` are **not** created iteratively.
-    :ivar np.ndarray or None NOT_NA_flat: An array, containing an indication (as bool) for each value on the dependent variable (i.e., specified by ``lhs.variable``) whether the corresponding value is not a number ("NA") or not. In order of the data-frame passed to ``data``. This variable will be initialized at construction but only if ``file_paths=None``, i.e., in case :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}` are **not** created iteratively.
+    :ivar lhs lhs: The left-hand side object of the regression formula passed to the constructor.
+        Initialized at construction.
+    :ivar [GammTerm] terms: The list of terms passed to the constructor. Initialized at
+        construction.
+    :ivar pd.DataFrame data: The dataframe passed to the constructor. Initialized at
+        construction.
+    :ivar [int] coef_per_term: A list containing the number of coefficients corresponding to each
+        term included in ``terms``. Initialized at construction.
+    :ivar [str] coef_names: A list containing a named identifier (e.g., "Intercept") for each
+        coefficient estimated by the model. Initialized at construction.
+    :ivar int n_coef: The number of coefficients estimated by the model in total. Initialized at
+        construction.
+    :ivar int unpenalized_coef: The number of un-penalized coefficients estimated by the model.
+        Initialized at construction.
+    :ivar np.ndarray or None y_flat: An array, containing all values on the dependent variable
+        (i.e., specified by ``lhs.variable``) in order of the data-frame passed to ``data``. This
+        variable will be initialized at construction but only if ``file_paths=None``, i.e., in case
+        :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}` are **not** created
+        iteratively.
+    :ivar np.ndarray or None cov_flat: An array, containing all (encoded, in case of categorical
+        predictors) values on each predictor (each columns of ``cov_flat`` corresponds to a
+        different predictor) variable included in any of the ``terms`` in order of the data-frame
+        passed to ``data``. This variable will be initialized at construction but only if
+        ``file_paths=None``, i.e., in case :math:`\\mathbf{X}^T\\mathbf{X}` and
+        :math:`\\mathbf{X}^T\\mathbf{y}` are **not** created iteratively.
+    :ivar np.ndarray or None NOT_NA_flat: An array, containing an indication (as bool) for each
+        value on the dependent variable (i.e., specified by ``lhs.variable``) whether the
+        corresponding value is not a number ("NA") or not. In order of the data-frame passed to
+        ``data``. This variable will be initialized at construction but only if ``file_paths=None``,
+        i.e., in case :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}` are
+        **not** created iteratively.
     """
 
     def __init__(
@@ -262,8 +329,10 @@ class Formula:
         self.data = data
         self.series_id = series_id
         self.print_warn = print_warn
-        self.keep_cov = keep_cov  # For iterative X.T@X building, whether the encoded data should be kept or read in from file again during every iteration.
-        self.file_paths = file_paths  # If this will not be empty, we accumulate t(X)@X directly without forming X. Only useful if model is normal.
+        self.keep_cov = keep_cov  # For iterative X.T@X building
+        self.file_paths = (
+            file_paths  # If this will not be empty, we accumulate t(X)@X directly
+        )
         self.file_loading_nc = file_loading_nc
         self.file_loading_kwargs = file_loading_kwargs
         self.factor_codings = {}
@@ -311,10 +380,14 @@ class Formula:
                 f"Column '{self.lhs.variable}' does not exist in Dataframe."
             )
 
-        if len(self.file_paths) != 0 and self.keep_cov == False and self.find_nested:
+        if len(self.file_paths) != 0 and self.keep_cov is False and self.find_nested:
             if print_warn:
                 warnings.warn(
-                    "``find_nested=True`` is not supported when iteratively building the model matrix and not keeping the encoded data (i.e., when ``keep_cov=False``). Setting ``find_nested=False``"
+                    (
+                        "``find_nested=True`` is not supported when iteratively building the model "
+                        "matrix and not keeping the encoded data (i.e., when ``keep_cov=False``). "
+                        "Setting ``find_nested=False``"
+                    )
                 )
             self.find_nested = False
 
@@ -345,7 +418,7 @@ class Formula:
                 self.random_terms.append(ti)
 
             if isinstance(term, fs):
-                if not term.approx_deriv is None:
+                if term.approx_deriv is not None:
                     self.discretize[ti] = term.approx_deriv
 
                     # Make sure all categorical split variables end up being encoded since
@@ -357,7 +430,7 @@ class Formula:
             # All variables must exist in data
             for var in term.variables:
 
-                if len(self.file_paths) == 0 and not var in self.data.columns:
+                if len(self.file_paths) == 0 and var not in self.data.columns:
                     raise KeyError(
                         f"Variable '{var}' of term {ti} does not exist in dataframe."
                     )
@@ -374,31 +447,40 @@ class Formula:
 
                 # Smooth-term variables must all be continuous
                 if isinstance(term, f) or isinstance(term, irf):
-                    if not vartype in ["float64", "int64"]:
+                    if vartype not in ["float64", "int64"]:
                         raise TypeError(
-                            f"Variable '{var}' attributed to smooth/impulse response smooth term {ti} must be numeric and is not."
+                            (
+                                f"Variable '{var}' attributed to smooth/impulse response smooth "
+                                f"term {ti} must be numeric and is not."
+                            )
                         )
 
                 # Random intercept variable must be categorical
                 if isinstance(term, ri):
                     if vartype in ["float64", "int64"]:
                         raise TypeError(
-                            f"Variable '{var}' attributed to random intercept term {ti} must not be numeric but is."
+                            (
+                                f"Variable '{var}' attributed to random intercept term {ti} must "
+                                "not be numeric but is."
+                            )
                         )
 
             # by-variables must be categorical
             if isinstance(term, f) or isinstance(term, irf) or isinstance(term, rs):
-                if not term.by is None or (
-                    isinstance(term, f) and not term.binary is None
+                if term.by is not None or (
+                    isinstance(term, f) and term.binary is not None
                 ):
 
                     t_by = term.by
                     if t_by is None:
                         t_by = term.binary[0]
 
-                    if len(self.file_paths) == 0 and not t_by in self.data.columns:
+                    if len(self.file_paths) == 0 and t_by not in self.data.columns:
                         raise KeyError(
-                            f"By-variable '{t_by}' attributed to term {ti} does not exist in dataframe."
+                            (
+                                f"By-variable '{t_by}' attributed to term {ti} does not exist in "
+                                "dataframe."
+                            )
                         )
 
                     if len(self.file_paths) == 0 and data[t_by].dtype in [
@@ -406,19 +488,27 @@ class Formula:
                         "int64",
                     ]:
                         raise KeyError(
-                            f"Data-type of By-variable '{t_by}' attributed to term {ti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'."
+                            (
+                                f"Data-type of By-variable '{t_by}' attributed to term {ti} must "
+                                "not be numeric but is. E.g., Make sure the pandas dtype is "
+                                "'object'."
+                            )
                         )
 
                     if len(self.file_paths) > 0 and read_dtype(
                         t_by, self.file_paths[0], self.file_loading_kwargs
                     ) in ["float64", "int64"]:
                         raise KeyError(
-                            f"Data-type of By-variable '{t_by}' attributed to term {ti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'."
+                            (
+                                f"Data-type of By-variable '{t_by}' attributed to term {ti} must "
+                                "not be numeric but is. E.g., Make sure the pandas dtype is "
+                                "'object'."
+                            )
                         )
 
                     t_by_subgroup = None
                     # Handle sub-cluster for factor smooth term.
-                    if isinstance(term, fs) and not term.by_subgroup is None:
+                    if isinstance(term, fs) and term.by_subgroup is not None:
 
                         t_by_subgroup = term.by_subgroup
 
@@ -427,14 +517,21 @@ class Formula:
                             and not t_by_subgroup[0] in self.data.columns
                         ):
                             raise KeyError(
-                                f"Sub-group by-variable '{t_by_subgroup}' attributed to term {ti} does not exist in dataframe."
+                                (
+                                    f"Sub-group by-variable '{t_by_subgroup}' attributed to term "
+                                    f"{ti} does not exist in dataframe."
+                                )
                             )
 
                         if len(self.file_paths) == 0 and data[
                             t_by_subgroup[0]
                         ].dtype in ["float64", "int64"]:
                             raise KeyError(
-                                f"Data-type of sub-group by-variable '{t_by_subgroup[0]}' attributed to term {ti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'."
+                                (
+                                    f"Data-type of sub-group by-variable '{t_by_subgroup[0]}' "
+                                    f"attributed to term {ti} must not be numeric but is. E.g., "
+                                    "Make sure the pandas dtype is 'object'."
+                                )
                             )
 
                         if len(self.file_paths) > 0 and read_dtype(
@@ -443,7 +540,11 @@ class Formula:
                             self.file_loading_kwargs,
                         ) in ["float64", "int64"]:
                             raise KeyError(
-                                f"Data-type of sub-group by-variable '{t_by_subgroup[0]}' attributed to term {ti} must not be numeric but is. E.g., Make sure the pandas dtype is 'object'."
+                                (
+                                    f"Data-type of sub-group by-variable '{t_by_subgroup[0]}' "
+                                    f"attributed to term {ti} must not be numeric but is. E.g., "
+                                    "Make sure the pandas dtype is 'object'."
+                                )
                             )
 
                         # Make sure sub-group variable is also encoded.
@@ -454,21 +555,24 @@ class Formula:
                         t_by, "O", cvi, codebook, by_subgroup=t_by_subgroup
                     )
 
-                    # If no error was raised we can now over-write the by variable for the factor smooth
-                    if isinstance(term, fs) and not t_by_subgroup is None:
+                    # If no error was raised we can now over-write the by variable
+                    # for the factor smooth
+                    if isinstance(term, fs) and t_by_subgroup is not None:
                         term.by += ":" + t_by_subgroup[1]
 
-                    if isinstance(term, f) and not term.binary is None:
+                    if isinstance(term, f) and term.binary is not None:
                         term.binary_level = self.factor_codings[t_by][term.binary[1]]
 
-                if (
-                    not term.by_cont is None
-                ):  # Continuous variable to be multiplied with model matrix for this term.
+                # Continuous variable to be multiplied with model matrix for this term.
+                if term.by_cont is not None:
                     t_by_cont = term.by_cont
 
-                    if len(self.file_paths) == 0 and not t_by_cont in self.data.columns:
+                    if len(self.file_paths) == 0 and t_by_cont not in self.data.columns:
                         raise KeyError(
-                            f"By_cont-variable '{t_by_cont}' attributed to term {ti} does not exist in dataframe."
+                            (
+                                f"By_cont-variable '{t_by_cont}' attributed to term {ti} does not "
+                                "exist in dataframe."
+                            )
                         )
 
                     if len(self.file_paths) == 0:
@@ -480,7 +584,10 @@ class Formula:
 
                     if vartype not in ["float64", "int64"]:
                         raise TypeError(
-                            f"Variable '{t_by_cont}' attributed to term {ti} must be numeric but is not."
+                            (
+                                f"Variable '{t_by_cont}' attributed to term {ti} must be numeric "
+                                "but is not."
+                            )
                         )
 
                     cvi = self.__encode_var(t_by_cont, vartype, cvi, codebook)
@@ -490,7 +597,10 @@ class Formula:
 
         if self.has_irf and (len(self.file_paths) != 0 or self.data is None):
             raise NotImplementedError(
-                "Building X.T@X iteratively does not support Impulse Response Terms (i.e., ``irf``) in the formula."
+                (
+                    "Building X.T@X iteratively does not support Impulse Response Terms "
+                    "(i.e., ``irf``) in the formula."
+                )
             )
 
         # Encode data into columns usable by the model
@@ -509,18 +619,18 @@ class Formula:
         if len(self.discretize) > 0:
             if self.series_id is None:
                 raise ValueError(
-                    f"The identifier column for unique series must be provided when requesting to approximate the derivative of one or more factor smooth terms."
+                    (
+                        "The identifier column for unique series must be provided when requesting "
+                        "to approximate the derivative of one or more factor smooth terms."
+                    )
                 )
 
-            if len(self.file_paths) != 0 and self.keep_cov == False:
-                # Need to create cov_flat (or at least figure out the correct dimensions) and sid after all
-                # sid_var_cov_flat = read_cov(self.lhs.variable,self.series_id,self.file_paths,self.file_loading_nc,self.file_loading_kwargs)
-                # self.cov_flat = np.zeros((len(sid_var_cov_flat),len(self.var_to_cov.keys())),dtype=int)
-
-                # _, id = np.unique(sid_var_cov_flat,return_index=True)
-                # self.sid = np.sort(id)
+            if len(self.file_paths) != 0 and self.keep_cov is False:
                 raise ValueError(
-                    "``Formula.keep.cov`` must be set to ``True`` when reading data from file AND approximating the derivative for factor smooths."
+                    (
+                        "``Formula.keep.cov`` must be set to ``True`` when reading data from file "
+                        "AND approximating the derivative for factor smooths."
+                    )
                 )
 
             for sti in self.discretize.keys():
@@ -557,7 +667,8 @@ class Formula:
         codebook: dict,
         by_subgroup: tuple[str, str] | None = None,
     ) -> int:
-        """Internal function that does bookkeeping on variables, encoding them into the ``codebook``.
+        """Internal function that does bookkeeping on variables, encoding them into the
+        ``codebook``.
 
         :param var: name of variable
         :type var: str
@@ -567,18 +678,19 @@ class Formula:
         :type cvi: int
         :param codebook: codebook dictionary
         :type codebook: dict
-        :param by_subgroup: Either None or a tuple with two strings: first corresponding to a factor, second to a level fo that factor, defaults to None
+        :param by_subgroup: Either None or a tuple with two strings: first corresponding to a
+            factor, second to a level fo that factor, defaults to None
         :type by_subgroup: tuple[str,str] | None, optional
         :return: Updated cvi
         :rtype: int
         """
         # Store information for all variables once.
-        if not by_subgroup is None:
+        if by_subgroup is not None:
             _org_var = var
             var += ":" + by_subgroup[1]
             self.subgroup_variables.append(var)
 
-        if not var in self.var_to_cov:
+        if var not in self.var_to_cov:
             self.var_to_cov[var] = cvi
 
             # Assign vartype enum and calculate mins/maxs for continuous variables
@@ -644,7 +756,7 @@ class Formula:
                 self.factor_levels[var] = levels
 
                 for ci, c in enumerate(levels):
-                    if not codebook is None and var in codebook:
+                    if codebook is not None and var in codebook:
                         self.factor_codings[var][c] = codebook[var][c]
                         self.coding_factors[var][codebook[var][c]] = c
                     else:
@@ -656,7 +768,10 @@ class Formula:
         return cvi
 
     def __get_coef_info(self) -> None:
-        """Get's information about the number of coefficients from each term + the names of these coefficients. Terms also provide info here about the number of unpenalized coefficients that come with the term."""
+        """Get's information about the number of coefficients from each term + the names of these
+        coefficients. Terms also provide info here about the number of unpenalized coefficients that
+        come with the term."""
+
         var_types = self.var_types
         factor_levels = self.factor_levels
         coding_factors = self.coding_factors
@@ -740,15 +855,27 @@ class Formula:
         np.ndarray | None,
     ]:
         """
-        Encodes ``data``, which needs to be a ``pd.DataFrame`` and by default (if ``prediction==False``) builds an index
-        of which rows in ``data`` are NA in the column of the dependent variable described by ``self.lhs``.
+        Encodes ``data``, which needs to be a ``pd.DataFrame`` and by default
+        (if ``prediction==False``) builds an index of which rows in ``data`` are NA in the column
+        of the dependent variable described by ``self.lhs``.
 
         :param data: The data to encode.
         :type data: pd.DataFrame
-        :param prediction: Whether or not a NA index and a column for the dependent variable should be generated.
+        :param prediction: Whether or not a NA index and a column for the dependent variable should
+            be generated.
         :type prediction: bool, optional
-        :return: A tuple with 7 (optional) entries: the dependent variable described by ``self.lhs``, the encoded predictor variables as a (N,k) array (number of rows matches the number of rows of the first entry returned, the number of columns matches the number of k variables present in the formula), an indication for each row whether the dependent variable described by ``self.lhs`` is NA, like the first entry but split into a list of lists by ``self.series_id``, like the second entry but split into a list of lists by ``self.series_id``, ike the third entry but split into a list of lists by ``self.series_id``, start and end points for the splits used to split the previous three elements (identifying the start and end point of every level of ``self.series_id``).
-        :rtype: (np.ndarray|None, np.ndarray, np.ndarray|None, list[np.ndarray]|None, list[np.ndarray]|None, list[np.ndarray]|None, np.ndarray|None)
+        :return: A tuple with 7 (optional) entries: the dependent variable described by
+            ``self.lhs``, the encoded predictor variables as a (N,k) array (number of rows matches
+            the number of rows of the first entry returned, the number of columns matches the
+            number of k variables present in the formula), an indication for each row whether
+            the dependent variable described by ``self.lhs`` is NA, like the first entry but split
+            into a list of lists by ``self.series_id``, like the second entry but split into a
+            list of lists by ``self.series_id``, ike the third entry but split into a list of lists
+            by ``self.series_id``, start and end points for the splits used to split the previous
+            three elements (identifying the start and end point of every level of
+            ``self.series_id``).
+        :rtype: (np.ndarray|None, np.ndarray, np.ndarray|None, list[np.ndarray]|None,
+            list[np.ndarray]|None, list[np.ndarray]|None, np.ndarray|None)
         """
         # Build NA index
         if prediction:
@@ -763,25 +890,34 @@ class Formula:
                     self.file_loading_nc,
                     self.file_loading_kwargs,
                 )
-                NAs_flat = np.isnan(y_flat) == False
+                NAs_flat = np.isnan(y_flat) == False  # noqa: E712
             else:
-                NAs_flat = np.isnan(data[self.lhs.variable].values) == False
+                NAs_flat = (
+                    np.isnan(data[self.lhs.variable].values) == False  # noqa: E712
+                )
 
-        if not data is None:
+        if data is not None:
             if (
                 not prediction
                 and data.shape[0] != data[NAs_flat].shape[0]
                 and self.print_warn
             ):
+                missing_p = round(
+                    (data.shape[0] - data[NAs_flat].shape[0]) / data.shape[0] * 100,
+                    ndigits=2,
+                )
                 warnings.warn(
-                    f"{data.shape[0] - data[NAs_flat].shape[0]} {self.lhs.variable} values ({round((data.shape[0] - data[NAs_flat].shape[0]) / data.shape[0] * 100,ndigits=2)}%) are NA."
+                    (
+                        f"{data.shape[0] - data[NAs_flat].shape[0]} {self.lhs.variable} values "
+                        f"({missing_p}%) are NA."
+                    )
                 )
             n_y = data.shape[0]
         else:
             n_y = len(y_flat)
 
         id_col = None
-        if not self.series_id is None:
+        if self.series_id is not None:
             if data is None:
                 id_col = read_cov_no_cor(
                     self.series_id,
@@ -802,7 +938,7 @@ class Formula:
         # order of the data frame.
         # Based on: https://stackoverflow.com/questions/12926898
         sid = None
-        if not self.series_id is None:
+        if self.series_id is not None:
             _, id = np.unique(id_col, return_index=True)
             sid = np.sort(id)
 
@@ -811,22 +947,20 @@ class Formula:
             y = None
         else:
             # Collect entire y column
-            if not data is None:
+            if data is not None:
                 y_flat = np.array(data[self.lhs.variable]).reshape(-1, 1)
 
             # Then split by seried id
             y = None
             NAs = None
-            if not self.series_id is None:
+            if self.series_id is not None:
                 y = np.split(y_flat, sid[1:])
 
                 # Also split NA index
                 NAs = np.split(NAs_flat, sid[1:])
 
         # Now all predictor variables
-        cov_flat = np.zeros(
-            (n_y, n_var), dtype=float
-        )  # Treating all predictors as floats has important implications for factors and requires special care!
+        cov_flat = np.zeros((n_y, n_var), dtype=float)
 
         for c in var_keys:
             if data is None:
@@ -868,7 +1002,7 @@ class Formula:
 
         # Now split cov by series id as well
         cov = None
-        if not self.series_id is None:
+        if self.series_id is not None:
             cov = np.split(cov_flat, sid[1:], axis=0)
 
         return y_flat, cov_flat, NAs_flat, y, cov, NAs, sid
@@ -878,7 +1012,8 @@ class Formula:
 
         :param sti: Smooth term index pointing to smooth holding a discretization dict
         :type sti: int
-        :return: np.ndarray holding discretized covariate values of the data set required by ``self.discretize[sti]``.
+        :return: np.ndarray holding discretized covariate values of the data set required by
+            ``self.discretize[sti]``.
         :rtype: np.ndarray
         """
         dig_cov_flat = np.zeros_like(self.cov_flat)
@@ -895,8 +1030,9 @@ class Formula:
                 continue
 
             if var not in self.discretize[sti]["no_disc"]:
-                # Discretize continuous variable into k**0.5 bins, where k is the number of unique values this variable
-                # took on in the training set (based on, Wood et al., 2017 "Gams for Gigadata").
+                # Discretize continuous variable into k**0.5 bins, where k is the number of unique
+                # values this variable took on in the training set (based on, Wood et al., 2017
+                # "Gams for Gigadata").
                 values = np.linspace(
                     min(self.cov_flat[:, var_map[var]]),
                     max(self.cov_flat[:, var_map[var]]),
@@ -919,11 +1055,13 @@ class Formula:
     ) -> tuple[list[np.ndarray], list[np.ndarray]]:
         """Internal function to split dscretized covariate objects.
 
-        :param dig_cov_flat_all: np.ndarray holding discretized covariate values of the data set required by ``self.discretize[sti]``.
+        :param dig_cov_flat_all: np.ndarray holding discretized covariate values of the data set
+            required by ``self.discretize[sti]``.
         :type dig_cov_flat_all: np.ndarray
         :param sti: Smooth term index pointing to smooth holding a discretization dict
         :type sti: int
-        :return: tuple holding two lists of np.ndarray. First list has split discretized covariate objects per series, second has series id
+        :return: tuple holding two lists of np.ndarray. First list has split discretized
+            covariate objects per series, second has series id
         :rtype: tuple[list[np.ndarray],list[np.ndarray]]
         """
         var_map = self.get_var_map()
@@ -950,9 +1088,9 @@ class Formula:
             dig_cov_flat_all = dig_cov_flat_all[sub_lvl_idx, :]
 
             # For id col a bit more work is necessary..
-            # First take again what belongs to sub-group. Now the problem is that series will no longer go from 0-S. So we
-            # have to reset the values in id_col to start from zero and then increment towards the number of series included
-            # in this sub-group.
+            # First take again what belongs to sub-group. Now the problem is that series will
+            # no longer go from 0-S. So we have to reset the values in id_col to start from zero and
+            # then increment towards the number of series included in this sub-group.
             id_col = id_col[sub_lvl_idx]
             # Split based on indices
             _, id = np.unique(id_col, return_index=True)
@@ -960,8 +1098,8 @@ class Formula:
 
             # Reset index
             id_splits = np.split(id_col, sub_sid[1:])
-            for i, _ in enumerate(id_splits):
-                id_splits[i][:] = i
+            for idsp, _ in enumerate(id_splits):
+                id_splits[idsp][:] = idsp
 
             # And merge again
             id_col = np.concatenate(id_splits)
@@ -970,7 +1108,8 @@ class Formula:
             # Don't actually split
             return [dig_cov_flat_all], [id_col]
 
-        # Now split dig_cov_flat_all per level of combination of all factor variables used for splitting, again correcting for any
+        # Now split dig_cov_flat_all per level of combination of all factor variables used for
+        # splitting, again correcting for any
         # potential sub-grouping
         if self.terms[sti].by_subgroup is None:
             unq_fact_comb, unq_fact_comb_memb = np.unique(
@@ -1007,7 +1146,8 @@ class Formula:
     ) -> None:
         """Internal function that clusters on the discretized covariate objects.
 
-        Takes input from :func:`__split_discretize`. Sets ``self.discretize[sti]["clust_series"]`` and ``self.discretize[sti]["clust_weights"]``.
+        Takes input from :func:`__split_discretize`. Sets ``self.discretize[sti]["clust_series"]``
+        and ``self.discretize[sti]["clust_weights"]``.
 
         :param dig_cov_flats: split discretized covariate objects per series
         :type dig_cov_flats: list[np.ndarray]
@@ -1040,8 +1180,9 @@ class Formula:
                 # Now compute the number of unique rows across the discretized matrix.
                 dig_cov_flat_unq = np.unique(dig_cov_flat, axis=0)
 
-                # Also compute, for each column, the inverse - telling us for each row in the discretized data
-                # to which unique value on the corresponding **variable** it belongs.
+                # Also compute, for each column, the inverse - telling us for each row in the
+                # discretized data to which unique value on the corresponding **variable** it
+                # belongs.
                 dig_cov_flat_unq_memb = np.zeros_like(dig_cov_flat, dtype=int)
 
                 dig_cov_unq_counts = []
@@ -1058,33 +1199,40 @@ class Formula:
                     dig_cov_flat_unq_memb[:, vari] = dig_var_flat_unq_memb[:]
 
                 # Now we prepare the cluster structure:
-                # Every series now gets represented by a row vector with sum(dig_cov_unq_counts) entries
-                # Every column in these vectors corresponds to a unique value of an individual discretized
-                # (or not) co-variate. The first dig_cov_unq_counts[0] columns correspond to the unique values
-                # of covariate 1, the next dig_cov_unq_counts[1] columns correspond to covariate 2, and so on.
-                # Each column gets assigned the number of times the corresponding unique value exists for the series to
-                # which the vector belongs.
+                # Every series now gets represented by a row vector with sum(dig_cov_unq_counts)
+                # entries
+                # Every column in these vectors corresponds to a unique value of an individual
+                # discretized (or not) co-variate. The first dig_cov_unq_counts[0] columns
+                # correspond to the unique values of covariate 1, the next dig_cov_unq_counts[1]
+                # columns correspond to covariate 2, and so on.
+                # Each column gets assigned the number of times the corresponding unique value
+                # exists for the series to which the vector belongs.
                 clust = np.zeros((len(sid_idx), sum(dig_cov_unq_counts)))
 
                 # To compute this we just split the inverse per unique series
                 # s_split_unq_memb is a list of 2d arrays, each array corresponding to a series
-                # with the number of rows matching the number of observations collected for that series.
-                # the number of columns matches the number of collected (and potentially discretized) covariates.
+                # with the number of rows matching the number of observations collected for that
+                # series.
+                # The number of columns matches the number of collected (and potentially
+                # discretized) covariates.
                 s_split_unq_memb = np.split(dig_cov_flat_unq_memb, fact_s_idx[1:])
 
-                # Now we flatten that 2d array and collect the unique values and how often they occur. This gives us
-                # for every series the indices in the cluster structure that will be non-zero and the value we need to
-                # store in each non-zero cell.
+                # Now we flatten that 2d array and collect the unique values and how often they
+                # occur. This gives us for every series the indices in the cluster structure that
+                # will be non-zero and the value we need to store in each non-zero cell.
                 s_split_unq_cnts = [
                     np.unique(s_dig, return_counts=True) for s_dig in s_split_unq_memb
                 ]
 
-                # Then loop over each series and add the counts of the corresponding rows to the cluster structure
+                # Then loop over each series and add the counts of the corresponding rows to the
+                # cluster structure
                 for sidx, (udr, cnts) in enumerate(s_split_unq_cnts):
                     clust[sidx, udr] += cnts
 
-                # Use heuristic to determine the number of clusters also used to discretize individual covariates
-                # Then cluster - for estimation this only has to do once before starting the actual fitting routine
+                # Use heuristic to determine the number of clusters also used to discretize
+                # individual covariates.
+                # Then cluster - for estimation this only has to do once before starting the
+                # actual fitting routine
                 clust_centroids, clust_lab = scp.cluster.vq.kmeans2(
                     clust,
                     int((dig_cov_flat_unq.shape[1] * dig_cov_flat_unq.shape[0]) ** 0.5),
@@ -1095,7 +1243,8 @@ class Formula:
                 if seed is not None:
                     seed += 1
 
-                # Compute clustering loss, according to scipy docs: https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.vq.kmeans2.html
+                # Compute clustering loss, according to scipy docs:
+                # https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.vq.kmeans2.html
                 # Simply pick the cluster set out of all repetitions that minimizes the loss
                 for k in range(clust_centroids.shape[0]):
                     error += np.power(
@@ -1117,18 +1266,18 @@ class Formula:
                 # Now collect all series ids of a particular cluster into a separate array
                 idx_grouped = np.split(idx_clust_sort, csid[1:])
 
-                # Find the (ideally, this is done heuristically after all) most complex series in every cluster:
-                # Compute the number of unique rows for each series in a cluster, then pick the maximum.
-                # Compute complexity weights for all series in the cluster relative to that maximum.
-                # These act as a a proxy of how similar each series is to the cluster prototype/maximum.
+                # Find the (ideally, this is done heuristically after all) most complex series in
+                # every cluster:
+                # Compute the number of unique rows for each series in a cluster, then pick the
+                # maximum. Compute complexity weights for all series in the cluster relative to that
+                # maximum.
+                # These act as a a proxy of how similar each series is to the cluster
+                # prototype/maximum.
 
                 for k, clu in enumerate(idx_grouped):
                     clu_sums = np.sum(clust[clu, :], axis=1)
                     clust_max_series.append(sid_idx[clu[np.argmax(clu_sums)]])
                     weights.append(clu_sums / np.max(clu_sums))
-
-                    #
-                    # clust_distances = np.power(clust[clu,:] - clust_centroids[k,:],2).sum(axis=1) + 1
 
                     # clust_max_series.append(sid_idx[clu[np.argmin(clust_distances)]])
                     # clust_rel_distances = clu_sums/clu_sums[np.argmin(clust_distances)]
@@ -1145,10 +1294,12 @@ class Formula:
     def __absorb_constraints2(self) -> None:
         """Internal function to absorb identifiability constraints when data is read from file.
 
-        Wood (2017) has an overview over identifiability constraints and different reparameterizations for smooth terms.
+        Wood (2017) has an overview over identifiability constraints and different
+        reparameterizations for smooth terms.
 
         References:
-           - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+           - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :raises ValueError: When re-parameterization is requested for identifiable terms.
         :raises NotImplementedError: When a constraint type other than ``QR`` is requested.
@@ -1161,7 +1312,8 @@ class Formula:
 
             if not sterm.is_identifiable:
                 if sterm.should_rp > 0:
-                    # Reparameterization of marginals was requested - but no identifiability constraints necessary.
+                    # Reparameterization of marginals was requested - but no identifiability
+                    # constraints necessary.
                     for vi in range(len(vars)):
 
                         if len(vars) > 1:
@@ -1197,7 +1349,10 @@ class Formula:
 
             if sterm.should_rp > 0:
                 raise ValueError(
-                    "Re-parameterizing identifiable terms is currently not supported when files are loaded in to build X.T@X incrementally."
+                    (
+                        "Re-parameterizing identifiable terms is currently not supported when "
+                        "files are loaded in to build X.T@X incrementally."
+                    )
                 )
 
             if term_constraint == ConstType.QR:
@@ -1227,16 +1382,22 @@ class Formula:
                         sterm.Z.append(Constraint(Q[:, 1:], ConstType.QR))
             else:
                 raise NotImplementedError(
-                    "Only QR constraints are currently supported when files are loaded in to build X.T@X incrementally."
+                    (
+                        "Only QR constraints are currently supported when files are loaded in to "
+                        "build X.T@X incrementally."
+                    )
                 )
 
     def __absorb_constraints(self) -> None:
-        """Internal function to absorb identifiability constraints and apply selected reparameterizations to individual smooth terms.
+        """Internal function to absorb identifiability constraints and apply selected
+        reparameterizations to individual smooth terms.
 
-        Wood (2017) has an overview over identifiability constraints and different reparameterizations for smooth terms.
+        Wood (2017) has an overview over identifiability constraints and different
+        reparameterizations for smooth terms.
 
         References:
-           - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+           - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
         """
         var_map = self.get_var_map()
 
@@ -1247,7 +1408,8 @@ class Formula:
 
             if not sterm.is_identifiable:
                 if sterm.should_rp > 0:
-                    # Reparameterization of marginals was requested - but no identifiability constraints are needed.
+                    # Reparameterization of marginals was requested - but no identifiability
+                    # constraints are needed.
                     for vi in range(len(vars)):
 
                         if len(vars) > 1:
@@ -1278,15 +1440,15 @@ class Formula:
             sterm.Z = []
             matrix_term = None  # for Te basis
             for vi in range(len(vars)):
-                # If a smooth term needs to be identifiable I act as if you would have asked for nk+1!
-                # so that the identifiable term is of the dimension expected.
+                # If a smooth term needs to be identifiable I act as if you would have asked
+                # for nk+1! so that the identifiable term is of the dimension expected.
 
                 if len(vars) > 1:
                     id_nk = sterm.nk[vi]
                 else:
                     id_nk = sterm.nk
 
-                if sterm.te == False:
+                if sterm.te is False:
                     id_nk += 1
 
                 var_cov_flat = self.cov_flat[self.NOT_NA_flat, var_map[vars[vi]]]
@@ -1300,10 +1462,10 @@ class Formula:
                     **sterm.basis_kwargs,
                 )
 
-                if sterm.te == False:
+                if sterm.te is False:
 
                     if term_constraint == ConstType.QR:
-                        # Wood (2017) 5.4.1 Identifiability constraints via QR. ToDo: Replace with mean subtraction method.
+                        # Wood (2017) 5.4.1 Identifiability constraints via QR.
                         C = np.sum(matrix_term_v, axis=0).reshape(-1, 1)
                         Q, _ = scp.linalg.qr(C, pivoting=False, mode="full")
                         sterm.Z.append(Constraint(Q[:, 1:], ConstType.QR))
@@ -1327,20 +1489,23 @@ class Formula:
                         # Applies difference re-coding for sum-to-zero coefficients.
                         # Based on smoothCon in mgcv(2017). See constraints.py
                         # for more details.
+
+                        # fmt: off
                         XPb = np.diff(
                             np.concatenate(
                                 (
                                     matrix_term_v[
-                                        :, sterm.Z[vi].Z : matrix_term_v.shape[1]
+                                        :, sterm.Z[vi].Z : matrix_term_v.shape[1]  # noqa: E203
                                     ],
                                     matrix_term_v[:, : sterm.Z[vi].Z],
                                 ),
                                 axis=1,
                             )
                         )
+                        # fmt: on
                         XPb = np.concatenate(
                             (
-                                XPb[:, XPb.shape[1] - sterm.Z[vi].Z :],
+                                XPb[:, XPb.shape[1] - sterm.Z[vi].Z :],  # noqa: E203
                                 XPb[:, : XPb.shape[1] - sterm.Z[vi].Z],
                             ),
                             axis=1,
@@ -1374,18 +1539,23 @@ class Formula:
                     )
 
     def __fix_nested(self) -> None:
-        """Internal function that identifies nested terms in the Formula, based on section 5.6.3 of Wood (2017) and what is implemented in the ``gam.side`` function in ``mgcv``.
+        """Internal function that identifies nested terms in the Formula, based on section 5.6.3 of
+        Wood (2017) and what is implemented in the ``gam.side`` function in ``mgcv``.
 
-        Automatically figures out which coefficients have to be dropped from individual smooth terms and assigns the corresponding indices to ``term.drop_coef``.
-        These are then automatically removed from the model matrix and penalty built for the particular term (i.e., when calling ``term.build_matrix`` and ``term.build_penalty``
+        Automatically figures out which coefficients have to be dropped from individual smooth
+        terms and assigns the corresponding indices to ``term.drop_coef``.
+        These are then automatically removed from the model matrix and penalty built for the
+        particular term (i.e., when calling ``term.build_matrix`` and ``term.build_penalty``
         for example via :func:`build_sparse_matrix_from_formula` and :func:`build_penalties`.)
 
         References:
-           - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-           - mgcv gam.side function, see: https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/mgcv.r#L563
+           - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+           - mgcv gam.side function, see: \
+            https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/mgcv.r#L563
         """
         sti = self.get_smooth_term_idx()
-        sti = [ti for ti in sti if isinstance(self.terms[ti], fs) == False]
+        sti = [ti for ti in sti if isinstance(self.terms[ti], fs) is False]
 
         term_var = [self.terms[ti].variables for ti in sti]
         n_term_var = [len(tvar) for tvar in term_var]
@@ -1396,8 +1566,9 @@ class Formula:
             return
 
         # Have smooth terms and potentially some nesting. Now need an extended list of smooth terms,
-        # their variable names (taking into account by, binary, and by_cont keywords), and the number of variables
-        # to check more carefully for nesting and to then also do something about it.
+        # their variable names (taking into account by, binary, and by_cont keywords), and the
+        # number of variables to check more carefully for nesting and to then also do something
+        # about it.
         term_var = [[] for _ in sti]
         unlist_var = []
         for tii, ti in enumerate(sti):
@@ -1432,7 +1603,8 @@ class Formula:
 
         # Identify nested depenndencies as discussed in section 5.6.3 of Wood (2017)
 
-        # First build model matrices for terms, making sure to create multiple ones per level of by variable
+        # First build model matrices for terms, making sure to create multiple ones per level of by
+        # variable
         # and to account for binary/by_cont keywords.
         Xs = [[] for _ in sti]
         n_term_by = []
@@ -1448,7 +1620,7 @@ class Formula:
                 else:
                     id_nk = sterm.nk
 
-                if sterm.is_identifiable and sterm.te == False:
+                if sterm.is_identifiable and sterm.te is False:
                     id_nk += 1
 
                 var_cov_flat = cov_flat[self.NOT_NA_flat, var_map[vars[vi]]]
@@ -1462,7 +1634,7 @@ class Formula:
                     **sterm.basis_kwargs,
                 )
 
-                if sterm.te == False:
+                if sterm.te is False:
                     # Absorb identifiability constraints into marginals
                     if sterm.is_identifiable:
                         if sterm.Z[vi].type == ConstType.QR:
@@ -1475,11 +1647,13 @@ class Formula:
                             # Applies difference re-coding for sum-to-zero coefficients.
                             # Based on smoothCon in mgcv(2017). See constraints.py
                             # for more details.
+
+                            # fmt: off
                             matrix_term_v = np.diff(
                                 np.concatenate(
                                     (
                                         matrix_term_v[
-                                            :, sterm.Z[vi].Z : matrix_term_v.shape[1]
+                                            :, sterm.Z[vi].Z : matrix_term_v.shape[1]  # noqa: E203
                                         ],
                                         matrix_term_v[:, : sterm.Z[vi].Z],
                                     ),
@@ -1489,7 +1663,7 @@ class Formula:
                             matrix_term_v = np.concatenate(
                                 (
                                     matrix_term_v[
-                                        :, matrix_term_v.shape[1] - sterm.Z[vi].Z :
+                                        :, matrix_term_v.shape[1] - sterm.Z[vi].Z :  # noqa: E203
                                     ],
                                     matrix_term_v[
                                         :, : matrix_term_v.shape[1] - sterm.Z[vi].Z
@@ -1497,6 +1671,7 @@ class Formula:
                                 ),
                                 axis=1,
                             )
+                            # fmt: on
 
                     # Absorb reparam into marginal
                     if sterm.should_rp > 0:
@@ -1518,10 +1693,12 @@ class Formula:
                         matrix_term = np.delete(matrix_term, sterm.Z[0].Z, axis=1)
 
                     elif sterm.Z[0].type == ConstType.DIFF:
+
+                        # fmt: off
                         matrix_term = np.diff(
                             np.concatenate(
                                 (
-                                    matrix_term[:, sterm.Z[0].Z : matrix_term.shape[1]],
+                                    matrix_term[:, sterm.Z[0].Z : matrix_term.shape[1]],  # noqa
                                     matrix_term[:, : sterm.Z[0].Z],
                                 ),
                                 axis=1,
@@ -1529,11 +1706,12 @@ class Formula:
                         )
                         matrix_term = np.concatenate(
                             (
-                                matrix_term[:, matrix_term.shape[1] - sterm.Z[0].Z :],
+                                matrix_term[:, matrix_term.shape[1] - sterm.Z[0].Z :],  # noqa: E203
                                 matrix_term[:, : matrix_term.shape[1] - sterm.Z[0].Z],
                             ),
                             axis=1,
                         )
+                        # fmt: on
 
                 # Currently no further reparam for te implemented
 
@@ -1642,7 +1820,7 @@ class Formula:
             if ti in drop:
                 self.terms[ti].drop_coef = drop[ti]
 
-    #### Getters ####
+    # Getters #
 
     def get_lhs(self) -> lhs:
         """Get a copy of the ``lhs`` specified for this formula."""
@@ -1657,35 +1835,50 @@ class Formula:
         return copy.deepcopy(self.data)
 
     def get_factor_codings(self) -> dict:
-        """Get a copy of the factor coding dictionary. Keys are factor variables in the data, values are dictionaries, where the keys correspond to the levels (str) of the factor and the values to their encoded levels (int)."""
+        """Get a copy of the factor coding dictionary. Keys are factor variables in the data,
+        values are dictionaries, where the keys correspond to the levels (str) of the factor and
+        the values to their encoded levels (int)."""
         return copy.deepcopy(self.factor_codings)
 
     def get_coding_factors(self) -> dict:
-        """Get a copy of the factor coding dictionary. Keys are factor variables in the data, values are dictionaries, where the keys correspond to the encoded levels (int) of the factor and the values to their levels (str)."""
+        """Get a copy of the factor coding dictionary. Keys are factor variables in the data,
+        values are dictionaries, where the keys correspond to the encoded levels (int) of the factor
+        and the values to their levels (str)."""
         return copy.deepcopy(self.coding_factors)
 
     def get_var_map(self) -> dict:
-        """Get a copy of the var map dictionary. Keys are variables in the data, values their column index in the encoded predictor matrix returned by ``self.encode_data``."""
+        """Get a copy of the var map dictionary. Keys are variables in the data, values their
+        column index in the encoded predictor matrix returned by ``self.encode_data``.
+        """
         return copy.deepcopy(self.var_to_cov)
 
     def get_factor_levels(self) -> dict:
-        """Get a copy of the factor levels dictionary. Keys are factor variables in the data, values are np.arrays holding the unique levels (as str) of the corresponding factor."""
+        """Get a copy of the factor levels dictionary. Keys are factor variables in the data,
+        values are np.arrays holding the unique levels (as str) of the corresponding factor.
+        """
         return copy.deepcopy(self.factor_levels)
 
     def get_var_types(self) -> dict:
-        """Get a copy of the var types dictionary. Keys are variables in the data, values are either ``VarType.NUMERIC`` for continuous variables or ``VarType.FACTOR`` for categorical variables."""
+        """Get a copy of the var types dictionary. Keys are variables in the data, values are
+        either ``VarType.NUMERIC`` for continuous variables or ``VarType.FACTOR`` for categorical
+        variables."""
         return copy.deepcopy(self.var_types)
 
     def get_var_mins(self) -> dict:
-        """Get a copy of the var mins dictionary. Keys are variables in the data, values are either the minimum value the variable takes on in ``self.data`` for continuous variables or ``None`` for categorical variables."""
+        """Get a copy of the var mins dictionary. Keys are variables in the data, values are either
+        the minimum value the variable takes on in ``self.data`` for continuous variables or
+        ``None`` for categorical variables."""
         return copy.deepcopy(self.var_mins)
 
     def get_var_maxs(self) -> dict:
-        """Get a copy of the var maxs dictionary. Keys are variables in the data, values are either the maximum value the variable takes on in ``self.data`` for continuous variables or ``None`` for categorical variables."""
+        """Get a copy of the var maxs dictionary. Keys are variables in the data, values are either
+        the maximum value the variable takes on in ``self.data`` for continuous variables or
+        ``None`` for categorical variables."""
         return copy.deepcopy(self.var_maxs)
 
     def get_var_mins_maxs(self) -> tuple[dict, dict]:
-        """Get a tuple containing copies of both the mins and maxs directory. See ``self.get_var_mins`` and ``self.get_var_maxs``."""
+        """Get a tuple containing copies of both the mins and maxs directory. See
+        ``self.get_var_mins`` and ``self.get_var_maxs``."""
         return (copy.deepcopy(self.var_mins), copy.deepcopy(self.var_maxs))
 
     def get_linear_term_idx(self) -> list[int]:
@@ -1697,7 +1890,8 @@ class Formula:
         return copy.deepcopy(self.smooth_terms)
 
     def get_ir_smooth_term_idx(self) -> list[int]:
-        """Get a copy of the list of indices that identify impulse response terms in ``self.terms``."""
+        """Get a copy of the list of indices that identify impulse response terms in
+        ``self.terms``."""
         return copy.deepcopy(self.ir_smooth_terms)
 
     def get_random_term_idx(self) -> list[int]:
@@ -1713,7 +1907,8 @@ class Formula:
         return copy.deepcopy(self.y_flat)
 
     def get_notNA(self) -> np.ndarray:
-        """Get a copy of the encoded 'not a NA' vector for the dependent variable (defined via ``self.lhs``)."""
+        """Get a copy of the encoded 'not a NA' vector for the dependent variable (defined via
+        ``self.lhs``)."""
         return copy.deepcopy(self.NOT_NA_flat)
 
     def get_has_intercept(self) -> bool:
@@ -1736,7 +1931,8 @@ class Formula:
 def build_penalties(formula) -> list[LambdaTerm]:
     """Function to build all penalty matrices required by a :class:`Formula`.
 
-    The function is called whenever it is needed, but the example below shows you how to use it in case you want to extract the penalties directly.
+    The function is called whenever it is needed, but the example below shows you how to use it in
+    case you want to extract the penalties directly.
 
     Examples::
 
@@ -1756,7 +1952,8 @@ def build_penalties(formula) -> list[LambdaTerm]:
     :param formula: A Formula
     :type formula: Formula
     :raises KeyError: If an un-penalized irf term is included in the formula after penalized terms.
-    :raises KeyError:  If an un-penalized smooth term is included in the formula after penalized terms.
+    :raises KeyError:  If an un-penalized smooth term is included in the formula after penalized
+        terms.
     :raises ValueError: If no start index has been defined by the formula. For testing only.
     :return: A list of all penalties (encoded as :class:`LambdaTerm`) required by the formula
     :rtype: list[LambdaTerm]
@@ -1800,12 +1997,19 @@ def build_penalties(formula) -> list[LambdaTerm]:
 
                 if formula.print_warn:
                     warnings.warn(
-                        f"Impulse response smooth {irsti} is not penalized. Smoothing terms should generally be penalized."
+                        (
+                            f"Impulse response smooth {irsti} is not penalized. Smoothing terms "
+                            "should generally be penalized."
+                        )
                     )
 
             else:
                 raise KeyError(
-                    f"Impulse response smooth {irsti} is not penalized and placed in the formula after penalized terms. Unpenalized terms should be moved to the beginning of the formula, ideally behind any linear terms."
+                    (
+                        f"Impulse response smooth {irsti} is not penalized and placed in the "
+                        "formula after penalized terms. Unpenalized terms should be moved to the "
+                        "beginning of the formula, ideally behind any linear terms."
+                    )
                 )
 
         else:
@@ -1851,12 +2055,19 @@ def build_penalties(formula) -> list[LambdaTerm]:
 
                 if formula.print_warn:
                     warnings.warn(
-                        f"Smooth {sti} is not penalized. Smoothing terms should generally be penalized."
+                        (
+                            f"Smooth {sti} is not penalized. Smoothing terms should generally be "
+                            "penalized."
+                        )
                     )
 
             else:
                 raise KeyError(
-                    f"Smooth {sti} is not penalized and placed in the formula after penalized terms. Unpenalized terms should be moved to the beginning of the formula, ideally behind any linear terms."
+                    (
+                        f"Smooth {sti} is not penalized and placed in the formula after penalized "
+                        "terms. Unpenalized terms should be moved to the beginning of the formula, "
+                        "ideally behind any linear terms."
+                    )
                 )
 
         else:
@@ -1877,7 +2088,7 @@ def build_penalties(formula) -> list[LambdaTerm]:
 
                 # Add necessary info for derivative approx. for factor smooth penalties
                 if isinstance(sterm, fs):
-                    if not sterm.approx_deriv is None:
+                    if sterm.approx_deriv is not None:
                         penalties[-1].clust_series = formula.discretize[sti][
                             "clust_series"
                         ]
@@ -1892,15 +2103,18 @@ def build_penalties(formula) -> list[LambdaTerm]:
                     is_reparam1 = False
                     n_pen = len(penalties)
 
-                    # Below we distinguish between TP smooths of multiple variables and single variable smooths.
-                    # For TP smooths Marra & Wood (2011) suggest to first sum over the penalties for individual
+                    # Below we distinguish between TP smooths of multiple variables and single
+                    # variable smooths. For TP smooths Marra & Wood (2011) suggest to first sum
+                    # over the penalties for individual
                     # variables and then computing the null-space for that summed penalty.
                     if len(vars) > 1:
 
-                        # For multivariate smooths, we need to chek for the possibility of separate penalties
-                        # for different bylevels. These might not be identical - in case different coefficients might have been dropped
-                        # for each level. Thus we need to keep track of a list of sums; one sum per by-level
-                        # and compute the null-space penalty separately per penalty in those lists.
+                        # For multivariate smooths, we need to chek for the possibility of
+                        # separate penalties for different bylevels. These might not be identical -
+                        # in case different coefficients might have been dropped
+                        # for each level. Thus we need to keep track of a list of sums; one sum per
+                        # by-level and compute the null-space penalty separately per penalty in
+                        # those lists.
                         if (
                             (sterm.drop_coef) is not None
                             and (sterm.by is not None)
@@ -1922,8 +2136,10 @@ def build_penalties(formula) -> list[LambdaTerm]:
                                     for pidx in range(len(new_TP_last))
                                 ]
 
-                        # Here all potential penalties belonging to different bylevels are equivalent. Or we have no bylevels. OR we have an id.
-                        # Any of those means that penalties from different variables are equivalent and we can just maintain a single penalty sum.
+                        # Here all potential penalties belonging to different bylevels are
+                        # equivalent. Or we have no bylevels. OR we have an id.
+                        # Any of those means that penalties from different variables are equivalent
+                        # and we can just maintain a single penalty sum.
                         else:
                             S_j_last = penalties[-1].S_J.toarray()
 
@@ -1932,7 +2148,8 @@ def build_penalties(formula) -> list[LambdaTerm]:
                             else:
                                 S_j_TP_last[0] += S_j_last
 
-                        # Keep track of penalties added for tensor smooths, note that (n_pen - prev_n_pen) will be > 1 for by level smooths
+                        # Keep track of penalties added for tensor smooths, note that
+                        # (n_pen - prev_n_pen) will be > 1 for by level smooths
                         TP_last_n += n_pen - prev_n_pen
 
                         if penid < (
@@ -1943,8 +2160,8 @@ def build_penalties(formula) -> list[LambdaTerm]:
                         # This holds the final list of penalty sums
                         S_j_last = S_j_TP_last
 
-                        # In the end, update the number of new penalties based on the number of variables
-                        # involed for TPs
+                        # In the end, update the number of new penalties based on the number of
+                        # variables involed for TPs
                         added_pen = int(TP_last_n / len(vars))
 
                     else:
@@ -1955,7 +2172,8 @@ def build_penalties(formula) -> list[LambdaTerm]:
                         )  # Only for univariate smooths should this be true.
                         added_pen = n_pen - prev_n_pen
 
-                    # Number of coefficients depends on which type S_j_last is: list with multiple elements or not?
+                    # Number of coefficients depends on which type S_j_last is: list with
+                    # multiple elements or not?
                     if len(S_j_last) == 1:
                         idk = [S_j_last[0].shape[1]]
                         last_pen_rep = penalties[
@@ -1974,9 +2192,11 @@ def build_penalties(formula) -> list[LambdaTerm]:
                     NULL_S = []  # Nullspace penalty in [dat,row,col]
                     NULL_D = []  # Root of Nullspace penalty in [dat, row, col]
 
-                    if is_reparam1 == False:
-                        # Based on: Marra & Wood (2011) and: https://rdrr.io/cran/mgcv/man/gam.selection.html
-                        # and: https://eric-pedersen.github.io/mgcv-esa-workshop/slides/03-model-selection.pdf
+                    if is_reparam1 is False:
+                        # Based on: Marra & Wood (2011) and:
+                        # https://rdrr.io/cran/mgcv/man/gam.selection.html
+                        # and:
+                        # https://eric-pedersen.github.io/mgcv-esa-workshop/slides/03-model-selection.pdf # noqa
 
                         for sji, S_ji_last in enumerate(S_j_last):
                             s, U = scp.linalg.eigh(S_ji_last)
@@ -1989,7 +2209,8 @@ def build_penalties(formula) -> list[LambdaTerm]:
                             SNULL = scp.sparse.csc_array(SNULL)
                             DNULL = scp.sparse.csc_array(DNULL)
 
-                            # Data in S and D is in canonical format, for competability this is translated to data, rows, columns
+                            # Data in S and D is in canonical format, for competability this is
+                            # translated to data, rows, columns
                             pen_data, pen_rows, pen_cols = translate_sparse(SNULL)
                             chol_data, chol_rows, chol_cols = translate_sparse(DNULL)
 
@@ -1999,9 +2220,12 @@ def build_penalties(formula) -> list[LambdaTerm]:
                             NULL_idks.append(idk[sji])
 
                     else:
-                        # Under the Demmler & Reinsch (1975) re-parameterization the last S.shape[1] - S.rank cols/rows correspond to functions in the kernel.
-                        # Hence we can simply place identity penalties on those to shrink them to zero. In this form we can also readily
-                        # have separate penalties on different null-space functions! This is how mgcv implements factor smooths as well.
+                        # Under the Demmler & Reinsch (1975) re-parameterization the last
+                        # S.shape[1] - S.rank cols/rows correspond to functions in the kernel.
+                        # Hence we can simply place identity penalties on those to shrink them
+                        # to zero. In this form we can also readily
+                        # have separate penalties on different null-space functions! This is how
+                        # mgcv implements factor smooths as well.
 
                         # Can only happen to univariate smooth, so indexing S_j_last is safe here.
 
@@ -2070,9 +2294,6 @@ def build_penalties(formula) -> list[LambdaTerm]:
                                 # Handle any By-keyword
                                 if last_pen_rep > 1:
                                     pen_iter = last_pen_rep - 1
-                                    # for _ in range(pen_iter):
-                                    #   lTerm.D_J_emb, _ = embed_in_S_sparse(chol_data,chol_rows,chol_cols,lTerm.D_J_emb,col_S,idk,cur_pen_idx)
-                                    #   lTerm.S_J_emb, cur_pen_idx = embed_in_S_sparse(pen_data,pen_rows,pen_cols,lTerm.S_J_emb,col_S,idk,cur_pen_idx)
 
                                     chol_rep = np.tile(chol_data, pen_iter)
                                     idx_row_rep = (
@@ -2136,7 +2357,8 @@ def build_penalties(formula) -> list[LambdaTerm]:
                                 # Append penalty for first level
                                 penalties.append(lTerm)
 
-                                # And add the penalties again for the remaining levels as separate terms
+                                # And add the penalties again for the remaining
+                                # levels as separate terms
                                 for _ in range((added_pen) - 1):
                                     lTerm = LambdaTerm(
                                         start_index=cur_pen_idx,
@@ -2182,7 +2404,10 @@ def build_penalties(formula) -> list[LambdaTerm]:
 
     if cur_pen_idx != col_S:
         raise ValueError(
-            f"Penalty dimension {cur_pen_idx},{cur_pen_idx} does not match outer model matrix dimension {col_S}"
+            (
+                f"Penalty dimension {cur_pen_idx},{cur_pen_idx} does not match outer model "
+                f"matrix dimension {col_S}"
+            )
         )
 
     formula.built_penalties = True
@@ -2209,10 +2434,11 @@ def build_sparse_matrix_from_formula(
 ) -> scp.sparse.csc_array:
     """Build model matrix from formula properties.
 
-    This function is used internally to construct model matrices from :class:`Formula` objects. For greater convenience see the
-    :func:`build_model_matrix` function.
+    This function is used internally to construct model matrices from :class:`Formula` objects.
+    For greater convenience see the :func:`build_model_matrix` function.
 
-    **Important**, make sure to only ever call this when ``formula.built_penalties==True`` - see the :func:`build_model_matrix` function description.
+    **Important**, make sure to only ever call this when ``formula.built_penalties==True`` - see
+    the :func:`build_model_matrix` function description.
 
     :param terms: List of terms of a :class:`Formula`
     :type terms: list[GammTerm]
@@ -2242,9 +2468,12 @@ def build_sparse_matrix_from_formula(
     :type cov: np.ndarray | None, optional
     :param pool: An instance of a multiprocessing pool, defaults to None
     :type pool: mp.pool.Pool | None, optional
-    :param use_only: A list of indices corresponding to which terms should actually be built. If ``None``, then all terms are build. Terms not built are set to zero columns, defaults to None
+    :param use_only: A list of indices corresponding to which terms should actually be built. If
+        ``None``, then all terms are build. Terms not built are set to zero columns, defaults to
+        None
     :type use_only: list[int] | None, optional
-    :param tol: Optional tolerance. Absolute values in the model matrix smaller than this are set to actual zeroes, defaults to 0
+    :param tol: Optional tolerance. Absolute values in the model matrix smaller than this are set
+        to actual zeroes, defaults to 0
     :type tol: float, optional
     :return: The model matrix implied by a :class:`Formula`  and ``cov_flat``.
     :rtype: scp.sparse.csc_array
@@ -2366,8 +2595,10 @@ def build_model_matrix(
 ) -> scp.sparse.csc_array:
     """Function to build the model matrix implied by ``formula``.
 
-    **Important:** A small selection of smooth terms, requires that the penalty matrices are built at least once before the model matrix can be build.
-    For this reason, you generally must call ``build_penalties(formula)`` before calling ``build_model_matrix(formula)`` (interally, mssm checks whether
+    **Important:** A small selection of smooth terms, requires that the penalty matrices are built
+    at least once before the model matrix can be build.
+    For this reason, you generally must call ``build_penalties(formula)`` before calling
+    ``build_model_matrix(formula)`` (interally, mssm checks whether
     ``formula.built_penalties==True``.). See the example below.
 
     Examples::
@@ -2393,24 +2624,35 @@ def build_model_matrix(
     :type formula: Formula
     :param pool: An instance of a multiprocessing pool, defaults to None
     :type pool: mp.pool.Pool | None, optional
-    :param use_only: A list of indices corresponding to which terms should actually be built. If ``None``, then all terms are build. Terms not built are set to zero columns, defaults to None
+    :param use_only: A list of indices corresponding to which terms should actually be built. If
+        ``None``, then all terms are build. Terms not built are set to zero columns, defaults
+        to None
     :type use_only: list[int] | None, optional
-    :param tol: Optional tolerance. Absolute values in the model matrix smaller than this are set to actual zeroes, defaults to 0
+    :param tol: Optional tolerance. Absolute values in the model matrix smaller than this are set
+        to actual zeroes, defaults to 0
     :type tol: float, optional
-    :raises ValueError: If ``formula.built_penalties == False`` - i.e., it is required that ``build_penalties(formula)`` was called before calling ``build_model_matrix(formula)``.
-    :raises NotImplementedError: If the ``formula`` was set up to read data from file, rather than from a pd.Dataframe.
+    :raises ValueError: If ``formula.built_penalties == False`` - i.e., it is required that
+        ``build_penalties(formula)`` was called before calling ``build_model_matrix(formula)``.
+    :raises NotImplementedError: If the ``formula`` was set up to read data from file, rather
+        than from a pd.Dataframe.
     :return: The model matrix implied by a :class:`Formula`  and ``cov_flat``.
     :rtype: scp.sparse.csc_array
     """
 
-    if formula.built_penalties == False:
+    if formula.built_penalties is False:
         raise ValueError(
-            "You must call ``build_penalties(formula)`` once before calling ``build_model_matrix(formula)``."
+            (
+                "You must call ``build_penalties(formula)`` once before calling "
+                "``build_model_matrix(formula)``."
+            )
         )
 
     if len(formula.file_paths) != 0:
         raise NotImplementedError(
-            "Cannot return the model-matrix if data was read directly from file, rather than provided as a pd.DataFrame."
+            (
+                "Cannot return the model-matrix if data was read directly from file, rather than "
+                "provided as a pd.DataFrame."
+            )
         )
 
     # Get all the objects from formula required

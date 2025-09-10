@@ -1,7 +1,6 @@
 import numpy as np
 import scipy as scp
 import math
-import sys
 import warnings
 import copy
 from collections.abc import Callable
@@ -9,33 +8,40 @@ from collections.abc import Callable
 
 class Link:
     """
-    Link function base class. To be implemented by any link functiion used for GAMMs and GAMMLSS models.
-    Only links used by ``GAMLSS`` models require implementing the dy2 function. Note, that care must be taken
-    that every method returns only valid values. Specifically, no returned element may be ``numpy.nan`` or ``numpy.inf``.
+    Link function base class. To be implemented by any link functiion used for GAMMs and GAMMLSS
+    models. Only links used by ``GAMLSS`` models require implementing the dy2 function. Note, that
+    care must be taken that every method returns only valid values. Specifically, no returned
+    element may be ``numpy.nan`` or ``numpy.inf``.
     """
 
     def f(self, mu: np.ndarray) -> np.ndarray:
         """
-        Link function :math:`f()` mapping mean :math:`\\boldsymbol{\\mu}` of an exponential family to the model prediction :math:`\\boldsymbol{\\eta}`, so that :math:`f(\\boldsymbol{\\mu}) = \\boldsymbol{\\eta}`.
-        see Wood (2017, 3.1.2) and Faraway (2016).
+        Link function :math:`f()` mapping mean :math:`\\boldsymbol{\\mu}` of an exponential family
+        to the model prediction :math:`\\boldsymbol{\\eta}`, so that
+        :math:`f(\\boldsymbol{\\mu}) = \\boldsymbol{\\eta}`. See Wood (2017, 3.1.2) and
+        Faraway (2016).
 
         References:
 
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         """
         pass
 
     def fi(self, eta: np.ndarray) -> np.ndarray:
         """
-        Inverse of the link function mapping :math:`\\boldsymbol{\\eta} = f(\\boldsymbol{\\mu})` to the mean :math:`fi(\\boldsymbol{\\eta}) = fi(f(\\boldsymbol{\\mu})) = \\boldsymbol{\\mu}`.
+        Inverse of the link function mapping :math:`\\boldsymbol{\\eta} = f(\\boldsymbol{\\mu})` to
+        the mean :math:`fi(\\boldsymbol{\\eta}) = fi(f(\\boldsymbol{\\mu})) = \\boldsymbol{\\mu}`.
         see Faraway (2016) and the ``Link.f`` function.
 
         References:
 
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param eta: A numpy array containing the model prediction corresponding to each observation.
         :type eta: np.ndarray
@@ -44,27 +50,34 @@ class Link:
 
     def dy1(self, mu: np.ndarray) -> np.ndarray:
         """
-        First derivative of :math:`f(\\boldsymbol{\\mu})` with respect to :math:`\\boldsymbol{\\mu}` Needed for Fisher scoring/PIRLS (Wood, 2017).
+        First derivative of :math:`f(\\boldsymbol{\\mu})` with respect to
+        :math:`\\boldsymbol{\\mu}` Needed for Fisher scoring/PIRLS (Wood, 2017).
 
         References:
 
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         """
         pass
 
     def dy2(self, mu: np.ndarray) -> np.ndarray:
         """
-        Second derivative of :math:`f(\\boldsymbol{\\mu})` with respect to :math:`\\boldsymbol{\\mu}`. Needed for GAMMLSS models (Wood, 2017).
+        Second derivative of :math:`f(\\boldsymbol{\\mu})` with respect to
+        :math:`\\boldsymbol{\\mu}`. Needed for GAMMLSS models (Wood, 2017).
 
         References:
 
-         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         """
         pass
@@ -72,19 +85,23 @@ class Link:
 
 class Logit(Link):
     """
-    Logit Link function, which is canonical for the binomial model. :math:`\\boldsymbol{\\eta}` = log-odds of success.
+    Logit Link function, which is canonical for the binomial model.
+    :math:`\\boldsymbol{\\eta}` = log-odds of success.
     """
 
     def f(self, mu: np.ndarray) -> np.ndarray:
         """
-        Canonical link for binomial distribution with :math:`\\boldsymbol{\\mu}` holding the probabilities of success, so that the model prediction :math:`\\boldsymbol{\\eta}`
+        Canonical link for binomial distribution with :math:`\\boldsymbol{\\mu}` holding the
+        probabilities of success, so that the model prediction :math:`\\boldsymbol{\\eta}`
         is equal to the log-odds.
 
         References:
 
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         """
         with warnings.catch_warnings():  # Divide by 0
@@ -95,12 +112,15 @@ class Logit(Link):
 
     def fi(self, eta: np.ndarray) -> np.ndarray:
         """
-        For the logit link and the binomial model, :math:`\\boldsymbol{\\eta}` = log-odds, so the inverse to go from :math:`\\boldsymbol{\\eta}` to :math:`\\boldsymbol{\\mu}` is :math:`\\boldsymbol{\\mu} = exp(\\boldsymbol{\\eta}) / (1 + exp(\\boldsymbol{\\eta}))`.
+        For the logit link and the binomial model, :math:`\\boldsymbol{\\eta}` = log-odds, so the
+        inverse to go from :math:`\\boldsymbol{\\eta}` to :math:`\\boldsymbol{\\mu}` is
+        :math:`\\boldsymbol{\\mu} = exp(\\boldsymbol{\\eta}) / (1 + exp(\\boldsymbol{\\eta}))`.
         see Faraway (2016)
 
         References:
 
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param eta: A numpy array containing the model prediction corresponding to each observation.
         :type eta: np.ndarray
@@ -113,7 +133,8 @@ class Logit(Link):
 
     def dy1(self, mu: np.ndarray) -> np.ndarray:
         """
-        First derivative of :math:`f(\\boldsymbol{\\mu})` with respect to :math:`\\boldsymbol{\\mu}`. Needed for Fisher scoring/PIRLS (Wood, 2017):
+        First derivative of :math:`f(\\boldsymbol{\\mu})` with respect to
+        :math:`\\boldsymbol{\\mu}`. Needed for Fisher scoring/PIRLS (Wood, 2017):
 
         .. math::
 
@@ -124,13 +145,16 @@ class Logit(Link):
 
            \\partial f(\\mu)/ \\partial \\mu = 1/\\mu - 1/(1 - \\mu)
 
-        Faraway (2016) simplifies this to: :math:`\\partial f(\\mu)/ \\partial \\mu = 1 / (\\mu - \\mu^2) = 1/ ((1-\\mu)\\mu)`
+        Faraway (2016) simplifies this to:
+        :math:`\\partial f(\\mu)/ \\partial \\mu = 1 / (\\mu - \\mu^2) = 1/ ((1-\\mu)\\mu)`
 
         References:
 
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         """
         with warnings.catch_warnings():  # Divide by 0
@@ -141,14 +165,18 @@ class Logit(Link):
 
     def dy2(self, mu: np.ndarray) -> np.ndarray:
         """
-        Second derivative of :math:`f(\\boldsymbol{\\mu})` with respect to :math:`\\boldsymbol{\\mu}`. Needed for GAMMLSS models (Wood, 2017).
+        Second derivative of :math:`f(\\boldsymbol{\\mu})` with respect to
+        :math:`\\boldsymbol{\\mu}`. Needed for GAMMLSS models (Wood, 2017).
 
         References:
 
-         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, \
+            Second Edition (2nd ed.).
 
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         """
         with warnings.catch_warnings():  # Divide by 0
@@ -160,30 +188,35 @@ class Logit(Link):
 
 class Identity(Link):
     """
-    Identity Link function. :math:`\\boldsymbol{\\mu}=\\boldsymbol{\\eta}` and so this link is trivial.
+    Identity Link function. :math:`\\boldsymbol{\\mu}=\\boldsymbol{\\eta}` and so this link is
+    trivial.
     """
 
     def f(self, mu: np.ndarray) -> np.ndarray:
         """
-        Canonical link for normal distribution with :math:`\\boldsymbol{\\eta} = \\boldsymbol{\\mu}`.
+        Canonical link for normal distribution with
+        :math:`\\boldsymbol{\\eta} = \\boldsymbol{\\mu}`.
 
         References:
 
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution \
+            corresponding to each observation.
         :type mu: np.ndarray
         """
         return mu
 
     def fi(self, eta: np.ndarray) -> np.ndarray:
         """
-        For the identity link, :math:`\\boldsymbol{\\eta} = \\boldsymbol{\\mu}`, so the inverse is also just the identity.
-        see Faraway (2016)
+        For the identity link, :math:`\\boldsymbol{\\eta} = \\boldsymbol{\\mu}`, so the inverse is
+        also just the identity. see Faraway (2016)
 
         References:
 
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param eta: A numpy array containing the model prediction corresponding to each observation.
         :type eta: np.ndarray
@@ -192,27 +225,34 @@ class Identity(Link):
 
     def dy1(self, mu: np.ndarray) -> np.ndarray:
         """
-        First derivative of :math:`f(\\boldsymbol{\\mu})` with respect to :math:`\\boldsymbol{\\mu}`. Needed for Fisher scoring/PIRLS (Wood, 2017).
+        First derivative of :math:`f(\\boldsymbol{\\mu})` with respect to
+        :math:`\\boldsymbol{\\mu}`. Needed for Fisher scoring/PIRLS (Wood, 2017).
 
         References:
 
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         """
         return np.ones_like(mu)
 
     def dy2(self, mu: np.ndarray) -> np.ndarray:
         """
-        Second derivative of :math:`f(\\boldsymbol{\\mu})` with respect to :math:`\\boldsymbol{\\mu}`. Needed for GAMMLSS models (Wood, 2017).
+        Second derivative of :math:`f(\\boldsymbol{\\mu})` with respect to
+        :math:`\\boldsymbol{\\mu}`. Needed for GAMMLSS models (Wood, 2017).
 
         References:
 
-         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         """
         return np.zeros_like(mu)
@@ -225,13 +265,16 @@ class LOG(Link):
 
     def f(self, mu: np.ndarray) -> np.ndarray:
         """
-        Non-canonical link for Gamma distribution with :math:`log(\\boldsymbol{\\mu}) = \\boldsymbol{\\eta}`.
+        Non-canonical link for Gamma distribution with
+        :math:`log(\\boldsymbol{\\mu}) = \\boldsymbol{\\eta}`.
 
         References:
 
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         """
         with warnings.catch_warnings():  # log of < 0
@@ -242,11 +285,12 @@ class LOG(Link):
 
     def fi(self, eta: np.ndarray) -> np.ndarray:
         """
-        For the log link, :math:`\\boldsymbol{\\eta} = log(\\boldsymbol{\\mu})`, so :math:`exp(\\boldsymbol{\\eta})=\\boldsymbol{\\mu}`.
-        see Faraway (2016)
+        For the log link, :math:`\\boldsymbol{\\eta} = log(\\boldsymbol{\\mu})`, so
+        :math:`exp(\\boldsymbol{\\eta})=\\boldsymbol{\\mu}`. see Faraway (2016)
 
         References:
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param eta: A numpy array containing the model prediction corresponding to each observation.
         :type eta: np.ndarray
@@ -259,12 +303,15 @@ class LOG(Link):
 
     def dy1(self, mu: np.ndarray) -> np.ndarray:
         """
-        First derivative of :math:`f(\\boldsymbol{\\mu})` with respect to :math:`\\boldsymbol{\\mu}`. Needed for Fisher scoring/PIRLS (Wood, 2017).
+        First derivative of :math:`f(\\boldsymbol{\\mu})` with respect to
+        :math:`\\boldsymbol{\\mu}`. Needed for Fisher scoring/PIRLS (Wood, 2017).
 
         References:
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         """
         with warnings.catch_warnings():  # Divide by 0
@@ -275,14 +322,18 @@ class LOG(Link):
 
     def dy2(self, mu: np.ndarray) -> np.ndarray:
         """
-        Second derivative of :math:`f(\\boldsymbol{\\mu})` with respect to :math:`\\boldsymbol{\\mu}`. Needed for GAMMLSS models (Wood, 2017).
+        Second derivative of :math:`f(\\boldsymbol{\\mu})` with respect to
+        :math:`\\boldsymbol{\\mu}`. Needed for GAMMLSS models (Wood, 2017).
 
         References:
 
-         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         """
         with warnings.catch_warnings():  # Divide by 0
@@ -310,9 +361,11 @@ class LOGb(Link):
 
         References:
 
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         """
         with warnings.catch_warnings():  # Log of < 0
@@ -323,10 +376,12 @@ class LOGb(Link):
 
     def fi(self, eta: np.ndarray) -> np.ndarray:
         """
-        For the logb link, :math:`\\boldsymbol{\\eta} = log(\\boldsymbol{\\mu} + b)`, so :math:`exp(\\boldsymbol{\\eta})-b =\\boldsymbol{\\mu}`
+        For the logb link, :math:`\\boldsymbol{\\eta} = log(\\boldsymbol{\\mu} + b)`, so
+        :math:`exp(\\boldsymbol{\\eta})-b =\\boldsymbol{\\mu}`
 
         References:
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param eta: A numpy array containing the model prediction corresponding to each observation.
         :type eta: np.ndarray
@@ -339,12 +394,15 @@ class LOGb(Link):
 
     def dy1(self, mu: np.ndarray) -> np.ndarray:
         """
-        First derivative of :math:`f(\\boldsymbol{\\mu})` with respect to :math:`\\boldsymbol{\\mu}`. Needed for Fisher scoring/PIRLS (Wood, 2017).
+        First derivative of :math:`f(\\boldsymbol{\\mu})` with respect to
+        :math:`\\boldsymbol{\\mu}`. Needed for Fisher scoring/PIRLS (Wood, 2017).
 
         References:
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         """
         with warnings.catch_warnings():  # Divide by 0
@@ -355,14 +413,17 @@ class LOGb(Link):
 
     def dy2(self, mu: np.ndarray) -> np.ndarray:
         """
-        Second derivative of :math:`f(\\boldsymbol{\\mu})` with respect to :math:`\\boldsymbol{\\mu}`. Needed for GAMMLSS models (Wood, 2017).
+        Second derivative of :math:`f(\\boldsymbol{\\mu})` with respect to
+        :math:`\\boldsymbol{\\mu}`. Needed for GAMMLSS models (Wood, 2017).
 
         References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         """
         with warnings.catch_warnings():  # Divide by 0
@@ -377,9 +438,11 @@ def est_scale(res: np.ndarray, rows_X: int, total_edf: float) -> float:
     Scale estimate from Wood & Fasiolo (2017).
 
     Refereces:
-     - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models.
+     - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing \
+        parameter optimization with application to Tweedie location, scale and shape models.
 
-    :param res: A numpy array containing the difference between the model prediction and the (pseudo) data.
+    :param res: A numpy array containing the difference between the model prediction and the
+        (pseudo) data.
     :type res: np.ndarray
     :param rows_X: The number of observations collected.
     :type rows_X: int
@@ -399,9 +462,13 @@ class Family:
 
     :param link: The link function to be used by the model of the mean of this family.
     :type link: Link
-    :param twopar: Whether the family has two parameters (mean,scale) to be estimated (i.e., whether the likelihood is a function of two parameters), or only a single one (usually the mean).
+    :param twopar: Whether the family has two parameters (mean,scale) to be estimated (i.e.,
+        whether the likelihood is a function of two parameters), or only a single
+        one (usually the mean).
     :type twopar: bool
-    :param scale: Known/fixed scale parameter for this family. Setting this to None means the parameter has to be estimated. **Must be set to 1 if the family has no scale parameter** (i.e., when ``twopar = False``)
+    :param scale: Known/fixed scale parameter for this family. Setting this to None means
+        the parameter has to be estimated. **Must be set to 1 if the family has no scale
+        parameter** (i.e., when ``twopar = False``)
     :type scale: float or None, optional
     """
 
@@ -413,7 +480,8 @@ class Family:
 
     def init_mu(self, y: np.ndarray) -> np.ndarray | None:
         """
-        Convenience function to compute an initial :math:`\\boldsymbol{\\mu}` estimate passed to the GAMM/PIRLS estimation routine.
+        Convenience function to compute an initial :math:`\\boldsymbol{\\mu}` estimate
+        passed to the GAMM/PIRLS estimation routine.
 
         :param y: A numpy array of shape (-1,1) containing each observation.
         :type y: np.ndarray
@@ -424,40 +492,49 @@ class Family:
 
     def V(self, mu: np.ndarray) -> np.ndarray:
         """
-        The variance function (of the mean; see Wood, 2017, 3.1.2). Different exponential families allow for different relationships
-        between the variance in our random response variable and the mean of it. For the normal model this is assumed to be constant.
+        The variance function (of the mean; see Wood, 2017, 3.1.2). Different exponential
+        families allow for different relationships between the variance in our random response
+        variable and the mean of it. For the normal model this is assumed to be constant.
 
         References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-
-        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
         :type mu: np.ndarray
-        :return: a N-dimensional vector of shape (-1,1) containing the variance function evaluated for each mean
+        :return: a N-dimensional vector of shape (-1,1) containing the variance function
+            evaluated for each mean
         :rtype: np.ndarray
         """
         pass
 
     def dVy1(self, mu: np.ndarray) -> np.ndarray:
         """
-        The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with respect ot the mean.
+        The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with
+        respect ot the mean.
 
         References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-
-        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the
+            response distribution corresponding to each observation.
         :type mu: np.ndarray
-        :return: a N-dimensional vector of shape (-1,1) containing the first derivative of the variance function with respect to each mean
+        :return: a N-dimensional vector of shape (-1,1) containing the first derivative of
+            the variance function with respect to each mean
         :rtype: np.ndarray
         """
         pass
 
     def llk(self, y: np.ndarray, mu: np.ndarray, **kwargs) -> float:
         """
-        log-probability of :math:`\\mathbf{y}` under this family with mean = :math:`\\boldsymbol{\\mu}`. Essentially sum over all elements in the vector returned by the :func:`lp` method.
+        log-probability of :math:`\\mathbf{y}` under this family with
+        mean = :math:`\\boldsymbol{\\mu}`. Essentially sum over all elements in the vector returned
+        by the :func:`lp` method.
 
-        Families with more than one parameter that needs to be estimated in order to evaluate the model's log-likelihood (i.e., ``two_par=True``) must pass as key-word argument a ``scale``
+        Families with more than one parameter that needs to be estimated in order to evaluate the
+        model's log-likelihood (i.e., ``two_par=True``) must pass as key-word argument a ``scale``
         parameter with a default value, e.g.,::
 
            def llk(self, mu, scale=1):
@@ -466,12 +543,13 @@ class Family:
         You can check the implementation of the :class:`Gaussian` Family for an example.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array of shape (-1,1) containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
         :type mu: np.ndarray
         :return: log-likelihood of the model under this family
         :rtype: float
@@ -480,9 +558,11 @@ class Family:
 
     def lp(self, y: np.ndarray, mu: np.ndarray, **kwargs) -> np.ndarray:
         """
-        Log-probability of observing every value in :math:`\\mathbf{y}` under this family with mean = :math:`\\boldsymbol{\\mu}`.
+        Log-probability of observing every value in :math:`\\mathbf{y}` under this family with
+        mean = :math:`\\boldsymbol{\\mu}`.
 
-        Families with more than one parameter that needs to be estimated in order to evaluate the model's log-likelihood (i.e., ``two_par=True``) must pass as key-word argument a ``scale``
+        Families with more than one parameter that needs to be estimated in order to evaluate the
+        model's log-likelihood (i.e., ``two_par=True``) must pass as key-word argument a ``scale``
         parameter with a default value, e.g.,::
 
            def lp(self, mu, scale=1):
@@ -491,29 +571,33 @@ class Family:
         You can check the implementation of the :class:`Gaussian` Family for an example.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array of shape (-1,1) containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
         :type mu: np.ndarray
-        :return: a N-dimensional vector of shape (-1,1) containing the log-probability of observing each data-point under the current model.
+        :return: a N-dimensional vector of shape (-1,1) containing the log-probability of observing
+            each data-point under the current model.
         :rtype: np.ndarray
         """
         pass
 
     def deviance(self, y: np.ndarray, mu: np.ndarray) -> float:
         """
-        Deviance of the model under this family: 2 * (llk_max - llk_c) * scale (Wood, 2017; Faraway, 2016).
+        Deviance of the model under this family: 2 * (llk_max - llk_c) * scale
+        (Wood, 2017; Faraway, 2016).
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array of shape (-1,1) containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
         :type mu: np.ndarray
         :return: Deviance of the model under this family
         :rtype: float
@@ -525,14 +609,16 @@ class Family:
         Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array of shape (-1,1) containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
         :type mu: np.ndarray
-        :return: a N-dimensional vector of shape (-1,1) containing the contribution of each observation to the overall deviance.
+        :return: a N-dimensional vector of shape (-1,1) containing the contribution of each
+            observation to the overall deviance.
         :rtype: np.ndarray
         """
         pass
@@ -540,20 +626,29 @@ class Family:
 
 class Binomial(Family):
     """
-    Binomial family. For this implementation we assume that we have collected proportions of success, i.e., the dependent variables specified in the model `Formula` needs to hold observed proportions and not counts!
-    If we assume that each observation :math:`y_i` reflects a single independent draw from a binomial, (with :math:`n=1`, and :math:`p_i` being the probability that the result is 1) then the dependent variable should either hold 1 or 0.
-    If we have multiple independent draws from the binomial per observation (i.e., row in our data-frame), then :math:`n` will usually differ between observations/rows in our data-frame (i.e., we observe :math:`k_i` counts of success
-    out of :math:`n_i` draws - so that :math:`y_i=k_i/n_i`). In that case, the `Binomial()` family accepts a vector for argument :math:`\\mathbf{n}` (which is simply set to 1 by default, assuming binary data), containing :math:`n_i` for every observation :math:`y_i`.
+    Binomial family. For this implementation we assume that we have collected proportions of
+    success, i.e., the dependent variables specified in the model `Formula` needs to hold observed
+    proportions and not counts! If we assume that each observation :math:`y_i` reflects a single
+    independent draw from a binomial, (with :math:`n=1`, and :math:`p_i` being the probability that
+    the result is 1) then the dependent variable should either hold 1 or 0.
+    If we have multiple independent draws from the binomial per observation (i.e., row in our
+    data-frame), then :math:`n` will usually differ between observations/rows in our data-frame
+    (i.e., we observe :math:`k_i` counts of success out of :math:`n_i` draws - so that
+    :math:`y_i=k_i/n_i`). In that case, the `Binomial()` family accepts a vector for argument
+    :math:`\\mathbf{n}` (which is simply set to 1 by default, assuming binary data), containing
+    :math:`n_i` for every observation :math:`y_i`.
 
     In this implementation, the scale parameter is kept fixed/known at 1.
 
     References:
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+        Edition (2nd ed.).
 
-     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-
-    :param link: The link function to be used by the model of the mean of this family. By default set to the canonical logit link.
+    :param link: The link function to be used by the model of the mean of this family. By default
+        set to the canonical logit link.
     :type link: Link
-    :param n: Number of independent draws from a Binomial per observation/row of data-frame. For binary data this can simply be set to 1, which is the default.
+    :param n: Number of independent draws from a Binomial per observation/row of data-frame. For
+        binary data this can simply be set to 1, which is the default.
     :type n: int or [int], optional
     """
 
@@ -567,13 +662,17 @@ class Binomial(Family):
         """
         Function providing initial :math:`\\boldsymbol{\\mu}` vector for GAMM.
 
-        Estimation assumes proportions as dep. variable. According to: https://stackoverflow.com/questions/60526586/
-        the glm() function in R always initializes :math:`\\mu` = 0.75 for observed proportions (i.e., elements in :math:`\\mathbf{y}`) of 1 and :math:`\\mu` = 0.25 for proportions of zero.
-        This can be achieved by adding 0.5 to the observed proportion of success (and adding one observation).
+        Estimation assumes proportions as dep. variable. According to:
+        https://stackoverflow.com/questions/60526586/ the glm() function in R always initializes
+        :math:`\\mu` = 0.75 for observed proportions (i.e., elements in :math:`\\mathbf{y}`) of 1
+        and :math:`\\mu` = 0.25 for proportions of zero.
+        This can be achieved by adding 0.5 to the observed proportion of success
+        (and adding one observation).
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :return: a N-dimensional vector of shape (-1,1) containing an initial estimate of the probability of success per observation
+        :return: a N-dimensional vector of shape (-1,1) containing an initial estimate of the
+            probability of success per observation
         :rtype: np.ndarray
         """
         prop = (y + 0.5) / (2)
@@ -582,15 +681,18 @@ class Binomial(Family):
 
     def V(self, mu: np.ndarray) -> np.ndarray:
         """
-        The variance function (of the mean; see Wood, 2017, 3.1.2) for the Binomial model. Variance is minimal for :math:`\\mu=1` and :math:`\\mu=0`, maximal for :math:`\\mu=0.5`.
+        The variance function (of the mean; see Wood, 2017, 3.1.2) for the Binomial model. Variance
+        is minimal for :math:`\\mu=1` and :math:`\\mu=0`, maximal for :math:`\\mu=0.5`.
 
         References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-
-        :param mu: A numpy array containing the predicted probability for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted probability for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
-        :return: a N-dimensional vector of shape (-1,1) containing the variance function evaluated for each mean
+        :return: a N-dimensional vector of shape (-1,1) containing the variance function evaluated
+            for each mean
         :rtype: np.ndarray
         """
         # Faraway (2016):
@@ -598,32 +700,38 @@ class Binomial(Family):
 
     def dVy1(self, mu: np.ndarray) -> np.ndarray:
         """
-        The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with respect ot the mean.
+        The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with
+        respect ot the mean.
 
         References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
-        :return: a N-dimensional vector of shape (-1,1) containing the first derivative of the variance function with respect to each mean
+        :return: a N-dimensional vector of shape (-1,1) containing the first derivative of the
+            variance function with respect to each mean
         :rtype: np.ndarray
         """
         return (1 - 2 * mu) / self.n
 
     def lp(self, y: np.ndarray, mu: np.ndarray) -> np.ndarray:
         """
-        Log-probability of observing every proportion in :math:`\\mathbf{y}` under their respective binomial with mean = :math:`\\boldsymbol{\\mu}`.
+        Log-probability of observing every proportion in :math:`\\mathbf{y}` under their respective
+        binomial with mean = :math:`\\boldsymbol{\\mu}`.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observed proportion.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted probability for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted probability for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
-        :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
+        :return: a N-dimensional vector containing the log-probability of observing each data-point
+            under the current model.
         :rtype: np.ndarray
         """
         # y is observed proportion of success
@@ -631,15 +739,17 @@ class Binomial(Family):
 
     def llk(self, y: np.ndarray, mu: np.ndarray) -> float:
         """
-        log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
+        log-probability of data under given model. Essentially sum over all elements in the vector
+        returned by the :func:`lp` method.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         :return: log-likelihood of the model
         :rtype: float
@@ -649,15 +759,17 @@ class Binomial(Family):
 
     def deviance(self, y: np.ndarray, mu: np.ndarray) -> float:
         """
-        Deviance of the model under this family: 2 * (llk_max - llk_c) * scale (Wood, 2017; Faraway, 2016).
+        Deviance of the model under this family: 2 * (llk_max - llk_c) * scale
+        (Wood, 2017; Faraway, 2016).
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, \
+            Second Edition (2nd ed.).
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         :return: Deviance of the model
         :rtype: float
@@ -670,14 +782,16 @@ class Binomial(Family):
         Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
-        :return: a N-dimensional vector of shape (-1,1) containing the contribution of each observation to the model deviance
+        :return: a N-dimensional vector of shape (-1,1) containing the contribution of each
+            observation to the model deviance
         :rtype: np.ndarray
         """
         # Based on Table 3.1 in Wood (2017)
@@ -699,18 +813,22 @@ class Binomial(Family):
 class Gaussian(Family):
     """Normal/Gaussian Family.
 
-    We assume: :math:`Y_i \\sim N(\\mu_i,\\sigma)` - i.e., each of the :math:`N` observations is generated from a normally distributed RV with observation-specific
-    mean and shared scale parameter :math:`\\sigma`. Equivalent to the assumption that the observed residual vector - the difference between the model
-    prediction and the observed data - should look like what could be expected from drawing :math:`N` independent samples from a Normal with mean zero and
+    We assume: :math:`Y_i \\sim N(\\mu_i,\\sigma)` - i.e., each of the :math:`N` observations is
+    generated from a normally distributed RV with observation-specific mean and shared scale
+    parameter :math:`\\sigma`. Equivalent to the assumption that the observed residual vector -
+    the difference between the model prediction and the observed data - should look like what could
+    be expected from drawing :math:`N` independent samples from a Normal with mean zero and
     standard deviation equal to :math:`\\sigma`.
 
     References:
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+        Edition (2nd ed.).
 
-     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-
-    :param link: The link function to be used by the model of the mean of this family. By default set to the canonical identity link.
+    :param link: The link function to be used by the model of the mean of this family. By default
+        set to the canonical identity link.
     :type link: Link
-    :param scale: Known scale parameter for this family - by default set to None so that the scale parameter is estimated.
+    :param scale: Known scale parameter for this family - by default set to None so that the scale
+        parameter is estimated.
     :type scale: float or None, optional
     """
 
@@ -721,17 +839,19 @@ class Gaussian(Family):
     def V(self, mu: np.ndarray) -> np.ndarray:
         """Variance function for the Normal family.
 
-        Not really a function since the link between variance and mean of the RVs is assumed constant for this model.
+        Not really a function since the link between variance and mean of the RVs is assumed
+        constant for this model.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param mu: a N-dimensional vector of the model prediction/the predicted mean
         :type mu: np.ndarray
         :return: a N-dimensional vector of 1s
         :rtype: np.ndarray
-        :return: a N-dimensional vector of shape (-1,1) containing the variance function evaluated for each mean
+        :return: a N-dimensional vector of shape (-1,1) containing the variance function evaluated
+            for each mean
         :rtype: np.ndarray
         """
         # Faraway (2016)
@@ -739,47 +859,55 @@ class Gaussian(Family):
 
     def dVy1(self, mu: np.ndarray) -> np.ndarray:
         """
-        The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with respect ot the mean.
+        The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with
+        respect ot the mean.
 
         References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
-        :return: a N-dimensional vector of shape (-1,1) containing the first derivative of the variance function with respect to each mean
+        :return: a N-dimensional vector of shape (-1,1) containing the first derivative of the
+            variance function with respect to each mean
         :rtype: np.ndarray
         """
         return np.zeros_like(mu)
 
     def lp(self, y: np.ndarray, mu: np.ndarray, sigma: float = 1) -> np.ndarray:
-        """Log-probability of observing every proportion in :math:`\\mathbf{y}` under their respective Normal with mean = :math:`\\boldsymbol{\\mu}`.
+        """Log-probability of observing every proportion in :math:`\\mathbf{y}` under their
+        respective Normal with mean = :math:`\\boldsymbol{\\mu}`.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         :param sigma: The (estimated) sigma parameter, defaults to 1
         :type sigma: float, optional
-        :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
+        :return: a N-dimensional vector containing the log-probability of observing each data-point
+            under the current model.
         :rtype: np.ndarray
         """
         return scp.stats.norm.logpdf(y, loc=mu, scale=math.sqrt(sigma))
 
     def llk(self, y: np.ndarray, mu: np.ndarray, sigma: float = 1) -> float:
-        """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
+        """log-probability of data under given model. Essentially sum over all elements in the
+        vector returned by the :func:`lp` method.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         :param sigma: The (estimated) sigma parameter, defaults to 1
         :type sigma: float, optional
@@ -789,15 +917,17 @@ class Gaussian(Family):
         return sum(self.lp(y, mu, sigma))[0]
 
     def deviance(self, y: np.ndarray, mu: np.ndarray) -> float:
-        """Deviance of the model under this family: 2 * (llk_max - llk_c) * scale (Wood, 2017; Faraway, 2016).
+        """Deviance of the model under this family: 2 * (llk_max - llk_c) * scale
+        (Wood, 2017; Faraway, 2016).
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         :return: The model deviance.
         :rtype: float
@@ -811,14 +941,16 @@ class Gaussian(Family):
         """Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
-        :return: A N-dimensional vector containing the contribution of each data-point to the overall model deviance.
+        :return: A N-dimensional vector containing the contribution of each data-point to the
+            overall model deviance.
         :rtype: np.ndarray
         """
         res = y - mu
@@ -828,17 +960,22 @@ class Gaussian(Family):
 class Gamma(Family):
     """Gamma Family.
 
-    We assume: :math:`Y_i \\sim \\Gamma(\\mu_i,\\phi)`. The Gamma distribution is usually not expressed in terms of the mean and scale (:math:`\\phi`) parameter
-    but rather in terms of a shape and rate parameter - called :math:`\\alpha` and :math:`\\beta` respectively. Wood (2017) provides :math:`\\alpha = 1/\\phi`.
-    With this we can obtain :math:`\\beta = 1/\\phi/\\mu` (see the source-code for :func:`lp` method for details).
+    We assume: :math:`Y_i \\sim \\Gamma(\\mu_i,\\phi)`. The Gamma distribution is usually not
+    expressed in terms of the mean and scale (:math:`\\phi`) parameter
+    but rather in terms of a shape and rate parameter - called :math:`\\alpha` and :math:`\\beta`
+    respectively. Wood (2017) provides :math:`\\alpha = 1/\\phi`.
+    With this we can obtain :math:`\\beta = 1/\\phi/\\mu` (see the source-code for :func:`lp`
+    method for details).
 
     References:
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+        Edition (2nd ed.).
 
-     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-
-    :param link: The link function to be used by the model of the mean of this family. By default set to the log link.
+    :param link: The link function to be used by the model of the mean of this family. By default
+        set to the log link.
     :type link: Link
-    :param scale: Known scale parameter for this family - by default set to None so that the scale parameter is estimated.
+    :param scale: Known scale parameter for this family - by default set to None so that the
+        scale parameter is estimated.
     :type scale: float or None, optional
     """
 
@@ -849,11 +986,12 @@ class Gamma(Family):
     def V(self, mu: np.ndarray) -> np.ndarray:
         """Variance function for the Gamma family.
 
-        The variance of random variable :math:`Y` is proportional to it's mean raised to the second power.
+        The variance of random variable :math:`Y` is proportional to it's mean raised to the
+        second power.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param mu: a N-dimensional vector of the model prediction/the predicted mean
         :type mu: np.ndarray
@@ -865,33 +1003,39 @@ class Gamma(Family):
 
     def dVy1(self, mu: np.ndarray) -> np.ndarray:
         """
-        The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with respect ot the mean.
+        The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with
+        respect ot the mean.
 
         References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
-        :return: a N-dimensional vector of shape (-1,1) containing the first derivative of the variance function with respect to each mean
+        :return: a N-dimensional vector of shape (-1,1) containing the first derivative of the
+            variance function with respect to each mean
         :rtype: np.ndarray
         """
         return 2 * mu
 
     def lp(self, y: np.ndarray, mu: np.ndarray, scale: float = 1) -> np.ndarray:
-        """Log-probability of observing every proportion in :math:`\\mathbf{y}` under their respective Gamma with mean = :math:`\\boldsymbol{\\mu}`.
+        """Log-probability of observing every proportion in :math:`\\mathbf{y}` under their
+        respective Gamma with mean = :math:`\\boldsymbol{\\mu}`.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observed value.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         :param scale: The (estimated) scale parameter, defaults to 1
         :type scale: float, optional
-        :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
+        :return: a N-dimensional vector containing the log-probability of observing each data-point
+            under the current model.
         :rtype: np.ndarray
         """
         # Need to transform from mean and scale to \alpha & \beta
@@ -909,15 +1053,17 @@ class Gamma(Family):
         return scp.stats.gamma.logpdf(y, a=alpha, scale=(1 / beta))
 
     def llk(self, y: np.ndarray, mu: np.ndarray, scale: float = 1) -> float:
-        """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
+        """log-probability of data under given model. Essentially sum over all elements in the
+        vector returned by the :func:`lp` method.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         :param scale: The (estimated) scale parameter, defaults to 1
         :type scale: float, optional
@@ -930,14 +1076,16 @@ class Gamma(Family):
         """Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
-        :return: A N-dimensional vector containing the contribution of each data-point to the overall model deviance.
+        :return: A N-dimensional vector containing the contribution of each data-point to the
+            overall model deviance.
         :rtype: np.ndarray
         """
         # Based on Table 3.1 in Wood (2017)
@@ -946,15 +1094,17 @@ class Gamma(Family):
         return 2 * (diff + ratio)
 
     def deviance(self, y: np.ndarray, mu: np.ndarray) -> float:
-        """Deviance of the model under this family: 2 * (llk_max - llk_c) * scale (Wood, 2017; Faraway, 2016).
+        """Deviance of the model under this family: 2 * (llk_max - llk_c) * scale
+        (Wood, 2017; Faraway, 2016).
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         :return: The model deviance.
         :rtype: float
@@ -967,19 +1117,24 @@ class Gamma(Family):
 class InvGauss(Family):
     """Inverse Gaussian Family.
 
-    We assume: :math:`Y_i \\sim IG(\\mu_i,\\phi)`. The Inverse Gaussian distribution is usually not expressed in terms of the mean and scale (:math:`\\phi`) parameter
-    but rather in terms of a shape and scale parameter - called :math:`\\nu` and :math:`\\lambda` respectively (see the scipy implementation).
-    We can simply set :math:`\\nu=\\mu` (compare scipy density to the one in table 3.1 of Wood, 2017).
-    Wood (2017) shows that :math:`\\phi=1/\\lambda`, so this provides :math:`\\lambda=1/\\phi`
+    We assume: :math:`Y_i \\sim IG(\\mu_i,\\phi)`. The Inverse Gaussian distribution is usually not
+    expressed in terms of the mean and scale (:math:`\\phi`) parameter but rather in terms of a
+    shape and scale parameter - called :math:`\\nu` and :math:`\\lambda` respectively
+    (see the scipy implementation).
+    We can simply set :math:`\\nu=\\mu` (compare scipy density to the one in table 3.1 of
+    Wood, 2017). Wood (2017) shows that :math:`\\phi=1/\\lambda`, so this provides
+    :math:`\\lambda=1/\\phi`
 
     References:
-
-     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+        Edition (2nd ed.).
      - scipy: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.invgauss.html
 
-    :param link: The link function to be used by the model of the mean of this family. By default set to the log link.
+    :param link: The link function to be used by the model of the mean of this family. By default
+        set to the log link.
     :type link: Link
-    :param scale: Known scale parameter for this family - by default set to None so that the scale parameter is estimated.
+    :param scale: Known scale parameter for this family - by default set to None so that the scale
+        parameter is estimated.
     :type scale: float or None, optional
     """
 
@@ -990,11 +1145,12 @@ class InvGauss(Family):
     def V(self, mu: np.ndarray) -> np.ndarray:
         """Variance function for the Inverse Gaussian family.
 
-        The variance of random variable :math:`Y` is proportional to it's mean raised to the third power.
+        The variance of random variable :math:`Y` is proportional to it's mean raised to the
+        third power.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param mu: a N-dimensional vector of the model prediction/the predicted mean
         :type mu: np.ndarray
@@ -1006,55 +1162,64 @@ class InvGauss(Family):
 
     def dVy1(self, mu: np.ndarray) -> np.ndarray:
         """
-        The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with respect ot the mean.
+        The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with
+        respect ot the mean.
 
         References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
-        :return: a N-dimensional vector of shape (-1,1) containing the first derivative of the variance function with respect to each mean
+        :return: a N-dimensional vector of shape (-1,1) containing the first derivative of the
+            variance function with respect to each mean
         :rtype: np.ndarray
         """
         return 3 * np.power(mu, 2)
 
     def lp(self, y: np.ndarray, mu: np.ndarray, scale: float = 1) -> np.ndarray:
-        """Log-probability of observing every value in :math:`\\mathbf{y}` under their respective inverse Gaussian with mean = :math:`\\boldsymbol{\\mu}`.
+        """Log-probability of observing every value in :math:`\\mathbf{y}` under their respective
+        inverse Gaussian with mean = :math:`\\boldsymbol{\\mu}`.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observed value.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         :param scale: The (estimated) scale parameter, defaults to 1
         :type scale: float, optional
-        :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
+        :return: a N-dimensional vector containing the log-probability of observing each
+            data-point under the current model.
         :rtype: np.ndarray
         """
         # Need to transform from mean and scale to \nu & \\lambda
         # From Wood (2017), we have that
         # \\phi = 1/\\lambda
         # so \\lambda = 1/\\phi
-        # From the density in https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.invgauss.html,
+        # From the density in
+        # https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.invgauss.html,
         # we have that \nu=\\mu
         lam = 1 / scale
         nu = mu
         return scp.stats.invgauss.logpdf(y, mu=nu / lam, scale=lam)
 
     def llk(self, y: np.ndarray, mu: np.ndarray, scale: float = 1) -> float:
-        """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
+        """log-probability of data under given model. Essentially sum over all elements in the
+        vector returned by the :func:`lp` method.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         :param scale: The (estimated) scale parameter, defaults to 1
         :type scale: float, optional
@@ -1067,14 +1232,16 @@ class InvGauss(Family):
         """Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
-        :return: A N-dimensional vector containing the contribution of each data-point to the overall model deviance.
+        :return: A N-dimensional vector containing the contribution of each data-point to the
+            overall model deviance.
         :rtype: np.ndarray
         """
         # Based on Table 3.1 in Wood (2017)
@@ -1083,15 +1250,17 @@ class InvGauss(Family):
         return diff / prod
 
     def deviance(self, y: np.ndarray, mu: np.ndarray) -> float:
-        """Deviance of the model under this family: 2 * (llk_max - llk_c) * scale (Wood, 2017; Faraway, 2016).
+        """Deviance of the model under this family: 2 * (llk_max - llk_c) * scale
+        (Wood, 2017; Faraway, 2016).
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         :return: The model deviance.
         :rtype: float
@@ -1104,15 +1273,17 @@ class InvGauss(Family):
 class Poisson(Family):
     """Poisson Family.
 
-    We assume: :math:`Y_i \\sim P(\\lambda)`. We can simply set :math:`\\lambda=\\mu` (compare scipy density to the one in table 3.1 of Wood, 2017)
-    and treat the scale parameter of a GAMM (:math:`\\phi`) as fixed/known at 1.
+    We assume: :math:`Y_i \\sim P(\\lambda)`. We can simply set :math:`\\lambda=\\mu`
+    (compare scipy density to the one in table 3.1 of Wood, 2017) and treat the scale parameter of
+    a GAMM (:math:`\\phi`) as fixed/known at 1.
 
     References:
-
-     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+        Edition (2nd ed.).
      - scipy: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.poisson.html
 
-    :param link: The link function to be used by the model of the mean of this family. By default set to the log link.
+    :param link: The link function to be used by the model of the mean of this family. By
+        default set to the log link.
     :type link: Link
     """
 
@@ -1126,8 +1297,8 @@ class Poisson(Family):
         The variance of random variable :math:`Y` is proportional to it's mean.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param mu: a N-dimensional vector of the model prediction/the predicted mean
         :type mu: np.ndarray
@@ -1139,49 +1310,58 @@ class Poisson(Family):
 
     def dVy1(self, mu: np.ndarray) -> np.ndarray:
         """
-        The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with respect ot the mean.
+        The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with
+        respect ot the mean.
 
         References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
-        :return: a N-dimensional vector of shape (-1,1) containing the first derivative of the variance function with respect to each mean
+        :return: a N-dimensional vector of shape (-1,1) containing the first derivative of the
+            variance function with respect to each mean
         :rtype: np.ndarray
         """
         return np.ones_like(mu)
 
     def lp(self, y: np.ndarray, mu: np.ndarray) -> np.ndarray:
-        """Log-probability of observing every value in :math:`\\mathbf{y}` under their respective Poisson with mean = :math:`\\boldsymbol{\\mu}`.
+        """Log-probability of observing every value in :math:`\\mathbf{y}` under their respective
+        Poisson with mean = :math:`\\boldsymbol{\\mu}`.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observed value.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
-        :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
+        :return: a N-dimensional vector containing the log-probability of observing each data-point
+            under the current model.
         :rtype: np.ndarray
         """
         # Need to transform from mean to \\lambda
-        # From Wood (2017) and the density in https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.poisson.html,
+        # From Wood (2017) and the density in
+        # https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.poisson.html,
         # we have that \\lam=\\mu
         lam = mu
         return scp.stats.poisson.logpmf(y, mu=lam)
 
     def llk(self, y: np.ndarray, mu: np.ndarray) -> float:
-        """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
+        """log-probability of data under given model. Essentially sum over all elements in the
+        vector returned by the :func:`lp` method.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         :param scale: The (estimated) scale parameter, defaults to 1
         :type scale: float, optional
@@ -1194,14 +1374,16 @@ class Poisson(Family):
         """Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
-        :return: A N-dimensional vector containing the contribution of each data-point to the overall model deviance.
+        :return: A N-dimensional vector containing the contribution of each data-point to the
+            overall model deviance.
         :rtype: np.ndarray
         """
         # Based on Table 3.1 in Wood (2017)
@@ -1216,15 +1398,17 @@ class Poisson(Family):
         return 2 * ratio - 2 * diff
 
     def deviance(self, y: np.ndarray, mu: np.ndarray) -> float:
-        """Deviance of the model under this family: 2 * (llk_max - llk_c) * scale (Wood, 2017; Faraway, 2016).
+        """Deviance of the model under this family: 2 * (llk_max - llk_c) * scale
+        (Wood, 2017; Faraway, 2016).
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
         :return: The model deviance.
         :rtype: float
@@ -1241,7 +1425,8 @@ class Poisson(Family):
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :return: a N-dimensional vector of shape (-1,1) containing an intial estimate of the mean of the response variables
+        :return: a N-dimensional vector of shape (-1,1) containing an intial estimate of the mean
+            of the response variables
         :rtype: np.ndarray
         """
 
@@ -1256,54 +1441,79 @@ class Poisson(Family):
 
 
 class GAMLSSFamily:
-    """Base-class to be implemented by families of Generalized Additive Mixed Models of Location, Scale, and Shape (GAMMLSS; Rigby & Stasinopoulos, 2005).
+    """Base-class to be implemented by families of Generalized Additive Mixed Models of Location,
+    Scale, and Shape (GAMMLSS; Rigby & Stasinopoulos, 2005).
 
-    Apart from the required methods, three mandatory attributes need to be defined by the :func:`__init__` constructor of implementations of this class. These are required
-    to evaluate the first and second (pure & mixed) derivative of the log-likelihood with respect to any of the log-likelihood's parameters (alternatively the linear predictors
-    of the parameters - see the description of the ``d_eta`` instance variable.). See the variables below.
+    Apart from the required methods, three mandatory attributes need to be defined by the
+    :func:`__init__` constructor of implementations of this class. These are required
+    to evaluate the first and second (pure & mixed) derivative of the log-likelihood with respect to
+    any of the log-likelihood's parameters (alternatively the linear predictors of the parameters -
+    see the description of the ``d_eta`` instance variable.). See the variables below.
 
-    Optionally, a ``mean_init_fam`` attribute can be defined - specfiying a :class:`Family` member that is fitted to the data to get an initial estimate of the mean parameter of the assumed distribution.
+    Optionally, a ``mean_init_fam`` attribute can be defined - specfiying a :class:`Family` member
+    that is fitted to the data to get an initial estimate of the mean parameter of the assumed
+    distribution.
 
     References:
-     - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
-     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+     - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, \
+        Scale and Shape.
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth \
+        Models.
 
-    :param pars: Number of parameters of the distribution belonging to the random variables assumed to have generated the observations, e.g., 2 for the Normal: mean and standard deviation.
+    :param pars: Number of parameters of the distribution belonging to the random variables assumed
+        to have generated the observations, e.g., 2 for the Normal: mean and standard deviation.
     :type pars: int
     :param links: Link functions for each of the parameters of the distribution.
     :type links: [Link]
-    :ivar bool d_eta: A boolean indicating whether partial derivatives of llk are provided with respect to the linear predictor instead of parameters (i.e., the mean), defaults to False (derivatives are provided with respect to parameters)
-    :ivar [Callable] d1: A list holding ``n_par`` functions to evaluate the first partial derivatives of llk with respect to each parameter of the llk. Needs to be initialized when calling :func:`__init__`.
-    :ivar [Callable] d2: A list holding ``n_par`` functions to evaluate the second (pure) partial derivatives of llk with respect to each parameter of the llk. Needs to be initialized when calling :func:`__init__`.
-    :ivar [Callable] d2m: A list holding ``n_par*(n_par-1)/2`` functions to evaluate the second mixed partial derivatives of llk with respect to each parameter of the llk in **order**: ``d2m[0]`` = :math:`\\partial l/\\partial \\mu_1 \\partial \\mu_2`, ``d2m[1]`` = :math:`\\partial l/\\partial \\mu_1 \\partial \\mu_3`, ..., ``d2m[n_par-1]`` = :math:`\\partial l/\\partial \\mu_1 \\partial \\mu_{n_{par}}`, ``d2m[n_par]`` = :math:`\\partial l/\\partial \\mu_2 \\partial \\mu_3`, ``d2m[n_par+1]`` = :math:`\\partial l/\\partial \\mu_2 \\partial \\mu_4`, ... . Needs to be initialized when calling :func:`__init__`.
+    :ivar bool d_eta: A boolean indicating whether partial derivatives of llk are provided with
+        respect to the linear predictor instead of parameters (i.e., the mean), defaults to False
+        (derivatives are provided with respect to parameters)
+    :ivar [Callable] d1: A list holding ``n_par`` functions to evaluate the first partial
+        derivatives of llk with respect to each parameter of the llk. Needs to be initialized when
+        calling :func:`__init__`.
+    :ivar [Callable] d2: A list holding ``n_par`` functions to evaluate the second (pure) partial
+        derivatives of llk with respect to each parameter of the llk. Needs to be initialized when
+        calling :func:`__init__`.
+    :ivar [Callable] d2m: A list holding ``n_par*(n_par-1)/2`` functions to evaluate the second
+        mixed partial derivatives of llk with respect to each parameter of the llk in **order**:
+        ``d2m[0]`` = :math:`\\partial l/\\partial \\mu_1 \\partial \\mu_2`,
+        ``d2m[1]`` = :math:`\\partial l/\\partial \\mu_1 \\partial \\mu_3`, ...,
+        ``d2m[n_par-1]`` = :math:`\\partial l/\\partial \\mu_1 \\partial \\mu_{n_{par}}`,
+        ``d2m[n_par]`` = :math:`\\partial l/\\partial \\mu_2 \\partial \\mu_3`,
+        ``d2m[n_par+1]`` = :math:`\\partial l/\\partial \\mu_2 \\partial \\mu_4`, ... .
+        Needs to be initialized when calling :func:`__init__`.
     """
 
     def __init__(self, pars: int, links: list[Link]) -> None:
         self.n_par: int = pars
         self.links: list[Link] = links
-        self.d_eta: bool = (
-            False  # Whether partial derivatives of llk are provided with respect to the linear predictor instead of parameters (i.e., the mean), defaults to False (derivatives are provided with respect to parameters)
-        )
-        self.d1: list[Callable] = (
-            []
-        )  # list with functions to evaluate derivative of llk with respect to corresponding mean
-        self.d2: list[Callable] = (
-            []
-        )  # list with function to evaluate pure second derivative of llk with respect to corresponding mean
-        self.d2m: list[Callable] = (
-            []
-        )  # list with functions to evaluate mixed second derivative of llk. Order is 12,13,1k,23,24,...
+        # Whether partial derivatives of llk are provided with respect to the linear predictor
+        # instead of parameters (i.e., the mean), defaults to False (derivatives are provided with
+        # respect to parameters)
+        self.d_eta: bool = False
+        # list with functions to evaluate derivative of llk with respect to corresponding mean
+        self.d1: list[Callable] = []
+        # list with function to evaluate pure second derivative of llk with respect to
+        # corresponding mean
+        self.d2: list[Callable] = []
+        # list with functions to evaluate mixed second derivative of llk. Order is
+        # 12,13,1k,23,24,...
+        self.d2m: list[Callable] = []
         self.mean_init_fam: Family | None = None
 
     def llk(self, y: np.ndarray, *mus: list[np.ndarray]) -> float:
-        """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
+        """log-probability of data under given model. Essentially sum over all elements in the
+        vector returned by the :func:`lp` method.
 
         References:
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array of shape (-1,1) containing each observation.
         :type y: np.ndarray
-        :param mus: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains a numpy array of shape (-1,1) holding the expected value for a particular parmeter for each of the N observations.
+        :param mus: A list including `self.n_par` lists - one for each parameter of the
+            distribution. Each of those lists contains a numpy array of shape (-1,1) holding the
+            expected value for a particular parmeter for each of the N observations.
         :type mus: [np.ndarray]
         :return: The log-probability of observing all data under the current model.
         :rtype: float
@@ -1311,35 +1521,45 @@ class GAMLSSFamily:
         pass
 
     def lp(self, y: np.ndarray, *mus: list[np.ndarray]) -> np.ndarray:
-        """Log-probability of observing every element in :math:`\\mathbf{y}` under their respective distribution parameterized by ``mus``.
+        """Log-probability of observing every element in :math:`\\mathbf{y}` under their respective
+        distribution parameterized by ``mus``.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array of shape (-1,1) containing each observed value.
         :type y: np.ndarray
-        :param mus: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains a numpy array of shape (-1,1) holding the expected value for a particular parmeter for each of the N observations.
+        :param mus: A list including `self.n_par` lists - one for each parameter of the
+            distribution. Each of those lists contains a numpy array of shape (-1,1) holding the
+            expected value for a particular parmeter for each of the N observations.
         :type mus: [np.ndarray]
-        :return: a N-dimensional vector of shape (-1,1) containing the log-probability of observing each data-point under the current model.
+        :return: a N-dimensional vector of shape (-1,1) containing the log-probability of observing
+            each data-point under the current model.
         :rtype: np.ndarray
         """
         pass
 
     def lcp(self, y: np.ndarray, *mus: list[np.ndarray]) -> np.ndarray | None:
-        """Log of the cumulative probability of observing a value as extreme or less extreme for every element in :math:`\\mathbf{y}` under their respective distribution parameterized by ``mus``.
+        """Log of the cumulative probability of observing a value as extreme or less extreme for
+        every element in :math:`\\mathbf{y}` under their respective distribution parameterized by
+        ``mus``.
 
         **Important:** Families for which this function is not implemented can return None.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array of shape (-1,1) containing each observed value.
         :type y: np.ndarray
-        :param mus: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains a numpy array of shape (-1,1) holding the expected value for a particular parmeter for each of the N observations.
+        :param mus: A list including `self.n_par` lists - one for each parameter of the
+            distribution. Each of those lists contains a numpy array of shape (-1,1) holding the
+            expected value for a particular parmeter for each of the N observations.
         :type mus: [np.ndarray]
-        :return: a N-dimensional vector of shape (-1,1) containing the log cumulative probability of observing a value as extreme or less extreme for every data-point under the current model or None if this function is not implemented by the specific family.
+        :return: a N-dimensional vector of shape (-1,1) containing the log cumulative probability
+            of observing a value as extreme or less extreme for every data-point under the current
+            model or None if this function is not implemented by the specific family.
         :rtype: np.ndarray
         """
         return None
@@ -1349,20 +1569,26 @@ class GAMLSSFamily:
     ) -> np.ndarray | None:
         """Get standardized residuals for a GAMMLSS model (Rigby & Stasinopoulos, 2005).
 
-        Any implementation of this function should return a vector that looks like what could be expected from taking ``len(y)`` independent draws from :math:`N(0,1)`.
-        Any additional arguments required by a specific implementation can be passed along via ``kwargs``.
+        Any implementation of this function should return a vector that looks like what could be
+        expected from taking ``len(y)`` independent draws from :math:`N(0,1)`. Any additional
+        arguments required by a specific implementation can be passed along via ``kwargs``.
 
         **Note**: Families for which no residuals are available can return None.
 
         References:
-         - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for \
+            Location, Scale and Shape.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array of shape (-1,1) containing each observed value.
         :type y: np.ndarray
-        :param mus: A list including `self.n_par` lists - one for each parameter of the distribution. Each of those lists contains a numpy array of shape (-1,1) holding the expected value for a particular parmeter for each of the N observations.
+        :param mus: A list including `self.n_par` lists - one for each parameter of the
+            distribution. Each of those lists contains a numpy array of shape (-1,1) holding the
+            expected value for a particular parmeter for each of the N observations.
         :type mus: [np.ndarray]
-        :return: a vector of shape (-1,1) containing standardized residuals under the current model or None in case residuals are not readily available.
+        :return: a vector of shape (-1,1) containing standardized residuals under the current model
+            or None in case residuals are not readily available.
         :rtype: np.ndarray | None
         """
         pass
@@ -1372,7 +1598,8 @@ class GAMLSSFamily:
 
         Can return ``None`` , in which case random initialization will be used.
 
-        :param models: A list of :class:`mssm.models.GAMM`'s, - each based on one of the formulas provided to a model.
+        :param models: A list of :class:`mssm.models.GAMM`'s, - each based on one of the formulas
+            provided to a model.
         :type models: [mssm.models.GAMM]
         :return: A numpy array of shape (-1,1), holding initial values for all model coefficients.
         :rtype: np.ndarray
@@ -1386,7 +1613,8 @@ class GAMLSSFamily:
 
         :param penalties: A list of all penalties to be estimated by the model.
         :type penalties: [mssm.src.python.penalties.LambdaTerm]
-        :return: A list, holding - for each :math:`\\lambda` parameter to be estimated - an initial value.
+        :return: A list, holding - for each :math:`\\lambda` parameter to be estimated - an initial
+            value.
         :rtype: [float]
         """
         return None
@@ -1395,19 +1623,25 @@ class GAMLSSFamily:
 class GAUMLSS(GAMLSSFamily):
     """Family for a Normal GAMMLSS model (Rigby & Stasinopoulos, 2005).
 
-    This Family follows the :class:`Gaussian` family, in that we assume: :math:`Y_i \\sim N(\\mu_i,\\sigma_i)`. i.e., each of the :math:`N` observations
-    is still believed to have been generated from an independent normally distributed RV with observation-specific mean.
+    This Family follows the :class:`Gaussian` family, in that we assume:
+    :math:`Y_i \\sim N(\\mu_i,\\sigma_i)`. i.e., each of the :math:`N` observations
+    is still believed to have been generated from an independent normally distributed RV with
+    observation-specific mean.
 
-    The important difference is that the scale parameter, :math:`\\sigma`, is now also observation-specific and modeled as an additive combination
-    of smooth functions and other parametric terms, just like the mean is in a Normal GAM. Note, that this explicitly models heteroscedasticity -
-    the residuals are no longer assumed to be i.i.d samples from :math:`\\sim N(0,\\sigma)`, since :math:`\\sigma` can now differ between residual realizations.
+    The important difference is that the scale parameter, :math:`\\sigma`, is now also
+    observation-specific and modeled as an additive combination of smooth functions and other
+    parametric terms, just like the mean is in a Normal GAM. Note, that this explicitly models
+    heteroscedasticity - the residuals are no longer assumed to be i.i.d samples from
+    :math:`\\sim N(0,\\sigma)`, since :math:`\\sigma` can now differ between residual realizations.
 
     References:
+     - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for \
+        Location, Scale and Shape.
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+        Smooth Models.
 
-     - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
-     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-
-    :param links: Link functions for the mean and standard deviation. Standard would be ``links=[Identity(),LOG()]``.
+    :param links: Link functions for the mean and standard deviation. Standard would be
+        ``links=[Identity(),LOG()]``.
     :type links: [Link]
     """
 
@@ -1415,7 +1649,7 @@ class GAUMLSS(GAMLSSFamily):
         super().__init__(2, links)
 
         # All derivatives taken from gamlss.dist: https://github.com/gamlss-dev/gamlss.dist
-        # see also: Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
+        # see also: Rigby, R. A., & Stasinopoulos, D. M. (2005).
         def d11(y, mu, sigma):
             return (1 / np.power(sigma, 2)) * (y - mu)
 
@@ -1439,53 +1673,64 @@ class GAUMLSS(GAMLSSFamily):
         self.mean_init_fam: Family = Gaussian(link=links[0])
 
     def lp(self, y: np.ndarray, mu: np.ndarray, sigma: np.ndarray) -> np.ndarray:
-        """Log-probability of observing every value in y under their respective Normal with observation-specific mean and standard deviation.
+        """Log-probability of observing every value in y under their respective Normal with
+        observation-specific mean and standard deviation.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observed value.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
-        :param sigma: A numpy array containing the predicted stdandard deviation for the response distribution corresponding to each observation.
+        :param sigma: A numpy array containing the predicted stdandard deviation for the response
+            distribution corresponding to each observation.
         :type sigma: np.ndarray
-        :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
+        :return: a N-dimensional vector containing the log-probability of observing each data-point
+            under the current model.
         :rtype: np.ndarray
         """
         return scp.stats.norm.logpdf(y, loc=mu, scale=sigma)
 
     def lcp(self, y: np.ndarray, mu: np.ndarray, sigma: np.ndarray) -> np.ndarray:
-        """Log of the cumulative probability of observing every value in y under their respective Normal with observation-specific mean and standard deviation.
+        """Log of the cumulative probability of observing every value in y under their respective
+        Normal with observation-specific mean and standard deviation.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observed value.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
-        :param sigma: A numpy array containing the predicted stdandard deviation for the response distribution corresponding to each observation.
+        :param sigma: A numpy array containing the predicted stdandard deviation for the response
+            distribution corresponding to each observation.
         :type sigma: np.ndarray
-        :return: a N-dimensional vector containing the log of the cumulative probability of observing each data-point under the current model.
+        :return: a N-dimensional vector containing the log of the cumulative probability of
+            observing each data-point under the current model.
         :rtype: np.ndarray
         """
         return scp.stats.norm.logcdf(y, loc=mu, scale=sigma)
 
     def llk(self, y: np.ndarray, mu: np.ndarray, sigma: np.ndarray) -> float:
-        """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
+        """log-probability of data under given model. Essentially sum over all elements in the
+        vector returned by the :func:`lp` method.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
-        :param sigma: A numpy array containing the predicted stdandard deviation for the response distribution corresponding to each observation.
+        :param sigma: A numpy array containing the predicted stdandard deviation for the response
+            distribution corresponding to each observation.
         :type sigma: np.ndarray
         :return: The log-probability of observing all data under the current model.
         :rtype: float
@@ -1495,15 +1740,19 @@ class GAUMLSS(GAMLSSFamily):
     def get_resid(self, y: np.ndarray, mu: np.ndarray, sigma: np.ndarray) -> float:
         """Get standardized residuals for a Normal GAMMLSS model (Rigby & Stasinopoulos, 2005).
 
-        Essentially, each residual should reflect a realization of a normal with mean zero and observation-specific standard deviation.
-        After scaling each residual by their observation-specific standard deviation we should end up with standardized
-        residuals that can be expected to be i.i.d :math:`\\sim N(0,1)` - assuming that our model is correct.
+        Essentially, each residual should reflect a realization of a normal with mean zero and
+        observation-specific standard deviation. After scaling each residual by their
+        observation-specific standard deviation we should end up with standardized
+        residuals that can be expected to be i.i.d :math:`\\sim N(0,1)` - assuming that our model
+        is correct.
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
-        :param sigma: A numpy array containing the predicted stdandard deviation for the response distribution corresponding to each observation.
+        :param sigma: A numpy array containing the predicted stdandard deviation for the response
+            distribution corresponding to each observation.
         :type sigma: np.ndarray
         :return: A list of standardized residuals that should be ~ N(0,1) if the model is correct.
         :rtype: np.ndarray
@@ -1517,7 +1766,8 @@ class GAUMLSS(GAMLSSFamily):
 
         Fits a GAMM for the mean and initializes all coef. for the standard deviation to 1.
 
-        :param models: A list of :class:`mssm.models.GAMM`'s, - each based on one of the formulas provided to a model.
+        :param models: A list of :class:`mssm.models.GAMM`'s, - each based on one of the formulas
+            provided to a model.
         :type models: [mssm.models.GAMM]
         :return: A numpy array of shape (-1,1), holding initial values for all model coefficients.
         :rtype: np.ndarray
@@ -1541,20 +1791,24 @@ class GAUMLSS(GAMLSSFamily):
 class MULNOMLSS(GAMLSSFamily):
     """Family for a Multinomial GAMMLSS model (Rigby & Stasinopoulos, 2005).
 
-    This Family assumes that each observation :math:`y_i` corresponds to one of :math:`K` classes (labeled as 0, ..., :math:`K`) and reflects a
-    realization of an independent RV :math:`Y_i` with observation-specific probability mass function defined over the :math:`K` classes. These :math:`K`
-    probabilities - that :math:`Y_i` takes on class 1, ..., :math:`K` - are modeled as additive combinations of smooth functions of covariates and
-    other parametric terms.
+    This Family assumes that each observation :math:`y_i` corresponds to one of :math:`K` classes
+    (labeled as 0, ..., :math:`K`) and reflects a realization of an independent RV :math:`Y_i` with
+    observation-specific probability mass function defined over the :math:`K` classes. These
+    :math:`K` probabilities - that :math:`Y_i` takes on class 1, ..., :math:`K` - are modeled as
+    additive combinations of smooth functions of covariates and other parametric terms.
 
-    As an example, consider a visual search experiment where :math:`K` distractors are presented on a computer screen together with
-    a single target and subjects are instructed to find the target and fixate it. With a Multinomial model we can estimate how
-    the probability of looking at each of the :math:`K` stimuli on the screen changes (smoothly) over time and as a function of other
-    predictor variables of interest (e.g., contrast of stimuli, dependening on whether parfticipants are instructed to be fast or accurate).
+    As an example, consider a visual search experiment where :math:`K` distractors are presented on
+    a computer screen together with a single target and subjects are instructed to find the target
+    and fixate it. With a Multinomial model we can estimate how the probability of looking at each
+    of the :math:`K` stimuli on the screen changes (smoothly) over time and as a function of other
+    predictor variables of interest (e.g., contrast of stimuli, dependening on whether parfticipants
+    are instructed to be fast or accurate).
 
     References:
-
-     - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
-     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+     - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, \
+        Scale and Shape.
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth \
+        Models.
 
     :param pars: K-1, i.e., 1- Number of classes or the number of linear predictors.
     :type pars: int
@@ -1563,11 +1817,11 @@ class MULNOMLSS(GAMLSSFamily):
     def __init__(self, pars: int) -> None:
         super().__init__(pars, [LOG() for _ in range(pars)])
 
-        # All derivatives taken from gamlss.r in mgcv: https://github.com/cran/mgcv/blob/master/R/gamlss.r#L1224 and have been adapted to work in Python code
-        # see also: Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
-        self.d_eta: bool = (
-            True  # Derivatives below are implemented with respect to linear predictor.
-        )
+        # All derivatives taken from gamlss.r in mgcv:
+        # https://github.com/cran/mgcv/blob/master/R/gamlss.r#L1224 and have been adapted to work
+        # in Python code see also: Rigby, R. A., & Stasinopoulos, D. M. (2005).
+        # Derivatives below are implemented with respect to linear predictor.
+        self.d_eta: bool = True
 
         self.d1: list[Callable] = []
         for ii in range(self.n_par):
@@ -1604,14 +1858,18 @@ class MULNOMLSS(GAMLSSFamily):
     def lp(self, y: np.ndarray, *mus: list[np.ndarray]) -> np.ndarray:
         """Log-probability of observing class k under current model.
 
-        Our DV consists of K classes but we essentially enforce a sum-to zero constraint on the DV so that we end up modeling only
-        K-1 (non-normalized) probabilities of observing class k (for all k except k==0) as an additive combination of smooth functions of our
-        covariates and other parametric terms. The probability of observing class 0 as well as the normalized probabilities of observing each
-        other class can readily be computed from these K-1 non-normalized probabilities. This is explained quite well on Wikipedia (see refs).
+        Our DV consists of K classes but we essentially enforce a sum-to zero constraint on the DV
+        so that we end up modeling only K-1 (non-normalized) probabilities of observing class k
+        (for all k except k==0) as an additive combination of smooth functions of our covariates
+        and other parametric terms. The probability of observing class 0 as well as the normalized
+        probabilities of observing each other class can readily be computed from these K-1
+        non-normalized probabilities. This is explained quite well on Wikipedia (see refs).
 
         Specifically, the probability of the outcome being class k is simply:
 
-        :math:`p(Y_i == k) = \\mu_k / (1 + \\sum_j^{K-1} \\mu_j)` where :math:`\\mu_k` is the aforementioned non-normalized probability of observing class :math:`k` - which is simply set to 1 for class :math:`k==0` (this follows from the sum-to-zero constraint; see Wikipedia).
+        :math:`p(Y_i == k) = \\mu_k / (1 + \\sum_j^{K-1} \\mu_j)` where :math:`\\mu_k` is the
+        aforementioned non-normalized probability of observing class :math:`k` - which is simply set
+        to 1 for class :math:`k==0` (this follows from the sum-to-zero constraint; see Wikipedia).
 
         So, the log-prob of the outcome being class k is:
 
@@ -1620,14 +1878,19 @@ class MULNOMLSS(GAMLSSFamily):
         References:
 
          - Wikipedia. https://en.wikipedia.org/wiki/Multinomial_logistic_regression
-         - gamlss.dist on Github (see Rigby & Stasinopoulos, 2005). https://github.com/gamlss-dev/gamlss.dist/blob/main/R/MN4.R
-         - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
+         - gamlss.dist on Github (see Rigby & Stasinopoulos, 2005). \
+            https://github.com/gamlss-dev/gamlss.dist/blob/main/R/MN4.R
+         - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for \
+            Location, Scale and Shape.
 
-        :param y: A numpy array containing each observed class, every element must be larger than or equal to 0 and smaller than `self.n_par + 1`.
+        :param y: A numpy array containing each observed class, every element must be larger than
+            or equal to 0 and smaller than `self.n_par + 1`.
         :type y: np.ndarray
-        :param mus: A list containing K-1 (`self.n_par`) lists, each containing the non-normalized probabilities of observing class k for every observation.
+        :param mus: A list containing K-1 (`self.n_par`) lists, each containing the non-normalized
+            probabilities of observing class k for every observation.
         :type mus: [np.ndarray]
-        :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
+        :return: a N-dimensional vector containing the log-probability of observing each data-point
+            under the current model.
         :rtype: np.ndarray
         """
         # Note, log(1) = 0, so we can simply initialize to -log(1 + \\sum_j^{K-1} mu_j)
@@ -1640,15 +1903,18 @@ class MULNOMLSS(GAMLSSFamily):
         return lp
 
     def llk(self, y: np.ndarray, *mus: list[np.ndarray]):
-        """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
+        """log-probability of data under given model. Essentially sum over all elements in the
+        vector returned by the :func:`lp` method.
 
         References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-
-        :param y: A numpy array containing each observed class, every element must be larger than or equal to 0 and smaller than `self.n_par + 1`.
+        :param y: A numpy array containing each observed class, every element must be larger than
+            or equal to 0 and smaller than `self.n_par + 1`.
         :type y: np.ndarray
-        :param mus: A list containing K-1 (`self.n_par`) lists, each containing the non-normalized probabilities of observing class k for every observation.
+        :param mus: A list containing K-1 (`self.n_par`) lists, each containing the non-normalized
+            probabilities of observing class k for every observation.
         :type mus: [np.ndarray]
         :return: The log-probability of observing all data under the current model.
         :rtype: float
@@ -1658,9 +1924,11 @@ class MULNOMLSS(GAMLSSFamily):
     def get_resid(self, y: np.ndarray, *mus: list[np.ndarray]) -> None:
         """Placeholder function for residuals of a Multinomial model - yet to be implemented.
 
-        :param y: A numpy array containing each observed class, every element must be larger than or equal to 0 and smaller than `self.n_par + 1`.
+        :param y: A numpy array containing each observed class, every element must be larger than
+            or equal to 0 and smaller than `self.n_par + 1`.
         :type y: np.ndarray
-        :param mus: A list containing K-1 (`self.n_par`) lists, each containing the non-normalized probabilities of observing class k for every observation.
+        :param mus: A list containing K-1 (`self.n_par`) lists, each containing the non-normalized
+            probabilities of observing class k for every observation.
         :type mus: [np.ndarray]
         :return: Currently None - since no residuals are implemented
         """
@@ -1673,25 +1941,31 @@ class MULNOMLSS(GAMLSSFamily):
 class GAMMALS(GAMLSSFamily):
     """Family for a GAMMA GAMMLSS model (Rigby & Stasinopoulos, 2005).
 
-    This Family follows the :class:`Gamma` family, in that we assume: :math:`Y_i \\sim \\Gamma(\\mu_i,\\phi_i)`. The difference to the :class:`Gamma` family
-    is that we now also model :math:`\\phi` as an additive combination of smooth variables and other parametric terms. The Gamma distribution is usually
-    not expressed in terms of the mean and scale (:math:`\\phi`) parameter but rather in terms of a shape and rate parameter - called :math:`\\alpha` and :math:`\\beta`
-    respectively. Wood (2017) provides :math:`\\alpha = 1/\\phi`. With this we can obtain :math:`\\beta = 1/\\phi/\\mu` (see the source-code for :func:`lp` method
+    This Family follows the :class:`Gamma` family, in that we assume:
+    :math:`Y_i \\sim \\Gamma(\\mu_i,\\phi_i)`. The difference to the :class:`Gamma` family is that
+    we now also model :math:`\\phi` as an additive combination of smooth variables and other
+    parametric terms. The Gamma distribution is usually not expressed in terms of the mean and
+    scale (:math:`\\phi`) parameter but rather in terms of a shape and rate parameter - called
+    :math:`\\alpha` and :math:`\\beta` respectively. Wood (2017) provides :math:`\\alpha = 1/\\phi`.
+    With this we can obtain :math:`\\beta = 1/\\phi/\\mu` (see the source-code for :func:`lp` method
     of the :class:`Gamma` family for details).
 
     References:
+     - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, \
+        Scale and Shape.
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+        Smooth Models.
 
-     - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
-     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-
-    :param links: Link functions for the mean and standard deviation. Standard would be ``links=[LOG(),LOG()]``.
+    :param links: Link functions for the mean and standard deviation. Standard would be
+        ``links=[LOG(),LOG()]``.
     :type links: [Link]
     """
 
     def __init__(self, links: list[Link]) -> None:
         super().__init__(2, links)
-        # All derivatives based on gamlss.dist: https://github.com/gamlss-dev/gamlss.dist, but adjusted so that \\phi (the scale) is \\sigma^2.
-        # see also: Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, Scale and Shape.
+        # All derivatives based on gamlss.dist:
+        # https://github.com/gamlss-dev/gamlss.dist, but adjusted so that \\phi is \\sigma^2.
+        # see also: Rigby, R. A., & Stasinopoulos, D. M. (2005).
 
         def d11(y, mu, scale):
             return (y - mu) / (scale * np.power(mu, 2))
@@ -1724,19 +1998,24 @@ class GAMMALS(GAMLSSFamily):
         self.d2m: list[Callable] = [dm21]
 
     def lp(self, y: np.ndarray, mu: np.ndarray, scale: np.ndarray) -> np.ndarray:
-        """Log-probability of observing every proportion in :math:`\\mathbf{y}` under their respective Gamma with mean = :math:`\\boldsymbol{\\mu}` and scale = :math:`\\boldsymbol{\\phi}`.
+        """Log-probability of observing every proportion in :math:`\\mathbf{y}` under their
+        respective Gamma with mean = :math:`\\boldsymbol{\\mu}` and
+        scale = :math:`\\boldsymbol{\\phi}`.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observed value.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
-        :param scale: A numpy array containing the predicted scale parameter for the response distribution corresponding to each observation.
+        :param scale: A numpy array containing the predicted scale parameter for the response
+            distribution corresponding to each observation.
         :type scale: np.ndarray
-        :return: a N-dimensional vector containing the log-probability of observing each data-point under the current model.
+        :return: a N-dimensional vector containing the log-probability of observing each data-point
+            under the current model.
         :rtype: np.ndarray
         """
         # Need to transform from mean and scale to \alpha & \beta
@@ -1754,19 +2033,23 @@ class GAMMALS(GAMLSSFamily):
         return scp.stats.gamma.logpdf(y, a=alpha, scale=(1 / beta))
 
     def lcp(self, y: np.ndarray, mu: np.ndarray, scale: np.ndarray) -> np.ndarray:
-        """Log of the cumulative probability of observing every value in y under their respective Gamma with mean = :math:`\\boldsymbol{\\mu}` and scale = :math:`\\boldsymbol{\\phi}`.
+        """Log of the cumulative probability of observing every value in y under their respective
+        Gamma with mean = :math:`\\boldsymbol{\\mu}` and scale = :math:`\\boldsymbol{\\phi}`.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observed value.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
-        :param scale: A numpy array containing the predicted scale parameter for the response distribution corresponding to each observation.
+        :param scale: A numpy array containing the predicted scale parameter for the response
+            distribution corresponding to each observation.
         :type scale: np.ndarray
-        :return: a N-dimensional vector containing the log of the cumulative probability of observing each data-point under the current model.
+        :return: a N-dimensional vector containing the log of the cumulative probability of
+            observing each data-point under the current model.
         :rtype: np.ndarray
         """
         alpha = 1 / scale
@@ -1774,17 +2057,20 @@ class GAMMALS(GAMLSSFamily):
         return scp.stats.gamma.logcdf(y, a=alpha, scale=(1 / beta))
 
     def llk(self, y: np.ndarray, mu: np.ndarray, scale: np.ndarray) -> float:
-        """log-probability of data under given model. Essentially sum over all elements in the vector returned by the :func:`lp` method.
+        """log-probability of data under given model. Essentially sum over all elements in the
+        vector returned by the :func:`lp` method.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
-        :param scale: A numpy array containing the predicted scale parameter for the response distribution corresponding to each observation.
+        :param scale: A numpy array containing the predicted scale parameter for the response
+            distribution corresponding to each observation.
         :type scale: np.ndarray
         :return: The log-probability of observing all data under the current model.
         :rtype: float
@@ -1794,21 +2080,26 @@ class GAMMALS(GAMLSSFamily):
     def get_resid(self, y: np.ndarray, mu: np.ndarray, scale: np.ndarray) -> np.ndarray:
         """Get standardized residuals for a Gamma GAMMLSS model (Rigby & Stasinopoulos, 2005).
 
-        Essentially, to get a standaridzed residual vector we first have to account for the mean-variance relationship of our RVs
-        (which we also have to do for the :class:`Gamma` family) - for this we can simply compute deviance residuals again (see Wood, 2017).
-        These should be :math:`\\sim N(0,\\phi_i)` (where :math:`\\phi_i` is the element in ``scale`` for a specific observation) - so if we divide each of those by the observation-specific scale we can expect the resulting
-        standardized residuals to be :math:` \\sim N(0,1)` if the model is correct.
+        Essentially, to get a standaridzed residual vector we first have to account for the
+        mean-variance relationship of our RVs (which we also have to do for the :class:`Gamma`
+        family) - for this we can simply compute deviance residuals again (see Wood, 2017).
+        These should be :math:`\\sim N(0,\\phi_i)` (where :math:`\\phi_i` is the element in
+        ``scale`` for a specific observation) - so if we divide each of those by the
+        observation-specific scale we can expect the resulting standardized residuals to be
+        :math:` \\sim N(0,1)` if the model is correct.
 
         References:
-
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution corresponding to each observation.
+        :param mu: A numpy array containing the predicted mean for the response distribution
+            corresponding to each observation.
         :type mu: np.ndarray
-        :param scale: A numpy array containing the predicted scale parameter for the response distribution corresponding to each observation.
+        :param scale: A numpy array containing the predicted scale parameter for the response
+            distribution corresponding to each observation.
         :type scale: np.ndarray
         :return: A list of standardized residuals that should be ~ N(0,1) if the model is correct.
         :rtype: np.ndarray
@@ -1821,7 +2112,8 @@ class GAMMALS(GAMLSSFamily):
 
         Fits a GAMM for the mean and initializes all coef. for the scale parameter to 1.
 
-        :param models: A list of :class:`mssm.models.GAMM`'s, - each based on one of the formulas provided to a model.
+        :param models: A list of :class:`mssm.models.GAMM`'s, - each based on one of the formulas
+            provided to a model.
         :type models: [mssm.models.GAMM]
         :return: A numpy array of shape (-1,1), holding initial values for all model coefficients.
         :rtype: np.ndarray
@@ -1842,30 +2134,40 @@ class GAMMALS(GAMLSSFamily):
 
 
 class GSMMFamily:
-    """Base-class for General Smooth "families" as discussed by Wood, Pya, & Säfken (2016). For estimation of :class:`mssm.models.GSMM` models via
-    ``L-qEFS`` (Krause et al., submitted) it is sufficient to implement :func:`llk`. :func:`gradient` and :func:`hessian` can then simply return ``None``. For exact estimation via
-    Newton's method, the latter two functions need to be implemented and have to return the gradient and hessian at the current coefficient estimate
+    """Base-class for General Smooth "families" as discussed by Wood, Pya, & Säfken (2016).
+    For estimation of :class:`mssm.models.GSMM` models via ``L-qEFS`` (Krause et al., submitted) it
+    is sufficient to implement :func:`llk`. :func:`gradient` and :func:`hessian` can then simply
+    return ``None``. For exact estimation via Newton's method, the latter two functions need to be
+    implemented and have to return the gradient and hessian at the current coefficient estimate
     respectively.
 
-    Additional parameters needed for likelihood, gradient, or hessian evaluation can be passed along via the ``llkargs``. They are then made available in ``self.llkargs``.
+    Additional parameters needed for likelihood, gradient, or hessian evaluation can be passed
+    along via the ``llkargs``. They are then made available in ``self.llkargs``.
 
     References:
-     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+        Smooth Models.
      - Nocedal & Wright (2006). Numerical Optimization. Springer New York.
-     - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient Estimation and Selection of Large Multi-Level Statistical Models. https://doi.org/10.48550/arXiv.2506.13132
+     - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient \
+        Estimation and Selection of Large Multi-Level Statistical Models. \
+        https://doi.org/10.48550/arXiv.2506.13132
 
     :param pars: Number of parameters of the likelihood.
     :type pars: int
-    :param links: List of Link functions for each parameter of the likelihood, e.g., `links=[Identity(),LOG()]`.
+    :param links: List of Link functions for each parameter of the likelihood,
+        e.g., `links=[Identity(),LOG()]`.
     :type links: [Link]
-    :ivar int, optional extra_coef: Number of extra coefficients required by specific family or ``None``. By default set to ``None`` and changed to ``int`` by specific families requiring this.
+    :ivar int, optional extra_coef: Number of extra coefficients required by specific family or
+        ``None``. By default set to ``None`` and changed to ``int`` by specific families requiring
+        this.
 
     """
 
     def __init__(self, pars: int, links: list[Link], *llkargs) -> None:
         self.n_par: int = pars
         self.links: list[Link] = links
-        self.llkargs = llkargs  # Any arguments that need to be passed to evaluate the likelihood/gradiant/hessian
+        # Any arguments that need to be passed to evaluate the likelihood/gradiant/hessian
+        self.llkargs = llkargs
         self.extra_coef: int | None = None
 
     def llk(
@@ -1878,17 +2180,29 @@ class GSMMFamily:
         """log-probability of data under given model.
 
         References:
-         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-         - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient Estimation and Selection of Large Multi-Level Statistical Models. https://doi.org/10.48550/arXiv.2506.13132
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+         - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient \
+            Estimation and Selection of Large Multi-Level Statistical Models. \
+            https://doi.org/10.48550/arXiv.2506.13132
 
-        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be flattened!).
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
         :type coef: np.ndarray
-        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each paramter of the llk.
         :type coef_split_idx: [int]
-        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
+        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
+            ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the
+            actual observed data is passed along via the first formula (so it is stored in
+            ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula,
+            then ``ys`` contains ``None`` at their indices to save memory.
         :type ys: list[np.ndarray | None]
-        :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None`` at indices for matrices which were flagged as "do not build" via the ``build_mat`` argument of the :func:`mssm.models.GSMM.fit` method.
+        :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None``
+            at indices for matrices which were flagged as "do not build" via the ``build_mat``
+            argument of the :func:`mssm.models.GSMM.fit` method.
         :type Xs: list[scp.sparse.csc_array | None]
         :return: The log-likelihood evaluated at ``coef``.
         :rtype: float
@@ -1904,26 +2218,42 @@ class GSMMFamily:
     ) -> np.ndarray:
         """Function to evaluate the gradient of the llk at current coefficient estimate ``coef``.
 
-        By default relies on numerical differentiation as implemented in scipy to approximate the Gradient from the implemented log-likelihood function.
-        See the link in the references for more details.
+        By default relies on numerical differentiation as implemented in scipy to approximate the
+        Gradient from the implemented log-likelihood function. See the link in the references for
+        more details.
 
         References:
-           - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-           - ``scipy.optimize.approx_fprime``: at https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.approx_fprime.html
-           - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient Estimation and Selection of Large Multi-Level Statistical Models. https://doi.org/10.48550/arXiv.2506.13132
+           - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+           - ``scipy.optimize.approx_fprime``: at \
+            https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.approx_fprime.html
+           - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient \
+            Estimation and Selection of Large Multi-Level Statistical Models. \
+            https://doi.org/10.48550/arXiv.2506.13132
 
-        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be flattened!).
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
         :type coef: np.ndarray
-        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each paramter of the llk.
         :type coef_split_idx: [int]
-        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
+        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
+            ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the
+            actual observed data is passed along via the first formula (so it is stored in
+            ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula,
+            then ``ys`` contains ``None`` at their indices to save memory.
         :type ys: list[np.ndarray | None]
-        :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None`` at indices for matrices which were flagged as "do not build" via the ``build_mat`` argument of the :func:`mssm.models.GSMM.fit` method.
+        :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None``
+            at indices for matrices which were flagged as "do not build" via the ``build_mat``
+            argument of the :func:`mssm.models.GSMM.fit` method.
         :type Xs: list[scp.sparse.csc_array | None]
-        :return: The Gradient of the log-likelihood evaluated at ``coef`` as numpy array of shape (-1,1).
+        :return: The Gradient of the log-likelihood evaluated at ``coef`` as numpy array of
+            shape (-1,1).
         :rtype: np.ndarray
         """
-        llk_warp = lambda x: self.llk(x.reshape(-1, 1), coef_split_idx, ys, Xs)
+
+        def llk_warp(x: np.ndarray) -> float:
+            return self.llk(x.reshape(-1, 1), coef_split_idx, ys, Xs)
 
         grad = scp.optimize.approx_fprime(coef.flatten(), llk_warp)
         return grad.reshape(-1, 1)
@@ -1937,21 +2267,34 @@ class GSMMFamily:
     ) -> scp.sparse.csc_array | None:
         """Function to evaluate the hessian of the llk at current coefficient estimate ``coef``.
 
-        Only has to be implemented if full Newton is to be used to estimate coefficients. If the L-qEFS update by Krause et al. (in preparation) is
-        to be used insetad, this method does not have to be implemented.
+        Only has to be implemented if full Newton is to be used to estimate coefficients. If the
+        L-qEFS update by Krause et al. (in preparation) is to be used insetad, this method does not
+        have to be implemented.
 
         References:
-           - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-           - ``scipy.optimize.approx_fprime``: at https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.approx_fprime.html
-           - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient Estimation and Selection of Large Multi-Level Statistical Models. https://doi.org/10.48550/arXiv.2506.13132
+           - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+           - ``scipy.optimize.approx_fprime``: at \
+            https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.approx_fprime.html
+           - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient \
+            Estimation and Selection of Large Multi-Level Statistical Models. \
+            https://doi.org/10.48550/arXiv.2506.13132
 
-        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be flattened!).
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
         :type coef: np.ndarray
-        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each paramter of the llk.
         :type coef_split_idx: [int]
-        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
+        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
+            ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the
+            actual observed data is passed along via the first formula (so it is stored in
+            ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula,
+            then ``ys`` contains ``None`` at their indices to save memory.
         :type ys: list[np.ndarray | None]
-        :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None`` at indices for matrices which were flagged as "do not build" via the ``build_mat`` argument of the :func:`mssm.models.GSMM.fit` method.
+        :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None``
+            at indices for matrices which were flagged as "do not build" via the ``build_mat``
+            argument of the :func:`mssm.models.GSMM.fit` method.
         :type Xs: list[scp.sparse.csc_array | None]
         :return: The Hessian of the log-likelihood evaluated at ``coef``.
         :rtype: scp.sparse.csc_array
@@ -1968,24 +2311,38 @@ class GSMMFamily:
     ) -> np.ndarray | None:
         """Get standardized residuals for a GSMM model.
 
-        Any implementation of this function should return a vector that looks like what could be expected from taking independent draws from :math:`N(0,1)`.
-        Any additional arguments required by a specific implementation can be passed along via ``kwargs``.
+        Any implementation of this function should return a vector that looks like what could be
+        expected from taking independent draws from :math:`N(0,1)`. Any additional arguments
+        required by a specific implementation can be passed along via ``kwargs``.
 
         **Note**: Families for which no residuals are available can return None.
 
         References:
-         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be flattened!).
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must
+            not be flattened!).
         :type coef: np.ndarray
-        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk.
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each paramter of the llk.
         :type coef_split_idx: [int]
-        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at their indices to save memory.
+        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
+            ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the
+            actual observed data is passed along via the first formula (so it is stored in
+            ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula,
+            then ``ys`` contains ``None`` at their indices to save memory.
         :type ys: list[np.ndarray | None]
-        :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None`` at indices for matrices which were flagged as "do not build" via the ``build_mat`` argument of the :func:`mssm.models.GSMM.fit` method.
+        :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None``
+            at indices for matrices which were flagged as "do not build" via the ``build_mat``
+            argument of the :func:`mssm.models.GSMM.fit` method.
         :type Xs: list[scp.sparse.csc_array | None]
-        :return: a vector of shape (-1,1) containing standardized residuals under the current model (**Note**, the first axis will not necessarily match the dimension of any of the response vectors (this will depend on the specific Family's implementation)) or None in case residuals are not readily available.
+        :return: a vector of shape (-1,1) containing standardized residuals under the current model
+            (**Note**, the first axis will not necessarily match the dimension of any of the
+            response vectors (this will depend on the specific Family's implementation)) or None in
+            case residuals are not readily available.
         :rtype: np.ndarray | None
         """
         pass
@@ -1995,7 +2352,8 @@ class GSMMFamily:
 
         Can return ``None`` , in which case random initialization will be used.
 
-        :param models: A list of :class:`mssm.models.GAMM`'s, - each based on one of the formulas provided to a model.
+        :param models: A list of :class:`mssm.models.GAMM`'s, - each based on one of the formulas
+            provided to a model.
         :type models: [mssm.models.GAMM]
         :return: A numpy array of shape (-1,1), holding initial values for all model coefficients.
         :rtype: np.ndarray
@@ -2009,17 +2367,20 @@ class GSMMFamily:
 
         :param penalties: A list of all penalties to be estimated by the model.
         :type penalties: [mssm.src.python.penalties.LambdaTerm]
-        :return: A list, holding - for each :math:`\\lambda` parameter to be estimated - an initial value.
+        :return: A list, holding - for each :math:`\\lambda` parameter to be estimated - an initial
+            value.
         :rtype: np.ndarray
         """
         return None
 
 
 class PropHaz(GSMMFamily):
-    """Family for proportional Hazard model - a type of General Smooth model as discussed by Wood, Pya, & Säfken (2016).
+    """Family for proportional Hazard model - a type of General Smooth model as discussed by
+    Wood, Pya, & Säfken (2016).
 
-    Based on Supplementary materials G in Wood, Pya, & Säfken (2016). The dependent variable passed to the :class:`mssm.src.python.formula.Formula`
-    needs to hold ``delta`` indicating whether the event was observed or not (i.e., only values in ``{0,1}``).
+    Based on Supplementary materials G in Wood, Pya, & Säfken (2016). The dependent variable
+    passed to the :class:`mssm.src.python.formula.Formula` needs to hold ``delta`` indicating
+    whether the event was observed or not (i.e., only values in ``{0,1}``).
 
     Examples::
 
@@ -2051,16 +2412,20 @@ class PropHaz(GSMMFamily):
        # Fit with Newton
        model.fit()
 
-       # Can plot the estimated effects on the scale of the linear predictor (i.e., log hazard) via mssmViz
+       # Can plot the estimated effects on the scale of the
+       # linear predictor (i.e., log hazard) via mssmViz
        plot(model)
 
     References:
-     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for \
+        General Smooth Models.
      - Nocedal & Wright (2006). Numerical Optimization. Springer New York.
 
-    :param ut: Unique event time vector (each time represnted as ``int``) as described by WPS (2016), holding unique event times in decreasing order.
+    :param ut: Unique event time vector (each time represnted as ``int``) as described by
+        WPS (2016), holding unique event times in decreasing order.
     :type ut: np.ndarray
-    :param r: Index vector as described by WPS (2016), holding for each data-point (i.e., for each row in ``Xs[0``]) the index to it's corresponding event time in ``ut``.
+    :param r: Index vector as described by WPS (2016), holding for each data-point
+        (i.e., for each row in ``Xs[0``]) the index to it's corresponding event time in ``ut``.
     :type r: np.ndarray
 
     """
@@ -2081,13 +2446,18 @@ class PropHaz(GSMMFamily):
         """Log-likelihood function as defined by Wood, Pya, & Säfken (2016).
 
         References:
-         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
 
-        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be flattened!).
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
         :type coef: np.ndarray
-        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk - not required by this family, which has a single parameter.
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each paramter of the llk - not required by this family,
+            which has a single parameter.
         :type coef_split_idx: [int]
-        :param ys: List containing the ``delta`` vector at the first and only index - see description of the model family.
+        :param ys: List containing the ``delta`` vector at the first and only index - see
+            description of the model family.
         :type ys: [np.ndarray]
         :param Xs: A list containing the sparse model matrix at the first and only index.
         :type Xs: [scp.sparse.csc_array]
@@ -2137,17 +2507,23 @@ class PropHaz(GSMMFamily):
         """Gradient as defined by Wood, Pya, & Säfken (2016).
 
         References:
-         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
 
-        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be flattened!).
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
         :type coef: np.ndarray
-        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk - not required by this family, which has a single parameter.
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each paramter of the llk - not required by this family,
+            which has a single parameter.
         :type coef_split_idx: [int]
-        :param ys: List containing the ``delta`` vector at the first and only index - see description of the model family.
+        :param ys: List containing the ``delta`` vector at the first and only index - see
+            description of the model family.
         :type ys: [np.ndarray]
         :param Xs: A list containing the sparse model matrix at the first and only index.
         :type Xs: [scp.sparse.csc_array]
-        :return: The Gradient of the log-likelihood evaluated at ``coef`` as numpy array of shape (-1,1).
+        :return: The Gradient of the log-likelihood evaluated at ``coef`` as numpy array of
+            shape (-1,1).
         :rtype: np.ndarray
         """
 
@@ -2201,13 +2577,18 @@ class PropHaz(GSMMFamily):
         """Hessian as defined by Wood, Pya, & Säfken (2016).
 
         References:
-         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
 
-        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be flattened!).
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
         :type coef: np.ndarray
-        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk - not required by this family, which has a single parameter.
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each paramter of the llk - not required by this family,
+            which has a single parameter.
         :type coef_split_idx: [int]
-        :param ys: List containing the ``delta`` vector at the first and only index - see description of the model family.
+        :param ys: List containing the ``delta`` vector at the first and only index - see
+            description of the model family.
         :type ys: [np.ndarray]
         :param Xs: A list containing the sparse model matrix at the first and only index.
         :type Xs: [scp.sparse.csc_array]
@@ -2269,20 +2650,30 @@ class PropHaz(GSMMFamily):
         See the :func:`PropHaz.get_survival` function for examples.
 
         References:
-           - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-           - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+           - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+           - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
 
-        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be flattened!).
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
         :type coef: np.ndarray
-        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the sub-sets associated with each paramter of the llk - not required by this family, which has a single parameter.
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each paramter of the llk - not required by this family,
+            which has a single parameter.
         :type coef_split_idx: [int]
-        :param ys: List containing the ``delta`` vector at the first and only index - see description of the model family.
+        :param ys: List containing the ``delta`` vector at the first and only index - see
+            description of the model family.
         :type ys: [np.ndarray]
         :param Xs: A list containing the sparse model matrix at the first and only index.
         :type Xs: [scp.sparse.csc_array]
-        :param resid_type: The type of residual to compute, supported are "Martingale" and "Deviance".
+        :param resid_type: The type of residual to compute, supported are "Martingale" and
+            "Deviance".
         :type resid_type: str, optional
-        :param reorder: A flattened np.ndarray containing for each data point the original index in the data-set before sorting. Used to re-order the residual vector into the original order. If this is set to None, the residual vector is not re-ordered and instead returned in the order of the sorted data-frame passed to the model formula.
+        :param reorder: A flattened np.ndarray containing for each data point the original index in
+            the data-set before sorting. Used to re-order the residual vector into the original
+            order. If this is set to None, the residual vector is not re-ordered and instead
+            returned in the order of the sorted data-frame passed to the model formula.
         :type reorder: np.ndarray
         :return: The residual vector of shape (-1,1)
         :rtype: np.ndarray
@@ -2325,18 +2716,24 @@ class PropHaz(GSMMFamily):
     def __prepare_predictions(
         self, coef: np.ndarray, delta: np.ndarray, Xs: list[scp.sparse.csc_array]
     ) -> None:
-        """Computes all the quantities defined by Wood, Pya, & Säfken (2016) that are necessary for predictions.
+        """Computes all the quantities defined by Wood, Pya, & Säfken (2016) that are necessary for
+        predictions.
 
-        This includes the cumulative base-line hazard, as well as the :math`\\mathbf{a}` vectors from WPS (2016). These are assigned to the instance of this family.
+        This includes the cumulative base-line hazard, as well as the :math`\\mathbf{a}` vectors
+        from WPS (2016). These are assigned to the instance of this family.
 
         References:
-         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
 
         :param coef: Coefficient vector as numpy array of shape (-1,1).
         :type coef: np.ndarray
-        :param delta: Dependent variable passed to :func:`mssm.src.python.formula.Formula`, holds (for each row in ``Xs[0``]) a value in ``{0,1}``, indicating whether for that observation the event was observed or not.
+        :param delta: Dependent variable passed to :func:`mssm.src.python.formula.Formula`, holds
+            (for each row in ``Xs[0``]) a value in ``{0,1}``, indicating whether for that
+            observation the event was observed or not.
         :type delta: np.ndarray
-        :param Xs The list model matrices (here holding a single model matrix) obtained from :func:`mssm.models.GAMMLSS.get_mmat`.
+        :param Xs: The list of model matrices (here holding a single model matrix) obtained from
+            :func:`mssm.models.GAMMLSS.get_mmat`.
         :type Xs: [scp.sparse.csc_array]
         """
         # Extract and define all variables defined by WPS (2016)
@@ -2418,7 +2815,8 @@ class PropHaz(GSMMFamily):
           import matplotlib.pyplot as plt
 
           # Simulate some data
-          sim_dat = sim3(500,2,c=1,seed=0,family=PropHaz([0],[0]),binom_offset = 0.1,correlate=False)
+          sim_dat = sim3(500,2,c=1,seed=0,family=PropHaz([0],[0]),binom_offset = 0.1,
+            correlate=False)
 
           # Prep everything for prophaz model
           sim_dat = sim_dat.sort_values(['y'],ascending=[False])
@@ -2441,7 +2839,8 @@ class PropHaz(GSMMFamily):
           model.fit()
 
           # Now get cumulative baseline hazard estimate
-          H = PropHaz_fam.get_baseline_hazard(model.coef,sim_formula_m.y_flat[sim_formula_m.NOT_NA_flat],model.get_mmat())
+          H = PropHaz_fam.get_baseline_hazard(model.coef,
+            sim_formula_m.y_flat[sim_formula_m.NOT_NA_flat],model.get_mmat())
 
           # And plot it
           plt.plot(ut,H)
@@ -2449,13 +2848,17 @@ class PropHaz(GSMMFamily):
           plt.ylabel("Cumulative Baseline Hazard")
 
         References:
-         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
 
         :param coef: Coefficient vector as numpy array of shape (-1,1).
         :type coef: np.ndarray
-        :param Xs: The list model matrices (here holding a single model matrix) obtained from :func:`mssm.models.GAMMLSS.get_mmat`.
+        :param Xs: The list of model matrices (here holding a single model matrix) obtained from
+            :func:`mssm.models.GAMMLSS.get_mmat`.
         :type Xs: [scp.sparse.csc_array]
-        :param delta: Dependent variable passed to :func:`mssm.src.python.formula.Formula`, holds (for each row in ``Xs[0``]) a value in ``{0,1}``, indicating whether for that observation the event was observed or not.
+        :param delta: Dependent variable passed to :func:`mssm.src.python.formula.Formula`, holds
+            (for each row in ``Xs[0``]) a value in ``{0,1}``, indicating whether for that
+            observation the event was observed or not.
         :type delta: np.ndarray
         :return: numpy array, holding ``k`` baseline hazard function estimates
         :rtype: np.ndarray
@@ -2476,7 +2879,8 @@ class PropHaz(GSMMFamily):
         V: scp.sparse.csc_array,
         compute_var: bool = True,
     ) -> tuple[np.ndarray, np.ndarray | None]:
-        """Compute survival function + variance at time-point ``t``, given ``k`` optional covariate vector(s) x as defined by Wood, Pya, & Säfken (2016).
+        """Compute survival function + variance at time-point ``t``, given ``k`` optional covariate
+        vector(s) x as defined by Wood, Pya, & Säfken (2016).
 
         Examples::
 
@@ -2486,7 +2890,8 @@ class PropHaz(GSMMFamily):
           import matplotlib.pyplot as plt
 
           # Simulate some data
-          sim_dat = sim3(500,2,c=1,seed=0,family=PropHaz([0],[0]),binom_offset = 0.1,correlate=False)
+          sim_dat = sim3(500,2,c=1,seed=0,family=PropHaz([0],[0]),binom_offset = 0.1,
+            correlate=False)
 
           # Prep everything for prophaz model
 
@@ -2523,15 +2928,18 @@ class PropHaz(GSMMFamily):
           # Get model matrix using only f0
           _,Xt,_ = model.predict(use_terms=[0],n_dat=new_dat)
 
-          # Now iterate over all time-points and obtain the predicted survival function + standard error estimate
+          # Now iterate over all time-points and obtain the predicted survival
+          # function + standard error estimate
           # for all 5 values of x0:
           S = np.zeros((len(ut),Xt.shape[0]))
           VS = np.zeros((len(ut),Xt.shape[0]))
           for idx,ti in enumerate(ut):
 
              # Su and VSu are of shape (5,1) here but will generally be of shape (Xt.shape[0],1)
-             Su,VSu = PropHaz_fam.get_survival(model.coef,model.get_mmat(),sim_formula_m.y_flat[sim_formula_m.NOT_NA_flat],
-                                              ti,Xt,model.lvi.T@model.lvi)
+             Su,VSu = PropHaz_fam.get_survival(model.coef,model.get_mmat(),
+                sim_formula_m.y_flat[sim_formula_m.NOT_NA_flat],
+                ti,Xt,model.lvi.T@model.lvi)
+
              S[idx,:] = Su.flatten()
              VS[idx,:] = VSu.flatten()
 
@@ -2549,36 +2957,48 @@ class PropHaz(GSMMFamily):
           # Note how the main effect of x0 is reflected in the plot above:
           plot(model,which=[0])
 
-          # Residual plots can be created via `plot_val` from `mssmViz` - by default Martingale residuals are returned (see Wood, 2017)
+          # Residual plots can be created via `plot_val` from `mssmViz` - by default Martingale
+          # residuals are returned (see Wood, 2017)
           fig = plt.figure(figsize=(10,3),layout='constrained')
           axs = fig.subplots(1,3,gridspec_kw={"wspace":0.2})
-          # Note the use of `gsmm_kwargs_pred={}` to ensure that the re-ordering is not applied to the plot against predicted values
+          # Note the use of `gsmm_kwargs_pred={}` to ensure that the re-ordering is not applied
+          # to the plot against predicted values
           plot_val(model,gsmm_kwargs={"reorder":res_idx},gsmm_kwargs_pred={},ar_lag=25,axs=axs)
 
           # Can also get Deviance residuals:
           fig = plt.figure(figsize=(10,3),layout='constrained')
           axs = fig.subplots(1,3,gridspec_kw={"wspace":0.2})
 
-          plot_val(model,gsmm_kwargs={"reorder":res_idx,"resid_type":"Deviance"},gsmm_kwargs_pred={"resid_type":"Deviance"},ar_lag=25,axs=axs)
+          plot_val(model,
+            gsmm_kwargs={"reorder":res_idx,"resid_type":"Deviance"},
+            gsmm_kwargs_pred={"resid_type":"Deviance"},ar_lag=25,axs=axs)
 
         References:
-         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
 
         :param coef: Coefficient vector as numpy array of shape (-1,1).
         :type coef: np.ndarray
-        :param Xs: The list model matrices (here holding a single model matrix) obtained from :func:`mssm.models.GAMMLSS.get_mmat`.
+        :param Xs: The list of model matrices (here holding a single model matrix) obtained from
+            :func:`mssm.models.GAMMLSS.get_mmat`.
         :type Xs: [scp.sparse.csc_array]
-        :param delta: Dependent variable passed to :func:`mssm.src.python.formula.Formula`, holds (for each row in ``Xs[0``]) a value in ``{0,1}``, indicating whether for that observation the event was observed or not.
+        :param delta: Dependent variable passed to :func:`mssm.src.python.formula.Formula`, holds
+            (for each row in ``Xs[0``]) a value in ``{0,1}``, indicating whether for that
+            observation the event was observed or not.
         :type delta: np.ndarray
         :param t: Time-point at which to evaluate the survival function.
         :type t: int
-        :param x: Optional vector (or matrix - can also be sparse) of covariate values. Needs to be of shape ``(k,len(coef))``.
+        :param x: Optional vector (or matrix - can also be sparse) of covariate values. Needs to be
+            of shape ``(k,len(coef))``.
         :type x: np.ndarray or scp.sparse.csc_array
         :param V: Estimated Co-variance matrix of posterior for ``coef``
         :type V: scp.sparse.csc_array
-        :param compute_var: Whether to compue the variance estimate of the survival as well. Otherwise None will be returned as the second argument.
+        :param compute_var: Whether to compue the variance estimate of the survival as well.
+            Otherwise None will be returned as the second argument.
         :type compute_var: bool, optional
-        :return: Two arrays, the first holds ``k`` survival function estimates, the latter holds ``k`` variance estimates for each of the survival function estimates. The second argument will be None instead if ``compute_var = False``.
+        :return: Two arrays, the first holds ``k`` survival function estimates, the latter holds
+            ``k`` variance estimates for each of the survival function estimates. The second
+            argument will be None instead if ``compute_var = False``.
         :rtype: tuple[np.ndarray, np.ndarray | None]
         """
 
@@ -2591,7 +3011,7 @@ class PropHaz(GSMMFamily):
         # print(eta)
 
         # Find nearest larger time-point
-        if not t in ut:
+        if t not in ut:
             t = min(ut[ut > t])
 
         # Find index in h corresponding to t

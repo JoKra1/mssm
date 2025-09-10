@@ -9,28 +9,27 @@ from .exp_fam import (
     Identity,
     warnings,
 )
-from .penalties import embed_in_S_sparse, split_shared_penalties, create_id_dict
+from .penalties import split_shared_penalties, create_id_dict
 from .formula import (
     build_sparse_matrix_from_formula,
-    setup_cache,
-    clear_cache,
     pd,
     Formula,
     mp,
     repeat,
-    os,
-    math,
     tqdm,
-    sys,
     copy,
 )
+from .file_loading import setup_cache, clear_cache
 from .compact_rep import computeH, computeHSR1, computeV, computeVSR1
 from .repara import reparam_model
 from functools import reduce
 from .custom_types import Fit_info, LambdaTerm
 from .terms import GammTerm
-from .matrix_solvers import *
+from .matrix_solvers import *  # noqa: F403
 from collections.abc import Callable
+import os
+import math
+import sys
 
 CACHE_DIR = "./.db"
 SHOULD_CACHE = False
@@ -44,17 +43,27 @@ def compute_lgdetD_bsb(
     emb_SJ: scp.sparse.csc_array,
     cCoef: np.ndarray,
 ) -> tuple[float, float]:
-    """Internal function. Computes derivative of :math:`log(|\\mathbf{S}_\\lambda|_+)`, the log of the "Generalized determinant", with respect to lambda.
+    """Internal function. Computes derivative of :math:`log(|\\mathbf{S}_\\lambda|_+)`, the log of
+    the "Generalized determinant", with respect to lambda.
 
-    See Wood, Shaddick, & Augustin, (2017) and Wood & Fasiolo (2017), and Wood (2017), and Wood (2011)
+    See Wood, Shaddick, & Augustin, (2017) and Wood & Fasiolo (2017), and Wood (2017), and
+    Wood (2011)
 
     References:
-       - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. https://doi.org/10.1080/01621459.2016.1195744
-       - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
-       - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models. https://doi.org/10.1111/j.1467-9868.2010.00749.x
-       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+     - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models \
+        for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. \
+        https://doi.org/10.1080/01621459.2016.1195744
+     - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing \
+        parameter optimization with application to Tweedie location, scale and shape models. \
+        https://doi.org/10.1111/biom.12666
+     - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood \
+        estimation of semiparametric generalized linear models: Estimation of Semiparametric \
+        Generalized Linear Models. https://doi.org/10.1111/j.1467-9868.2010.00749.x
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
 
-    :param rank: Known rank of penalty matrix or None (should only be set to int for single penalty terms)
+    :param rank: Known rank of penalty matrix or None (should only be set to int for single
+        penalty terms)
     :type rank: int | None
     :param cLam: Current lambda value
     :type cLam: float
@@ -67,15 +76,19 @@ def compute_lgdetD_bsb(
     :return: Tuple, first element is aforementioned derivative, second is ``cCoef.T@emb_SJ@cCoef``
     :rtype: tuple[float,float]
     """
-    # Derivative of log(|S_lambda|+), the log of the "Generalized determinant", with respect to lambda see Wood, Shaddick, & Augustin, (2017)
+    # Derivative of log(|S_lambda|+), the log of the "Generalized determinant", with respect to
+    # lambda see Wood, Shaddick, & Augustin, (2017)
     # and Wood & Fasiolo (2016), and Wood (2017), and Wood (2020)
-    if not rank is None:
-        # (gInv @ emb_SJ).trace() should be equal to rank(S_J)/cLam for single penalty terms (Wood, 2020)
+
+    # (gInv @ emb_SJ).trace() should be equal to rank(S_J)/cLam for single penalty terms
+    # see (Wood, 2020)
+    if rank is not None:
         lgdet_deriv = rank / cLam
     else:
         lgdet_deriv = (gInv @ emb_SJ).trace()
 
-    # Derivative of log(|XX + S_lambda|) is computed elsewhere, but we need the remaining part from the LLK (Wood & Fasiolo, 2016):
+    # Derivative of log(|XX + S_lambda|) is computed elsewhere, but we need the remaining part
+    # from the LLK (Wood & Fasiolo, 2016):
     bSb = cCoef.T @ emb_SJ @ cCoef
     return lgdet_deriv, bSb
 
@@ -83,15 +96,21 @@ def compute_lgdetD_bsb(
 def step_fellner_schall_sparse(
     lgdet_deriv: float, ldet_deriv: float, bSb: float, cLam: float, scale: float
 ) -> float:
-    """Internal function. Compute a generalized Fellner Schall update step for a lambda term. This update rule is discussed in Wood & Fasiolo (2017).
+    """Internal function. Compute a generalized Fellner Schall update step for a lambda term.
+    This update rule is discussed in Wood & Fasiolo (2017).
 
     References:
-       - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
-       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+     - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing \
+        parameter optimization with application to Tweedie location, scale and shape models. \
+        https://doi.org/10.1111/biom.12666
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
 
-    :param lgdet_deriv: Derivative of :math:`log(|\\mathbf{S}_\\lambda|_+)`, the log of the "Generalized determinant", with respect to lambda.
+    :param lgdet_deriv: Derivative of :math:`log(|\\mathbf{S}_\\lambda|_+)`, the log of the
+        "Generalized determinant", with respect to lambda.
     :type lgdet_deriv: float
-    :param ldet_deriv: Derivative of :math:`log(|\\mathbf{H} + S_\\lambda|)` (:math:`\\mathbf{X}` is negative hessian of penalized llk) with respect to lambda.
+    :param ldet_deriv: Derivative of :math:`log(|\\mathbf{H} + S_\\lambda|)` (:math:`\\mathbf{X}`
+        is negative hessian of penalized llk) with respect to lambda.
     :type ldet_deriv: float
     :param bSb: ``cCoef.T@emb_SJ@cCoef`` where ``cCoef`` is current coefficient estimate
     :type bSb: float
@@ -125,23 +144,30 @@ def step_fellner_schall_sparse(
 
 def grad_lambda(
     lgdet_deriv: float, ldet_deriv: float, bSb: float, scale: float
-) -> np.ndarray:
+) -> float:
     """Internal function. Computes gradient of REML criterion with respect to all lambda paraemters.
 
     References:
-       - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
-       - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models. https://doi.org/10.1111/j.1467-9868.2010.00749.x
-       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+     - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing \
+        parameter optimization with application to Tweedie location, scale and shape models. \
+        https://doi.org/10.1111/biom.12666
+     - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood \
+        estimation of semiparametric generalized linear models: Estimation of Semiparametric \
+        Generalized Linear Models. https://doi.org/10.1111/j.1467-9868.2010.00749.x
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
 
-    :param lgdet_deriv: Derivative of :math:`log(|\\mathbf{S}_\\lambda|_+)`, the log of the "Generalized determinant", with respect to lambda.
+    :param lgdet_deriv: Derivative of :math:`log(|\\mathbf{S}_\\lambda|_+)`, the log of the
+        "Generalized determinant", with respect to lambda.
     :type lgdet_deriv: float
-    :param ldet_deriv: Derivative of :math:`log(|\\mathbf{H} + S_\\lambda|)` (:math:`\\mathbf{X}` is negative hessian of penalized llk) with respect to lambda.
+    :param ldet_deriv: Derivative of :math:`log(|\\mathbf{H} + S_\\lambda|)` (:math:`\\mathbf{X}`
+        is negative hessian of penalized llk) with respect to lambda.
     :type ldet_deriv: float
     :param bSb: ``cCoef.T@emb_SJ@cCoef`` where ``cCoef`` is current coefficient estimate
     :type bSb: float
     :param scale: Optional scale parameter (or 1)
     :type scale: float
-    :return: The gradient of the reml criterion
+    :return: The derivative of the reml criterion with resepct to a specific smoothing penalty
     :rtype: np.ndarray
     """
     # P. Deriv of restricted likelihood with respect to lambda.
@@ -154,7 +180,9 @@ def compute_S_emb_pinv_det(
 ) -> tuple[
     scp.sparse.csc_array, scp.sparse.csc_array, scp.sparse.csc_array | None, list[bool]
 ]:
-    """Internal function. Compute the total embedded penalty matrix, a generalized inverse of the former, optionally a root of the total penalty matrix, and determines for which EFS updates the rank rather than the generalized inverse should be used.
+    """Internal function. Compute the total embedded penalty matrix, a generalized inverse of the
+    former, optionally a root of the total penalty matrix, and determines for which EFS updates the
+    rank rather than the generalized inverse should be used.
 
 
     :param col_S: Number of columns of total penalty matrix
@@ -165,7 +193,9 @@ def compute_S_emb_pinv_det(
     :type pinv: str
     :param root: Whther to compute a root of the generalized inverse, defaults to False
     :type root: bool, optional
-    :return: A tuple holding total embedded penalty matrix, a generalized inverse of the former, optionally a root of the total penalty matrix, and a list of bools indicating for which EFS updates the rank rather than the generalized inverse should be used
+    :return: A tuple holding total embedded penalty matrix, a generalized inverse of the former,
+        optionally a root of the total penalty matrix, and a list of bools indicating for which
+        EFS updates the rank rather than the generalized inverse should be used
     :rtype: tuple[scp.sparse.csc_array, scp.sparse.csc_array, scp.sparse.csc_array|None, list[bool]]
     """
     # Computes final S multiplied with lambda
@@ -179,9 +209,9 @@ def compute_S_emb_pinv_det(
     # penalties weighted by lambda) for every term so we first collect and sum
     # all term penalties together.
     SJs = []  # Summed SJs for every term
-    DJs = (
-        []
-    )  # None if summation, otherwise embedded DJ*sqrt(\\lambda) - root of corresponding SJ*\\lambda
+    # Below is None if summation, otherwise embedded DJ*sqrt(\\lambda) - root of
+    # corresponding SJ*\\lambda
+    DJs = []
     SJ_terms = []  # How many penalties were summed
     SJ_types = []  # None if summation otherwise penalty type
     SJ_lams = []  # None if summation otherwise penalty lambda
@@ -265,12 +295,14 @@ def compute_S_emb_pinv_det(
         else:
             # Compute pinv(SJ) via cholesky factor L so that L @ L' = SJ' @ SJ.
             # If SJ is full rank, then pinv(SJ) = inv(L)' @ inv(L) @ SJ'.
-            # However, SJ' @ SJ will usually be rank deficient so we add e=1e-7 to the main diagonal, because:
-            # As e -> 0 we get closer to pinv(SJ) if we base it on L_e in L_e @ L_e' = SJ' @ SJ + e*I
+            # However, SJ' @ SJ will usually be rank deficient so we add e=1e-7 to the
+            # main diagonal, because:
+            # As e -> 0 we get closer to pinv(SJ) if we base it on L_e in
+            # L_e @ L_e' = SJ' @ SJ + e*I
             # where I is the identity.
             if pinv != "svd":
                 t = scp.sparse.identity(SJs[SJi].shape[1], format="csc")
-                L, code = cpp_chol(SJs[SJi].T @ SJs[SJi] + 1e-10 * t)
+                L, code = cpp_chol(SJs[SJi].T @ SJs[SJi] + 1e-10 * t)  # noqa: F405
 
                 if code != 0:
                     warnings.warn(
@@ -283,18 +315,18 @@ def compute_S_emb_pinv_det(
 
             # Compute pinv via SVD
             else:
-                # ToDo: Find a better svd implementation. The sparse svds commonly fails with propack
+                # ToDo: Find better svd implementation. The sparse svds commonly fails with propack
                 # but propack is the only one for which we can set k=SJ.shape[1]. This is requried
                 # since especially the null-penalty terms require all vectors to be recoverd to
-                # compute an accurate pseudo-inverse.
-                # casting to an array and then using svd works but I would rather avoid that to benefit
+                # compute an accurate pseudo-inverse. Casting to an array and then using svd works
+                # but I would rather avoid that to benefit
                 # from the smaller memory footprint of the sparse variants.
-                # u, Sig, vt = scp.sparse.linalg.svds(SJ,SJ.shape[1],solver='propack',maxiter=20*SJ.shape[1])
+                # u, Sig, vt = scp.sparse.linalg.svds(SJ,SJ.shape[1],
+                #   solver='propack',maxiter=20*SJ.shape[1])
                 u, Sig, vt = scp.linalg.svd(SJs[SJi].toarray())
                 rs = [1 / s if s > 1e-7 else 0 for s in Sig]
                 SJ_pinv = vt.T @ np.diag(rs) @ u.T
                 SJ_pinv = scp.sparse.csc_array(SJ_pinv)
-                # print((SJs[SJi]@SJ_pinv@SJs[SJi] - SJs[SJi]).min(),(SJs[SJi]@SJ_pinv@SJs[SJi] - SJs[SJi]).max())
 
             if root:
                 eig, U = scp.linalg.eigh(SJs[SJi].toarray())
@@ -305,11 +337,13 @@ def compute_S_emb_pinv_det(
                     )
                 )
 
-                Dl_dat, Dl_rows, Dl_cols = translate_sparse(D_root)
+                Dl_dat, Dl_rows, Dl_cols = translate_sparse(D_root)  # noqa: F405
                 Dl_rows = np.array(Dl_rows)
                 Dl_cols = np.array(Dl_cols)
 
-            SJ_pinv_elements, SJ_pinv_rows, SJ_pinv_cols = translate_sparse(SJ_pinv)
+            # fmt: off
+            SJ_pinv_elements, SJ_pinv_rows, SJ_pinv_cols = translate_sparse(SJ_pinv)   # noqa: F405
+            # fmt: on
 
             SJ_pinv_rows = np.array(SJ_pinv_rows)
             SJ_pinv_cols = np.array(SJ_pinv_cols)
@@ -339,13 +373,14 @@ def compute_S_emb_pinv_det(
         S_root = scp.sparse.csc_array(
             (S_root_elements, (S_root_rows, S_root_cols)), shape=(col_S, col_S)
         )
-        if not S_root_singles is None:
+        if S_root_singles is not None:
             S_root += S_root_singles
 
     if len(FS_use_rank) != len(penalties):
         raise IndexError("An incorrect number of rank decisions were made.")
 
-    # At this point FS_use_rank has rank decisions for term-specific penalties. Now need to adjust this to lambda specific rank decisions
+    # At this point FS_use_rank has rank decisions for term-specific penalties.
+    # Now need to adjust this to lambda specific rank decisions
     id_dict = create_id_dict(penalties)
 
     if id_dict is not None:
@@ -374,12 +409,14 @@ def compute_S_emb_pinv_det(
 def PIRLS_pdat_weights(
     y: np.ndarray, mu: np.ndarray, eta: np.ndarray, family: Family
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Internal function. Compute pseudo-data and weights for Penalized Reweighted Least Squares iteration (Wood, 2017, 6.1.1)
+    """Internal function. Compute pseudo-data and weights for Penalized Reweighted Least Squares
+    iteration (Wood, 2017, 6.1.1)
 
     Calculation is based on a(mu) = 1, so reflects Fisher scoring!
 
     References:
-       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
 
     :param y: vector of observations
     :type y: np.ndarray
@@ -390,7 +427,8 @@ def PIRLS_pdat_weights(
     :param family: Family of model
     :type family: Family
     :raises ValueError: If not a single observation provided information for Fisher weights.
-    :return: the pesudo-data, weights, and a boolean array indicating invalid weights/pseudo-observations
+    :return: the pesudo-data, weights, and a boolean array indicating invalid
+        weights/pseudo-observations
     :rtype: tuple[np.ndarray,np.ndarray,np.ndarray]
     """
 
@@ -418,12 +456,14 @@ def PIRLS_pdat_weights(
 def PIRLS_newton_weights(
     y: np.ndarray, mu: np.ndarray, eta: np.ndarray, family: Family
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Internal function. Compute pseudo-data and newton weights for Penalized Reweighted Least Squares iteration (Wood, 2017, 6.1.1 and 3.1.2)
+    """Internal function. Compute pseudo-data and newton weights for Penalized Reweighted Least
+    Squares iteration (Wood, 2017, 6.1.1 and 3.1.2)
 
     Calculation reflects full Newton scoring!
 
     References:
-       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
 
     :param y: vector of observations
     :type y: np.ndarray
@@ -434,7 +474,8 @@ def PIRLS_newton_weights(
     :param family: Family of model
     :type family: Family
     :raises ValueError: If not a single observation provided information for newton weights.
-    :return: the pesudo-data, weights, and a boolean array indicating invalid weights/pseudo-observations
+    :return: the pesudo-data, weights, and a boolean array indicating invalid
+        weights/pseudo-observations
     :rtype: tuple[np.ndarray,np.ndarray,np.ndarray]
     """
 
@@ -478,9 +519,11 @@ def update_PIRLS(
 ) -> tuple[
     np.ndarray, scp.sparse.csc_array, np.ndarray | None, scp.sparse.csc_array | None
 ]:
-    """Internal function. Updates the pseudo-weights and observation vector ``yb`` and model matrix ``Xb`` of the working model.
+    """Internal function. Updates the pseudo-weights and observation vector ``yb`` and model
+    matrix ``Xb`` of the working model.
 
-    **Note**: Dimensions of ``yb`` and ``Xb`` might not match those of ``y`` and ``X`` since rows of invalid pseudo-data observations are dropped here.
+    **Note**: Dimensions of ``yb`` and ``Xb`` might not match those of ``y`` and ``X`` since rows
+    of invalid pseudo-data observations are dropped here.
 
     :param y: vector of observations
     :type y: np.ndarray
@@ -498,7 +541,9 @@ def update_PIRLS(
     :type family: Family
     :param Lrhoi: Optional covariance matrix of an ar1 model
     :type Lrhoi: scp.sparse.csc_array | None
-    :return: Updated observation vector ``yb`` and model matrix ``Xb`` of the working model, pseudo-weights, and a diagonal sparse matrix holding the **root** of the Fisher weights. Latter two are None for strictly additive models.
+    :return: Updated observation vector ``yb`` and model matrix ``Xb`` of the working model,
+        pseudo-weights, and a diagonal sparse matrix holding the **root** of the Fisher weights.
+        Latter two are None for strictly additive models.
     :rtype: tuple[np.ndarray,scp.sparse.csc_array,np.ndarray|None,scp.sparse.csc_array|None]
     """
     # Update the PIRLS weights and data (if the model is not Gaussian)
@@ -507,17 +552,19 @@ def update_PIRLS(
     Wr = None
 
     if (
-        isinstance(family, Gaussian) == False
-        or isinstance(family.link, Identity) == False
+        isinstance(family, Gaussian) is False
+        or isinstance(family.link, Identity) is False
     ):
         # Compute weights and pseudo-dat - drop any rows for which z or w is not defined.
         z, w, inval = PIRLS_pdat_weights(y, mu, eta, family)
 
-        Wr = scp.sparse.spdiags([np.sqrt(np.ndarray.flatten(w[inval == False]))], [0])
+        Wr = scp.sparse.spdiags(
+            [np.sqrt(np.ndarray.flatten(w[inval == False]))], [0]  # noqa: E712
+        )
 
         # Update yb and Xb
-        yb = Wr @ z[inval == False]
-        Xb = (Wr @ X[inval == False, :]).tocsc()
+        yb = Wr @ z[inval == False]  # noqa: E712
+        Xb = (Wr @ X[inval == False, :]).tocsc()  # noqa: E712
 
         if Lrhoi is not None:
             # Apply ar1 model to working linear model.
@@ -528,8 +575,8 @@ def update_PIRLS(
             # with eps ~ N(0,\\phi)
             # see section 1.8.4 of Wood (2017)
 
-            Lrhoiv = Lrhoi[inval == False, :]
-            Lrhoiv = Lrhoiv[:, inval == False]
+            Lrhoiv = Lrhoi[inval == False, :]  # noqa: E712
+            Lrhoiv = Lrhoiv[:, inval == False]  # noqa: E712
 
             yb = Lrhoiv.T @ yb  # Lhroi^T@Wr@z_i
             Xb = Lrhoiv.T @ Xb  # Lhroi^T@Wr@X
@@ -557,7 +604,8 @@ def compute_eigen_perm(Pr: list[int]) -> scp.sparse.csc_array:
 def apply_eigen_perm(
     Pr: list[int], InvCholXXSP: scp.sparse.csc_array
 ) -> scp.sparse.csc_array:
-    """Internal function. Unpivots columns of ``InvCholXXSP`` (usually the inverse of a Cholesky factor) and returns the unpivoted version.
+    """Internal function. Unpivots columns of ``InvCholXXSP`` (usually the inverse of a
+    Cholesky factor) and returns the unpivoted version.
 
     :param Pr: List of column indices
     :type Pr: list[int]
@@ -578,19 +626,25 @@ def computetrVS3(
     lTerm: LambdaTerm,
     V0: scp.sparse.csc_array,
 ) -> float:
-    """Internal function. Compute ``tr(V@lTerm.S_j)`` from linear operator of ``V`` obtained from L-BFGS-B optimizer.
+    """Internal function. Compute ``tr(V@lTerm.S_j)`` from linear operator of ``V`` obtained
+    from L-BFGS-B optimizer.
 
-    Relies on equation 3.13 in Byrd, Nocdeal & Schnabel (1992). Adapted to ensure positive semi-definitiness required
-    by EFS update.
+    Relies on equation 3.13 in Byrd, Nocdeal & Schnabel (1992). Adapted to ensure positive
+    semi-definitiness required by EFS update.
 
     References:
-       - Byrd, R. H., Nocedal, J., & Schnabel, R. B. (1994). Representations of quasi-Newton matrices and their use in limited memory methods. Mathematical Programming, 63(1), 129–156. https://doi.org/10.1007/BF01582063
+     - Byrd, R. H., Nocedal, J., & Schnabel, R. B. (1994). Representations of quasi-Newton \
+        matrices and their use in limited memory methods. Mathematical Programming, 63(1), \
+        129–156. https://doi.org/10.1007/BF01582063
 
-    :param t1: ``nCoef*2m``  matrix from Byrd, Nocdeal & Schnabel (1992). If ``t2 is None``, then ``V`` is treated like an identity matrix.
+    :param t1: ``nCoef*2m``  matrix from Byrd, Nocdeal & Schnabel (1992). If ``t2 is None``,
+        then ``V`` is treated like an identity matrix.
     :type t1: np.ndarray or None
-    :param t2: ``2m*2m``  matrix from Byrd, Nocdeal & Schnabel (1992). If ``t2 is None``, then ``V`` is treated like an identity matrix.
+    :param t2: ``2m*2m``  matrix from Byrd, Nocdeal & Schnabel (1992). If ``t2 is None``,
+        then ``V`` is treated like an identity matrix.
     :type t2: np.ndarray or None
-    :param t3: ``2m*nCoef``  matrix from Byrd, Nocdeal & Schnabel (1992). If ``t2 is None``, then ``t1`` is treated like an identity matrix.
+    :param t3: ``2m*nCoef``  matrix from Byrd, Nocdeal & Schnabel (1992). If ``t2 is None``,
+        then ``t1`` is treated like an identity matrix.
     :type t3: np.ndarray or None
     :param lTerm: Current lambda term for which to compute the trace.
     :type lTerm: LambdaTerm
@@ -610,7 +664,7 @@ def computetrVS3(
         S_c = lTerm.S_J_emb[:, [cidx]]  # Can remain sparse
 
         # Now compute product with vector in compact form
-        if not t2 is None:
+        if t2 is not None:
             # print((V0@S_c)[[cidx],[0]][0],lTerm.S_J_emb[[cidx],[cidx]])
             VS_c = (V0 @ S_c)[[cidx], [0]][0] - t1[[cidx], :] @ t2 @ t3 @ S_c
 
@@ -632,28 +686,39 @@ def calculate_edf(
     n_c: int,
     drop: list[int] | None,
     S_emb: scp.sparse.csc_array,
-) -> tuple[float, list[float], list[scp.sparse.csc_array]]:
-    """Internal function. Follows steps outlined by Wood & Fasiolo (2017) to compute total degrees of freedom by the model.
+) -> tuple[float, list[float], list[float]]:
+    """Internal function. Follows steps outlined by Wood & Fasiolo (2017) to compute total degrees
+    of freedom by the model.
 
-    Generates the B matrix also required for the derivative of the log-determinant of X.T@X+S_lambda. This
-    is either done exactly - as described by Wood & Fasiolo (2017) - or approximately. The latter is much faster.
+    Generates the B matrix also required for the derivative of the log-determinant of
+    X.T@X+S_lambda. This is either done exactly - as described by Wood & Fasiolo (2017) - or
+    approximately. The latter is much faster.
 
-    Also implements the L-qEFS trace computations described by Krause et al. (submitted) based on a quasi-newton approximation to the negative hessian of the log-likelihood.
+    Also implements the L-qEFS trace computations described by Krause et al. (submitted) based on a
+    quasi-newton approximation to the negative hessian of the log-likelihood.
 
     References:
-       - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
-       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-       - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient Estimation and Selection of Large Multi-Level Statistical Models. https://doi.org/10.48550/arXiv.2506.13132
+     - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing \
+        parameter optimization with application to Tweedie location, scale and shape models. \
+        https://doi.org/10.1111/biom.12666
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
+     - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient \
+        Estimation and Selection of Large Multi-Level Statistical Models. \
+        https://doi.org/10.48550/arXiv.2506.13132
 
     :param LP: Pivoted Cholesky of negative penalzied hessian or None
     :type LP: scp.sparse.csc_array | None
     :param Pr: Permutation list of ``LP``
     :type Pr: list[int]
-    :param InvCholXXS: Unpivoted Inverse of ``LP``, or a quasi-newton approximation of it (for the L-qEFS update), or None
+    :param InvCholXXS: Unpivoted Inverse of ``LP``, or a quasi-newton approximation of it
+        (for the L-qEFS update), or None
     :type InvCholXXS: scp.sparse.csc_array | scp.sparse.linalg.LinearOperator | None
     :param merged_penalties: list of penalties
     :type merged_penalties: list[LambdaTerm]
-    :param lgdetDs: list of Derivatives of :math:`log(|\\mathbf{H} + S_\\lambda|)` (:math:`\\mathbf{X}` is negative hessian of penalized llk) with respect to lambda.
+    :param lgdetDs: list of Derivatives of
+        :math:`log(|\\mathbf{H} + S_\\lambda|)` (:math:`\\mathbf{X}` is negative hessian of
+        penalized llk) with respect to lambda.
     :type lgdetDs: list[float]
     :param colsX: Number of columns of model matrix
     :type colsX: int
@@ -663,8 +728,10 @@ def calculate_edf(
     :type drop: list[int]
     :param S_emb: Total penalty matrix
     :type S_emb: scp.sparse.csc_array
-    :return: A tuple containing the total estimated degrees of freedom, the amount of parameters penalized away by individual penalties in a list, and a list of the aforementioned B matrices
-    :rtype: tuple[float,list[float],list[scp.sparse.csc_array]]
+    :return: A tuple containing the total estimated degrees of freedom, the amount of parameters
+        penalized away by individual penalties in a list, and a list of the aforementioned sum
+        of the elements of the aforementioned B matrices raised to the power of 2.
+    :rtype: tuple[float,list[float],list[float]]
     """
 
     total_edf = colsX
@@ -673,7 +740,7 @@ def calculate_edf(
 
     penalties = split_shared_penalties(merged_penalties)
 
-    if (not InvCholXXS is None) and isinstance(
+    if (InvCholXXS is not None) and isinstance(
         InvCholXXS, scp.sparse.linalg.LinearOperator
     ):
         # Following prepares trace computation via equation 3.13 in Byrd, Nocdeal & Schnabel (1992).
@@ -690,11 +757,11 @@ def calculate_edf(
         form = InvCholXXS.form
 
         H0 = (scp.sparse.identity(colsX, format="csc") * omega) + S_emb
-        Lp, Pr, _ = cpp_cholP(H0)
-        P = compute_eigen_perm(Pr)
+        Lp, Pr, _ = cpp_cholP(H0)  # noqa: F405
+        # P = compute_eigen_perm(Pr)
 
         # ... and the corresponding inverse.
-        LVp0 = compute_Linv(Lp, n_c)
+        LVp0 = compute_Linv(Lp, n_c)  # noqa: F405
         LV0 = apply_eigen_perm(Pr, LVp0)
         V0 = LV0.T @ LV0
 
@@ -742,8 +809,8 @@ def calculate_edf(
                     s, y, rho, H0, omega, make_psd=True, explicit=False
                 )
 
-                # When using SR1 int2 is potentially singular, so we need a modified Woodbury that accounts for that.
-                # This is given by eq. 23 in Henderson & Searle (1981):
+                # When using SR1 int2 is potentially singular, so we need a modified Woodbury that
+                # accounts for that. This is given by eq. 23 in Henderson & Searle (1981):
                 invt2 = np.identity(int2.shape[1]) + int2 @ nt3 @ V0 @ nt1
 
                 U, sv_invt2, VT = scp.linalg.svd(invt2, lapack_driver="gesvd")
@@ -761,7 +828,7 @@ def calculate_edf(
             # LV = LVT.T
 
     for lti, lTerm in enumerate(penalties):
-        if not InvCholXXS is None:
+        if InvCholXXS is not None:
             # Compute B, needed for Fellner Schall update (Wood & Fasiolo, 2017)
             if isinstance(InvCholXXS, scp.sparse.linalg.LinearOperator):
                 Bps = computetrVS3(t1, t2, t3, lTerm, V0)
@@ -769,9 +836,9 @@ def calculate_edf(
                 B = InvCholXXS @ lTerm.D_J_emb
                 Bps = B.power(2).sum()
         else:
-            Bps = compute_B(LP, compute_eigen_perm(Pr), lTerm, n_c, drop)
+            Bps = compute_B(LP, compute_eigen_perm(Pr), lTerm, n_c, drop)  # noqa: F405
 
-            if not lTerm.clust_series is None:
+            if lTerm.clust_series is not None:
                 if Bps[1] < lgdetDs[lti]:
                     Bps = Bps[1]
                 elif (Bps[1] * 0.7 + Bps[0] * 0.3) < lgdetDs[lti]:
@@ -786,11 +853,12 @@ def calculate_edf(
         pen_params = lTerm.lam * Bps
         total_edf -= pen_params
         Bs.append(Bps)
-        term_edfs.append(
-            pen_params
-        )  # Not actually edf yet - rather the amount of parameters penalized away by individual penalties.
+        # Not actually edf yet - rather the amount of parameters penalized away by
+        # individual penalties.
+        term_edfs.append(pen_params)
 
-    # At this point Bs has derivatives for term-specific penalties. Now need to adjust this to lambda specific ones
+    # At this point Bs has derivatives for term-specific penalties. Now need to adjust this to
+    # lambda specific ones
     id_dict = create_id_dict(penalties)
 
     if id_dict is not None:
@@ -814,17 +882,22 @@ def calculate_edf(
 def calculate_term_edf(
     merged_penalties: list[LambdaTerm], param_penalized: list[float]
 ) -> list[float]:
-    """Internal function. Computes the smooth-term (and random term) specific estimated degrees of freedom.
+    """Internal function. Computes the smooth-term (and random term) specific estimated degrees of
+    freedom.
 
     See Wood (2017) for a definition and Wood, S. N., & Fasiolo, M. (2017). for the computations.
 
     References:
-       - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
-       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+     - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing \
+        parameter optimization with application to Tweedie location, scale and shape models. \
+        https://doi.org/10.1111/biom.12666
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
 
     :param merged_penalties: List of penalties
     :type merged_penalties: list[LambdaTerm]
-    :param param_penalized: List holding the amount of parameters penalized away by individual penalties - obtained from :func:`calculate_edf`.
+    :param param_penalized: List holding the amount of parameters penalized away by individual
+        penalties - obtained from :func:`calculate_edf`.
     :type param_penalized: list[float]
     :return: A list holding the estimated degrees of freedom per smooth/random term in the model
     :rtype: list[float]
@@ -893,14 +966,18 @@ def update_scale_edf(
     scp.sparse.csc_array | None,
     float,
     list[float],
-    list[scp.sparse.csc_array],
+    list[float],
     float,
 ]:
-    """Internal function. Updates the scale of the model. For this the edf are computed as well - they are returned as well because they are needed for the lambda step.
+    """Internal function. Updates the scale of the model. For this the edf are computed as well -
+    they are returned as well because they are needed for the lambda step.
 
     References:
-       - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
-       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+     - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing \
+        parameter optimization with application to Tweedie location, scale and shape models. \
+        https://doi.org/10.1111/biom.12666
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
 
     :param y: vector of observations
     :type y: np.ndarray
@@ -920,7 +997,8 @@ def update_scale_edf(
     :type InvCholXXSP: scp.sparse.csc_array | None
     :param Pr: Permutation list of ``LP``
     :type Pr: list[int]
-    :param lgdetDs: List of derivatives of :math:`log(|\\mathbf{S}_\\lambda|_+)`, the log of the "Generalized determinant", with respect to lambdas.
+    :param lgdetDs: List of derivatives of :math:`log(|\\mathbf{S}_\\lambda|_+)`, the log of the
+        "Generalized determinant", with respect to lambdas.
     :type lgdetDs: list[float]
     :param Lrhoi: Optional covariance matrix of an ar1 model
     :type Lrhoi: scp.sparse.csc_array | None
@@ -934,8 +1012,11 @@ def update_scale_edf(
     :type drop: list[int]
     :param n_c: Number of cores to use
     :type n_c: int
-    :return: a tuple containing the working residuals, optionally the unpivoted inverse of ``LP``, total edf, term-wise edf, Bs, scale estimate
-    :rtype: tuple[np.ndarray, scp.sparse.csc_array|None, float, list[float], list[scp.sparse.csc_array], float]
+    :return: a tuple containing the working residuals, optionally the unpivoted inverse of ``LP``,
+        total edf, term-wise edf, a list of the aforementioned sum
+        of the elements of the aforementioned B matrices raised to the power of 2, scale estimate
+    :rtype: tuple[np.ndarray, scp.sparse.csc_array|None, float, list[float],
+        list[float], float]
     """
     # Updates the scale of the model. For this the edf
     # are computed as well - they are returned because they are needed for the
@@ -945,8 +1026,8 @@ def update_scale_edf(
     # Standard residuals for AMM
     dropped = 0
     if (
-        isinstance(family, Gaussian) == False
-        or isinstance(family.link, Identity) == False
+        isinstance(family, Gaussian) is False
+        or isinstance(family.link, Identity) is False
     ):
         inval = np.isnan(z)
         dropped = np.sum(
@@ -955,26 +1036,29 @@ def update_scale_edf(
 
         # Apply ar1 model to working residuals
         if Lrhoi is not None:
-            inval_f = (inval == False).flatten()
+            inval_f = (inval == False).flatten()  # noqa: E712
             Lrhoiv = Lrhoi[inval_f, :]
             Lrhoiv = Lrhoiv[:, inval_f]
 
             wres = Lrhoiv.T @ (
-                Wr @ (z[inval == False] - eta[inval == False]).reshape(-1, 1)
+                Wr
+                @ (z[inval == False] - eta[inval == False]).reshape(-1, 1)  # noqa: E712
             )
         else:
-            wres = Wr @ (z[inval == False] - eta[inval == False]).reshape(-1, 1)
+            wres = Wr @ (z[inval == False] - eta[inval == False]).reshape(  # noqa: E712
+                -1, 1
+            )
     else:
         wres = y - eta
 
     # Calculate total and term wise edf
     InvCholXXS = None
-    if not InvCholXXSP is None:
+    if InvCholXXSP is not None:
         InvCholXXS = apply_eigen_perm(Pr, InvCholXXSP)
 
         # Dropped some terms, need to insert zero columns and rows for dropped coefficients
         if InvCholXXS.shape[1] < colsX:
-            Linvdat, Linvrow, Linvcol = translate_sparse(InvCholXXS)
+            Linvdat, Linvrow, Linvcol = translate_sparse(InvCholXXS)  # noqa: F405
 
             Linvrow = keep[Linvrow]
             Linvcol = keep[Linvcol]
@@ -983,7 +1067,8 @@ def update_scale_edf(
                 (Linvdat, (Linvrow, Linvcol)), shape=(colsX, colsX)
             )
 
-    # If there are penalized terms we need to adjust the total_edf - make sure to subtract dropped coef from colsX
+    # If there are penalized terms we need to adjust the total_edf - make sure to subtract
+    # dropped coef from colsX
     if len(penalties) > 0:
         total_edf, term_edfs, Bs = calculate_edf(
             LP,
@@ -1030,11 +1115,15 @@ def update_coef(
     list[int] | None,
     list[int] | None,
 ]:
-    """Internal function. Estimates the coefficients of the model and updates the linear predictor and mean estimates.
+    """Internal function. Estimates the coefficients of the model and updates the linear predictor
+    and mean estimates.
 
     References:
-       - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
-       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+     - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing \
+        parameter optimization with application to Tweedie location, scale and shape models. \
+        https://doi.org/10.1111/biom.12666
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
 
     :param yb: vector of observations of the working model
     :type yb: np.ndarray
@@ -1054,19 +1143,23 @@ def update_coef(
     :type formula: Formula | None
     :param offset: Offset (fixed effect) to add to ``eta``
     :type offset: float | np.ndarray
-    :return: A tuple containing the linear predictor ``eta``, the estimated means ``mu``, the estimated coefficients, the column permutation indices ``Pr``, the column permutation matirx ``P``, the cholesky of the pivoted penalized negative hessian, an optional list of the coefficients to keep, an optional list of the estimated coefficients to drop
-    :rtype: tuple[np.ndarray, np.ndarray, np.ndarray, list[int], scp.sparse.csc_array, scp.sparse.csc_array, list[int]|None, list[int]|None]
+    :return: A tuple containing the linear predictor ``eta``, the estimated means ``mu``, the
+        estimated coefficients, the column permutation indices ``Pr``, the column permutation
+        matrix ``P``, the cholesky of the pivoted penalized negative hessian, an optional list
+        of the coefficients to keep, an optional list of the estimated coefficients to drop
+    :rtype: tuple[np.ndarray, np.ndarray, np.ndarray, list[int], scp.sparse.csc_array,
+        scp.sparse.csc_array, list[int]|None, list[int]|None]
     """
     # Solves the coefficients of an additive model, given weights and penalty.
     keep = None
     drop = None
     if formula is None:
         if S_root is None:
-            LP, Pr, coef, code = cpp_solve_coef(yb, Xb, S_emb)
+            LP, Pr, coef, code = cpp_solve_coef(yb, Xb, S_emb)  # noqa: F405
             P = compute_eigen_perm(Pr)
 
         else:  # Qr-based
-            RP, Pr1, Pr2, coef, rank, code = cpp_solve_coef_pqr(
+            RP, Pr1, Pr2, coef, rank, code = cpp_solve_coef_pqr(  # noqa: F405
                 yb, Xb, S_root.T.tocsc()
             )
 
@@ -1088,7 +1181,7 @@ def update_coef(
             # And identify which coef was dropped
             idx = np.arange(len(coef))
             drop = idx[np.isnan(coef)]
-            keep = idx[np.isnan(coef) == False]
+            keep = idx[np.isnan(coef) == False]  # noqa: E712
 
             # Now actually set dropped ones to zero
             coef[drop] = 0
@@ -1096,17 +1189,18 @@ def update_coef(
             # Convert R so that rest of code can just continue as with Chol (i.e., L)
             LP = RP.T.tocsc()
 
-            # Keep only columns of Pr/P that belong to identifiable params. So P.T@LP is Cholesky of negative penalized Hessian
-            # of model without unidentifiable coef. Important: LP and Pr/P no longer match dimensions of embedded penalties
-            # after this! So we need to keep track of that in the appropriate functions (i.e., `calculate_edf` which calls
+            # Keep only columns of Pr/P that belong to identifiable params. So P.T@LP is Cholesky of
+            # negative penalized Hessian of model without unidentifiable coef. Important: LP and
+            # Pr/P no longer match dimensions of embedded penalties after this! So we need to keep
+            # track of that in the appropriate functions (i.e., `calculate_edf` which calls
             # `compute_B` when called with only LP and not Linv).
             P = P[:, keep]
-            _, Pr, _ = translate_sparse(P.tocsc())
+            _, Pr, _ = translate_sparse(P.tocsc())  # noqa: F405
             P = compute_eigen_perm(Pr)
 
     else:
         # yb is X.T@y and Xb is X.T@X
-        LP, Pr, coef, code = cpp_solve_coefXX(yb, Xb + S_emb)
+        LP, Pr, coef, code = cpp_solve_coefXX(yb, Xb + S_emb)  # noqa: F405
         P = compute_eigen_perm(Pr)
 
     # Update mu & eta
@@ -1125,8 +1219,8 @@ def update_coef(
     mu = eta
 
     if (
-        isinstance(family, Gaussian) == False
-        or isinstance(family.link, Identity) == False
+        isinstance(family, Gaussian) is False
+        or isinstance(family.link, Identity) is False
     ):
         with (
             warnings.catch_warnings()
@@ -1162,11 +1256,12 @@ def update_coef_and_scale(
     np.ndarray,
     np.ndarray,
     scp.sparse.csc_array | None,
+    scp.sparse.csc_array | None,
     list[float],
     list[float],
     float,
     list[float],
-    list[scp.sparse.csc_array],
+    list[float],
     float,
     np.ndarray,
     list[int] | None,
@@ -1175,8 +1270,11 @@ def update_coef_and_scale(
     """Internal function to update the coefficients and (optionally) scale parameter of the model.
 
     References:
-       - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
-       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+     - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing \
+        parameter optimization with application to Tweedie location, scale and shape models. \
+        https://doi.org/10.1111/biom.12666
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
 
     :param y: vector of observations
     :type y: np.ndarray
@@ -1204,7 +1302,8 @@ def update_coef_and_scale(
     :type S_root: scp.sparse.csc_array | None
     :param S_pinv: Generalized inverse of total penalty matrix
     :type S_pinv: scp.sparse.csc_array
-    :param FS_use_rank: A list of bools indicating for which EFS updates the rank rather than the generalized inverse should be used
+    :param FS_use_rank: A list of bools indicating for which EFS updates the rank rather than the
+        generalized inverse should be used
     :type FS_use_rank: list[bool]
     :param penalties: List of penalties
     :type penalties: list[LambdaTerm]
@@ -1212,12 +1311,21 @@ def update_coef_and_scale(
     :type n_c: int
     :param formula: Formula of the model
     :type formula: Formula
-    :param form_Linv: Whether to form the inverse of the cholesky of the negative penalzied hessian or not
+    :param form_Linv: Whether to form the inverse of the cholesky of the negative penalzied hessian
+        or not
     :type form_Linv: bool
     :param offset: Offset (fixed effect) to add to ``eta``
     :type offset: float | np.ndarray
-    :return: A tuple containing the linear predictor ``eta``, the estimated means ``mu``, the estimated coefficients, the unpivoted cholesky of the penalized negative hessian, the inverse of the former (optional), derivative of :math:`log(|\\mathbf{S}_\\lambda|_+)` with respect to lambdas, cCoef.T@emb_SJ@cCoef for each SJ, total edf, termwise edf, Bs, scale estimate, working residuals, an optional list of the coefficients to keep, an optional list of the estimated coefficients to drop
-    :rtype: tuple[np.ndarray, np.ndarray, np.ndarray, scp.sparse.csc_array|None, list[float], list[float], float, list[float], list[scp.sparse.csc_array], float, np.ndarray, list[int]|None, list[int]|None]
+    :return: A tuple containing the linear predictor ``eta``, the estimated means ``mu``, the
+        estimated coefficients, the unpivoted cholesky of the penalized negative hessian,
+        the inverse of the former (optional), derivative of :math:`log(|\\mathbf{S}_\\lambda|_+)`
+        with respect to lambdas, cCoef.T@emb_SJ@cCoef for each SJ, total edf, termwise edf, 
+        a list of the aforementioned sum of the elements of the aforementioned B matrices raised to
+        the power of 2, scale estimate, working residuals, an optional list of the coefficients to
+        keep, an optional list of the estimated coefficients to drop
+    :rtype: tuple[np.ndarray, np.ndarray, np.ndarray, scp.sparse.csc_array | None,
+        scp.sparse.csc_array|None, list[float], list[float], float, list[float],
+        list[float], float, np.ndarray, list[int]|None, list[int]|None]
     """
     # Solves the additive model for a given set of weights and penalty
     eta, mu, coef, Pr, P, LP, keep, drop = update_coef(
@@ -1245,16 +1353,17 @@ def update_coef_and_scale(
     # Solve for inverse of Chol factor of XX+S
     InvCholXXSP = None
     if form_Linv:
-        InvCholXXSP = compute_Linv(LP, n_c)
+        InvCholXXSP = compute_Linv(LP, n_c)  # noqa: F405
 
     # Un-pivot L
     L = P.T @ LP
 
-    # Makes sense to insert zero rows and columns here in case of unidentifiable params since L is not used for any solves.
-    # InvCholXXSP might also be of reduced size but is not un-pivoted here so we don't need to worry about padding here.
+    # Makes sense to insert zero rows and columns here in case of unidentifiable params since L is
+    # not used for any solves. InvCholXXSP might also be of reduced size but is not un-pivoted
+    # here so we don't need to worry about padding here.
     if LP.shape[1] < S_emb.shape[1]:
 
-        Ldat, Lrow, Lcol = translate_sparse(L.tocsc())  # L@L.T = H_pen
+        Ldat, Lrow, Lcol = translate_sparse(L.tocsc())  # L@L.T = H_pen  # noqa: F405
 
         Lrow = keep[Lrow]
         Lcol = keep[Lcol]
@@ -1334,12 +1443,18 @@ def init_step_gam(
     np.ndarray,
     scp.sparse.csc_array,
 ]:
-    """Internal function. Gets initial estimates for a GAM model for coefficients and proposes first lambda update.
+    """Internal function. Gets initial estimates for a GAM model for coefficients and proposes
+    first lambda update.
 
     References:
-       - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
-       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-       - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient Estimation and Selection of Large Multi-Level Statistical Models. https://doi.org/10.48550/arXiv.2506.13132
+     - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing \
+        parameter optimization with application to Tweedie location, scale and shape models. \
+        https://doi.org/10.1111/biom.12666
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
+     - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient \
+        Estimation and Selection of Large Multi-Level Statistical Models. \
+        https://doi.org/10.48550/arXiv.2506.13132
 
     :param y: vector of observations
     :type y: np.ndarray
@@ -1369,7 +1484,8 @@ def init_step_gam(
     :type n_c: int
     :param formula: Formula of the model
     :type formula: Formula
-    :param form_Linv: Whether to form the inverse of the cholesky of the negative penalzied hessian or not
+    :param form_Linv: Whether to form the inverse of the cholesky of the negative penalzied hessian
+        or not
     :type form_Linv: bool
     :param method: Which method to use to solve for the coefficients ("Chol" or "Qr")
     :type method: str
@@ -1377,8 +1493,11 @@ def init_step_gam(
     :type offset: float | np.ndarray
     :param Lrhoi: Optional covariance matrix of an ar1 model
     :type Lrhoi: scp.sparse.csc_array | None
-    :return: A tuple containing the deviance ``dev``, penalized deviance ``pen_dev``,eta, mu, coef, CholXXS, InvCholXXS, total_edf, term_edfs, scale, wres, lam_delta, S_emb
-    :rtype: tuple[float, float, np.ndarray, np.ndarray, np.ndarray, scp.sparse.csc_array, scp.sparse.csc_array, float, list[float], float, np.ndarray, np.ndarray, scp.sparse.csc_array]
+    :return: A tuple containing the deviance ``dev``, penalized deviance ``pen_dev``,eta, mu, coef,
+        CholXXS, InvCholXXS, total_edf, term_edfs, scale, wres, lam_delta, S_emb
+    :rtype: tuple[float, float, np.ndarray, np.ndarray, np.ndarray, scp.sparse.csc_array,
+        scp.sparse.csc_array, float, list[float], float, np.ndarray, np.ndarray,
+        scp.sparse.csc_array]
     """
     # Initial fitting iteration without step-length control for gam.
 
@@ -1442,7 +1561,7 @@ def init_step_gam(
     # Deviance under these starting coefficients
     # As well as penalized deviance
     inval = np.isnan(mu).flatten()
-    dev = family.deviance(y[inval == False], mu[inval == False])
+    dev = family.deviance(y[inval == False], mu[inval == False])  # noqa: E712
     pen_dev = dev
 
     if len(penalties) > 0:
@@ -1499,8 +1618,11 @@ def correct_coef_step(
     """Internal function. Performs step-length control on the coefficient vector.
 
     References:
-       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-       - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient Estimation and Selection of Large Multi-Level Statistical Models. https://doi.org/10.48550/arXiv.2506.13132
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
+     - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient \
+        Estimation and Selection of Large Multi-Level Statistical Models. \
+        https://doi.org/10.48550/arXiv.2506.13132
 
 
     :param coef: Current coefficient estimate
@@ -1575,8 +1697,8 @@ def correct_coef_step(
         mu = eta
 
         if (
-            isinstance(family, Gaussian) == False
-            or isinstance(family.link, Identity) == False
+            isinstance(family, Gaussian) is False
+            or isinstance(family.link, Identity) is False
         ):
             with (
                 warnings.catch_warnings()
@@ -1586,7 +1708,7 @@ def correct_coef_step(
 
         # Update deviance
         inval = np.isnan(mu).flatten()
-        dev = family.deviance(y[inval == False], mu[inval == False])
+        dev = family.deviance(y[inval == False], mu[inval == False])  # noqa: E712
 
         # And penalized deviance term
         if n_pen > 0:
@@ -1599,7 +1721,8 @@ def correct_coef_step(
 
 
 def initialize_extension(method: str, penalties: list[LambdaTerm]) -> dict:
-    """Internal function. Initializes a dictionary holding all the necessary information to compute the lambda extensions at every iteration of the fitting iteration.
+    """Internal function. Initializes a dictionary holding all the necessary information to compute
+    the lambda extensions at every iteration of the fitting iteration.
 
     :param method: Which extension method to use
     :type method: str
@@ -1626,7 +1749,8 @@ def extend_lambda_step(
     was_extended: list[bool],
     method: str,
 ) -> tuple[float, dict, bool]:
-    """Internal function. Performs an update to the lambda parameter, ideally extending the step aken without overshooting the objective.
+    """Internal function. Performs an update to the lambda parameter, ideally extending the step
+    taken without overshooting the objective.
 
     :param lti: Penalty index
     :type lti: int
@@ -1651,10 +1775,10 @@ def extend_lambda_step(
         # the correction to lambda. So that the next efs update will be calculated from
         # lam_t + efs_step + (efs_step**2 / |lam_t - lam_{t-1}|) instead of just lam_t + efs_step.
 
-        # Essentially, until corrected increase in lambda reaches unit size a fraction of the quadratic
-        # efs_step is added. At unit size the quadratic efs_step is added in its entirety. As corrected update
-        # step-length decreases further the extension will become increasingly larger than just the quadratic
-        # of the efs_step.
+        # Essentially, until corrected increase in lambda reaches unit size a fraction of the
+        # quadratic efs_step is added. At unit size the quadratic efs_step is added in its entirety.
+        # As corrected update step-length decreases further the extension will become increasingly
+        # larger than just the quadratic of the efs_step.
 
         diff_lam = lam - extend_by["prev_lam"][lti]
 
@@ -1721,8 +1845,8 @@ def undo_extension_lambda_step(
     :rtype: tuple[float,float]
     """
     if method == "nesterov" or method == "nesterov2":
-        # We can simply reset lam by the extension factor computed earlier. If we repeatedly have to half we
-        # can fall back to the strategy by Wood & Fasiolo (2016) to just half the step.
+        # We can simply reset lam by the extension factor computed earlier. If we repeatedly have
+        # to half we can fall back to the strategy by Wood & Fasiolo (2016) to just half the step.
         dLam -= extend_by["acc"][lti]
         lam -= extend_by["acc"][lti]
         extend_by["acc"][lti] = 0
@@ -1790,12 +1914,18 @@ def correct_lambda_step(
 ]:
     """Performs step-length control for lambda.
 
-    Lambda update is based on EFS update by Wood & Fasiolo (2017), step-length control is partially based on Wood et al. (2017) - Krause et al. (submitted) has the specific implementation.
+    Lambda update is based on EFS update by Wood & Fasiolo (2017), step-length control is partially
+    based on Wood et al. (2017) - Krause et al. (submitted) has the specific implementation.
 
     References:
-       - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. https://doi.org/10.1080/01621459.2016.1195744
-       - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
-       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
+     - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models \
+        for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. \
+        https://doi.org/10.1080/01621459.2016.1195744
+     - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing \
+        parameter optimization with application to Tweedie location, scale and shape models. \
+        https://doi.org/10.1111/biom.12666
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
 
 
     :param y: vector of observations
@@ -1840,17 +1970,27 @@ def correct_lambda_step(
     :type dev_check: float
     :param n_c: Number of cores to use
     :type n_c: int
-    :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for whether or not they (approxiately) increase the Laplace approximate restricted maximum likelihood of the model. Setting this to 0 disables control. Setting it to 1 means the step will never be smaller than the original EFS update but extensions will be removed in case the objective was exceeded. Setting it to 2 means that steps will be halved if it fails to increase the approximate REML. Set to 2 by default.
+    :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased)
+        for whether or not they (approxiately) increase the Laplace approximate restricted maximum
+        likelihood of the model. Setting this to 0 disables control. Setting it to 1 means the step
+        will never be smaller than the original EFS update but extensions will be removed in case
+        the objective was exceeded. Setting it to 2 means that steps will be halved if it fails to
+        increase the approximate REML. Set to 2 by default.
     :type control_lambda: int
-    :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the number of new smoothing penalty proposals necessary. Disabled by default.
+    :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the
+        number of new smoothing penalty proposals necessary. Disabled by default.
     :type extend_lambda: bool
-    :param exclude_lambda: Whether selective lambda terms should be excluded heuristically from updates. Can make each iteration a bit cheaper but is problematic when using additional Kernel penalties on terms. Thus, disabled by default.
+    :param exclude_lambda: Whether selective lambda terms should be excluded heuristically from
+        updates. Can make each iteration a bit cheaper but is problematic when using additional
+        Kernel penalties on terms. Thus, disabled by default.
     :type exclude_lambda: bool
-    :param extension_method_lam: **Experimental - do not change!** Which method to use to extend lambda proposals. Set to 'nesterov' by default.
+    :param extension_method_lam: **Experimental - do not change!** Which method to use to extend
+        lambda proposals. Set to 'nesterov' by default.
     :type extension_method_lam: str
     :param formula: Formula of model
     :type formula: Formula
-    :param form_Linv: Whether to form the inverse of the cholesky of the negative penalzied hessian or not
+    :param form_Linv: Whether to form the inverse of the cholesky of the negative penalzied hessian
+        or not
     :type form_Linv: bool
     :param method: Which method to use to solve for the coefficients ("Chol" or "Qr")
     :type method: str
@@ -1858,15 +1998,23 @@ def correct_lambda_step(
     :type offset: float | np.ndarray
     :param max_inner: Maximum number of iterations to use to update the coefficient estimate
     :type max_inner: int
-    :return: Tuple containing updated values for yb, Xb, z, Wr, eta, mu, n_coef, the Cholesky fo the penalzied hessian ``CholXXS``, the inverse of the former ``InvCholXXS``, total edf, term-wse edfs, updated scale, working residuals, accepted update to lambda, extend_by, penalties, was_extended, updated S_emb, number of lambda updates, an optional list of the coefficients to keep, an optional list of the estimated coefficients to drop
-    :rtype: tuple[np.ndarray, scp.sparse.csc_array, np.ndarray, scp.sparse.csc_array, np.ndarray, np.ndarray, np.ndarray, scp.sparse.csc_array, scp.sparse.csc_array|None, float, list[float], float, np.ndarray, np.ndarray, dict, list[LambdaTerm], list[bool], scp.sparse.csc_array, int, list[int]|None, list[int]|None]
+    :return: Tuple containing updated values for yb, Xb, z, Wr, eta, mu, n_coef, the Cholesky of
+        the penalzied hessian ``CholXXS``, the inverse of the former ``InvCholXXS``, total edf,
+        term-wse edfs, updated scale, working residuals, accepted update to lambda, extend_by,
+        penalties, was_extended, updated S_emb, number of lambda updates, an optional list of the
+        coefficients to keep, an optional list of the estimated coefficients to drop
+    :rtype: tuple[np.ndarray, scp.sparse.csc_array, np.ndarray, scp.sparse.csc_array, np.ndarray,
+        np.ndarray, np.ndarray, scp.sparse.csc_array, scp.sparse.csc_array|None, float, list[float],
+        float, np.ndarray, np.ndarray, dict, list[LambdaTerm], list[bool], scp.sparse.csc_array,
+        int, list[int]|None, list[int]|None]
     """
     # Propose & perform step-length control for the lambda parameters via the Fellner Schall method
     # by Wood & Fasiolo (2016)
     lam_accepted = False
     lam_checks = 0
 
-    # dev_check holds current deviance - but need penalized for lambda step-length (see Wood et al., 2017)
+    # dev_check holds current deviance - but need penalized for lambda
+    # step-length (see Wood et al., 2017)
     pen_dev_check = dev_check + coef.T @ S_emb @ coef
 
     while not lam_accepted:
@@ -1914,23 +2062,24 @@ def correct_lambda_step(
             offset,
         )
 
-        # Optionally repeat PIRLS iteration until convergence - this is no longer PQL/Wood, 2017 but will generally be more stable (Wood & Fasiolo, 2017)
+        # Optionally repeat PIRLS iteration until convergence - this is no longer PQL/Wood, 2017
+        # but will generally be more stable (Wood & Fasiolo, 2017)
         if max_inner > 1 and (
-            (isinstance(family, Gaussian) == False)
-            or (isinstance(family.link, Identity) == False)
+            (isinstance(family, Gaussian) is False)
+            or (isinstance(family.link, Identity) is False)
         ):
 
-            # If coef. are updated to convergence, we have to check first iter against incoming/old coef
-            # but under current penalty! (see Wood et al., 2017)
-            c_dev_prev = (
-                dev_check + coef.T @ S_emb @ coef
-            )  # dev check holds current deviance
+            # If coef. are updated to convergence, we have to check first iter against
+            # incoming/old coef but under current penalty! (see Wood et al., 2017)
+
+            # dev check holds current deviance
+            c_dev_prev = dev_check + coef.T @ S_emb @ coef
             n_coef2 = copy.deepcopy(n_coef)
             n_coef = copy.deepcopy(coef)
 
             # Update deviance & penalized deviance
             inval = np.isnan(mu).flatten()
-            dev = family.deviance(y[inval == False], mu[inval == False])
+            dev = family.deviance(y[inval == False], mu[inval == False])  # noqa: E712
             pen_dev = dev + n_coef2.T @ S_emb @ n_coef2
 
             for i_iter in range(max_inner - 1):
@@ -1974,11 +2123,14 @@ def correct_lambda_step(
 
                 # Update deviance & penalized deviance
                 inval = np.isnan(mu).flatten()
-                dev = family.deviance(y[inval == False], mu[inval == False])
+                dev = family.deviance(
+                    y[inval == False], mu[inval == False]  # noqa: E712
+                )
                 pen_dev = dev + n_coef2.T @ S_emb @ n_coef2
 
             # Now re-compute scale and Linv
-            # Given new coefficients compute lgdetDs and bsbs - needed for REML gradient and EFS step
+            # Given new coefficients compute lgdetDs and bsbs - needed for REML gradient
+            # and EFS step
             lgdetDs = None
             bsbs = None
             if len(penalties) > 0:
@@ -1999,7 +2151,7 @@ def correct_lambda_step(
             # Solve for inverse of Chol factor of XX+S
             InvCholXXSP = None
             if form_Linv:
-                InvCholXXSP = compute_Linv(LP, n_c)
+                InvCholXXSP = compute_Linv(LP, n_c)  # noqa: F405
 
             wres, InvCholXXS, total_edf, term_edfs, _, scale = update_scale_edf(
                 y,
@@ -2020,12 +2172,16 @@ def correct_lambda_step(
                 n_c,
             )
 
-            # Unpivot Cholesky of negative penalized hessian - InvCholXXS has already been un-pivoted (and padded) by `update_scale_edf`!
+            # Unpivot Cholesky of negative penalized hessian - InvCholXXS has already been
+            # un-pivoted (and padded) by `update_scale_edf`!
             CholXXS = P.T @ LP
 
-            # Again need to make sure here to insert zero rows and columns after un-pivoting for parameters that were dropped.
+            # Again need to make sure here to insert zero rows and columns after un-pivoting for
+            # parameters that were dropped.
             if LP.shape[1] < S_emb.shape[1]:
-                CholXXSdat, CholXXSrow, CholXXScol = translate_sparse(CholXXS.tocsc())
+                CholXXSdat, CholXXSrow, CholXXScol = translate_sparse(  # noqa: F405
+                    CholXXS.tocsc()
+                )
 
                 CholXXSrow = keep[CholXXSrow]
                 CholXXScol = keep[CholXXScol]
@@ -2043,27 +2199,29 @@ def correct_lambda_step(
         lam_grad = np.array(lam_grad).reshape(-1, 1)
         check = lam_grad.T @ lam_delta
 
-        # For Generalized models we theoretically should not reduce step beyond original EFS update since
-        # criterion maximized is approximate REML. But we can probably relax the criterion a
-        # bit, since check will quite often be < 0. Additionally, performing step length control after all
-        # can be motivated (see Krause et al., submitted). So if control_lambda > 1 we control anyway.
+        # For Generalized models we theoretically should not reduce step beyond original EFS update
+        # since criterion maximized is approximate REML. But we can probably relax the criterion a
+        # bit, since check will quite often be < 0. Additionally, performing step length control
+        # after all can be motivated (see Krause et al., submitted). So if control_lambda > 1 we
+        # control anyway.
         check_criterion = 0
         if (
-            (isinstance(family, Gaussian) == False)
-            or (isinstance(family.link, Identity) == False)
+            (isinstance(family, Gaussian) is False)
+            or (isinstance(family.link, Identity) is False)
         ) and control_lambda < 2:
 
             if o_iter > 0:
                 check_criterion = 1e-7 * -abs(pen_dev_check)
 
             if check[0, 0] < check_criterion:
-                # Now check whether we extend lambda - and if we do so whether any extension was actually applied.
-                # If not, we still "pass" the check.
-                if (extend_lambda == False) or (np.any(was_extended) == False):
+                # Now check whether we extend lambda - and if we do so whether any extension was
+                # actually applied. If not, we still "pass" the check.
+                if (extend_lambda is False) or (not np.any(was_extended)):
                     check[0, 0] = check_criterion + 1
 
         # Now check whether we have to correct lambda.
-        # Because of minimization in Wood (2017) they use a different check (step 7) but idea is the same.
+        # Because of minimization in Wood (2017) they use a different check (step 7) but
+        # idea is the same.
         if check[0, 0] < check_criterion and control_lambda > 0:
             # Reset extension or cut the step taken in half (for additive models)
             lam_changes = 0
@@ -2085,7 +2243,8 @@ def correct_lambda_step(
                     lam_changes += 1
 
                 # Otherwise, rely on the strategy by Wood & Fasiolo (2016) to just half the step.
-                # For strictly additive models we can always do this. For all others we only do it if control_lambda > 1
+                # For strictly additive models we can always do this. For all others we only do
+                # it if control_lambda > 1
                 elif (
                     isinstance(family, Gaussian) and isinstance(family.link, Identity)
                 ) or control_lambda == 2:
@@ -2099,21 +2258,16 @@ def correct_lambda_step(
 
             # Also have to reset eta, mu, z, and Wr
             if max_inner > 1 and (
-                (isinstance(family, Gaussian) == False)
-                or (isinstance(family.link, Identity) == False)
+                isinstance(family, Gaussian) is False
+                or isinstance(family.link, Identity) is False
             ):
                 eta = (X @ coef).reshape(-1, 1) + offset
                 mu = eta
 
-                if (
-                    isinstance(family, Gaussian) == False
-                    or isinstance(family.link, Identity) == False
-                ):
-                    with (
-                        warnings.catch_warnings()
-                    ):  # Catch errors with mean computation (e.g., overflow)
-                        warnings.simplefilter("ignore")
-                        mu = family.link.fi(eta)
+                # Catch errors with mean computation (e.g., overflow)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    mu = family.link.fi(eta)
 
                 # Reset PIRLS weights
                 yb, Xb, z, Wr = update_PIRLS(
@@ -2121,17 +2275,21 @@ def correct_lambda_step(
                 )
 
         if check[0, 0] >= check_criterion or (control_lambda == 0) or lam_accepted:
-            # Accept the step and propose a new one as well! (part of step 6 in Wood, 2017; here uses efs from Wood & Fasiolo, 2017 to propose new lambda delta)
+            # Accept the step and propose a new one as well! (part of step 6 in Wood, 2017; her
+            #  uses efs from Wood & Fasiolo, 2017 to propose new lambda delta)
             lam_accepted = True
             lam_delta = []
             for lti, (lGrad, lTerm) in enumerate(zip(lam_grad, penalties)):
-                # Heuristic check to determine whether smooth penalty should be excluded from further updates.
-                # For penalties that -> inf, there is an inverse relationship between the gradient^2 and the lambda term:
-                # the gradient^2 diminishes, the lambda term explodes
-                # If the ratio between those two gets close to zero, we drop the corresponding term from the next update.
+                # Heuristic check to determine whether smooth penalty should be excluded from
+                # further updates.
+                # For penalties that -> inf, there is an inverse relationship between the
+                # gradient^2 and the lambda term: the gradient^2 diminishes, the lambda term
+                # explodes.
+                # If the ratio between those two gets close to zero, we drop the corresponding
+                # term from the next update.
                 if (
                     not ((lTerm.lam > 1e5) and (((lGrad[0] ** 2) / lTerm.lam) < 1e-8))
-                ) or exclude_lambda == False:
+                ) or exclude_lambda is False:
 
                     dLam = step_fellner_schall_sparse(
                         lgdetDs[lti], Bs[lti], bsbs[lti], lTerm.lam, scale
@@ -2148,7 +2306,9 @@ def correct_lambda_step(
                             extension_method_lam,
                         )
 
-                else:  # ReLikelihood is probably insensitive to further changes in this smoothing penalty, so set change to 0.
+                else:
+                    # ReLikelihood is probably insensitive to further changes in this
+                    # smoothing penalty, so set change to 0.
                     dLam = 0
                     was_extended[lti] = False
 
@@ -2183,7 +2343,7 @@ def correct_lambda_step(
     )
 
 
-################################################ Main solver ################################################
+##################################### Main solver ##################################### # noqa: E266
 
 
 def solve_gamm_sparse(
@@ -2221,16 +2381,27 @@ def solve_gamm_sparse(
     float,
     Fit_info,
 ]:
-    """Estimates a Generalized Additive Mixed model. Implements the algorithms discussed in section 3.2 of the paper by Krause et al. (submitted).
+    """Estimates a Generalized Additive Mixed model. Implements the algorithms discussed in section
+    3.2 of the paper by Krause et al. (submitted).
 
-    Relies on methods proposed by Wood et al. (2017), Wood & Fasiolo (2017), Wood (2011), and Wood (2017).
+    Relies on methods proposed by Wood et al. (2017), Wood & Fasiolo (2017), Wood (2011),
+    and Wood (2017).
 
     References:
-       - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. https://doi.org/10.1080/01621459.2016.1195744
-       - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
-       - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models. https://doi.org/10.1111/j.1467-9868.2010.00749.x
-       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-       - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient Estimation and Selection of Large Multi-Level Statistical Models. https://doi.org/10.48550/arXiv.2506.13132
+     - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models \
+        for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. \
+        https://doi.org/10.1080/01621459.2016.1195744
+     - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing \
+        parameter optimization with application to Tweedie location, scale and shape models. \
+        https://doi.org/10.1111/biom.12666
+     - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood \
+        estimation of semiparametric generalized linear models: Estimation of Semiparametric \
+        Generalized Linear Models. https://doi.org/10.1111/j.1467-9868.2010.00749.x
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
+     - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient \
+        Estimation and Selection of Large Multi-Level Statistical Models. \
+        https://doi.org/10.48550/arXiv.2506.13132
 
     :param mu_init: Initial values for means
     :type mu_init: np.ndarray
@@ -2246,25 +2417,43 @@ def solve_gamm_sparse(
     :type family: Family
     :param maxiter: Maximum number of iterations for outer algorithm updating lambda, defaults to 10
     :type maxiter: int, optional
-    :param max_inner: Maximum number of iterations for inner algorithm updating coefficients, defaults to 100
+    :param max_inner: Maximum number of iterations for inner algorithm updating coefficients,
+        defaults to 100
     :type max_inner: int, optional
     :param pinv: Method to use to compute generalzied inverse of total penalty,, defaults to "svd"
     :type pinv: str, optional
     :param conv_tol: Convergence tolerance, defaults to 1e-7
     :type conv_tol: float, optional
-    :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the number of new smoothing penalty proposals necessary. Disabled by default.
+    :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the
+        number of new smoothing penalty proposals necessary. Disabled by default.
     :type extend_lambda: bool
-    :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for whether or not they (approxiately) increase the Laplace approximate restricted maximum likelihood of the model. Setting this to 0 disables control. Setting it to 1 means the step will never be smaller than the original EFS update but extensions will be removed in case the objective was exceeded. Setting it to 2 means that steps will be halved if it fails to increase the approximate REML. Set to 1 by default.
+    :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased)
+        for whether or not they (approxiately) increase the Laplace approximate restricted maximum
+        likelihood of the model. Setting this to 0 disables control. Setting it to 1 means the step
+        will never be smaller than the original EFS update but extensions will be removed in case
+        the objective was exceeded. Setting it to 2 means that steps will be halved if it fails to
+        increase the approximate REML. Set to 1 by default.
     :type control_lambda: int
-    :param exclude_lambda: Whether selective lambda terms should be excluded heuristically from updates. Can make each iteration a bit cheaper but is problematic when using additional Kernel penalties on terms. Thus, disabled by default.
+    :param exclude_lambda: Whether selective lambda terms should be excluded heuristically from
+        updates. Can make each iteration a bit cheaper but is problematic when using additional
+        Kernel penalties on terms. Thus, disabled by default.
     :type exclude_lambda: bool
     :param extension_method_lam: _description_, defaults to "nesterov"
     :type extension_method_lam: str, optional
-    :param form_Linv: Whether to form the inverse of the cholesky of the negative penalzied hessian or not, defaults to True
+    :param form_Linv: Whether to form the inverse of the cholesky of the negative penalzied hessian
+        or not, defaults to True
     :type form_Linv: bool, optional
-    :param method:  Which method to use to solve for the coefficients ("Chol" or "Qr"), defaults to "Chol"
+    :param method:  Which method to use to solve for the coefficients ("Chol" or "Qr"), defaults
+        to "Chol"
     :type method: str, optional
-    :param check_cond: Whether to obtain an estimate of the condition number for the linear system that is solved. When ``check_cond=0``, no check will be performed. When ``check_cond=1``, an estimate of the condition number for the final system (at convergence) will be computed and warnings will be issued based on the outcome (see :func:`mssm.src.python.gamm_solvers.est_condition`). When ``check_cond=2``, an estimate of the condition number will be performed for each new system (at each iteration of the algorithm) and an error will be raised if the condition number is estimated as too high given the chosen ``method``., defaults to 2
+    :param check_cond: Whether to obtain an estimate of the condition number for the linear system
+        that is solved. When ``check_cond=0``, no check will be performed. When ``check_cond=1``,
+        an estimate of the condition number for the final system (at convergence) will be computed
+        and warnings will be issued based on the outcome (see
+        :func:`mssm.src.python.gamm_solvers.est_condition`). When ``check_cond=2``, an estimate of
+        the condition number will be performed for each new system (at each iteration of the
+        algorithm) and an error will be raised if the condition number is estimated as too high
+        given the chosen ``method``., defaults to 2
     :type check_cond: int, optional
     :param progress_bar: Whether to print progress or not, defaults to False
     :type progress_bar: bool, optional
@@ -2279,10 +2468,16 @@ def solve_gamm_sparse(
     :raises ArithmeticError: _description_
     :raises ArithmeticError: _description_
     :raises warnings.warn: _description_
-    :return: An estimate of the coefficients coef,the linear predictor eta, the working residuals wres, the root of the Fisher weights as matrix Wr, the matrix with Newton weights at convergence WN, an estimate of the scale parameter, an inverse of the cholesky of the penalized negative hessian InvCholXXS, total edf, term-wise edf, total penalty, a :class:`Fit_info` object
-    :rtype: tuple[np.ndarray, np.ndarray, np.ndarray, scp.sparse.csc_array, scp.sparse.csc_array, float, scp.sparse.csc_array, float, list[float], float, Fit_info]
+    :return: An estimate of the coefficients coef,the linear predictor eta, the working residuals
+        wres, the root of the Fisher weights as matrix Wr, the matrix with Newton weights at
+        convergence WN, an estimate of the scale parameter, an inverse of the cholesky of the
+        penalized negative hessian InvCholXXS, total edf, term-wise edf, total penalty, a
+        :class:`Fit_info` object
+    :rtype: tuple[np.ndarray, np.ndarray, np.ndarray, scp.sparse.csc_array, scp.sparse.csc_array,
+        float, scp.sparse.csc_array, float, list[float], float, Fit_info]
     """
-    # Estimates a penalized Generalized additive mixed model, following the steps outlined in Wood, Li, Shaddick, & Augustin (2017)
+    # Estimates a penalized Generalized additive mixed model, following the steps outlined in
+    # Wood, Li, Shaddick, & Augustin (2017)
     # "Generalized Additive Models for Gigadata" referred to as Wood (2017) below.
 
     n_c = min(mp.cpu_count(), n_c)
@@ -2314,8 +2509,8 @@ def solve_gamm_sparse(
     eta = mu
 
     if (
-        isinstance(family, Gaussian) == False
-        or isinstance(family.link, Identity) == False
+        isinstance(family, Gaussian) is False
+        or isinstance(family.link, Identity) is False
     ):
         eta = family.link.f(mu)
 
@@ -2358,14 +2553,24 @@ def solve_gamm_sparse(
     yb, Xb, z, Wr = update_PIRLS(y, yb, mu, eta - offset, X, Xb, family, Lrhoi)
 
     if check_cond == 2:
-        K2, _, _, Kcode = est_condition(CholXXS, InvCholXXS, verbose=False)
+        K2, _, _, Kcode = est_condition(  # noqa: F405
+            CholXXS, InvCholXXS, verbose=False
+        )
         if method == "Chol" and Kcode == 1:
             raise ArithmeticError(
-                f"Condition number ({K2}) of matrix A, where A.T@A=X.T@X + S_\\lambda, is larger than 1/sqrt(u), where u is half the machine precision. Try calling ``model.fit()`` with ``method='QR'``."
+                (
+                    f"Condition number ({K2}) of matrix A, where A.T@A=X.T@X + S_\\lambda, is "
+                    "larger than 1/sqrt(u), where u is half the machine precision. Try calling "
+                    "``model.fit()`` with ``method='QR'``."
+                )
             )
         if method != "Chol" and Kcode == 2:
             raise ArithmeticError(
-                f"Condition number ({K2}) of matrix A, where A.T@A=X.T@X + S_\\lambda, is larger than 1/u, where u is half the machine precision. The model estimates are likely inaccurate."
+                (
+                    f"Condition number ({K2}) of matrix A, where A.T@A=X.T@X + S_\\lambda, is "
+                    "larger than 1/u, where u is half the machine precision. The model estimates "
+                    "are likely inaccurate."
+                )
             )
 
     # Initialize extension variable
@@ -2387,15 +2592,16 @@ def solve_gamm_sparse(
             # under **current** lambda for proposed coef (n_coef)
             # and current coef. (see Step 3 in Wood, 2017)
             inval = np.isnan(mu).flatten()
-            dev = family.deviance(y[inval == False], mu[inval == False])
+            dev = family.deviance(y[inval == False], mu[inval == False])  # noqa: E712
             pen_dev = dev
-            c_dev_prev = prev_dev
+            c_dev_prev = prev_dev  # noqa: F405
 
             if len(penalties) > 0:
                 pen_dev += n_coef.T @ S_emb @ n_coef
                 c_dev_prev += coef.T @ S_emb @ coef
 
-            # For Gaussian/PQL, perform step-length control for the coefficients here (Step 3 in Wood, 2017)
+            # For Gaussian/PQL, perform step-length control for the coefficients here
+            # (Step 3 in Wood, 2017)
             if max_inner <= 1 or (
                 isinstance(family, Gaussian) and isinstance(family.link, Identity)
             ):
@@ -2418,8 +2624,10 @@ def solve_gamm_sparse(
                     offset,
                 )
 
-                # Update pseudo-dat weights for next coefficient step (step 1 in Wood, 2017; but moved after the coef correction because z and Wr depend on
-                # mu and eta, which change during the correction but anything that needs to be computed during the correction (deviance) does not depend on
+                # Update pseudo-dat weights for next coefficient step (step 1 in Wood, 2017; but
+                # moved after the coef correction because z and Wr depend on
+                # mu and eta, which change during the correction but anything that needs to be
+                # computed during the correction (deviance) does not depend on
                 # z and Wr).
                 yb, Xb, z, Wr = update_PIRLS(
                     y, yb, mu, eta - offset, X, Xb, family, Lrhoi
@@ -2427,13 +2635,17 @@ def solve_gamm_sparse(
             else:
                 coef = n_coef
 
-            # Test for convergence (Step 2 in Wood, 2017), implemented based on step 4 in Wood, Goude, & Shaw (2016): Generalized
-            # additive models for large data-sets. They reccomend inspecting the change in deviance after a PQL iteration to monitor
-            # convergence. Wood (2017) check the REML gradient against a fraction of the current deviance so to determine whether the change
-            # in deviance is "small" enough, it is also compared to a fraction of the current deviance. mgcv's bam function also considers this
-            # for convergence decisions but as part of a larger composite criterion, also involving checks on the scale parameter for example.
-            # From simulations, I get the impression that the simple criterion proposed by WGS seems to suffice.
-            dev_diff = abs(pen_dev - prev_pen_dev)
+            # Test for convergence (Step 2 in Wood, 2017), implemented based on step 4 in Wood,
+            # Goude, & Shaw (2016): Generalized additive models for large data-sets. They reccomend
+            # inspecting the change in deviance after a PQL iteration to monitor convergence.
+            # Wood (2017) check the REML gradient against a fraction of the current deviance so to
+            # determine whether the change in deviance is "small" enough, it is also compared to a
+            # fraction of the current deviance. mgcv's bam function also considers this
+            # for convergence decisions but as part of a larger composite criterion, also involving
+            # checks on the scale parameter for example.
+            # From simulations, I get the impression that the simple criterion proposed by WGS
+            # seems to suffice.
+            dev_diff = abs(pen_dev - prev_pen_dev)  # noqa: F405
 
             if progress_bar:
                 iterator.set_description_str(
@@ -2449,12 +2661,15 @@ def solve_gamm_sparse(
                 fit_info.code = 0
                 break
 
-        # We need the deviance and penalized deviance of the model at this point (before completing steps 5-7 (dev_{old} in WGS used for convergence control)
-        # for coef step control (step 3 in Wood, 2017) and convergence control (step 2 in Wood, 2017 based on step 4 in Wood, Goude, & Shaw, 2016) respectively
-        prev_dev = dev
-        prev_pen_dev = pen_dev
+        # We need the deviance and penalized deviance of the model at this point (before completing
+        # steps 5-7 (dev_{old} in WGS used for convergence control)
+        # for coef step control (step 3 in Wood, 2017) and convergence control (step 2 in Wood,
+        # 2017 based on step 4 in Wood, Goude, & Shaw, 2016) respectively
+        prev_dev = dev  # noqa: F841
+        prev_pen_dev = pen_dev  # noqa: F841
 
-        # Step length control for proposed lambda change (steps 5-7 in Wood, 2017) adjusted to make use of EFS from Wood & Fasiolo, 2017
+        # Step length control for proposed lambda change (steps 5-7 in Wood, 2017) adjusted to make
+        # use of EFS from Wood & Fasiolo, 2017
         if len(penalties) > 0:
 
             # Test the lambda update (step 5 in Wood, 2017)
@@ -2564,14 +2779,24 @@ def solve_gamm_sparse(
 
         # Check condition number of current system.
         if check_cond == 2:
-            K2, _, _, Kcode = est_condition(CholXXS, InvCholXXS, verbose=progress_bar)
+            K2, _, _, Kcode = est_condition(  # noqa: F405
+                CholXXS, InvCholXXS, verbose=progress_bar
+            )
             if method == "Chol" and Kcode == 1:
                 raise ArithmeticError(
-                    f"Condition number ({K2}) of matrix A, where A.T@A=X.T@X + S_\\lambda, is larger than 1/sqrt(u), where u is half the machine precision. Try calling ``model.fit()`` with ``method='QR'``."
+                    (
+                        f"Condition number ({K2}) of matrix A, where A.T@A=X.T@X + S_\\lambda, is "
+                        "larger than 1/sqrt(u), where u is half the machine precision. Try calling "
+                        "``model.fit()`` with ``method='QR'``."
+                    )
                 )
             if method != "Chol" and Kcode == 2:
                 raise ArithmeticError(
-                    f"Condition number ({K2}) of matrix A, where A.T@A=X.T@X + S_\\lambda, is larger than 1/u, where u is half the machine precision. The model estimates are likely inaccurate."
+                    (
+                        f"Condition number ({K2}) of matrix A, where A.T@A=X.T@X + S_\\lambda, is "
+                        "larger than 1/u, where u is half the machine precision. The model "
+                        "estimates are likely inaccurate."
+                    )
                 )
 
         # At this point we:
@@ -2591,12 +2816,12 @@ def solve_gamm_sparse(
         penalty = 0
 
     # Final term edf
-    if not term_edfs is None:
+    if term_edfs is not None:
         term_edfs = calculate_term_edf(penalties, term_edfs)
 
     # At this point, Wr/z might not match the dimensions of y and X, because observations might be
-    # excluded at convergence. eta and mu are of correct dimension, so we need to re-compute Wr - this
-    # time with a weight of zero for any dropped obs.
+    # excluded at convergence. eta and mu are of correct dimension, so we need to re-compute Wr -
+    # this time with a weight of zero for any dropped obs.
     WN = None
     if Wr is not None:
         inval = np.isnan(z)
@@ -2606,11 +2831,13 @@ def solve_gamm_sparse(
         if (
             Lrhoi is not None
         ):  # Need to return ar-corrected and "normal" working residuals
-            wres2 = Wr @ (z[inval == False] - eta[inval == False]).reshape(-1, 1)
+            wres2 = Wr @ (
+                z[inval == False] - eta[inval == False]  # noqa: E712
+            ).reshape(-1, 1)
 
         if inval_check:
             w_full = np.zeros_like(eta)
-            w_full[inval == False] = Wr.diagonal()
+            w_full[inval == False] = Wr.diagonal()  # noqa: E712
             w = w_full
 
             # Re-compute weight matrix
@@ -2618,12 +2845,12 @@ def solve_gamm_sparse(
 
             # Adjust working residuals
             wres_full = np.zeros_like(eta)
-            wres_full[inval == False] = wres.flatten()
+            wres_full[inval == False] = wres.flatten()  # noqa: E712
             wres = wres_full
 
             if Lrhoi is not None:
                 wres_full2 = np.zeros_like(eta)
-                wres_full2[inval == False] = wres2.flatten()
+                wres_full2[inval == False] = wres2.flatten()  # noqa: E712
                 wres2 = wres_full2
 
         if wres2 is not None:
@@ -2637,15 +2864,21 @@ def solve_gamm_sparse(
     if InvCholXXS is None:
         if method != "Chol":
             warnings.warn(
-                "Final re-computation of inverse of Cholesky of penalized Hessian might not account for dropped coefficients. Check `model.info` and inspect returned inverse carefully."
+                (
+                    "Final re-computation of inverse of Cholesky of penalized Hessian might not "
+                    "account for dropped coefficients. Check `model.info` and inspect returned "
+                    "inverse carefully."
+                )
             )
-        Lp, Pr, _ = cpp_cholP((Xb.T @ Xb + S_emb).tocsc())
-        InvCholXXSP = compute_Linv(Lp, n_c)
+        Lp, Pr, _ = cpp_cholP((Xb.T @ Xb + S_emb).tocsc())  # noqa: F405
+        InvCholXXSP = compute_Linv(Lp, n_c)  # noqa: F405
         InvCholXXS = apply_eigen_perm(Pr, InvCholXXSP)
 
     # Check condition number of current system but only after convergence - and warn only.
     if check_cond == 1:
-        K2, _, _, Kcode = est_condition(CholXXS, InvCholXXS, verbose=False)
+        K2, _, _, Kcode = est_condition(  # noqa: F405
+            CholXXS, InvCholXXS, verbose=False
+        )
 
         if (
             fit_info.code == 0
@@ -2654,11 +2887,19 @@ def solve_gamm_sparse(
 
         if method == "Chol" and Kcode == 1:
             warnings.warn(
-                f"Condition number ({K2}) of matrix A, where A.T@A=X.T@X + S_\\lambda, is larger than 1/sqrt(u), where u is half the machine precision. Try calling ``model.fit()`` with ``method='QR'``."
+                (
+                    f"Condition number ({K2}) of matrix A, where A.T@A=X.T@X + S_\\lambda, is "
+                    "larger than 1/sqrt(u), where u is half the machine precision. Try calling "
+                    "``model.fit()`` with ``method='QR'``."
+                )
             )
         if method != "Chol" and Kcode == 2:
             raise warnings.warn(
-                f"Condition number ({K2}) of matrix A, where A.T@A=X.T@X + S_\\lambda, is larger than 1/u, where u is half the machine precision. The model estimates are likely inaccurate."
+                (
+                    f"Condition number ({K2}) of matrix A, where A.T@A=X.T@X + S_\\lambda, is "
+                    "larger than 1/u, where u is half the machine precision. The model estimates "
+                    "are likely inaccurate."
+                )
             )
 
     fit_info.K2 = K2
@@ -2678,7 +2919,7 @@ def solve_gamm_sparse(
     )
 
 
-################################################ Iterative GAMM building code ################################################
+############################# Iterative GAMM building code ############################ # noqa: E266
 
 
 def read_mmat(
@@ -2700,8 +2941,8 @@ def read_mmat(
     cov_flat_file: np.ndarray,
     cov: list[np.ndarray],
 ) -> scp.sparse.csc_array:
-    """Creates model matrix for that dataset. The model-matrix is either cached or not. If the former is the case,
-    the matrix is read in on subsequent calls to this function.
+    """Creates model matrix for that dataset. The model-matrix is either cached or not. If the
+    former is the case, the matrix is read in on subsequent calls to this function.
 
     :param should_cache: whether or not the directory should actually be created
     :type should_cache: bool
@@ -2743,7 +2984,7 @@ def read_mmat(
 
     target = file.split("/")[-1].split(".csv")[0] + f"_{fi}.npz"
 
-    if should_cache == False:
+    if should_cache is False:
         mmat = build_sparse_matrix_from_formula(
             terms,
             has_intercept,
@@ -2760,7 +3001,7 @@ def read_mmat(
             cov,
         )
 
-    elif should_cache == True and target not in os.listdir(cache_dir):
+    elif should_cache and target not in os.listdir(cache_dir):
         mmat = build_sparse_matrix_from_formula(
             terms,
             has_intercept,
@@ -2918,7 +3159,8 @@ def read_XTX(
     subsets = [i for i in range(len(cov_flat_files))]
 
     with mp.Pool(processes=nc) as pool:
-        # Build the model matrix with all information from the formula - but only for sub-set of rows in this file
+        # Build the model matrix with all information from the formula - but only for sub-set of
+        # rows in this file
         XX, Xy = zip(
             *pool.starmap(
                 form_cross_prod_mp,
@@ -3003,7 +3245,8 @@ def keep_XTX(
         subsets = [i for i in range(len(cov_flat_files))]
 
         with mp.Pool(processes=min(rows, nc)) as pool:
-            # Build the model matrix with all information from the formula - but only for sub-set of rows at a time
+            # Build the model matrix with all information from the formula - but only for sub-set
+            # of rows at a time
             XX0, Xy0 = zip(
                 *pool.starmap(
                     form_cross_prod_mp,
@@ -3132,7 +3375,8 @@ def form_eta_mp(
 
 
 def read_eta(file, formula: Formula, coef: np.ndarray, nc: int) -> np.ndarray:
-    """Computes ``X@coef`` in parallel, where ``X`` is the model matrix based on this ``file`` and ``coef`` is the current coefficient estimate.
+    """Computes ``X@coef`` in parallel, where ``X`` is the model matrix based on this ``file`` and
+    ``coef`` is the current coefficient estimate.
 
     :param file: File name
     :type file: str
@@ -3173,7 +3417,8 @@ def read_eta(file, formula: Formula, coef: np.ndarray, nc: int) -> np.ndarray:
     subsets = [i for i in range(len(cov_flat_files))]
 
     with mp.Pool(processes=nc) as pool:
-        # Build eta with all information from the formula - but only for sub-set of rows in this file
+        # Build eta with all information from the formula - but only for sub-set of
+        # rows in this file
         etas = pool.starmap(
             form_eta_mp,
             zip(
@@ -3206,7 +3451,8 @@ def read_eta(file, formula: Formula, coef: np.ndarray, nc: int) -> np.ndarray:
 
 
 def keep_eta(formula: Formula, coef: np.ndarray, nc: int) -> np.ndarray:
-    """Computes ``X@coef`` in parallel, where ``X`` is the overall model matrix and ``coef`` is current coefficient estimate.
+    """Computes ``X@coef`` in parallel, where ``X`` is the overall model matrix and ``coef`` is
+    current coefficient estimate.
 
     :param formula: Formula of model
     :type formula: Formula
@@ -3300,18 +3546,31 @@ def solve_gamm_sparse2(
     float,
     Fit_info,
 ]:
-    """Estimates an Additive Mixed model. Implements the algorithms discussed in section 3.1 of the paper by Krause et al. (submitted).
+    """Estimates an Additive Mixed model. Implements the algorithms discussed in section 3.1 of the
+    paper by Krause et al. (submitted).
 
-    Relies on methods proposed by Wood et al. (2017), Wood & Fasiolo (2017), Wood (2011), and Wood (2017). In addition, this function builds the products involving the model matrix only once (iteratively) as described
-    by Wood et al. (2015).
+    Relies on methods proposed by Wood et al. (2017), Wood & Fasiolo (2017), Wood (2011), and Wood
+    (2017). In addition, this function builds the products involving the model matrix only once
+    (iteratively) as described by Wood et al. (2015).
 
     References:
-       - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. https://doi.org/10.1080/01621459.2016.1195744
-       - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. https://doi.org/10.1111/biom.12666
-       - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models: Estimation of Semiparametric Generalized Linear Models. https://doi.org/10.1111/j.1467-9868.2010.00749.x
-       - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition (2nd ed.).
-       - Wood, S. N., Goude, Y., & Shaw, S. (2015). Generalized additive models for large data sets. Journal of the Royal Statistical Society: Series C (Applied Statistics), 64(1), 139–155. https://doi.org/10.1111/rssc.12068
-       - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient Estimation and Selection of Large Multi-Level Statistical Models. https://doi.org/10.48550/arXiv.2506.13132
+     - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models \
+        for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. \
+        https://doi.org/10.1080/01621459.2016.1195744
+     - Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner-Schall method for smoothing \
+        parameter optimization with application to Tweedie location, scale and shape models. \
+        https://doi.org/10.1111/biom.12666
+     - Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood \
+        estimation of semiparametric generalized linear models: Estimation of Semiparametric \
+        Generalized Linear Models. https://doi.org/10.1111/j.1467-9868.2010.00749.x
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.).
+     - Wood, S. N., Goude, Y., & Shaw, S. (2015). Generalized additive models for large data \
+        sets. Journal of the Royal Statistical Society: Series C (Applied Statistics), \
+        64(1), 139–155. https://doi.org/10.1111/rssc.12068
+     - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient \
+        Estimation and Selection of Large Multi-Level Statistical Models. \
+        https://doi.org/10.48550/arXiv.2506.13132
 
     :param formula: Formula of the model
     :type formula: Formula
@@ -3328,25 +3587,39 @@ def solve_gamm_sparse2(
     :type pinv: str, optional
     :param conv_tol: Convergence tolerance, defaults to 1e-7
     :type conv_tol: float, optional
-    :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the number of new smoothing penalty proposals necessary. Disabled by default.
+    :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the
+        number of new smoothing penalty proposals necessary. Disabled by default.
     :type extend_lambda: bool
-    :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for whether or not they (approxiately) increase the Laplace approximate restricted maximum likelihood of the model. Setting this to 0 disables control. Setting it to 1 means the step will never be smaller than the original EFS update but extensions will be removed in case the objective was exceeded. Setting it to 2 means that steps will be halved if it fails to increase the approximate REML. Set to 1 by default.
+    :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased)
+        for whether or not they (approxiately) increase the Laplace approximate restricted maximum
+        likelihood of the model. Setting this to 0 disables control. Setting it to 1 means the step
+        will never be smaller than the original EFS update but extensions will be removed in case
+        the objective was exceeded. Setting it to 2 means that steps will be halved if it fails to
+        increase the approximate REML. Set to 1 by default.
     :type control_lambda: int
-    :param exclude_lambda: Whether selective lambda terms should be excluded heuristically from updates. Can make each iteration a bit cheaper but is problematic when using additional Kernel penalties on terms. Thus, disabled by default.
+    :param exclude_lambda: Whether selective lambda terms should be excluded heuristically from
+        updates. Can make each iteration a bit cheaper but is problematic when using additional
+        Kernel penalties on terms. Thus, disabled by default.
     :type exclude_lambda: bool
-    :param extension_method_lam: Which method to use to extend lambda proposals., defaults to "nesterov"
+    :param extension_method_lam: Which method to use to extend lambda proposals., defaults to
+        "nesterov"
     :type extension_method_lam: str, optional
-    :param form_Linv: Whether to form the inverse of the cholesky of the negative penalzied hessian or not, defaults to True
+    :param form_Linv: Whether to form the inverse of the cholesky of the negative penalzied
+        hessian or not, defaults to True
     :type form_Linv: bool, optional
     :param progress_bar: Whether to print progress or not, defaults to False
     :type progress_bar: bool, optional
     :param n_c: Number of cores to use, defaults to 10
     :type n_c: int, optional
-    :return: An estimate of the coefficients coef, the linear predictor eta, the working residuals wres, the negative hessian, the estimated scale, an inverse of the cholesky of the negative penalized hessian, total edf, term-wise edfs, total penalty, a :class:`Fit_info` object
-    :rtype: tuple[np.ndarray, np.ndarray, np.ndarray, scp.sparse.csc_array, float, scp.sparse.csc_array|None, float, list[float], float, Fit_info]
+    :return: An estimate of the coefficients coef, the linear predictor eta, the working residuals
+        wres, the negative hessian, the estimated scale, an inverse of the cholesky of the negative
+        penalized hessian, total edf, term-wise edfs, total penalty, a :class:`Fit_info` object
+    :rtype: tuple[np.ndarray, np.ndarray, np.ndarray, scp.sparse.csc_array, float,
+        scp.sparse.csc_array|None, float, list[float], float, Fit_info]
     """
     # Estimates a penalized additive mixed model, following the steps outlined in Wood (2017)
-    # "Generalized Additive Models for Gigadata" but builds X.T @ X, and X.T @ y iteratively - and only once.
+    # "Generalized Additive Models for Gigadata" but builds X.T @ X, and X.T @ y
+    # iteratively - and only once.
     setup_cache(CACHE_DIR, SHOULD_CACHE)
     n_c = min(mp.cpu_count(), n_c)
 
@@ -3380,7 +3653,8 @@ def solve_gamm_sparse2(
             y_flat_file, _, NAs_flat_file, _, _, _, _ = formula.encode_data(file_dat)
             y_flat.extend(y_flat_file[NAs_flat_file])
 
-            # Build the model matrix products with all information from the formula - but only for sub-set of rows in this file
+            # Build the model matrix products with all information from the formula - but only
+            # for sub-set of rows in this file
             XX0, Xy0, rowsX0 = read_XTX(file, formula, n_c)
             rowsX += rowsX0
             # Compute X.T@X and X.T@y
@@ -3394,7 +3668,9 @@ def solve_gamm_sparse2(
     colsX = XX.shape[1]
     coef = None
     n_coef = None
-    extend_by = 1  # Extension factor for lambda update for the Fellner Schall method by Wood & Fasiolo (2016)
+
+    # Extension factor for lambda update for the Fellner Schall method by Wood & Fasiolo (2016)
+    extend_by = 1
     was_extended = [False for _ in enumerate(penalties)]
 
     # mu and eta (start estimates in case the family is not Gaussian)
@@ -3458,7 +3734,7 @@ def solve_gamm_sparse2(
             # and current coef.
             dev = family.deviance(y, mu)
             pen_dev = dev
-            c_dev_prev = prev_dev
+            c_dev_prev = prev_dev  # noqa: F405
 
             if len(penalties) > 0:
                 pen_dev += n_coef.T @ S_emb @ n_coef
@@ -3484,7 +3760,7 @@ def solve_gamm_sparse2(
             )
 
             # Test for convergence (Step 2 in Wood, 2017)
-            dev_diff = abs(pen_dev - prev_pen_dev)
+            dev_diff = abs(pen_dev - prev_pen_dev)  # noqa: F405
 
             if progress_bar:
                 iterator.set_description_str(
@@ -3500,10 +3776,12 @@ def solve_gamm_sparse2(
                 fit_info.code = 0
                 break
 
-        # We need the deviance and penalized deviance of the model at this point (before completing steps 5-7 (dev_{old} in WGS used for convergence control)
-        # for coef step control (step 3 in Wood, 2017) and convergence control (step 2 in Wood, 2017 based on step 4 in Wood, Goude, & Shaw, 2016) respectively
-        prev_dev = dev
-        prev_pen_dev = pen_dev
+        # We need the deviance and penalized deviance of the model at this point
+        # (before completing steps 5-7 (dev_{old} in WGS used for convergence control)
+        # for coef step control (step 3 in Wood, 2017) and convergence control (step 2 in Wood, 2017
+        # based on step 4 in Wood, Goude, & Shaw, 2016) respectively
+        prev_dev = dev  # noqa: F841
+        prev_pen_dev = pen_dev  # noqa: F841
 
         # Step length control for proposed lambda change
         if len(penalties) > 0:
@@ -3618,7 +3896,7 @@ def solve_gamm_sparse2(
         penalty = 0
 
     # Final term edf
-    if not term_edfs is None:
+    if term_edfs is not None:
         term_edfs = calculate_term_edf(penalties, term_edfs)
 
     clear_cache(CACHE_DIR, SHOULD_CACHE)
@@ -3637,16 +3915,19 @@ def solve_gamm_sparse2(
     )
 
 
-################################################ GAMMLSS code ################################################
+################################### GAMMLSS code ###################################### # noqa: E266
 
 
 def deriv_transform_mu_eta(
     y: np.ndarray, means: list[np.ndarray], family: GAMLSSFamily
 ) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
-    """Compute derivatives (first and second order) of llk with respect to each linear predictor based on their respective mean for all observations following steps outlined by Wood, Pya, & Säfken (2016)
+    """Compute derivatives (first and second order) of llk with respect to each linear predictor
+    based on their respective mean for all observations following steps outlined by Wood,
+    Pya, & Säfken (2016)
 
      References:
-      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth \
+        Models.
 
     :param y: Vector of observations
     :type y: np.ndarray
@@ -3654,7 +3935,9 @@ def deriv_transform_mu_eta(
     :type means: list[np.ndarray]
     :param family: Family of the model
     :type family: GAMLSSFamily
-    :return: A tuple containing a list containing the first order partial derivatives with respect to each parameter, the same for pure second derivatives, and a list containing mixed derivatives
+    :return: A tuple containing a list containing the first order partial derivatives with respect
+        to each parameter, the same for pure second derivatives, and a list containing mixed
+        derivatives
     :rtype: tuple[list[np.ndarray],list[np.ndarray],list[np.ndarray]]
     """
     with (
@@ -3671,11 +3954,14 @@ def deriv_transform_mu_eta(
         ld2 = [family.links[mui].dy2(means[mui]) for mui in range(len(means))]
 
     # Transform first order derivatives via A.1 in Wood, Pya, & Säfken (2016)
-    """
-    WPS (2016) provide that $l_{\\eta}$ is obtained as $l^i_{\\mu}/h'(\\mu^i)$ - where $h'$ is the derivative of the link function $h$.
-    This follows from applying the chain rule and the inversion rule of derivatives
-    $\frac{\\partial llk(h^{-1}(\\eta))}{\\partial \\eta} = \frac{\\partial llk(\\mu)}{\\partial \\mu} \frac{\\partial h^{-1}(\\eta)}{\\partial \\eta} = \frac{\\partial llk(\\mu)}{\\partial \\mu}\frac{1}{\frac{\\partial h(\\mu)}{\\mu}}$.
-    """
+
+    # WPS (2016) provide that $l_{\\eta}$ is obtained as $l^i_{\\mu}/h'(\\mu^i)$ - where
+    # $h'$ is the derivative of the link function $h$.
+    # This follows from applying the chain rule and the inversion rule of derivatives
+    # $\frac{\\partial llk(h^{-1}(\\eta))}{\\partial \\eta} =
+    # \frac{\\partial llk(\\mu)}{\\partial \\mu} \frac{\\partial h^{-1}(\\eta)}{\\partial \\eta} =
+    # \frac{\\partial llk(\\mu)}{\\partial \\mu}\frac{1}{\frac{\\partial h(\\mu)}{\\mu}}$.
+
     # d1eta = [d1[mui]/ld1[mui] for mui in range(len(means))]
     d1eta = []
     for mui in range(len(means)):
@@ -3689,24 +3975,35 @@ def deriv_transform_mu_eta(
         d1eta.append(de)
 
     # Pure second order derivatives are transformed via A.2 in WPS (2016)
-    """
-    For second derivatives we need pure and mixed. Computation of $l^\\mathbf{i}_{\\eta^l,\\eta^m}$ in general is again obtained by applying the steps outlined for first order and provided by WPS (2016)
-    for the pure case. For the mixed case it is even simpler: We need $\frac{\\partial^2 llk(h_1^{-1}(\\eta^1),h_2^{-1}(\\eta^2))}{\\partial \\eta^1 \\partial \\eta^2}$,
-    which is $\frac{\\partial llk / \\partial \\eta^1}{\\partial \\eta^2}$. With the first partial being equal to
-    $\frac{\\partial llk}{\\partial \\mu^1}\frac{1}{\frac{\\partial h_1(\\mu^1)}{\\mu^1}}$ (see comment above for first order) we now have
-    $\frac{\\partial \frac{\\partial llk}{\\partial \\mu^1}\frac{1}{\frac{\\partial h_1(\\mu^1)}{\\mu^1}}}{\\partial \\eta^2}$.
-    
-    We now apply the product rule (the second term in the sum disappears, because
-    $\\partial \frac{1}{\frac{\\partial h_1(\\mu^1)}{\\mu^1}} / \\partial \\eta^2 = 0$, this is not the case for pure second derivatives as shown in WPS, 2016)
-    to get $\frac{\\partial \frac{\\partial llk}{\\partial \\mu^1}}{\\partial \\eta^2} \frac{1}{\frac{\\partial h_1(\\mu^1)}{\\mu^1}}$.
-    We can now again rely on the same steps taken to get the first derivatives (chain rule + inversion rule) to get
-    $\frac{\\partial \frac{\\partial llk}{\\partial \\mu^1}}{\\partial \\eta^2} =
-    \frac{\\partial^2 llk}{\\partial \\mu^1 \\partial \\mu^2}\frac{1}{\frac{\\partial h_2(\\mu^2)}{\\mu^2}}$.
-    
-    Thus, $\frac{\\partial llk / \\partial \\eta^1}{\\partial \\eta^2} =
-    \frac{\\partial^2 llk}{\\partial \\mu^1 \\partial \\mu^2}\frac{1}{\frac{\\partial h_2(\\mu^2)}{\\mu^2}}\frac{1}{\frac{\\partial h_1(\\mu^1)}{\\mu^1}}$.
-    """
-    # d2eta = [d2[mui]/np.power(ld1[mui],2) - d1[mui]*ld2[mui]/np.power(ld1[mui],3) for mui in range(len(means))]
+
+    # For second derivatives we need pure and mixed. Computation of
+    # $l^\\mathbf{i}_{\\eta^l,\\eta^m}$ in general is again obtained by applying the steps outlined
+    # for first order and provided by WPS (2016) for the pure case. For the mixed case it is even
+    # simpler: We need
+    # $\frac{\\partial^2 llk(h_1^{-1}(\\eta^1),h_2^{-1}(\\eta^2))}\
+    # {\\partial \\eta^1 \\partial \\eta^2}$,
+    # which is $\frac{\\partial llk / \\partial \\eta^1}{\\partial \\eta^2}$.
+    # With the first partial being equal to
+    # $\frac{\\partial llk}{\\partial \\mu^1}\frac{1}{\frac{\\partial h_1(\\mu^1)}{\\mu^1}}$
+    # (see comment above for first order) we now have
+    # $\frac{\\partial \frac{\\partial llk}{\\partial \\mu^1}\frac{1}\
+    # {\frac{\\partial h_1(\\mu^1)}{\\mu^1}}}{\\partial \\eta^2}$.
+
+    # We now apply the product rule (the second term in the sum disappears, because
+    # $\\partial \frac{1}{\frac{\\partial h_1(\\mu^1)}{\\mu^1}} / \\partial \\eta^2 = 0$,
+    # this is not the case for pure second derivatives as shown in WPS, 2016)
+    # to get $\frac{\\partial \frac{\\partial llk}{\\partial \\mu^1}}{\\partial \\eta^2}\
+    #  \frac{1}{\frac{\\partial h_1(\\mu^1)}{\\mu^1}}$.
+    # We can now again rely on the same steps taken to get the first derivatives
+    # (chain rule + inversion rule) to get
+    # $\frac{\\partial \frac{\\partial llk}{\\partial \\mu^1}}{\\partial \\eta^2} =
+    # \frac{\\partial^2 llk}{\\partial \\mu^1 \\partial \
+    # \\mu^2}\frac{1}{\frac{\\partial h_2(\\mu^2)}{\\mu^2}}$.
+
+    # Thus, $\frac{\\partial llk / \\partial \\eta^1}{\\partial \\eta^2} =
+    # \frac{\\partial^2 llk}{\\partial \\mu^1 \\partial \\mu^2}\frac{1}{\frac{\\partial \
+    # h_2(\\mu^2)}{\\mu^2}}\frac{1}{\frac{\\partial h_1(\\mu^1)}{\\mu^1}}$.
+
     d2eta = []
     for mui in range(len(means)):
 
@@ -3747,7 +4044,8 @@ def deriv_transform_eta_beta(
     only_grad=False,
 ):
     """
-    Further transforms derivatives of llk with respect to eta to get derivatives of llk with respect to coefficients
+    Further transforms derivatives of llk with respect to eta to get derivatives of llk with
+    respect to coefficients.
     Based on section 3.2 and Appendix A in Wood, Pya, & Säfken (2016)
 
     References:
@@ -3755,9 +4053,10 @@ def deriv_transform_eta_beta(
     """
 
     # Gradient: First order partial derivatives of llk with respect to coefficients
-    """
-    WPS (2016) provide $l^j_{\beta^l} = l^\\mathbf{i}_{\\eta^l}\\mathbf{X}^l_{\\mathbf{i},j}$. See ```deriv_transform_mu_eta```.
-    """
+
+    # WPS (2016) provide $l^j_{\beta^l} = l^\\mathbf{i}_{\\eta^l}\\mathbf{X}^l_{\\mathbf{i},j}$.
+    # See ```deriv_transform_mu_eta```.
+
     grad = []
 
     for etai in range(len(d1eta)):
@@ -3772,11 +4071,11 @@ def deriv_transform_eta_beta(
     if only_grad:
         return np.array(grad).reshape(-1, 1), None
     # Hessian: Second order partial derivatives of llk with respect to coefficients
-    """
-    WPS (2016) provide in general:
-    $l^{j,k}_{\beta^l,\beta^m} = l^\\mathbf{i}_{\\eta^l,\\eta^m}\\mathbf{X}^l_{\\mathbf{i},j}\\mathbf{X}^m_{\\mathbf{i},k}$.
-    See ```deriv_transform_mu_eta```.
-    """
+
+    # WPS (2016) provide in general:
+    # $l^{j,k}_{\beta^l,\beta^m} =
+    # l^\\mathbf{i}_{\\eta^l,\\eta^m}\\mathbf{X}^l_{\\mathbf{i},j}\\mathbf{X}^m_{\\mathbf{i},k}$.
+    # See ```deriv_transform_mu_eta```.
 
     mixed_idx = 0
 
@@ -3800,13 +4099,12 @@ def deriv_transform_eta_beta(
                 d2 = d2meta[mixed_idx]
                 mixed_idx += 1
 
-            val_idx = ((np.isnan(d2) | np.isinf(d2)) == False).flatten()
+            # val_idx = ((np.isnan(d2) | np.isinf(d2)) == False).flatten()
 
             for coefi in range(Xs[etai].shape[1]):
-                # More efficient computation now, no longer an additional nested loop over coefj..
-                # d2beta = (d2[val_idx]*Xs[etai][:,[coefi]][val_idx]).T @ Xs[etaj][val_idx,coefi:Xs[etaj].shape[1]]
+
                 d2beta = (d2 * Xs[etai][:, [coefi]]).T @ Xs[etaj][
-                    :, (coefi if etai == etaj else 0) : Xs[etaj].shape[1]
+                    :, (coefi if etai == etaj else 0) : Xs[etaj].shape[1]  # noqa: E203
                 ]
 
                 if d2beta.nnz > 0:
@@ -3816,21 +4114,23 @@ def deriv_transform_eta_beta(
                         d2beta.sort_indices()
 
                     # Get non-zero column entries for current row
-                    cols = d2beta.indices[d2beta.indptr[0] : d2beta.indptr[1]] + (
-                        coefi if etai == etaj else 0
-                    )
+                    cols = d2beta.indices[
+                        d2beta.indptr[0] : d2beta.indptr[1]  # noqa: E203
+                    ] + (coefi if etai == etaj else 0)
 
                     # Get non-zero values for current row in sorted order
-                    vals = d2beta.data[d2beta.indptr[0] : d2beta.indptr[1]]
+                    vals = d2beta.data[
+                        d2beta.indptr[0] : d2beta.indptr[1]  # noqa: E203
+                    ]
 
                     h_rows.extend(np.tile(coefi, d2beta.nnz) + hr_idx)
                     h_cols.extend(cols + hc_idx)
                     h_vals.extend(vals)
 
                     # Symmetric 2nd deriv..
-                    if etai == etaj and (
-                        (cols[0] + hc_idx) == (coefi + hr_idx)
-                    ):  # For diagonal block need to skip diagonal element if present (i.e., non-zero)
+                    if etai == etaj and ((cols[0] + hc_idx) == (coefi + hr_idx)):
+                        # For diagonal block need to skip diagonal
+                        # element if present (i.e., non-zero)
                         h_rows.extend(cols[1:] + hc_idx)
                         h_cols.extend(np.tile(coefi, d2beta.nnz - 1) + hr_idx)
                         h_vals.extend(vals[1:])
@@ -3852,7 +4152,8 @@ def newton_coef_smooth(
     H: scp.sparse.csc_array,
     S_emb: scp.sparse.csc_array,
 ) -> tuple[np.ndarray, scp.sparse.csc_array, scp.sparse.csc_array, float]:
-    """Follows sections 3.1.2 and 3.14 in Wood, Pya, & Säfken (2016) to update the coefficients of a GAMLSS/GSMM model via a newton step.
+    """Follows sections 3.1.2 and 3.14 in Wood, Pya, & Säfken (2016) to update the coefficients of
+    a GAMLSS/GSMM model via a newton step.
 
     1) Computes gradient of the penalized likelihood (grad - S_emb@coef)
     2) Computes negative Hessian of the penalized likelihood (-1*H + S_emb) and it's inverse.
@@ -3860,8 +4161,9 @@ def newton_coef_smooth(
     4) Step size control - happens outside
 
     References:
-       - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-       - mgcv source code, in particular: https://github.com/cran/mgcv/blob/master/R/gam.fit4.r
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth \
+        Models.
+     - mgcv source code, in particular: https://github.com/cran/mgcv/blob/master/R/gam.fit4.r
 
     :param coef: Current coefficient estimate
     :type coef: np.ndarray
@@ -3871,7 +4173,9 @@ def newton_coef_smooth(
     :type H: scp.sparse.csc_array
     :param S_emb: Total penalty matrix
     :type S_emb: scp.sparse.csc_array
-    :return: A tuple containing an estimate of the coefficients, the un-pivoted cholesky of the penalized negative hessian, the inverse of the former, the multiple (float) added to the diagonal of the negative penalized hessian to make it invertible
+    :return: A tuple containing an estimate of the coefficients, the un-pivoted cholesky of the
+        penalized negative hessian, the inverse of the former, the multiple (float) added to the
+        diagonal of the negative penalized hessian to make it invertible
     :rtype: tuple[np.ndarray,scp.sparse.csc_array,scp.sparse.csc_array,float]
     """
 
@@ -3879,9 +4183,9 @@ def newton_coef_smooth(
     nH = -1 * H + S_emb
 
     # Below tries diagonal pre-conditioning as implemented in mgcv's gam.fit5 function,
-    # see: https://github.com/cran/mgcv/blob/master/R/gam.fit4.r#L1028. However, this does not work well for me, so I must be
-    # doing something wrong.. The diagonal pre-conditioning as suggested by WPS (2016) does work. So for
-    # now this is what happens below the comment.
+    # see: https://github.com/cran/mgcv/blob/master/R/gam.fit4.r#L1028. However, this does not work
+    # well for me, so I must be doing something wrong.. The diagonal pre-conditioning as suggested
+    # by WPS (2016) does work. So for now this is what happens below the comment.
     """
     nHdgr = nH.diagonal()
     mD = np.min(nHdgr)
@@ -3892,9 +4196,12 @@ def newton_coef_smooth(
           nHdgr[nHdgr < mAcc] = mAcc
        else:
           ill_def = True
-    
+
     if ill_def:
-       nH += np.abs(mD)*scp.sparse.identity(nH.shape[1],format='csc') + np.abs(mAcc)*scp.sparse.identity(nH.shape[1],format='csc')
+       nH += (
+              np.abs(mD)*scp.sparse.identity(nH.shape[1],format='csc') +
+              np.abs(mAcc)*scp.sparse.identity(nH.shape[1],format='csc')
+              )
        D = scp.sparse.diags(np.ones_like(nHdgr))
        DI = D
     else:
@@ -3916,7 +4223,7 @@ def newton_coef_smooth(
     code = 1
     while code != 0:
 
-        Lp, Pr, code = cpp_cholP(
+        Lp, Pr, code = cpp_cholP(  # noqa: F405
             nH2 + eps * scp.sparse.identity(nH2.shape[1], format="csc")
         )
         P = compute_eigen_perm(Pr)
@@ -3929,7 +4236,7 @@ def newton_coef_smooth(
                 eps *= 2
             continue
 
-        LVp = compute_Linv(Lp, 10)
+        LVp = compute_Linv(Lp, 10)  # noqa: F405
         LV = apply_eigen_perm(Pr, LVp)
         V = LV.T @ LV
 
@@ -3951,14 +4258,16 @@ def gd_coef_smooth(
     coef: np.ndarray, grad: np.ndarray, S_emb: scp.sparse.csc_array, a: float
 ) -> np.ndarray:
     """
-    Follows sections 3.1.2 and 3.14 in WPS (2016) to update the coefficients of a GAMLSS/GSMM model via a Gradient descent (ascent actually) step.
+    Follows sections 3.1.2 and 3.14 in WPS (2016) to update the coefficients of a GAMLSS/GSMM model
+    via a Gradient descent (ascent actually) step.
 
     1) Computes gradient of the penalized likelihood (grad - S_emb@coef)
     3) Uses this to compute update
     4) Step size control - happens outside
 
     References:
-       - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth \
+        Models.
 
     :param coef: Current coefficient estimate
     :type coef: np.ndarray
@@ -4016,7 +4325,8 @@ def correct_coef_step_gammlss(
     :type coef: np.ndarray
     :param next_coef: Updated coefficient estimate
     :type next_coef: np.ndarray
-    :param coef_split_idx: The indices at which to split the overall coefficient vector into separate lists - one per parameter.
+    :param coef_split_idx: The indices at which to split the overall coefficient vector into
+        separate lists - one per parameter.
     :type coef_split_idx: list[int]
     :param c_llk: Current log likelihood
     :type c_llk: float
@@ -4024,7 +4334,9 @@ def correct_coef_step_gammlss(
     :type S_emb: scp.sparse.csc_array
     :param a: Step length for gradient descent update
     :type a: float
-    :return: A tuple containing the corrected coefficient estimate ``next_coef``,``next_coef`` split via ``coef_split_idx``,next mus,next etas,next llk,nex penalized llk, updated step length fro next gradient update
+    :return: A tuple containing the corrected coefficient estimate ``next_coef``,``next_coef``
+        split via ``coef_split_idx``,next mus,next etas,next llk,nex penalized llk, updated
+        step length fro next gradient update
     :rtype: tuple[np.ndarray,list[np.ndarray],list[np.ndarray],list[np.ndarray],float,float,float]
     """
     # Update etas and mus
@@ -4046,7 +4358,9 @@ def correct_coef_step_gammlss(
     inval = inval.flatten()
 
     # Step size control for newton step.
-    next_llk = family.llk(y[inval == False], *[nmu[inval == False] for nmu in next_mus])
+    next_llk = family.llk(
+        y[inval == False], *[nmu[inval == False] for nmu in next_mus]  # noqa: E712
+    )
 
     # Evaluate improvement of penalized llk under new and old coef - but in both
     # cases for current lambda (see Wood, Li, Shaddick, & Augustin; 2017)
@@ -4056,8 +4370,7 @@ def correct_coef_step_gammlss(
     for n_checks in range(32):
 
         if next_pen_llk >= prev_llk_cur_pen and (
-            np.isinf(next_pen_llk[0, 0]) == False
-            and np.isnan(next_pen_llk[0, 0]) == False
+            not np.isinf(next_pen_llk[0, 0]) and not np.isnan(next_pen_llk[0, 0])
         ):
             break
 
@@ -4087,7 +4400,7 @@ def correct_coef_step_gammlss(
 
         # Re-evaluate penalized likelihood
         next_llk = family.llk(
-            y[inval == False], *[nmu[inval == False] for nmu in next_mus]
+            y[inval == False], *[nmu[inval == False] for nmu in next_mus]  # noqa: E712
         )
         next_pen_llk = next_llk - 0.5 * next_coef.T @ S_emb @ next_coef
         n_checks += 1
@@ -4105,28 +4418,41 @@ def identify_drop(
     H: scp.sparse.csc_array, S_scaled: scp.sparse.csc_array, method: str = "QR"
 ) -> tuple[list[int] | None, list[int] | None]:
     """
-    Routine to (approximately) identify the rank of the scaled negative hessian of the penalized likelihood based on a rank revealing QR decomposition or the methods by Foster (1986) and Gotsman & Toledo (2008).
+    Routine to (approximately) identify the rank of the scaled negative hessian of the penalized
+    likelihood based on a rank revealing QR decomposition or the methods by Foster (1986) and
+    Gotsman & Toledo (2008).
 
-    If ``method=="QR"``, a rank revealing QR decomposition is performed for the scaled penalized Hessian. The latter has to be transformed to a dense matrix for this.
-    This is essentially the approach by Wood et al. (2016) and is the most accurate. Alternatively, we can rely on a variant of Foster's method.
-    This is done when ``method=="LU"`` or ``method=="Direct"``. ``method=="LU"`` requires ``p`` LU decompositions - where ``p`` is approximately the Kernel size of the matrix.
-    Essentially continues to find vectors forming a basis of the Kernel of the balanced penalzied Hessian from the upper matrix of the LU decomposition and successively drops columns
-    corresponding to the maximum absolute value of the Kernel vectors (see Foster, 1986). This is repeated until we can form a cholesky of the scaled penalized hessian which as an acceptable condition number.
-    If ``method=="Direct"``, the same procedure is completed, but Kernel vectors are found directly based on the balanced penalized Hessian, which can be less precise.
+    If ``method=="QR"``, a rank revealing QR decomposition is performed for the scaled penalized
+    Hessian. The latter has to be transformed to a dense matrix for this.
+    This is essentially the approach by Wood et al. (2016) and is the most accurate. Alternatively,
+    we can rely on a variant of Foster's method.
+    This is done when ``method=="LU"`` or ``method=="Direct"``. ``method=="LU"`` requires ``p`` LU
+    decompositions - where ``p`` is approximately the Kernel size of the matrix.
+    Essentially continues to find vectors forming a basis of the Kernel of the balanced penalzied
+    Hessian from the upper matrix of the LU decomposition and successively drops columns
+    corresponding to the maximum absolute value of the Kernel vectors (see Foster, 1986). This is
+    repeated until we can form a cholesky of the scaled penalized hessian which as an acceptable
+    condition number.
+    If ``method=="Direct"``, the same procedure is completed, but Kernel vectors are found directly
+    based on the balanced penalized Hessian, which can be less precise.
 
     References:
-    - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-    - Foster (1986). Rank and null space calculations using matrix decomposition without column interchanges.
-    - Gotsman & Toledo (2008). On the Computation of Null Spaces of Sparse Rectangular Matrices.
-    - mgcv source code, in particular: https://github.com/cran/mgcv/blob/master/R/gam.fit4.r
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth \
+        Models.
+     - Foster (1986). Rank and null space calculations using matrix decomposition without column \
+        interchanges.
+     - Gotsman & Toledo (2008). On the Computation of Null Spaces of Sparse Rectangular Matrices.
+     - mgcv source code, in particular: https://github.com/cran/mgcv/blob/master/R/gam.fit4.r
 
     :param H: Estimate of the hessian of the log-likelihood.
     :type H: scp.sparse.csc_array
-    :param S_scaled: Scaled version of the penalty matrix (i.e., unweighted total penalty divided by it's norm).
+    :param S_scaled: Scaled version of the penalty matrix (i.e., unweighted total penalty
+        divided by it's norm).
     :type S_scaled: scp.sparse.csc_array
     :param method: Which method to use to check for rank deficiency, defaults to 'QR'
     :type method: str, optional
-    :return: A tuple containing lists of the coefficients to keep and to drop, both of which are None when we don't need to drop any.
+    :return: A tuple containing lists of the coefficients to keep and to drop, both of which are
+        None when we don't need to drop any.
     :rtype: tuple[list[int]|None,list[int]|None]
     """
 
@@ -4151,7 +4477,7 @@ def identify_drop(
 
     if method == "QR":
         # Perform dense QR decomposition with pivoting to estimate rank
-        Pr, rank = cpp_dqrr(nH_scaled.toarray())
+        Pr, rank = cpp_dqrr(nH_scaled.toarray())  # noqa: F405
 
         if rank < nH_scaled.shape[1]:
             drop = Pr[rank:]
@@ -4163,19 +4489,19 @@ def identify_drop(
         return keep, drop
 
     # Verify that we actually have a problem..
-    Lp, Pr, code = cpp_cholP(nH_scaled)
+    Lp, Pr, code = cpp_cholP(nH_scaled)  # noqa: F405
 
     if code == 0:
         # Check condition number
         P = compute_eigen_perm(Pr)
-        LVp = compute_Linv(Lp, 10)
+        LVp = compute_Linv(Lp, 10)  # noqa: F405
         LV = apply_eigen_perm(Pr, LVp)
 
         # Undo conditioning.
         LV = LV
         L = P.T @ Lp
 
-        K2, _, _, Kcode = est_condition(L, LV, verbose=False)
+        K2, _, _, Kcode = est_condition(L, LV, verbose=False)  # noqa: F405
         if Kcode == 0:
             return keep, drop
 
@@ -4184,8 +4510,10 @@ def identify_drop(
 
     # Follow steps outlined in algorithm 1 of Foster:
     # - Optionally form LU decomposition of current penalized hessian matrix
-    # - find approximate singular value (from nH or U) + vector -> vector is approximate Kernel vector
-    # - drop column of current (here also row since nH is symmetric) matrix corresponding to maximum of approximate Kernel vector
+    # - find approximate singular value (from nH or U) + vector -> vector is approximate Kernel
+    #   vector
+    # - drop column of current (here also row since nH is symmetric) matrix corresponding to
+    #   maximum of approximate Kernel vector
     # - check if cholesky works now, otherwise continue
 
     while True:
@@ -4215,7 +4543,7 @@ def identify_drop(
                 which="SM",
                 maxiter=10000,
             )
-        except:
+        except:  # noqa: E722
             try:
                 _, _, vh = scp.sparse.linalg.svds(
                     R,
@@ -4226,7 +4554,7 @@ def identify_drop(
                     solver="lobpcg",
                     maxiter=10000,
                 )
-            except:
+            except:  # noqa: E722
                 # Solver failed.. get out and try again later.
                 return keep, drop
 
@@ -4234,9 +4562,9 @@ def identify_drop(
         w = np.zeros(H.shape[1])
 
         if method == "LU":
-            wk = (
-                vh @ P.T
-            ).T  # Need to undo column-pivoting here - depends on method used to compute pivot, here COLAMD.
+            # Need to undo column-pivoting here - depends on method used to compute pivot,
+            # here COLAMD.
+            wk = (vh @ P.T).T
         else:
             wk = vh  # No pivoting if directly extracting vector from nH
         w[keep] = wk.flatten()
@@ -4251,18 +4579,18 @@ def identify_drop(
         nH_drop = nH_drop[:, keep]
 
         # Check if Cholesky works now and has good conditioning - otherwise continue
-        Lp, Pr2, code = cpp_cholP(nH_drop)
+        Lp, Pr2, code = cpp_cholP(nH_drop)  # noqa: F405
         if code == 0:
             # Check condition number
             P2 = compute_eigen_perm(Pr2)
-            LVp = compute_Linv(Lp, 10)
+            LVp = compute_Linv(Lp, 10)  # noqa: F405
             LV = apply_eigen_perm(Pr2, LVp)
 
             # Undo conditioning.
             LV = LV
             L = P2.T @ Lp
 
-            K2, _, _, Kcode = est_condition(L, LV, verbose=False)
+            K2, _, _, Kcode = est_condition(L, LV, verbose=False)  # noqa: F405
 
             if Kcode == 0:
                 break
@@ -4282,7 +4610,8 @@ def drop_terms_X(
     :type Xs: list[scp.sparse.csc_array]
     :param keep: List of columns to keep.
     :type keep: list[int]
-    :return: Tuple, containing a list of updated model matrices - a copy is made - and a new list conatining the indices by which to split the coefficient vector.
+    :return: Tuple, containing a list of updated model matrices - a copy is made - and a new
+        list conatining the indices by which to split the coefficient vector.
     :rtype: tuple[list[scp.sparse.csc_array],list[int]]
     """
     # Drop from model matrices
@@ -4316,13 +4645,15 @@ def check_drop_valid_gammlss(
     keep: list[int],
     family: GAMLSSFamily,
 ) -> tuple[bool, float]:
-    """Checks whether an identified set of coefficients to be dropped from the model results in a valid log-likelihood.
+    """Checks whether an identified set of coefficients to be dropped from the model results in a
+    valid log-likelihood.
 
     :param y: Vector of response variable
     :type y: np.ndarray
     :param coef: Vector of coefficientss
     :type coef: np.ndarray
-    :param coef_split_idx: List with indices to split coef - one per parameter of response distribution
+    :param coef_split_idx: List with indices to split coef - one per parameter of response
+        distribution
     :type coef_split_idx: list[int]
     :param Xs: List of model matrices - one per parameter of response distribution
     :type Xs: list[scp.sparse.csc_array]
@@ -4332,7 +4663,8 @@ def check_drop_valid_gammlss(
     :type keep: list[int]
     :param family: Model family
     :type family: GAMLSSFamily
-    :return: tuple holding bool indicating if likelihood is valid and penalized log-likelihood under dropped set.
+    :return: tuple holding bool indicating if likelihood is valid and penalized log-likelihood
+        under dropped set.
     :rtype: tuple[bool,float]
     """
     # Drop from coef
@@ -4365,7 +4697,9 @@ def check_drop_valid_gammlss(
     inval = inval.flatten()
 
     # Re-compute llk
-    c_llk = family.llk(y[inval == False], *[mu[inval == False] for mu in mus])
+    c_llk = family.llk(
+        y[inval == False], *[mu[inval == False] for mu in mus]  # noqa: E712
+    )
     c_pen_llk = c_llk - 0.5 * dropcoef.T @ rS_emb @ dropcoef
 
     if np.isinf(c_pen_llk[0, 0]) or np.isnan(c_pen_llk[0, 0]):
@@ -4392,7 +4726,8 @@ def handle_drop_gammlss(
     float,
     float,
 ]:
-    """Drop coefficients and make sure this is reflected in the model matrices, total penalty, llk, and penalized llk.
+    """Drop coefficients and make sure this is reflected in the model matrices, total penalty, llk,
+    and penalized llk.
 
     :param family: Model family
     :type family: GAMLSSFamily
@@ -4406,8 +4741,11 @@ def handle_drop_gammlss(
     :type Xs: list[scp.sparse.csc_array]
     :param S_emb: Total penalty matrix.
     :type S_emb: scp.sparse.csc_array
-    :return: A tuple holding: reduced coef vector, split version of the reduced coef vector, a new list of indices determining where to split the reduced coef vector, list with reduced model matrices, reduced total penalty matrix, updated etas, mus, llk, and penalzied llk
-    :rtype: tuple[np.ndarray, list[np.ndarray], list[int], list[scp.sparse.csc_array], scp.sparse.csc_array, list[np.ndarray], list[np.ndarray], float, float]
+    :return: A tuple holding: reduced coef vector, split version of the reduced coef vector, a new
+        list of indices determining where to split the reduced coef vector, list with reduced model
+        matrices, reduced total penalty matrix, updated etas, mus, llk, and penalzied llk
+    :rtype: tuple[np.ndarray, list[np.ndarray], list[int], list[scp.sparse.csc_array],
+        scp.sparse.csc_array, list[np.ndarray], list[np.ndarray], float, float]
     """
     # Drop from coef
     coef = coef[keep]
@@ -4439,7 +4777,9 @@ def handle_drop_gammlss(
     inval = inval.flatten()
 
     # Re-compute llk
-    c_llk = family.llk(y[inval == False], *[mu[inval == False] for mu in mus])
+    c_llk = family.llk(
+        y[inval == False], *[mu[inval == False] for mu in mus]  # noqa: E712
+    )
     c_pen_llk = c_llk - 0.5 * coef.T @ rS_emb @ coef
 
     return coef, rsplit_coef, rcoef_split_idx, rXs, rS_emb, etas, mus, c_llk, c_pen_llk
@@ -4479,7 +4819,8 @@ def restart_coef_gammlss(
     :type mus: list[np.ndarray]
     :param n_coef: Number of coefficients
     :type n_coef: int
-    :param coef_split_idx: List with indices to split coef - one per parameter of response distribution
+    :param coef_split_idx: List with indices to split coef - one per parameter of
+        response distribution
     :type coef_split_idx: list[int]
     :param y: Vector of observations
     :type y: np.ndarray
@@ -4529,7 +4870,8 @@ def restart_coef_gammlss(
 
             # Step size control for newton step.
             res_llk = family.llk(
-                y[inval == False], *[nmu[inval == False] for nmu in res_mus]
+                y[inval == False],  # noqa: E712
+                *[nmu[inval == False] for nmu in res_mus],  # noqa: E712
             )
 
             # Evaluate improvement of penalized llk under new and old coef - but in both
@@ -4585,13 +4927,18 @@ def update_coef_gammlss(
     list[int] | None,
     list[int] | None,
 ]:
-    """Repeatedly perform Newton update with step length control to the coefficient vector - essentially implements algorithm 3 from the paper by Krause et al. (submitted).
+    """Repeatedly perform Newton update with step length control to the coefficient vector -
+    essentially implements algorithm 3 from the paper by Krause et al. (submitted).
 
-    Based on steps outlined by Wood, Pya, & Säfken (2016). Checks for rank deficiency when ``method != "Chol"``.
+    Based on steps outlined by Wood, Pya, & Säfken (2016). Checks for rank deficiency when
+    ``method != "Chol"``.
 
     References:
-      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-      - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient Estimation and Selection of Large Multi-Level Statistical Models. https://doi.org/10.48550/arXiv.2506.13132
+      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth \
+        Models.
+      - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient \
+        Estimation and Selection of Large Multi-Level Statistical Models. \
+        https://doi.org/10.48550/arXiv.2506.13132
 
     :param family: Family of model
     :type family: GAMLSSFamily
@@ -4603,7 +4950,8 @@ def update_coef_gammlss(
     :type Xs: [scp.sparse.csc_array]
     :param coef: Coefficient estimate
     :type coef: np.ndarray
-    :param coef_split_idx: List with indices to split coef - one per parameter of response distribution
+    :param coef_split_idx: List with indices to split coef - one per parameter of response
+        distribution
     :type coef_split_idx: list[int]
     :param S_emb: Total penalty matrix
     :type S_emb: scp.sparse.csc_array
@@ -4611,7 +4959,8 @@ def update_coef_gammlss(
     :type S_emb: scp.sparse.csc_array
     :param S_pinv: Generalized inverse of total penalty matrix
     :type S_pinv: scp.sparse.csc_array
-    :param FS_use_rank: A list of bools indicating for which EFS updates the rank rather than the generalized inverse should be used
+    :param FS_use_rank: A list of bools indicating for which EFS updates the rank rather than the
+        generalized inverse should be used
     :type FS_use_rank: list[bool]
     :param gammlss_penalties: List of penalties
     :type gammlss_penalties: list[LambdaTerm]
@@ -4631,8 +4980,15 @@ def update_coef_gammlss(
     :type piv_tol: float
     :param keep_drop: Set of previously dropped coeeficients or None
     :type keep_drop: list[list[int],list[int]] | None
-    :return: A tuple containing an estimate of all coefficients, a split version of the former, updated values for mus, etas, the negative hessian of the log-likelihood, cholesky of negative hessian of the penalized log-likelihood, inverse of the former, new llk, new penalized llk, the multiple (float) added to the diagonal of the negative penalized hessian to make it invertible, an optional list of the coefficients to keep, an optional list of the estimated coefficients to drop
-    :rtype: tuple[np.ndarray, list[np.ndarray], list[np.ndarray], list[np.ndarray], scp.sparse.csc_array, scp.sparse.csc_array, scp.sparse.csc_array, float, float, float, list[int] | None, list[int] | None]
+    :return: A tuple containing an estimate of all coefficients, a split version of the former,
+        updated values for mus, etas, the negative hessian of the log-likelihood, cholesky of
+        negative hessian of the penalized log-likelihood, inverse of the former, new llk, new
+        penalized llk, the multiple (float) added to the diagonal of the negative penalized hessian
+        to make it invertible, an optional list of the coefficients to keep, an optional list of the
+        estimated coefficients to drop
+    :rtype: tuple[np.ndarray, list[np.ndarray], list[np.ndarray], list[np.ndarray],
+        scp.sparse.csc_array, scp.sparse.csc_array, scp.sparse.csc_array, float, float, float,
+        list[int] | None, list[int] | None]
     """
     grad_only = method == "Grad"
     a = 0.1  # Step-size for gradient only
@@ -4662,13 +5018,13 @@ def update_coef_gammlss(
     converged = False
     checked_identifiable = False
     inner = 0
-    while converged == False:
+    while converged is False:
 
         if inner >= max_inner:
             break
 
         # Get derivatives with respect to eta
-        if family.d_eta == False:
+        if family.d_eta is False:
             d1eta, d2eta, d2meta = deriv_transform_mu_eta(y, mus, family)
         else:
             d1eta = [fd1(y, *mus) for fd1 in family.d1]
@@ -4725,7 +5081,7 @@ def update_coef_gammlss(
             # Check for drop
             if (
                 (keep_drop is None)
-                and (checked_identifiable == False)
+                and (checked_identifiable is False)
                 and (method in ["QR/Chol", "LU/Chol", "Direct/Chol"])
             ):
                 keep, drop = identify_drop(H, S_norm, method.split("/")[0])
@@ -4742,7 +5098,7 @@ def update_coef_gammlss(
                     )
 
                     # Skip if likelihood becomes invalid
-                    if drop_valid == False:
+                    if drop_valid is False:
                         keep = None
                         drop = None
                         break
@@ -4785,7 +5141,7 @@ def update_coef_gammlss(
     if drop is not None:
         full_coef[keep] = coef
 
-        LVdat, LVrow, LVcol = translate_sparse(LV)  # LV.T@LV = V
+        LVdat, LVrow, LVcol = translate_sparse(LV)  # LV.T@LV = V # noqa: F405
         LVrow = keep[LVrow]
         LVcol = keep[LVcol]
         LV = scp.sparse.csc_array(
@@ -4840,7 +5196,7 @@ def update_coef_gammlss(
 
             # Pad new LV in case of drop again:
             if drop is not None:
-                LVdat, LVrow, LVcol = translate_sparse(LV)  # LV.T@LV = V
+                LVdat, LVrow, LVcol = translate_sparse(LV)  # LV.T@LV = V # noqa: F405
                 LVrow = keep[LVrow]
                 LVcol = keep[LVcol]
                 LV = scp.sparse.csc_array(
@@ -4858,8 +5214,8 @@ def update_coef_gammlss(
         split_coef = np.split(full_coef, full_coef_split_idx)
 
         # Now H, L
-        Hdat, Hrow, Hcol = translate_sparse(H)
-        Ldat, Lrow, Lcol = translate_sparse(L.tocsc())  # L@L.T = H_pen
+        Hdat, Hrow, Hcol = translate_sparse(H)  # noqa: F405
+        Ldat, Lrow, Lcol = translate_sparse(L.tocsc())  # L@L.T = H_pen # noqa: F405
 
         Hrow = keep[Hrow]
         Hcol = keep[Hcol]
@@ -4924,13 +5280,18 @@ def correct_lambda_step_gamlss(
     list[float],
     np.ndarray,
 ]:
-    """Updates and performs step-length control for the vector of lambda parameters of a GAMMLSS model. Essentially completes the steps described in section 3.3 of the paper by Krause et al. (submitted).
+    """Updates and performs step-length control for the vector of lambda parameters of a GAMMLSS
+    model. Essentially completes the steps described in section 3.3 of the paper by Krause et al.
+    (submitted).
 
     Based on steps outlined by Wood, Pya, & Säfken (2016).
 
     References:
-      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-      - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient Estimation and Selection of Large Multi-Level Statistical Models. https://doi.org/10.48550/arXiv.2506.13132
+      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth \
+        Models.
+      - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient \
+        Estimation and Selection of Large Multi-Level Statistical Models. \
+        https://doi.org/10.48550/arXiv.2506.13132
 
     :param family: Family of model
     :type family: GAMLSSFamily
@@ -4940,7 +5301,8 @@ def correct_lambda_step_gamlss(
     :type y: np.ndarray
     :param Xs: List of model matrices - one per parameter of response distribution
     :type Xs: [scp.sparse.csc_array]
-    :param S_norm: Scaled version of the penalty matrix (i.e., unweighted total penalty divided by it's norm).
+    :param S_norm: Scaled version of the penalty matrix (i.e., unweighted total penalty divided
+        by it's norm).
     :type S_norm: scp.sparse.csc_array
     :param n_coef: Number of coefficients
     :type n_coef: int
@@ -4950,7 +5312,8 @@ def correct_lambda_step_gamlss(
     :type form_up_coef: list[int]
     :param coef: Coefficient estimate
     :type coef: np.ndarray
-    :param coef_split_idx: The indices at which to split the overall coefficient vector into separate lists - one per parameter.
+    :param coef_split_idx: The indices at which to split the overall coefficient vector into
+        separate lists - one per parameter.
     :type coef_split_idx: list[int]
     :param gamlss_pen: List of penalties
     :type gamlss_pen: list[LambdaTerm]
@@ -4978,32 +5341,50 @@ def correct_lambda_step_gamlss(
     :type piv_tol: float
     :param keep_drop: Set of previously dropped coeeficients or None
     :type keep_drop: list[list[int],list[int]] | None
-    :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the number of new smoothing penalty proposals necessary
+    :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the
+        number of new smoothing penalty proposals necessary
     :type extend_lambda: bool
     :param extension_method_lam: Which method to use to extend lambda proposals.
     :type extension_method_lam: str
-    :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for whether or not they (approxiately) increase the Laplace approximate restricted maximum likelihood of the model. Setting this to 0 disables control. Setting it to 1 means the step will never be smaller than the original EFS update but extensions will be removed in case the objective was exceeded. Setting it to 2 means that steps will be halved if it fails to increase the approximate REML.
+    :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased)
+        for whether or not they (approxiately) increase the Laplace approximate restricted maximum
+        likelihood of the model. Setting this to 0 disables control. Setting it to 1 means the step
+        will never be smaller than the original EFS update but extensions will be removed in case
+        the objective was exceeded. Setting it to 2 means that steps will be halved if it fails to
+        increase the approximate REML.
     :type control_lambda: int
     :param repara: Whether to apply a stabilizing re-parameterization to the model
     :type repara: bool
     :param n_c: Number of cores to use
     :type n_c: int
-    :return: coef estimate under corrected lambda, split version of next coef estimate, next mus, next etas, the negative hessian of the log-likelihood, cholesky of negative hessian of the penalized log-likelihood, inverse of the former, new llk, new penalized llk, the multiple (float) added to the diagonal of the negative penalized hessian to make it invertible, an optional list of the coefficients to keep, an optional list of the estimated coefficients to drop, the new total penalty matrix, the new list of penalties, total edf, term-wise edfs, the update to the lambda vector
-    :rtype: tuple[np.ndarray, list[np.ndarray], list[np.ndarray], list[np.ndarray], scp.sparse.csc_array, scp.sparse.csc_array, scp.sparse.csc_array, float, float, float, list[int], list[int], scp.sparse.csc_array, list[LambdaTerm], float, list[float], np.ndarray]
+    :return: coef estimate under corrected lambda, split version of next coef estimate, next mus,
+        next etas, the negative hessian of the log-likelihood, cholesky of negative hessian of the
+        penalized log-likelihood, inverse of the former, new llk, new penalized llk, the multiple
+        (float) added to the diagonal of the negative penalized hessian to make it invertible, an
+        optional list of the coefficients to keep, an optional list of the estimated coefficients
+        to drop, the new total penalty matrix, the new list of penalties, total edf, term-wise edfs,
+        the update to the lambda vector
+    :rtype: tuple[np.ndarray, list[np.ndarray], list[np.ndarray], list[np.ndarray],
+        scp.sparse.csc_array, scp.sparse.csc_array, scp.sparse.csc_array, float, float, float,
+        list[int], list[int], scp.sparse.csc_array, list[LambdaTerm], float, list[float],
+        np.ndarray]
     """
 
-    # Fitting routine with step size control for smoothing parameters of GAMMLSS models. Not obvious - because we have only approximate REMl
-    # and approximate derivative, because we drop the last term involving the derivative of the negative penalized
-    # Hessian with respect to the smoothing parameters (see section 4 in Wood & Fasiolo, 2017). However, Krause et al. (in preparation) motivate
-    # step-legnth control based on these approximate information and step-length control is thus performed here if ``control_lambda > 0``.
-    # Setting ``control_lambda=1`` means any acceleration of the lambda step is undone if we overshoot the approximate criterion. Setting ``control_lambda=2``
+    # Fitting routine with step size control for smoothing parameters of GAMMLSS models.
+    # Not obvious - because we have only approximate REMl
+    # and approximate derivative, because we drop the last term involving the derivative of the
+    # negative penalized Hessian with respect to the smoothing parameters (see section 4 in Wood
+    # & Fasiolo, 2017). However, Krause et al. (in preparation) motivate step-legnth control
+    # based on these approximate information and step-length control is thus performed here if
+    # ``control_lambda > 0``. Setting ``control_lambda=1`` means any acceleration of the lambda
+    # step is undone if we overshoot the approximate criterion. Setting ``control_lambda=2``
     # means we perform step-length reduction as if the approximate information were accurate.
 
     lam_accepted = False
 
     # prev_drop = fit_info.dropped
     # reductions = 0
-    while lam_accepted == False:
+    while lam_accepted is False:
 
         # Build new penalties
         S_emb, S_pinv, _, FS_use_rank = compute_S_emb_pinv_det(
@@ -5101,7 +5482,7 @@ def correct_lambda_step_gamlss(
         if (
             outer == 0
             or (control_lambda < 1)
-            or (extend_lambda == False and control_lambda < 2)
+            or (extend_lambda is False and control_lambda < 2)
         ):
             lam_accepted = True
             continue
@@ -5115,13 +5496,14 @@ def correct_lambda_step_gamlss(
         lam_grad = np.array(lam_grad).reshape(-1, 1)
         check = lam_grad.T @ lam_delta
 
-        # Now undo the acceleration if overall direction is **very** off - don't just check against 0 because
-        # our criterion is approximate, so we can be more lenient (see Wood et al., 2017).
+        # Now undo the acceleration if overall direction is **very** off - don't just check against
+        # 0 because our criterion is approximate, so we can be more lenient (see Wood et al., 2017).
         lam_changes = 0
         if check[0] < 1e-7 * -abs(next_pen_llk):
-            for lti, lTerm in enumerate(
-                gamlss_pen
-            ):  # Make sure to work with original penalty object here, so that step-length control is reflected in lambda values
+
+            # Make sure to work with original penalty object here,
+            # so that step-length control is reflected in lambda values
+            for lti, lTerm in enumerate(gamlss_pen):
 
                 # For extended terms undo extension
                 if extend_lambda and was_extended[lti]:
@@ -5141,8 +5523,8 @@ def correct_lambda_step_gamlss(
 
                 elif control_lambda == 2:
                     # Continue to half step - this is not necessarily because we overshoot the REML
-                    # (because we only have approximate gradient), but can help preventing that models
-                    # oscillate around estimates.
+                    # (because we only have approximate gradient), but can help preventing that
+                    # models oscillate around estimates.
                     lam_delta[lti] = lam_delta[lti] / 2
                     lTerm.lam -= lam_delta[lti]
                     lam_changes += 1
@@ -5175,7 +5557,8 @@ def correct_lambda_step_gamlss(
 
         # For poorly scaled/ill-identifiable problems we cannot rely on the theorems by Wood
         # & Fasiolo (2017) - so the condition below will be met, in which case we just want to
-        # take very small steps until it hopefully gets more stable (due to term dropping or better lambda value).
+        # take very small steps until it hopefully gets more stable (due to term dropping or better
+        # lambda value).
         if lgdetD - ldetHS < 0:
             dLam = np.sign(dLam) * min(abs(lTerm.lam) * 0.001, abs(dLam))
             dLam = 0 if lTerm.lam + dLam < 0 else dLam
@@ -5197,7 +5580,8 @@ def correct_lambda_step_gamlss(
 
                 extend_by["acc"][lti] *= damp
 
-        # Dampen steps taken if Hessian continues to be modified to prevent erratic jumps or if progress is slow
+        # Dampen steps taken if Hessian continues to be modified to prevent erratic jumps or if
+        # progress is slow
         if (
             (outer > 100 and step_norm < 5e-3)
             or outer > 250
@@ -5290,13 +5674,17 @@ def solve_gammlss_sparse(
     list[LambdaTerm],
     Fit_info,
 ]:
-    """Fits a GAMLSS model - essentially completes the steps discussed in section 3.3 of the paper by Krause et al. (submitted).
+    """Fits a GAMLSS model - essentially completes the steps discussed in section 3.3 of the paper
+    by Krause et al. (submitted).
 
     Based on steps outlined by Wood, Pya, & Säfken (2016)
 
     References:
-       - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-       - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient Estimation and Selection of Large Multi-Level Statistical Models. https://doi.org/10.48550/arXiv.2506.13132
+       - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+        Smooth Models.
+       - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient \
+        Estimation and Selection of Large Multi-Level Statistical Models. \
+        https://doi.org/10.48550/arXiv.2506.13132
 
 
     :param family: Model family
@@ -5311,7 +5699,8 @@ def solve_gammlss_sparse(
     :type form_up_coef: list[int]
     :param coef: Coefficient estimate
     :type coef: np.ndarray
-    :param coef_split_idx: The indices at which to split the overall coefficient vector into separate lists - one per parameter.
+    :param coef_split_idx: The indices at which to split the overall coefficient vector into
+        separate lists - one per parameter.
     :type coef_split_idx: list[int]
     :param gamlss_pen: List of penalties
     :type gamlss_pen: list[LambdaTerm]
@@ -5323,30 +5712,47 @@ def solve_gammlss_sparse(
     :type min_inner: int, optional
     :param conv_tol: Convergence tolerance, defaults to 1e-7
     :type conv_tol: float, optional
-    :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the number of new smoothing penalty proposals necessary, defaults to True
+    :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the
+        number of new smoothing penalty proposals necessary, defaults to True
     :type extend_lambda: bool, optional
-    :param extension_method_lam: Which method to use to extend lambda proposals, defaults to "nesterov2"
+    :param extension_method_lam: Which method to use to extend lambda proposals, defaults to
+        "nesterov2"
     :type extension_method_lam: str, optional
-    :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for whether or not they (approxiately) increase the Laplace approximate restricted maximum likelihood of the model. Setting this to 0 disables control. Setting it to 1 means the step will never be smaller than the original EFS update but extensions will be removed in case the objective was exceeded. Setting it to 2 means that steps will be halved if it fails to increase the approximate REML., defaults to 1
+    :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased)
+        for whether or not they (approxiately) increase the Laplace approximate restricted maximum
+        likelihood of the model. Setting this to 0 disables control. Setting it to 1 means the step
+        will never be smaller than the original EFS update but extensions will be removed in case
+        the objective was exceeded. Setting it to 2 means that steps will be halved if it fails to
+        increase the approximate REML., defaults to 1
     :type control_lambda: int, optional
     :param method: Method to use to estimate coefficients, defaults to "Chol"
     :type method: str, optional
-    :param check_cond: Whether to obtain an estimate of the condition number for the linear system that is solved. When ``check_cond=0``, no check will be performed. When ``check_cond=1``, an estimate of the condition number for the final system (at convergence) will be computed and warnings will be issued based on the outcome (see :func:`mssm.src.python.gamm_solvers.est_condition`)., defaults to 1
+    :param check_cond: Whether to obtain an estimate of the condition number for the linear system
+        that is solved. When ``check_cond=0``, no check will be performed. When ``check_cond=1``,
+        an estimate of the condition number for the final system (at convergence) will be computed
+        and warnings will be issued based on the outcome
+        (see :func:`mssm.src.python.gamm_solvers.est_condition`)., defaults to 1
     :type check_cond: int, optional
     :param piv_tol: Deprecated, defaults to 0.175
     :type piv_tol: float, optional
     :param repara: Whether to apply a stabilizing re-parameterization to the model, defaults to True
     :type repara: bool, optional
-    :param should_keep_drop: If set to True, any coefficients that are dropped during fitting - are permanently excluded from all subsequent iterations, defaults to True
+    :param should_keep_drop: If set to True, any coefficients that are dropped during fitting - are
+        permanently excluded from all subsequent iterations, defaults to True
     :type should_keep_drop: bool, optional
-    :param prefit_grad: Whether to rely on Gradient Descent to improve the initial starting estimate for coefficients., defaults to False
+    :param prefit_grad: Whether to rely on Gradient Descent to improve the initial starting estimate
+        for coefficients., defaults to False
     :type prefit_grad: bool, optional
     :param progress_bar: Whether progress should be displayed, defaults to True
     :type progress_bar: bool, optional
     :param n_c: Number of cores to use, defaults to 10
     :type n_c: int, optional
-    :return: coef estimate, etas, mus, working residuals, the negative hessian of the log-likelihood, inverse of cholesky of negative hessian of the penalized log-likelihood, total edf, term-wise edfs, total penalty, final list of penalties, a :class:`Fit_info` object
-    :rtype: tuple[np.ndarray, list[np.ndarray], list[np.ndarray], np.ndarray, scp.sparse.csc_array, scp.sparse.csc_array, float, list[float], float, list[LambdaTerm], Fit_info]
+    :return: coef estimate, etas, mus, working residuals, the negative hessian of the
+        log-likelihood, inverse of cholesky of negative hessian of the penalized log-likelihood,
+        total edf, term-wise edfs, total penalty, final list of penalties, a :class:`Fit_info`
+        object
+    :rtype: tuple[np.ndarray, list[np.ndarray], list[np.ndarray], np.ndarray, scp.sparse.csc_array,
+        scp.sparse.csc_array, float, list[float], float, list[LambdaTerm], Fit_info]
     """
     # total number of coefficients
     n_coef = np.sum(form_n_coef)
@@ -5369,7 +5775,8 @@ def solve_gammlss_sparse(
 
     if np.sum(inval) > 0:
         raise ValueError(
-            "The initial coefficients result in invalid value for at least one predictor. Provide a different set via the family's ``init_coef`` function."
+            "The initial coefficients result in invalid value for at least one predictor. Provide \
+            a different set via the family's ``init_coef`` function."
         )
 
     # Build current penalties
@@ -5519,14 +5926,16 @@ def solve_gammlss_sparse(
                     desc="Fitting - Conv.: "
                     + "{:.2e}".format(
                         (
-                            np.abs(prev_pen_llk - c_pen_llk)
+                            np.abs(prev_pen_llk - c_pen_llk)  # noqa: F405
                             - conv_tol * np.abs(c_pen_llk)
                         )[0, 0]
                     ),
                     refresh=True,
                 )
-            # print(drop,lam_delta,np.max(np.abs([prev_lam[lti] - gamlss_pen[lti].lam for lti in range(len(gamlss_pen))])))
-            # generally converge if change in pen llk is small - but if we have dropped something also permit small change in lambda after correction or - if we have been at it for some time - a very small proposal
+
+            # generally converge if change in pen llk is small - but if we have dropped something
+            # also permit small change in lambda after correction or - if we have been at it for
+            # some time - a very small proposal
             if (
                 np.any(
                     [
@@ -5541,7 +5950,7 @@ def solve_gammlss_sparse(
                         np.max(
                             np.abs(
                                 [
-                                    prev_lam[lti] - gamlss_pen[lti].lam
+                                    prev_lam[lti] - gamlss_pen[lti].lam  # noqa: F405
                                     for lti in range(len(gamlss_pen))
                                 ]
                             )
@@ -5557,13 +5966,14 @@ def solve_gammlss_sparse(
                 fit_info.code = 0
                 break
 
-        # We need the penalized likelihood of the model at this point for convergence control (step 2 in Wood, 2017 based on step 4 in Wood, Goude, & Shaw, 2016)
+        # We need the penalized likelihood of the model at this point for convergence control
+        # (step 2 in Wood, 2017 based on step 4 in Wood, Goude, & Shaw, 2016)
         prev_pen_llk = c_pen_llk
         prev_llk_hist.append(prev_pen_llk[0, 0])
         if len(prev_llk_hist) > 5:
             del prev_llk_hist[0]
 
-        prev_lam = copy.deepcopy([lterm.lam for lterm in gamlss_pen])
+        prev_lam = copy.deepcopy([lterm.lam for lterm in gamlss_pen])  # noqa: F841
         # prev_coef = copy.deepcopy(coef)
         # print("lambda before step:",[lterm.lam for lterm in gamlss_pen])
         # And ultimately apply new proposed lambda step
@@ -5578,14 +5988,15 @@ def solve_gammlss_sparse(
         # 5) Applied the new update lambdas so that we can go to the next iteration
         # print("lambda after step:",[lterm.lam for lterm in gamlss_pen])
 
-    # H, L, and LV do not have sorted indices after undoing repara transform - need to take care of that here.
+    # H, L, and LV do not have sorted indices after undoing repara transform - need to take care of
+    # that here.
     if repara:
         H.sort_indices()
         LV.sort_indices()
         L.sort_indices()
 
     if check_cond == 1:
-        K2, _, _, Kcode = est_condition(L, LV, verbose=False)
+        K2, _, _, Kcode = est_condition(L, LV, verbose=False)  # noqa: F405
 
         fit_info.K2 = K2
 
@@ -5596,7 +6007,12 @@ def solve_gammlss_sparse(
 
         if Kcode > 0:
             warnings.warn(
-                f"Condition number ({K2}) of matrix A, where A.T@A=H and H is the Hessian of the negative penalized likelihood, is larger than 1/sqrt(u), where u is half the machine precision. Call ``model.fit()`` with ``method='QR/Chol'``, but note that even then estimates are likely to be inaccurate."
+                (
+                    f"Condition number ({K2}) of matrix A, where A.T@A=H and H is the Hessian of "
+                    "the negative penalized likelihood, is larger than 1/sqrt(u), where u is half "
+                    "the machine precision. Call ``model.fit()`` with ``method='QR/Chol'``, but "
+                    "note that even then estimates are likely to be inaccurate."
+                )
             )
 
     # "Residuals"
@@ -5623,7 +6039,7 @@ def solve_gammlss_sparse(
     )
 
 
-################################################ General Smooth model code ################################################
+############################ General Smooth model code ################################ # noqa: E266
 
 
 def correct_coef_step_gen_smooth(
@@ -5637,10 +6053,12 @@ def correct_coef_step_gen_smooth(
     S_emb: scp.sparse.csc_array,
     a: float,
 ) -> tuple[np.ndarray, float, float, float]:
-    """Apply step size correction to Newton update for general smooth models, as discussed by Wood, Pya, & Säfken (2016).
+    """Apply step size correction to Newton update for general smooth models, as discussed by Wood,
+    Pya, & Säfken (2016).
 
      References:
-       - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+       - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth \
+        Models.
 
     :param family: Model family
     :type family: GSMMFamily
@@ -5652,7 +6070,8 @@ def correct_coef_step_gen_smooth(
     :type coef: np.ndarray
     :param next_coef: Proposed next coefficient estimate
     :type next_coef: np.ndarray
-    :param coef_split_idx: The indices at which to split the overall coefficient vector into separate lists - one per parameter.
+    :param coef_split_idx: The indices at which to split the overall coefficient vector into
+        separate lists - one per parameter.
     :type coef_split_idx: list[int]
     :param c_llk: Current log likelihood
     :type c_llk: float
@@ -5660,7 +6079,8 @@ def correct_coef_step_gen_smooth(
     :type S_emb: scp.sparse.csc_array
     :param a: Step length for gradient descent update
     :type a: float
-    :return: A tuple containing the corrected coefficient estimate ``next_coef``,next llk, next penalized llk, updated step length for next gradient update
+    :return: A tuple containing the corrected coefficient estimate ``next_coef``,next llk, next
+        penalized llk, updated step length for next gradient update
     :rtype: tuple[np.ndarray,float,float,float]
     """
 
@@ -5675,8 +6095,7 @@ def correct_coef_step_gen_smooth(
     for n_checks in range(32):
 
         if next_pen_llk >= prev_llk_cur_pen and (
-            np.isinf(next_pen_llk[0, 0]) == False
-            and np.isnan(next_pen_llk[0, 0]) == False
+            not np.isinf(next_pen_llk[0, 0]) and not np.isnan(next_pen_llk[0, 0])
         ):
             break
 
@@ -5709,7 +6128,8 @@ def back_track_alpha(
     c1: float = 1e-4,
     max_iter: int = 100,
 ) -> float | None:
-    """Simple step-size backtracking function that enforces Armijo condition (Nocedal & Wright, 2004)
+    """Simple step-size backtracking function that enforces Armijo condition
+    (Nocedal & Wright, 2004)
 
     References:
        - Nocedal & Wright (2006). Numerical Optimization. Springer New York.
@@ -5745,9 +6165,7 @@ def back_track_alpha(
 
         armijo = n_llk <= c_llk + c_alpha * c1 * c_grad.T @ step
 
-        if armijo and (
-            np.isnan(n_llk[0, 0]) == False and np.isinf(n_llk[0, 0]) == False
-        ):
+        if armijo and (not np.isnan(n_llk[0, 0]) and not np.isinf(n_llk[0, 0])):
             return c_alpha
 
         c_alpha /= 2
@@ -5763,7 +6181,8 @@ def check_drop_valid_gensmooth(
     keep: list[int],
     family: GSMMFamily,
 ) -> tuple[bool, float | None]:
-    """Checks whether an identified set of coefficients to be dropped from the model results in a valid log-likelihood.
+    """Checks whether an identified set of coefficients to be dropped from the model results in a
+    valid log-likelihood.
 
     :param ys: List holding vectors of observations
     :type ys: list[np.ndarray | None]
@@ -5777,7 +6196,8 @@ def check_drop_valid_gensmooth(
     :type keep: list[int]
     :param family: Model family
     :type family: GSMMFamily
-    :return: tuple holding bool indicating if likelihood is valid and penalized log-likelihood under dropped set.
+    :return: tuple holding bool indicating if likelihood is valid and penalized log-likelihood
+        under dropped set.
     :rtype: tuple[bool,float|None]
     """
     # Drop from coef
@@ -5823,7 +6243,8 @@ def restart_coef(
     :type c_pen_llk: float
     :param n_coef: Number of coefficients
     :type n_coef: np.ndarray
-    :param coef_split_idx: List with indices to split coef - one per parameter of response distribution
+    :param coef_split_idx: List with indices to split coef - one per parameter of response
+        distribution
     :type coef_split_idx: list[int]
     :param ys: List of observation vectors
     :type ys: list[np.ndarray | None]
@@ -5881,7 +6302,9 @@ def test_SR1(
     Relies on steps discussed by Byrd, Nocdeal & Schnabel (1992).
 
     References:
-     - Byrd, R. H., Nocedal, J., & Schnabel, R. B. (1994). Representations of quasi-Newton matrices and their use in limited memory methods. Mathematical Programming, 63(1), 129–156. https://doi.org/10.1007/BF01582063
+     - Byrd, R. H., Nocedal, J., & Schnabel, R. B. (1994). Representations of quasi-Newton \
+        matrices and their use in limited memory methods. Mathematical Programming, 63(1), \
+        129–156. https://doi.org/10.1007/BF01582063
 
     :param sk: New update vector sk
     :type sk: np.ndarray
@@ -5933,7 +6356,7 @@ def test_SR1(
         )
         # t12,t22,t32 = computeHSR1(yks,sks,rhos,V0,omega=1/omega,make_psd=False,explicit=False)
         # print(np.max(np.abs((t11@t21@t31)-(t12@t22@t32))))
-    except:
+    except:  # noqa: E722
         Fail = True
 
     # Undo conditional assignment
@@ -5958,7 +6381,8 @@ def handle_drop_gsmm(
     float,
     float,
 ]:
-    """Drop coefficients and make sure this is reflected in the model matrices, total penalty, llk, and penalized llk.
+    """Drop coefficients and make sure this is reflected in the model matrices, total penalty, llk,
+    and penalized llk.
 
     :param family: Model family
     :type family: GSMMFamily
@@ -5972,8 +6396,11 @@ def handle_drop_gsmm(
     :type Xs: list[scp.sparse.csc_array | None]
     :param S_emb: Total penalty matrix.
     :type S_emb: scp.sparse.csc_array
-    :return: A tuple holding: reduced coef vector, a new list of indices determining where to split the reduced coef vector, list with reduced model matrices, reduced total penalty matrix, updated llk, and penalized llk
-    :rtype: tuple[np.ndarray, list[int], list[scp.sparse.csc_array], scp.sparse.csc_array, float, float]
+    :return: A tuple holding: reduced coef vector, a new list of indices determining where to split
+        the reduced coef vector, list with reduced model matrices, reduced total penalty matrix,
+        updated llk, and penalized llk
+    :rtype: tuple[np.ndarray, list[int], list[scp.sparse.csc_array], scp.sparse.csc_array, float,
+        float]
     """
     # Drop from coef
     coef = coef[keep]
@@ -6024,13 +6451,18 @@ def update_coef_gen_smooth(
     list[int] | None,
     list[int] | None,
 ]:
-    """Repeatedly perform Newton/Gradient/L-qEFS update with step length control to the coefficient vector - essentially completes the steps discussed in sections 3.3 and 4 of the paper by Krause et al. (submitted).
+    """Repeatedly perform Newton/Gradient/L-qEFS update with step length control to the coefficient
+    vector - essentially completes the steps discussed in sections 3.3 and 4 of the paper by
+    Krause et al. (submitted).
 
     Based on steps outlined by Wood, Pya, & Säfken (2016).
 
     References:
-      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-      - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient Estimation and Selection of Large Multi-Level Statistical Models. https://doi.org/10.48550/arXiv.2506.13132
+      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+        Smooth Models.
+      - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient \
+        Estimation and Selection of Large Multi-Level Statistical Models. \
+        https://doi.org/10.48550/arXiv.2506.13132
 
     :param family: Model family
     :type family: GSMMFamily
@@ -6040,15 +6472,18 @@ def update_coef_gen_smooth(
     :type Xs: list[scp.sparse.csc_array | None]
     :param coef: Coefficient estimate
     :type coef: np.ndarray
-    :param coef_split_idx: The indices at which to split the overall coefficient vector into separate lists - one per parameter of llk.
+    :param coef_split_idx: The indices at which to split the overall coefficient vector into
+        separate lists - one per parameter of llk.
     :type coef_split_idx: list[int]
     :param S_emb: Total penalty matrix
     :type S_emb: scp.sparse.csc_array
-    :param S_norm: Scaled version of the penalty matrix (i.e., unweighted total penalty divided by it's norm).
+    :param S_norm: Scaled version of the penalty matrix (i.e., unweighted total penalty divided
+        by it's norm).
     :type S_norm: scp.sparse.csc_array
     :param S_pinv: Generalized inverse of total penalty matrix
     :type S_pinv: scp.sparse.csc_array
-    :param FS_use_rank: A list of bools indicating for which EFS updates the rank rather than the generalized inverse should be used
+    :param FS_use_rank: A list of bools indicating for which EFS updates the rank rather than
+        the generalized inverse should be used
     :type FS_use_rank: list[bool]
     :param smooth_pen: List of penalties
     :type smooth_pen: list[LambdaTerm]
@@ -6068,10 +6503,19 @@ def update_coef_gen_smooth(
     :type piv_tol: float
     :param keep_drop: Set of previously dropped coeeficients or None
     :type keep_drop: list[list[int],list[int]] | None
-    :param opt_raw: If the L-qEFS update is used to estimate coefficients/lambda parameters, then this is the previous state of the quasi-Newton approximations to the (inverse) of the hessian of the log-likelihood
+    :param opt_raw: If the L-qEFS update is used to estimate coefficients/lambda parameters,
+        then this is the previous state of the quasi-Newton approximations to the (inverse) of the
+        hessian of the log-likelihood
     :type opt_raw: scp.sparse.linalg.LinearOperator | None
-    :return: A tuple containing an estimate of all coefficients, the negative hessian of the log-likelihood,cholesky of negative hessian of the penalized log-likelihood,inverse of the former (or another instance of :class:`scp.sparse.linalg.LinearOperator` representing the new quasi-newton approximation), new llk, new penalized llk, the multiple (float) added to the diagonal of the negative penalized hessian to make it invertible, an optional list of the coefficients to keep, an optional list of the estimated coefficients to drop
-    :rtype: tuple[np.ndarray, scp.sparse.csc_array|None, scp.sparse.csc_array|None, scp.sparse.csc_array|scp.sparse.linalg.LinearOperator, float, float, float, list[int]|None, list[int]|None]
+    :return: A tuple containing an estimate of all coefficients, the negative hessian of the
+        log-likelihood,cholesky of negative hessian of the penalized log-likelihood,inverse of the
+        former (or another instance of :class:`scp.sparse.linalg.LinearOperator` representing the
+        new quasi-newton approximation), new llk, new penalized llk, the multiple (float) added to
+        the diagonal of the negative penalized hessian to make it invertible, an optional list of
+        the coefficients to keep, an optional list of the estimated coefficients to drop
+    :rtype: tuple[np.ndarray, scp.sparse.csc_array|None, scp.sparse.csc_array|None,
+        scp.sparse.csc_array|scp.sparse.linalg.LinearOperator, float, float, float, list[int]|None,
+        list[int]|None]
     """
     grad_only = method == "Grad"
     a = 0.1  # Step-size for gradient only
@@ -6084,8 +6528,8 @@ def update_coef_gen_smooth(
         eps = 0
 
     if method == "qEFS":
-        # Define wrapper for negative (penalized) likelihood function plus function to evaluate negative gradient of the former likelihood
-        # to compute line-search.
+        # Define wrapper for negative (penalized) likelihood function plus function to evaluate
+        # negative gradient of the former likelihood to compute line-search.
         def __neg_llk(coef, coef_split_idx, ys, Xs, family, S_emb):
             coef = coef.reshape(-1, 1)
             neg_llk = -1 * family.llk(coef, coef_split_idx, ys, Xs)
@@ -6141,9 +6585,10 @@ def update_coef_gen_smooth(
             )
         else:
             omega = 1
-        omegas = [
-            omega
-        ]  # omega can fluctuate between updates.. keep track of smallest one within an update series and use that for scaling efs update later
+
+        # omega can fluctuate between updates.. keep track of smallest one within an update series
+        # and use that for scaling efs update later - no longer doing that!
+        omegas = [omega]
         updates = 0
 
         # Initialize hessian + inverse
@@ -6168,12 +6613,13 @@ def update_coef_gen_smooth(
 
         # Also compute H0 and V0 for penalized problem.
         pH0 = scp.sparse.identity(len(coef), format="csc") * omega
-        Lp, Pr, _ = cpp_cholP(pH0 + S_emb)
-        LVp0 = compute_Linv(Lp, 10)
+        Lp, Pr, _ = cpp_cholP(pH0 + S_emb)  # noqa: F405
+        LVp0 = compute_Linv(Lp, 10)  # noqa: F405
         LV0 = apply_eigen_perm(Pr, LVp0)
         pV0 = LV0.T @ LV0
 
-        # Should hessian be estimated on gradients from completely un-penalized problem or on problem with a little shrinkage?
+        # Should hessian be estimated on gradients from completely un-penalized problem or on
+        # problem with a little shrinkage?
         # Latter might be more appropriate for random effects where hessian is far from PD!
         S_up = scp.sparse.csc_matrix((len(coef), len(coef)))
         if shrinkage:
@@ -6199,7 +6645,7 @@ def update_coef_gen_smooth(
     converged = False
     checked_identifiable = False
     inner = 0
-    while converged == False:
+    while converged is False:
 
         if inner >= max_inner:
             break
@@ -6207,10 +6653,10 @@ def update_coef_gen_smooth(
         # Get llk derivatives with respect to coef
         grad = family.gradient(coef, coef_split_idx, ys, Xs)
 
-        if grad_only == False:
+        if grad_only is False:
             if method == "qEFS":
                 # Update limited memory representation of the negative hessian of the llk
-                if shrinkage == False:
+                if shrinkage is False:
                     grad_up = grad
                 else:
                     grad_up = np.array(
@@ -6293,7 +6739,7 @@ def update_coef_gen_smooth(
                         c_llk = family.llk(coef, coef_split_idx, ys, Xs)
                         grad = family.gradient(coef, coef_split_idx, ys, Xs)
 
-                if new_slope is not None and (form != "SR1" or (skip == False)):
+                if new_slope is not None and (form != "SR1" or (skip is False)):
                     # Wolfe/Armijo met, can collect update vectors
 
                     if form != "SR1" and len(sks) > 0:
@@ -6325,8 +6771,8 @@ def update_coef_gen_smooth(
                 if sks.shape[0] > 0 and yk.T @ sk > 0:
                     omega = np.dot(yks[-1], yks[-1]) / np.dot(yks[-1], sks[-1])
                     if omega < 0 or (sks.shape[0] == 1 and form == "SR1"):
-                        # Cannot use scaling for first update vector since inverse of hessian will result in
-                        # zero t2 term due to cancellation
+                        # Cannot use scaling for first update vector since inverse of hessian will
+                        # result in zero t2 term due to cancellation
                         omega = 1
                 else:
                     omega = 1
@@ -6342,8 +6788,8 @@ def update_coef_gen_smooth(
 
                 # Also for penalized problem!
                 pH0 = scp.sparse.identity(len(coef), format="csc") * omega
-                Lp, Pr, _ = cpp_cholP(pH0 + S_emb)
-                LVp0 = compute_Linv(Lp, 10)
+                Lp, Pr, _ = cpp_cholP(pH0 + S_emb)  # noqa: F405
+                LVp0 = compute_Linv(Lp, 10)  # noqa: F405
                 LV0 = apply_eigen_perm(Pr, LVp0)
                 pV0 = LV0.T @ LV0
 
@@ -6359,10 +6805,11 @@ def update_coef_gen_smooth(
                             sks, yks, rhos, V0, explicit=False
                         )
 
-                    # Can now form penalized gradient and approximate penalized hessian to update penalized
-                    # coefficients. Important: pass un-penalized hessian here!
+                    # Can now form penalized gradient and approximate penalized hessian to update
+                    # penalized coefficients. Important: pass un-penalized hessian here!
                     # Because # Below we get int2
-                    # H = H0 + nt1 @ int2 @ nt3; that is the estimate of the negative un-penalized hessian of llk
+                    # H = H0 + nt1 @ int2 @ nt3; that is the estimate of the negative un-penalized
+                    # hessian of llk.
                     # Now we replace H0 with pH0 - which is really: H0 + S_emb.
                     # Now H is our estimate of the negative hessian of the penalized llk.
                     # Now, using the Woodbury identity:
@@ -6392,7 +6839,8 @@ def update_coef_gen_smooth(
                             sks, yks, rhos, H0, omega, make_psd=True, explicit=False
                         )
 
-                        # When using SR1 int2 is potentially singular, so we need a modified Woodbury inverse that accounts for that.
+                        # When using SR1 int2 is potentially singular, so we need a modified
+                        # Woodbury inverse that accounts for that.
                         # This is given by eq. 23 in Henderson & Searle (1981):
                         invt2 = np.identity(int2.shape[1]) + int2 @ nt3 @ pV0 @ nt1
 
@@ -6403,10 +6851,11 @@ def update_coef_gen_smooth(
 
                         t1 = pV0 @ nt1
                         t3 = int2 @ nt3 @ pV0
-                    # We now have: pV = pV0 - pV0@nt1@t2@nt3@pV0, but don't have to form that explcitly!
+                    # We now have: pV = pV0 - pV0@nt1@t2@nt3@pV0, but don't have to form that
+                    # explcitly!
 
-                # All we need at this point is to form the penalized gradient. # And then we can compute
-                # next_coef via quasi newton step as well (handled below).
+                # All we need at this point is to form the penalized gradient. # And then we can
+                # compute next_coef via quasi newton step as well (handled below).
                 pgrad = np.array(
                     [grad[i] - (S_emb[[i], :] @ coef)[0] for i in range(len(grad))]
                 ).reshape(-1, 1)
@@ -6414,7 +6863,7 @@ def update_coef_gen_smooth(
             else:
                 H = family.hessian(coef, coef_split_idx, ys, Xs)
 
-        ##################################### Update coef and perform step size control #####################################
+        ################### Update coef and perform step size control ################# # noqa: E266
 
         # Update Coefficients
         if grad_only:
@@ -6543,7 +6992,7 @@ def update_coef_gen_smooth(
             # Check for drop
             if (
                 (keep_drop is None)
-                and (checked_identifiable == False)
+                and (checked_identifiable is False)
                 and (method in ["QR/Chol", "LU/Chol", "Direct/Chol"])
             ):
                 keep, drop = identify_drop(H, S_norm, method.split("/")[0])
@@ -6560,7 +7009,7 @@ def update_coef_gen_smooth(
                     )
 
                     # Skip if likelihood becomes invalid
-                    if drop_valid == False:
+                    if drop_valid is False:
                         keep = None
                         drop = None
                         break
@@ -6590,7 +7039,8 @@ def update_coef_gen_smooth(
         inner += 1
 
     if method == "qEFS":
-        # Store update to S and Y in scipy LbfgsInvHess and keep that in LV, since this is what we need later
+        # Store update to S and Y in scipy LbfgsInvHess and keep that in LV, since this is
+        # what we need later
         LV = scp.optimize.LbfgsInvHessProduct(sks, yks)
         LV.nit = opt["nit"]
         LV.omega = omega  # np.min(omegas)
@@ -6602,7 +7052,7 @@ def update_coef_gen_smooth(
     if drop is not None:
         full_coef[keep] = coef
 
-        LVdat, LVrow, LVcol = translate_sparse(LV)  # LV.T@LV = V
+        LVdat, LVrow, LVcol = translate_sparse(LV)  # LV.T@LV = V # noqa: F405
         LVrow = keep[LVrow]
         LVcol = keep[LVcol]
         LV = scp.sparse.csc_array(
@@ -6611,10 +7061,11 @@ def update_coef_gen_smooth(
     else:
         # Full coef is simply coef
         full_coef = coef
-        full_coef_split_idx = coef_split_idx
+        full_coef_split_idx = coef_split_idx  # noqa: F841
 
     if method != "qEFS":
-        # Make sure at convergence negative Hessian of llk is at least positive semi-definite as well
+        # Make sure at convergence negative Hessian of llk is at least positive
+        # semi-definite as well
         checkH = True
         checkHc = 0
 
@@ -6660,7 +7111,7 @@ def update_coef_gen_smooth(
 
                 # Pad new LV in case of drop again:
                 if drop is not None:
-                    LVdat, LVrow, LVcol = translate_sparse(LV)  # LV.T@LV = V
+                    LVdat, LVrow, LVcol = translate_sparse(LV)  # noqa: F405
                     LVrow = keep[LVrow]
                     LVcol = keep[LVcol]
                     LV = scp.sparse.csc_array(
@@ -6675,11 +7126,11 @@ def update_coef_gen_smooth(
     # Done except when we have a drop -> still need to pad H and L
     if drop is not None:
         # print(coef)
-        split_coef = np.split(full_coef, full_coef_split_idx)
+        # split_coef = np.split(full_coef, full_coef_split_idx)
 
         # Now H, L
-        Hdat, Hrow, Hcol = translate_sparse(H)
-        Ldat, Lrow, Lcol = translate_sparse(L.tocsc())  # L@L.T = H_pen
+        Hdat, Hrow, Hcol = translate_sparse(H)  # noqa: F405
+        Ldat, Lrow, Lcol = translate_sparse(L.tocsc())  # L@L.T = H_pen # noqa: F405
 
         Hrow = keep[Hrow]
         Hcol = keep[Hcol]
@@ -6752,13 +7203,18 @@ def correct_lambda_step_gen_smooth(
     list[float],
     np.ndarray,
 ]:
-    """Updates and performs step-length control for the vector of lambda parameters of a GSMM model. Essentially completes the steps discussed in sections 3.3 and 4 of the paper by Krause et al. (submitted).
+    """Updates and performs step-length control for the vector of lambda parameters of a GSMM model.
+    Essentially completes the steps discussed in sections 3.3 and 4 of the paper by Krause et al.
+    (submitted).
 
     Based on steps outlined by Wood, Pya, & Säfken (2016).
 
     References:
-      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
-      - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient Estimation and Selection of Large Multi-Level Statistical Models. https://doi.org/10.48550/arXiv.2506.13132
+      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth \
+        Models.
+      - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient \
+        Estimation and Selection of Large Multi-Level Statistical Models. \
+        https://doi.org/10.48550/arXiv.2506.13132
 
     :param family: Model family
     :type family: GSMMFamily
@@ -6766,7 +7222,8 @@ def correct_lambda_step_gen_smooth(
     :type ys: list[np.ndarray | None]
     :param Xs: List of model matrices
     :type Xs: list[scp.sparse.csc_array | None]
-    :param S_norm: Scaled version of the penalty matrix (i.e., unweighted total penalty divided by it's norm).
+    :param S_norm: Scaled version of the penalty matrix (i.e., unweighted total penalty divided
+        by it's norm).
     :type S_norm: scp.sparse.csc_array
     :param n_coef: Number of coefficients
     :type n_coef: int
@@ -6776,7 +7233,8 @@ def correct_lambda_step_gen_smooth(
     :type form_up_coef: list[int]
     :param coef: Coefficient estimate
     :type coef: np.ndarray
-    :param coef_split_idx: The indices at which to split the overall coefficient vector into separate lists - one per parameter.
+    :param coef_split_idx: The indices at which to split the overall coefficient vector into
+        separate lists - one per parameter.
     :type coef_split_idx: list[int]
     :param smooth_pen: List of penalties
     :type smooth_pen: list[LambdaTerm]
@@ -6798,19 +7256,30 @@ def correct_lambda_step_gen_smooth(
     :type min_inner: int
     :param conv_tol: Convergence tolerance
     :type conv_tol: float
-    :param gamma: Weight factor determining whether we should look for smoother or less smooth models
+    :param gamma: Weight factor determining whether we should look for smoother or less
+        smooth models
     :type gamma: float
     :param method: Method to use to estimate coefficients (and lambda parameter)
     :type method: str
-    :param qEFSH: Should the hessian approximation use a symmetric rank 1 update (``qEFSH='SR1'``) that is forced to result in positive semi-definiteness of the approximation or the standard bfgs update (``qEFSH='BFGS'``)
+    :param qEFSH: Should the hessian approximation use a symmetric rank 1 update (``qEFSH='SR1'``)
+        that is forced to result in positive semi-definiteness of the approximation or the standard
+        bfgs update (``qEFSH='BFGS'``)
     :type qEFSH: str
-    :param overwrite_coef: Whether the initial coefficients passed to the optimization routine should be over-written by the solution obtained for the un-penalized version of the problem when ``method='qEFS'``. Setting this to False will be useful when passing coefficients from a simpler model to initialize a more complex one. Only has an effect when ``qEFS_init_converge=True``.
+    :param overwrite_coef: Whether the initial coefficients passed to the optimization routine
+        should be over-written by the solution obtained for the un-penalized version of the problem
+        when ``method='qEFS'``. Setting this to False will be useful when passing coefficients from
+        a simpler model to initialize a more complex one. Only has an effect
+        when ``qEFS_init_converge=True``.
     :type overwrite_coef: bool
-    :param qEFS_init_converge: Whether to optimize the un-penalzied version of the model and to use the hessian (and optionally coefficients, if ``overwrite_coef=True``) to initialize the q-EFS solver. Ignored if ``method!='qEFS'``.
+    :param qEFS_init_converge: Whether to optimize the un-penalzied version of the model and to use
+        the hessian (and optionally coefficients, if ``overwrite_coef=True``) to initialize the
+        q-EFS solver. Ignored if ``method!='qEFS'``.
     :type qEFS_init_converge: bool
     :param optimizer: Deprecated
     :type optimizer: str
-    :param __old_opt: If the L-qEFS update is used to estimate coefficients/lambda parameters, then this is the previous state of the quasi-Newton approximations to the (inverse) of the hessian of the log-likelihood
+    :param __old_opt: If the L-qEFS update is used to estimate coefficients/lambda parameters, then
+        this is the previous state of the quasi-Newton approximations to the (inverse) of the
+        hessian of the log-likelihood
     :type __old_opt: scp.sparse.linalg.LinearOperator | None
     :param use_grad: Deprecated
     :type use_grad: bool
@@ -6822,31 +7291,60 @@ def correct_lambda_step_gen_smooth(
     :type piv_tol: float
     :param keep_drop: Set of previously dropped coeeficients or None
     :type keep_drop: list[list[int],list[int]] | None
-    :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the number of new smoothing penalty proposals necessary
+    :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the
+        number of new smoothing penalty proposals necessary
     :type extend_lambda: bool
     :param extension_method_lam:  Which method to use to extend lambda proposals.
     :type extension_method_lam: str
-    :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for whether or not they (approxiately) increase the Laplace approximate restricted maximum likelihood of the model. For ``method != 'qEFS'`` the following options are available: setting this to 0 disables control. Setting it to 1 means the step will never be smaller than the original EFS update but extensions will be removed in case the objective was exceeded (only has an effect when setting ``extend_lambda=True``). Setting it to 2 means that steps will generally be halved when they fail to increase the aproximate REML criterion. For ``method=='qEFS'`` the following options are available: setting this to 0 disables control. Setting it to 1 means the check described by Krause et al. (submitted) will be performed to control updates to lambda. Setting it to 2 means that steps will generally be halved when they fail to increase the aproximate REML criterion (note, that the gradient is based on quasi-newton approximations as well and thus less accurate). Setting it to 3 means both checks (i.e., 1 and 2) are performed.
+    :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased)
+        for whether or not they (approxiately) increase the Laplace approximate restricted maximum
+        likelihood of the model. For ``method != 'qEFS'`` the following options are available:
+        setting this to 0 disables control. Setting it to 1 means the step will never be smaller
+        than the original EFS update but extensions will be removed in case the objective was
+        exceeded (only has an effect when setting ``extend_lambda=True``). Setting it to 2 means
+        that steps will generally be halved when they fail to increase the aproximate REML
+        criterion. For ``method=='qEFS'`` the following options are available: setting this to 0
+        disables control. Setting it to 1 means the check described by Krause et al. (submitted)
+        will be performed to control updates to lambda. Setting it to 2 means that steps will
+        generally be halved when they fail to increase the aproximate REML criterion (note, that
+        the gradient is based on quasi-newton approximations as well and thus less accurate).
+        Setting it to 3 means both checks (i.e., 1 and 2) are performed.
     :type control_lambda: int
     :param repara: Whether to apply a stabilizing re-parameterization to the model
     :type repara: bool
     :param n_c: Number of cores to use
     :type n_c: int
-    :param init_bfgs_options: An optional dictionary holding the same key:value pairs that can be passed to ``bfgs_options`` but pased to the optimizer of the un-penalized problem. Only has an effect when ``qEFS_init_converge=True``.
+    :param init_bfgs_options: An optional dictionary holding the same key:value pairs that can be
+        passed to ``bfgs_options`` but pased to the optimizer of the un-penalized problem. Only has
+        an effect when ``qEFS_init_converge=True``.
     :type init_bfgs_options: dict
-    :param bfgs_options: An optional dictionary holding arguments that should be passed on to the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``.
+    :param bfgs_options: An optional dictionary holding arguments that should be passed on to the
+        call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``.
     :type bfgs_options: dict
-    :return: coef estimate under corrected lambda, the negative hessian of the log-likelihood, cholesky of negative hessian of the penalized log-likelihood, inverse of the former (or another instance of :class:`scp.sparse.linalg.LinearOperator` representing the new quasi-newton approximation), covariance matrix of coefficients, next llk, next penalized llk, if the L-qEFS update is used to estimate coefficients/lambda parameters a ``scp.sparse.linalg.LinearOperator`` holding the previous quasi-Newton approximations to the (inverse) of the hessian of the log-likelihood, an optional list of the coefficients to keep, an optional list of the estimated coefficients to drop, new total penalty matrix, new list of penalties, total edf, term-wise edfs, the update to the lambda vector
-    :rtype: tuple[np.ndarray, scp.sparse.csc_array|None, scp.sparse.csc_array|None, scp.sparse.csc_array|scp.sparse.linalg.LinearOperator, scp.sparse.csc_array|None, float, float, scp.sparse.linalg.LinearOperator|None, list[int], list[int], scp.sparse.csc_array, list[LambdaTerm], float, list[float], np.ndarray]
+    :return: coef estimate under corrected lambda, the negative hessian of the log-likelihood,
+        cholesky of negative hessian of the penalized log-likelihood, inverse of the former
+        (or another instance of :class:`scp.sparse.linalg.LinearOperator` representing the new
+        quasi-newton approximation), covariance matrix of coefficients, next llk, next penalized
+        llk, if the L-qEFS update is used to estimate coefficients/lambda parameters a
+        ``scp.sparse.linalg.LinearOperator`` holding the previous quasi-Newton approximations to
+        the (inverse) of the hessian of the log-likelihood, an optional list of the coefficients
+        to keep, an optional list of the estimated coefficients to drop, new total penalty matrix,
+        new list of penalties, total edf, term-wise edfs, the update to the lambda vector
+    :rtype: tuple[np.ndarray, scp.sparse.csc_array|None, scp.sparse.csc_array|None,
+        scp.sparse.csc_array|scp.sparse.linalg.LinearOperator, scp.sparse.csc_array|None, float,
+        float, scp.sparse.linalg.LinearOperator|None, list[int], list[int], scp.sparse.csc_array,
+        list[LambdaTerm], float, list[float], np.ndarray]
     """
     # Fitting iteration and step size control for smoothing parameters of general smooth model.
-    # Basically a more general copy of the function for gammlss. Again, step-size control is not obvious - because we have only approximate REMl
-    # and approximate derivative, because we drop the last term involving the derivative of the negative penalized
-    # Hessian with respect to the smoothing parameters (see section 4 in Wood & Fasiolo, 2017). However, what we
-    # can do is at least undo the acceleration if we over-shoot the approximate derivative...
+    # Basically a more general copy of the function for gammlss. Again, step-size control is not
+    # obvious - because we have only approximate REMl and approximate derivative, because we drop
+    # the last term involving the derivative of the negative penalized
+    # Hessian with respect to the smoothing parameters (see section 4 in Wood & Fasiolo, 2017).
+    # However, what we can do is at least undo the acceleration if we over-shoot the approximate
+    # derivative...
 
     lam_accepted = False
-    while lam_accepted == False:
+    while lam_accepted is False:
 
         # Build new penalties
         S_emb, S_pinv, _, FS_use_rank = compute_S_emb_pinv_det(
@@ -6879,7 +7377,8 @@ def correct_lambda_step_gen_smooth(
             )
 
             if __old_opt is not None:
-                # sk and yk of previous optimizer are in state before re-param and will have to be transformed here
+                # sk and yk of previous optimizer are in state before re-param and will have to be
+                # transformed here
                 sk = __old_opt.sk
                 yk = __old_opt.yk
 
@@ -6972,7 +7471,7 @@ def correct_lambda_step_gen_smooth(
                 )
             )
 
-            if method == "qEFS" and outer == 0 and __old_opt.init == False:
+            if method == "qEFS" and outer == 0 and __old_opt.init is False:
                 __old_opt = LV
                 __old_opt.bfgs_options = bfgs_options
                 __old_opt.init = True
@@ -7006,7 +7505,7 @@ def correct_lambda_step_gen_smooth(
         if (
             outer == 0
             or (control_lambda < 1)
-            or (extend_lambda == False and control_lambda < 2)
+            or (extend_lambda is False and control_lambda < 2)
         ):
             lam_accepted = True
             continue
@@ -7020,8 +7519,8 @@ def correct_lambda_step_gen_smooth(
         lam_grad = np.array(lam_grad).reshape(-1, 1)
         check = lam_grad.T @ lam_delta
 
-        # Now undo the acceleration if overall direction is **very** off - don't just check against 0 because
-        # our criterion is approximate, so we can be more lenient (see Wood et al., 2017).
+        # Now undo the acceleration if overall direction is **very** off - don't just check against
+        # 0 because our criterion is approximate, so we can be more lenient (see Wood et al., 2017).
         lam_changes = 0
         if check[0] < 1e-7 * -abs(next_pen_llk):
             for lti, lTerm in enumerate(smooth_pen):
@@ -7044,8 +7543,8 @@ def correct_lambda_step_gen_smooth(
 
                 elif control_lambda >= 2:
                     # Continue to half step - this is not necessarily because we overshoot the REML
-                    # (because we only have approximate gradient), but can help preventing that models
-                    # oscillate around estimates.
+                    # (because we only have approximate gradient), but can help preventing that
+                    # models oscillate around estimates.
                     lam_delta[lti] = lam_delta[lti] / 2
                     lTerm.lam -= lam_delta[lti]
                     lam_changes += 1
@@ -7064,7 +7563,8 @@ def correct_lambda_step_gen_smooth(
     else:
         fit_info.dropped = None
 
-    # For qEFS we check whether new approximation results in worse balance of efs update - then we fall back to previous approximation
+    # For qEFS we check whether new approximation results in worse balance of efs update - then we
+    # fall back to previous approximation
     # control_lambda = 0 -> No checks for qEFS
     # control_lambda = 1 -> balance check (below)
     # control_lambda = 2 -> approximate gradient check
@@ -7082,8 +7582,7 @@ def correct_lambda_step_gen_smooth(
                 np.abs((lgdetDs[lti] - ldetHSs2[lti]) - bsbs[lti])
                 for lti in range(len(smooth_pen_rp))
             ]
-            # print([(lgdetDs[lti] - ldetHSs[lti]) - bsbs[lti] for lti in range(len(smooth_pen_rp))])
-            # print([(lgdetDs[lti] - ldetHSs2[lti]) - bsbs[lti] for lti in range(len(smooth_pen_rp))])
+
             # print(np.mean(diff2),np.mean(diff1))
 
             if np.mean(diff2) < np.mean(diff1):
@@ -7111,8 +7610,9 @@ def correct_lambda_step_gen_smooth(
         # print("Theorem 1:",lgdetD-ldetHS,bsb)
 
         # For poorly scaled/ill-identifiable problems we cannot rely on the theorems by Wood
-        # & Fasiolo (2017) - so the condition below will ocasionally be met, in which case we just want to
-        # take very small steps until it hopefully gets more stable (due to term dropping or better lambda value).
+        # & Fasiolo (2017) - so the condition below will ocasionally be met, in which case we just
+        # want to take very small steps until it hopefully gets more stable (due to term dropping or
+        # better lambda value).
         if lgdetD - ldetHS < 0:
             dLam = np.sign(dLam) * min(abs(lTerm.lam) * 0.001, abs(dLam))
             dLam = 0 if lTerm.lam + dLam < 0 else dLam
@@ -7176,7 +7676,8 @@ def correct_lambda_step_gen_smooth(
             L = Q_emb @ L
             LV = LV @ Q_emb.T
         else:
-            # sk and yk of previous and current optimizer are in state after re-param and will have to be transformed here
+            # sk and yk of previous and current optimizer are in state after re-param and will
+            # have to be transformed here
             sk1 = __old_opt.sk
             yk1 = __old_opt.yk
             sk2 = LV.sk
@@ -7270,16 +7771,24 @@ def solve_generalSmooth_sparse(
     list[LambdaTerm],
     Fit_info,
 ]:
-    """Fits a general smooth model. Essentially completes the steps discussed in sections 3.3 and 4 of the paper by Krause et al. (submitted).
+    """Fits a general smooth model. Essentially completes the steps discussed in sections 3.3 and 4
+    of the paper by Krause et al. (submitted).
 
-    Based on steps outlined by Wood, Pya, & Säfken (2016). An even more general version of :func:``solve_gammlss_sparse`` that can use the L-qEFS update by Krause et al. (submitted) to estimate the coefficients and lambda parameters.
-    The update requires only a function to compute the log-likelihood and a function to compute the gradient of said likelihood with respect to the coefficients. Alternatively full Newton can be used - requiring a function to compute the hessian as well.
+    Based on steps outlined by Wood, Pya, & Säfken (2016). An even more general version of
+    :func:``solve_gammlss_sparse`` that can use the L-qEFS update by Krause et al. (submitted) to
+    estimate the coefficients and lambda parameters.
+    The update requires only a function to compute the log-likelihood and a function to compute the
+    gradient of said likelihood with respect to the coefficients. Alternatively full Newton can be
+    used - requiring a function to compute the hessian as well.
 
     References:
 
-       - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth Models.
+       - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General Smooth \
+        Models.
        - Nocedal & Wright (2006). Numerical Optimization. Springer New York.
-       - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient Estimation and Selection of Large Multi-Level Statistical Models. https://doi.org/10.48550/arXiv.2506.13132
+       - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient \
+        Estimation and Selection of Large Multi-Level Statistical Models. \
+        https://doi.org/10.48550/arXiv.2506.13132
 
     :param family: Model family
     :type family: GSMMFamily
@@ -7293,7 +7802,8 @@ def solve_generalSmooth_sparse(
     :type form_up_coef: list[int]
     :param coef: Coefficient estimate
     :type coef: np.ndarray
-    :param coef_split_idx: The indices at which to split the overall coefficient vector into separate lists - one per parameter.
+    :param coef_split_idx: The indices at which to split the overall coefficient vector into
+        separate lists - one per parameter.
     :type coef_split_idx: list[int]
     :param smooth_pen: List of penalties
     :type smooth_pen: list[LambdaTerm]
@@ -7305,52 +7815,104 @@ def solve_generalSmooth_sparse(
     :type min_inner: int, optional
     :param conv_tol: Convergence tolerance, defaults to 1e-7
     :type conv_tol: float, optional
-    :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the number of new smoothing penalty proposals necessary, defaults to True
+    :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the
+        number of new smoothing penalty proposals necessary, defaults to True
     :type extend_lambda: bool, optional
-    :param extension_method_lam: Which method to use to extend lambda proposals, defaults to "nesterov2"
+    :param extension_method_lam: Which method to use to extend lambda proposals, defaults to
+        "nesterov2"
     :type extension_method_lam: str, optional
-    :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased) for whether or not they (approxiately) increase the Laplace approximate restricted maximum likelihood of the model. For ``method != 'qEFS'`` the following options are available: setting this to 0 disables control. Setting it to 1 means the step will never be smaller than the original EFS update but extensions will be removed in case the objective was exceeded (only has an effect when setting ``extend_lambda=True``). Setting it to 2 means that steps will generally be halved when they fail to increase the aproximate REML criterion. For ``method=='qEFS'`` the following options are available: setting this to 0 disables control. Setting it to 1 means the check described by Krause et al. (submitted) will be performed to control updates to lambda. Setting it to 2 means that steps will generally be halved when they fail to increase the aproximate REML criterion (note, that the gradient is based on quasi-newton approximations as well and thus less accurate). Setting it to 3 means both checks (i.e., 1 and 2) are performed, defaults to 1
+    :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased)
+        for whether or not they (approxiately) increase the Laplace approximate restricted maximum
+        likelihood of the model. For ``method != 'qEFS'`` the following options are available:
+        setting this to 0 disables control. Setting it to 1 means the step will never be smaller
+        than the original EFS update but extensions will be removed in case the objective was
+        exceeded (only has an effect when setting ``extend_lambda=True``). Setting it to 2 means
+        that steps will generally be halved when they fail to increase the aproximate REML
+        criterion. For ``method=='qEFS'`` the following options are available: setting this to 0
+        disables control. Setting it to 1 means the check described by Krause et al. (submitted)
+        will be performed to control updates to lambda. Setting it to 2 means that steps will
+        generally be halved when they fail to increase the aproximate REML criterion (note, that
+        the gradient is based on quasi-newton approximations as well and thus less accurate).
+        Setting it to 3 means both checks (i.e., 1 and 2) are performed, defaults to 1
     :type control_lambda: int, optional
     :param optimizer: Deprecated, defaults to "Newton"
     :type optimizer: str, optional
-    :param method: Which method to use to estimate the coefficients (and lambda parameters), defaults to "Chol"
+    :param method: Which method to use to estimate the coefficients (and lambda parameters),
+        defaults to "Chol"
     :type method: str, optional
-    :param check_cond: Whether to obtain an estimate of the condition number for the linear system that is solved. When ``check_cond=0``, no check will be performed. When ``check_cond=1``, an estimate of the condition number for the final system (at convergence) will be computed and warnings will be issued based on the outcome (see :func:`mssm.src.python.gamm_solvers.est_condition`), defaults to 1
+    :param check_cond: Whether to obtain an estimate of the condition number for the linear system
+        that is solved. When ``check_cond=0``, no check will be performed. When ``check_cond=1``,
+        an estimate of the condition number for the final system (at convergence) will be computed
+        and warnings will be issued based on the outcome (see
+        :func:`mssm.src.python.gamm_solvers.est_condition`), defaults to 1
     :type check_cond: int, optional
     :param piv_tol: Deprecated, defaults to 0.175
     :type piv_tol: float, optional
     :param repara: Whether to apply a stabilizing re-parameterization to the model, defaults to True
     :type repara: bool, optional
-    :param should_keep_drop: If set to True, any coefficients that are dropped during fitting - are permanently excluded from all subsequent iterations, defaults to True
+    :param should_keep_drop: If set to True, any coefficients that are dropped during fitting - are
+        permanently excluded from all subsequent iterations, defaults to True
     :type should_keep_drop: bool, optional
-    :param form_VH: Whether to explicitly form matrix ``V`` - the estimated inverse of the negative Hessian of the penalized likelihood - and ``H`` - the estimate of the Hessian of the log-likelihood - when using the ``qEFS`` method, defaults to True
+    :param form_VH: Whether to explicitly form matrix ``V`` - the estimated inverse of the negative
+        Hessian of the penalized likelihood - and ``H`` - the estimate of the Hessian of the
+        log-likelihood - when using the ``qEFS`` method, defaults to True
     :type form_VH: bool, optional
     :param use_grad: Deprecated, defaults to False
     :type use_grad: bool, optional
-    :param gamma: Setting this to a value larger than 1 promotes more complex (less smooth) models. Setting this to a value smaller than 1 (but must be > 0) promotes smoother models, defaults to 1
+    :param gamma: Setting this to a value larger than 1 promotes more complex (less smooth) models.
+        Setting this to a value smaller than 1 (but must be > 0) promotes smoother models,
+        defaults to 1
     :type gamma: float, optional
-    :param qEFSH: Should the hessian approximation use a symmetric rank 1 update (``qEFSH='SR1'``) that is forced to result in positive semi-definiteness of the approximation or the standard bfgs update (``qEFSH='BFGS'``), defaults to 'SR1'
+    :param qEFSH: Should the hessian approximation use a symmetric rank 1 update (``qEFSH='SR1'``)
+        that is forced to result in positive semi-definiteness of the approximation or the standard
+        bfgs update (``qEFSH='BFGS'``), defaults to 'SR1'
     :type qEFSH: str, optional
-    :param overwrite_coef: Whether the initial coefficients passed to the optimization routine should be over-written by the solution obtained for the un-penalized version of the problem when ``method='qEFS'``, defaults to True
+    :param overwrite_coef: Whether the initial coefficients passed to the optimization routine
+        should be over-written by the solution obtained for the un-penalized version of the problem
+        when ``method='qEFS'``, defaults to True
     :type overwrite_coef: bool, optional
-    :param max_restarts: How often to shrink the coefficient estimate back to a random vector when convergence is reached and when ``method='qEFS'``. The optimizer might get stuck in local minima so it can be helpful to set this to 1-3. What happens is that if we converge, we shrink the coefficients back to a random vector and then continue optimizing once more, defaults to 0
+    :param max_restarts: How often to shrink the coefficient estimate back to a random vector when
+        convergence is reached and when ``method='qEFS'``. The optimizer might get stuck in local
+        minima so it can be helpful to set this to 1-3. What happens is that if we converge, we
+        shrink the coefficients back to a random vector and then continue optimizing once more,
+        defaults to 0
     :type max_restarts: int, optional
-    :param qEFS_init_converge: Whether to optimize the un-penalzied version of the model and to use the hessian (and optionally coefficients, if ``overwrite_coef=True``) to initialize the q-EFS solver. Ignored if ``method!='qEFS'``, defaults to True
+    :param qEFS_init_converge: Whether to optimize the un-penalzied version of the model and to use
+        the hessian (and optionally coefficients, if ``overwrite_coef=True``) to initialize the
+        q-EFS solver. Ignored if ``method!='qEFS'``, defaults to True
     :type qEFS_init_converge: bool, optional
-    :param prefit_grad: Whether to rely on Gradient Descent to improve the initial starting estimate for coefficients, defaults to False
+    :param prefit_grad: Whether to rely on Gradient Descent to improve the initial starting
+        estimate for coefficients, defaults to False
     :type prefit_grad: bool, optional
     :param progress_bar: Whether progress should be printed or not, defaults to True
     :type progress_bar: bool, optional
     :param n_c: Number of cores to use, defaults to 10
     :type n_c: int, optional
-    :param callback: An optional callback function to call after every update to the :math:`\\lambda` parameters. The signature of the provided function needs to match ``callback(outer:int,llk:float,coef:np.ndarray,lam:[float]) -> None``, where ``outer`` is the current iteration of the outer algorithm used to update the :math:`\\lambda`` parameters, ``llk`` is the current log-likelihood, ``coef`` is the current coefficient estimate, and ``lam`` holds a list with the current :math:`lambda` parameters. Defaults to None.
+    :param callback: An optional callback function to call after every update to the
+        :math:`\\lambda` parameters. The signature of the provided function needs to match
+        ``callback(outer:int,llk:float,coef:np.ndarray,lam:[float]) -> None``, where ``outer``
+        is the current iteration of the outer algorithm used to update the :math:`\\lambda``
+        parameters, ``llk`` is the current log-likelihood, ``coef`` is the current coefficient
+        estimate, and ``lam`` holds a list with the current :math:`\\lambda` parameters.
+        Defaults to None.
     :type callback: Callable | None ,optional
-    :param init_bfgs_options: An optional dictionary holding the same key:value pairs that can be passed to ``bfgs_options`` but pased to the optimizer of the un-penalized problem, defaults to {"gtol":1e-9,"ftol":1e-9,"maxcor":30,"maxls":100,"maxfun":1e7}
+    :param init_bfgs_options: An optional dictionary holding the same key:value pairs that can be
+        passed to ``bfgs_options`` but pased to the optimizer of the un-penalized problem, defaults
+        to {"gtol":1e-9,"ftol":1e-9,"maxcor":30,"maxls":100,"maxfun":1e7}
     :type init_bfgs_options: _type_, optional
-    :param bfgs_options: An optional dictionary holding arguments that should be passed on to the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``, defaults to {"gtol":1e-9,"ftol":1e-9,"maxcor":30,"maxls":100,"maxfun":1e7}
+    :param bfgs_options: An optional dictionary holding arguments that should be passed on to the
+        call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``, defaults to
+        {"gtol":1e-9,"ftol":1e-9,"maxcor":30,"maxls":100,"maxfun":1e7}
     :type bfgs_options: _type_, optional
-    :return: coef estimate, the negative hessian of the log-likelihood, inverse of cholesky of negative hessian of the penalized log-likelihood, if ``method=='qEFS'`` an instance of :class:`scp.sparse.linalg.LinearOperator` representing the new quasi-newton approximation, total edf, term-wise edfs, total penalty, final list of penalties, a :class:`Fit_info` object
-    :rtype: tuple[np.ndarray, scp.sparse.csc_array|None, scp.sparse.csc_array|scp.sparse.linalg.LinearOperator, scp.sparse.linalg.LinearOperator|None, float, list[float], float, list[LambdaTerm], Fit_info]
+    :return: coef estimate, the negative hessian of the log-likelihood, inverse of cholesky of
+        negative hessian of the penalized log-likelihood, if ``method=='qEFS'`` an instance of
+        :class:`scp.sparse.linalg.LinearOperator` representing the new quasi-newton approximation,
+        total edf, term-wise edfs, total penalty, final list of penalties, a :class:`Fit_info`
+        object
+    :rtype: tuple[np.ndarray, scp.sparse.csc_array|None,
+        scp.sparse.csc_array|scp.sparse.linalg.LinearOperator,
+        scp.sparse.linalg.LinearOperator|None, float, list[float],
+        float, list[LambdaTerm], Fit_info]
     """
 
     # total number of coefficients
@@ -7384,12 +7946,12 @@ def solve_generalSmooth_sparse(
     if method == "qEFS":
         # Define negative penalized likelihood function to be minimized via BFGS
         # plus function to evaluate negative gradient of penalized likelihood.
-        def __neg_pen_llk(coef, coef_split_idx, ys, Xs, family, S_emb):
+        def __neg_pen_llk(coef, coef_split_idx, ys, Xs, family, S_emb):  # noqa: F811
             coef = coef.reshape(-1, 1)
             neg_llk = -1 * family.llk(coef, coef_split_idx, ys, Xs)
             return neg_llk + 0.5 * coef.T @ S_emb @ coef
 
-        def __neg_pen_grad(coef, coef_split_idx, ys, Xs, family, S_emb):
+        def __neg_pen_grad(coef, coef_split_idx, ys, Xs, family, S_emb):  # noqa: F811
             # see Wood, Pya & Saefken (2016)
             coef = coef.reshape(-1, 1)
             grad = family.gradient(coef, coef_split_idx, ys, Xs)
@@ -7565,7 +8127,7 @@ def solve_generalSmooth_sparse(
         # Check overall convergence
         fit_info.iter += 1
         if outer > 0:
-            # print((np.abs(prev_pen_llk - c_pen_llk) - conv_tol*np.abs(c_pen_llk))[0,0], (np.abs(prev_pen_llk - c_pen_llk) < conv_tol*np.abs(c_pen_llk)),np.any([np.abs(prev_llk_hist[hi] - c_pen_llk[0,0])  < conv_tol*np.abs(c_pen_llk) for hi in range(len(prev_llk_hist))]),[np.abs(prev_llk_hist[hi] - c_pen_llk[0,0])  - conv_tol*np.abs(c_pen_llk) for hi in range(len(prev_llk_hist))])
+
             if progress_bar:
                 iterator.set_description_str(
                     desc="Fitting - Conv.: "
@@ -7592,7 +8154,7 @@ def solve_generalSmooth_sparse(
                         np.max(
                             np.abs(
                                 [
-                                    prev_lam[lti] - smooth_pen[lti].lam
+                                    prev_lam[lti] - smooth_pen[lti].lam  # noqa: F405
                                     for lti in range(len(smooth_pen))
                                 ]
                             )
@@ -7630,14 +8192,16 @@ def solve_generalSmooth_sparse(
         if callback is not None:
             callback(outer, c_pen_llk, coef, [lterm.lam for lterm in smooth_pen])
 
-        # We need the penalized likelihood of the model at this point for convergence control (step 2 in Wood, 2017 based on step 4 in Wood, Goude, & Shaw, 2016)
+        # We need the penalized likelihood of the model at this point for convergence control
+        # (step 2 in Wood, 2017 based on step 4 in Wood, Goude, & Shaw, 2016)
         prev_pen_llk = c_pen_llk
         prev_llk_hist.append(prev_pen_llk[0, 0])
         if len(prev_llk_hist) > 5:
             del prev_llk_hist[0]
-        prev_llk = c_llk
-        prev_coef = copy.deepcopy(coef)
-        prev_lam = copy.deepcopy([lterm.lam for lterm in smooth_pen])
+
+        prev_llk = c_llk  # noqa: F841
+        prev_coef = copy.deepcopy(coef)  # noqa: F841
+        prev_lam = copy.deepcopy([lterm.lam for lterm in smooth_pen])  # noqa: F841
 
         # print("lambda before step:",[lterm.lam for lterm in smooth_pen])
 
@@ -7690,9 +8254,9 @@ def solve_generalSmooth_sparse(
 
             # Get Cholesky factor of inverse of penalized hessian (needed for CIs)
             pH = scp.sparse.csc_array((-1 * H) + S_emb)
-            Lp, Pr, _ = cpp_cholP(pH)
+            Lp, Pr, _ = cpp_cholP(pH)  # noqa: F405
             P = compute_eigen_perm(Pr)
-            LVp0 = compute_Linv(Lp, 10)
+            LVp0 = compute_Linv(Lp, 10)  # noqa: F405
             LV = apply_eigen_perm(Pr, LVp0)
             L = P.T @ Lp
 
@@ -7700,14 +8264,15 @@ def solve_generalSmooth_sparse(
             LV = None
             H = None  # Do not approximate H.
 
-    # H, L, and LV do not have sorted indices after undoing repara transform - need to take care of that here.
+    # H, L, and LV do not have sorted indices after undoing repara transform - need to take care of
+    # that here.
     if repara and method != "qEFS":
         H.sort_indices()
         LV.sort_indices()
         L.sort_indices()
 
     if check_cond == 1 and (method != "qEFS" or form_VH):
-        K2, _, _, Kcode = est_condition(L, LV, verbose=False)
+        K2, _, _, Kcode = est_condition(L, LV, verbose=False)  # noqa: F405
 
         fit_info.K2 = K2
 
@@ -7718,7 +8283,12 @@ def solve_generalSmooth_sparse(
 
         if Kcode > 0:
             warnings.warn(
-                f"Condition number ({K2}) of matrix A, where A.T@A=H and H is the Hessian of the negative penalized likelihood, is larger than 1/sqrt(u), where u is half the machine precision. Call ``model.fit()`` with ``method='QR/Chol'``, but note that even then estimates are likely to be inaccurate."
+                (
+                    f"Condition number ({K2}) of matrix A, where A.T@A=H and H is the Hessian of "
+                    "the negative penalized likelihood, is larger than 1/sqrt(u), where u is half "
+                    "the machine precision. Call ``model.fit()`` with ``method='QR/Chol'``, but "
+                    "note that even then estimates are likely to be inaccurate."
+                )
             )
 
     return (

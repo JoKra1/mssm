@@ -18,9 +18,9 @@ def map_csc_to_eigen(
     An Eigen mapping can then be used to refer to these, without requiring an extra copy.
     see: https://eigen.tuxfamily.org/dox/classEigen_1_1Map_3_01SparseMatrixType_01_4.html
 
-    The mapping needs to assume compressed storage, since then we can use the indices, indptr, and data
-    arrays directly for the valuepointer, innerPointer, and outerPointer fields of the sparse array
-    map constructor.
+    The mapping needs to assume compressed storage, since then we can use the indices, indptr, and
+    data arrays directly for the valuepointer, innerPointer, and outerPointer fields of the
+    sparse array map constructor.
     see: https://eigen.tuxfamily.org/dox/group__TutorialSparse.html (section sparse matrix format).
 
     I got this idea from the NumpyEigen project, which also uses such a map!
@@ -28,7 +28,8 @@ def map_csc_to_eigen(
 
     :param X: Some sparse matrix
     :type X: scp.sparse.csc_array
-    :return: Number of rows in X, Number of cols in X, Number of non-zero elements in X, X.data, X.indptr.astype(np.int64), X.indices.astype(np.int64)
+    :return: Number of rows in X, Number of cols in X, Number of non-zero elements in X, X.data,
+        X.indptr.astype(np.int64), X.indices.astype(np.int64)
     :rtype: tuple[int,int,int,np.ndarray,np.ndarray,np.ndarray]
     """
 
@@ -37,7 +38,7 @@ def map_csc_to_eigen(
             f"Format of sparse matrix passed to c++ MUST be 'csc' but is {X.getformat()}"
         )
 
-    if X.has_sorted_indices == False:
+    if X.has_sorted_indices is False:
         raise TypeError(
             "Indices of sparse matrix passed to c++ MUST be sorted but are not."
         )
@@ -62,7 +63,8 @@ def map_csr_to_eigen(
 
     :param X: Some sparse matrix
     :type X: scp.sparse.csr_array
-    :return: Number of rows in X, Number of cols in X, Number of non-zero elements in X, X.data, X.indptr.astype(np.int64), X.indices.astype(np.int64)
+    :return: Number of rows in X, Number of cols in X, Number of non-zero elements in X, X.data,
+        X.indptr.astype(np.int64), X.indices.astype(np.int64)
     :rtype: tuple[int,int,int,np.ndarray,np.ndarray,np.ndarray]
     """
 
@@ -71,7 +73,7 @@ def map_csr_to_eigen(
             f"Format of sparse matrix passed to c++ MUST be 'csr' but is {X.getformat()}"
         )
 
-    if X.has_sorted_indices == False:
+    if X.has_sorted_indices is False:
         raise TypeError(
             "Indices of sparse matrix passed to c++ MUST be sorted but are not."
         )
@@ -94,7 +96,7 @@ def translate_sparse(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Translate canonical sparse csc matrix representation into data, row, col representation
 
-    See: https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csc_array.html#scipy.sparse.csc_array
+    See: https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csc_array.html#scipy.sparse.csc_array # noqa: E501
 
     :param mat: sparse matrix
     :type mat: scp.sparse.csc_array
@@ -104,7 +106,10 @@ def translate_sparse(
 
     if mat.format != "csc":
         raise TypeError(
-            f"Format of sparse matrix passed to be translated must be 'csc' but is {mat.getformat()}"
+            (
+                "Format of sparse matrix passed to be translated must be 'csc' but "
+                f"is {mat.getformat()}"
+            )
         )
 
     elements = mat.data
@@ -117,8 +122,8 @@ def translate_sparse(
 
     for ci in range(mat.shape[1]):
 
-        c_data = elements[iptr[ci] : iptr[ci + 1]]
-        c_rows = idx[iptr[ci] : iptr[ci + 1]]
+        c_data = elements[iptr[ci] : iptr[ci + 1]]  # noqa: E203
+        c_rows = idx[iptr[ci] : iptr[ci + 1]]  # noqa: E203
 
         data.extend(c_data)
         rows.extend(c_rows)
@@ -195,14 +200,16 @@ def cpp_symqr(
     :type A: scp.sparse.csc_array
     :param tol: tolerance for rank estimation
     :type tol: float
-    :return: Matrix R, column pivot order for sparsity, column pivot order for rank estimation, rank estimate, code indicating success
+    :return: Matrix R, column pivot order for sparsity, column pivot order for rank estimation,
+        rank estimate, code indicating success
     :rtype: tuple[scp.sparse.csc_array,list[int],list[int],int,int]
     """
     return eigen_solvers.spqr(*map_csc_to_eigen(A), tol)
 
 
 def cpp_solve_qr(A: scp.sparse.csc_array) -> tuple[scp.sparse.csc_array, int, int]:
-    """Solves ``A@B=I`` for ``B``, where ``A`` is sparse, square, and full rank and ``I`` is an identity matrix of suitable dimension via QR decomposition.
+    """Solves ``A@B=I`` for ``B``, where ``A`` is sparse, square, and full rank and ``I`` is an
+    identity matrix of suitable dimension via QR decomposition.
 
     :param A: Some sparse square matrix
     :type A: scp.sparse.csc_array
@@ -215,7 +222,8 @@ def cpp_solve_qr(A: scp.sparse.csc_array) -> tuple[scp.sparse.csc_array, int, in
 def cpp_solve_am(
     y: np.ndarray, X: scp.sparse.csc_array, S: scp.sparse.csc_array
 ) -> tuple[scp.sparse.csc_array, list[int], np.ndarray, int]:
-    """Solves ``(X.T@X + S)@b = X.T@y`` for ``b`` via sparse Cholesky decomposition and computes inverse of pivoted Cholesky of ``X.T@X + S``.
+    """Solves ``(X.T@X + S)@b = X.T@y`` for ``b`` via sparse Cholesky decomposition and computes
+    inverse of pivoted Cholesky of ``X.T@X + S``.
 
     :param y: vector of observations
     :type y: np.ndarray
@@ -223,7 +231,8 @@ def cpp_solve_am(
     :type X: scp.sparse.csc_array
     :param S: Sparse square matrix
     :type S: scp.sparse.csc_array
-    :return: Inverse of pivoted Cholesky of ``X.T@X + S``, column pivot indices in a list, ``b``, and code indicating success
+    :return: Inverse of pivoted Cholesky of ``X.T@X + S``, column pivot indices in a list, ``b``,
+        and code indicating success
     :rtype: tuple[scp.sparse.csc_array,list[int],np.ndarray,int]
     """
     return eigen_solvers.solve_am(y, *map_csc_to_eigen(X), *map_csc_to_eigen(S))
@@ -240,7 +249,8 @@ def cpp_solve_coef(
     :type X: scp.sparse.csc_array
     :param S: Sparse square matrix
     :type S: scp.sparse.csc_array
-    :return: Pivoted Cholesky of ``X.T@X + S``, column pivot indices in a list, ``b``, and code indicating success
+    :return: Pivoted Cholesky of ``X.T@X + S``, column pivot indices in a list, ``b``, and code
+        indicating success
     :rtype: tuple[scp.sparse.csc_array,list[int],np.ndarray,int]
     """
     return eigen_solvers.solve_coef(y, *map_csc_to_eigen(X), *map_csc_to_eigen(S))
@@ -251,8 +261,8 @@ def cpp_solve_coef_pqr(
 ) -> tuple[scp.sparse.csc_array, list[int], list[int], np.ndarray, int, int]:
     """Solves ``(X.T@X + S)@b = X.T@y`` for ``b`` via sparse QR decomposition, where ``E.T@E=S``.
 
-    **Does not form ``X.T@X + S`` for solve**. Potentially pivots twice - once for sparsity (always) and then once more
-    whenever algorithm detects a diagonal element that is too small.
+    **Does not form ``X.T@X + S`` for solve**. Potentially pivots twice - once for sparsity (always)
+    and then once more whenever algorithm detects a diagonal element that is too small.
 
     Examples::
 
@@ -283,10 +293,11 @@ def cpp_solve_coef_pqr(
        # Convert R so that rest of code can just continue as with Chol (i.e., L)
        LP = RP.T.tocsc()
 
-       # Keep only columns of Pr/P that belong to identifiable params. So P.T@LP is Cholesky of negative penalized Hessian
-       # of model without unidentifiable coef. Important: LP and Pr/P no longer match dimensions of embedded penalties
-       # after this! So we need to keep track of that in the appropriate functions (i.e., `calculate_edf` which calls
-       # `compute_B` when called with only LP and not Linv).
+       # Keep only columns of Pr/P that belong to identifiable params. So P.T@LP is Cholesky of
+       # negative penalized Hessian of model without unidentifiable coef. Important: LP and Pr/P no
+       # longer match dimensions of embedded penalties after this! So we need to keep track of that
+       # in the appropriate functions (i.e., `calculate_edf` which calls `compute_B` when called
+       # with only LP and not Linv).
        P = P[:,keep]
        _,Pr,_ = translate_sparse(P.tocsc())
        P = compute_eigen_perm(Pr)
@@ -297,7 +308,8 @@ def cpp_solve_coef_pqr(
     :type X: scp.sparse.csc_array
     :param E: Sparse square matrix
     :type E: scp.sparse.csc_array
-    :return: Pivoted Cholesky of ``X.T@X + S``, first column pivot indices in a list, second column pivot indices in a list, ``b``, estimated rank, and code indicating success.
+    :return: Pivoted Cholesky of ``X.T@X + S``, first column pivot indices in a list, second column
+        pivot indices in a list, ``b``, estimated rank, and code indicating success.
     :rtype: tuple[scp.sparse.csc_array,list[int],list[int],np.ndarray,int,int]
     """
     return eigen_solvers.solve_coef_pqr(y, *map_csc_to_eigen(X), *map_csc_to_eigen(E))
@@ -306,13 +318,15 @@ def cpp_solve_coef_pqr(
 def cpp_solve_coefXX(
     Xy: np.ndarray, XXS: scp.sparse.csc_array
 ) -> tuple[scp.sparse.csc_array, list[int], np.ndarray, int]:
-    """Solves ``(X.T@X + S)@b = X.T@y`` for ``b`` via sparse Cholesky decomposition with ``(X.T@X + S)`` and ``X.T@y`` pre-computed.
+    """Solves ``(X.T@X + S)@b = X.T@y`` for ``b`` via sparse Cholesky decomposition with
+    ``(X.T@X + S)`` and ``X.T@y`` pre-computed.
 
     :param Xy: Holds ``X.T@y``
     :type Xy: np.ndarray
     :param XXS: Holds ``(X.T@X + S)``
     :type XXS: scp.sparse.csc_array
-    :return: Pivoted Cholesky of ``X.T@X + S``, column pivot indices in a list, ``b``, and code indicating success
+    :return: Pivoted Cholesky of ``X.T@X + S``, column pivot indices in a list, ``b``, and
+        code indicating success
     :rtype: tuple[scp.sparse.csc_array,list[int],np.ndarray,int]
     """
     return eigen_solvers.solve_coefXX(Xy, *map_csc_to_eigen(XXS))
@@ -321,13 +335,15 @@ def cpp_solve_coefXX(
 def cpp_solve_L(
     X: scp.sparse.csc_array, S: scp.sparse.csc_array
 ) -> tuple[scp.sparse.csc_array, list[int], int]:
-    """Solves ``(X.T@X + S)@B=I`` for ``B``, where ``(X.T@X + S)`` is sparse, symmetric, and full rank and ``I`` is an identity matrix of suitable dimension via Cholesky decomposition.
+    """Solves ``(X.T@X + S)@B=I`` for ``B``, where ``(X.T@X + S)`` is sparse, symmetric, and full
+    rank and ``I`` is an identity matrix of suitable dimension via Cholesky decomposition.
 
     :param X: Some rectangular sparse matrix
     :type X: scp.sparse.csc_array
     :param S: Sparse square matrix
     :type S: scp.sparse.csc_array
-    :return: ``B`` (inverse of **pivoted** ``X.T@X + S``), list of pivot indices, and code indicating success
+    :return: ``B`` (inverse of **pivoted** ``X.T@X + S``), list of pivot indices, and code
+        indicating success
     :rtype: tuple[scp.sparse.csc_array,list[int],int]
     """
     return eigen_solvers.solve_L(*map_csc_to_eigen(X), *map_csc_to_eigen(S))
@@ -336,11 +352,13 @@ def cpp_solve_L(
 def cpp_solve_LXX(
     A: scp.sparse.csc_array,
 ) -> tuple[scp.sparse.csc_array, list[int], int]:
-    """Solves ``A@B=I`` for ``B``, where ``A`` is sparse, symmetric, and full rank and ``I`` is an identity matrix of suitable dimension via Cholesky decomposition.
+    """Solves ``A@B=I`` for ``B``, where ``A`` is sparse, symmetric, and full rank and ``I`` is an
+    identity matrix of suitable dimension via Cholesky decomposition.
 
     :param A: Some sparse symmetric matrix
     :type A: scp.sparse.csc_array
-    :return: ``B`` (inverse of **pivoted** ``A``), list of pivot indices, and code indicating success
+    :return: ``B`` (inverse of **pivoted** ``A``), list of pivot indices, and code indicating
+        success
     :rtype: tuple[scp.sparse.csc_array,list[int],int]
     """
     return eigen_solvers.cpp_solve_LXX(*map_csc_to_eigen(A))
@@ -349,7 +367,8 @@ def cpp_solve_LXX(
 def cpp_solve_tr(
     A: scp.sparse.csc_array, C: scp.sparse.csc_array
 ) -> scp.sparse.csc_array:
-    """Solves ``A@B=C``, where ``A`` is sparse and lower triangular. This can be utilized to obtain ``B = inv(A)``, when ``C`` is the identity.
+    """Solves ``A@B=C``, where ``A`` is sparse and lower triangular. This can be utilized to obtain
+    ``B = inv(A)``, when ``C`` is the identity.
 
     :param A: Lower triangluar sparse matrix
     :type A: scp.sparse.csc_array
@@ -364,7 +383,8 @@ def cpp_solve_tr(
 def cpp_backsolve_tr(
     A: scp.sparse.csc_array, C: scp.sparse.csc_array
 ) -> scp.sparse.csc_array:
-    """Solves ``A@B=C``, where ``A`` is sparse and upper triangular. This can be utilized to obtain ``B = inv(A)``, when ``C`` is the identity.
+    """Solves ``A@B=C``, where ``A`` is sparse and upper triangular. This can be utilized to obtain
+    ``B = inv(A)``, when ``C`` is the identity.
 
     :param A: Lower triangluar sparse matrix
     :type A: scp.sparse.csc_array
@@ -382,15 +402,17 @@ def est_condition(
     seed: int | None = 0,
     verbose: bool = True,
 ) -> tuple[float, float, float, int]:
-    """Estimate the condition number ``K`` - the ratio of the largest to smallest singular values - of matrix ``A``, where ``A.T@A = L@L.T``.
+    """Estimate the condition number ``K`` - the ratio of the largest to smallest singular values -
+    of matrix ``A``, where ``A.T@A = L@L.T``.
 
     ``L`` and ``Linv`` can either be obtained by Cholesky decomposition, i.e., ``A.T@A = L@L.T`` or
     by QR decomposition ``A=Q@R`` where ``R=L.T``.
 
-    If ``verbose=True`` (default), separate warnings will be issued in case ``K>(1/(0.5*sqrt(epsilon)))`` and ``K>(1/(0.5*epsilon))``.
-    If the former warning is raised, this indicates that computing ``L`` via a Cholesky decomposition is likely unstable
-    and should be avoided. If the second warning is raised as well, obtaining ``L`` via QR decomposition (of ``A``) is also likely
-    to be unstable (see Golub & Van Loan, 2013).
+    If ``verbose=True`` (default), separate warnings will be issued in case
+    ``K>(1/(0.5*sqrt(epsilon)))`` and ``K>(1/(0.5*epsilon))``. If the former warning is raised,
+    this indicates that computing ``L`` via a Cholesky decomposition is likely unstable
+    and should be avoided. If the second warning is raised as well, obtaining ``L`` via QR
+    decomposition (of ``A``) is also likely to be unstable (see Golub & Van Loan, 2013).
 
     References:
       - Cline et al. (1979). An Estimate for the Condition Number of a Matrix.
@@ -400,11 +422,15 @@ def est_condition(
     :type L: scp.sparse.csc_array
     :param Linv: Inverse of Choleksy (or any other root) of ``A.T@A``.
     :type Linv: scp.sparse.csc_array
-    :param seed: The seed to use for the random parts of the singular value decomposition. Defaults to 0.
+    :param seed: The seed to use for the random parts of the singular value decomposition.
+        Defaults to 0.
     :type seed: int or None or numpy.random.Generator
     :param verbose: Whether or not warnings should be printed. Defaults to True.
     :type verbose: bool
-    :return: A tuple, containing the estimate of condition number ``K``, an estimate of the largest singular value of ``A``, an estimate of the smallest singular value of ``A``, and a ``code``. The latter will be zero in case no warning was raised, 1 in case the first warning described above was raised, and 2 if the second warning was raised as well.
+    :return: A tuple, containing the estimate of condition number ``K``, an estimate of the largest
+        singular value of ``A``, an estimate of the smallest singular value of ``A``, and a
+        ``code``. The latter will be zero in case no warning was raised, 1 in case the first
+        warning described above was raised, and 2 if the second warning was raised as well.
     :rtype: tuple[float,float,float,int]
     """
 
@@ -420,7 +446,7 @@ def est_condition(
         max_sing = scp.sparse.linalg.svds(
             L, k=1, return_singular_vectors=False, random_state=seed
         )[0]
-    except:
+    except:  # noqa: E722
         try:
             min_sing = scp.sparse.linalg.svds(
                 Linv,
@@ -436,10 +462,14 @@ def est_condition(
                 random_state=seed,
                 solver="lobpcg",
             )[0]
-        except:
+        except:  # noqa: E722
             # Solver failed.. get out
             warnings.warn(
-                "Estimating the condition number of matrix A, where A.T@A=L.T@L failed. This can happen but might indicate that something is wrong. Consider estimates carefully!"
+                (
+                    "Estimating the condition number of matrix A, where A.T@A=L.T@L failed. This "
+                    "can happen but might indicate that something is wrong. Consider estimates "
+                    "carefully!"
+                )
             )
             return np.inf, np.inf, -np.inf, 1
 
@@ -449,14 +479,20 @@ def est_condition(
     if K > 1 / np.sqrt(u):
         if verbose:
             warnings.warn(
-                "Condition number of matrix A, where A.T@A=L.T@L, is larger than 1/sqrt(u), where u is half the machine precision."
+                (
+                    "Condition number of matrix A, where A.T@A=L.T@L, is larger than 1/sqrt(u), "
+                    "where u is half the machine precision."
+                )
             )
         code = 1
 
     if K > 1 / u:
         if verbose:
             warnings.warn(
-                "Condition number of matrix A, where A.T@A=L.T@L, is larger than 1/u, where u is half the machine precision."
+                (
+                    "Condition number of matrix A, where A.T@A=L.T@L, is larger than 1/u, where u "
+                    "is half the machine precision."
+                )
             )
         code = 2
 
@@ -474,7 +510,8 @@ def compute_block_B_shared(
     nnz: int,
     T: scp.sparse.csc_array,
 ) -> float:
-    """Solves ``L @ B = T`` for ``B`` via forward solving and based on shared memory for ``L``, then computes and returns ``B.power(2).sum()``.
+    """Solves ``L @ B = T`` for ``B`` via forward solving and based on shared memory for ``L``,
+    then computes and returns ``B.power(2).sum()``.
 
     :param address_dat: Address to data array of ``L``
     :type address_dat: str
@@ -515,7 +552,9 @@ def compute_block_B_shared_cluster(
     T: scp.sparse.csc_array,
     cluster_weights: list[float],
 ) -> tuple[float, float]:
-    """Solves ``L @ B = T`` for ``B`` via forward solving and based on shared memory for ``L``, then computes and returns ``sum(B.power(2).sum()*cluster_weights)`` and ``B.power(2).sum()*len(cluster_weights)``.
+    """Solves ``L @ B = T`` for ``B`` via forward solving and based on shared memory for ``L``,
+    then computes and returns ``sum(B.power(2).sum()*cluster_weights)`` and
+    ``B.power(2).sum()*len(cluster_weights)``.
 
     :param address_dat: Address to data array of ``L``
     :type address_dat: str
@@ -535,9 +574,11 @@ def compute_block_B_shared_cluster(
     :type nnz: int
     :param T: Target matrix
     :type T: scp.sparse.csc_array
-    :param cluster_weights: Cluster weights obtained from :func:`mssm.src.python.formula.__cluster_discretize`.
+    :param cluster_weights: Cluster weights obtained from
+        :func:`mssm.src.python.formula.__cluster_discretize`.
     :type cluster_weights: list[float]
-    :return: ``sum(B.power(2).sum()*cluster_weights)`` and ``B.power(2).sum()*len(cluster_weights)``
+    :return: ``sum(B.power(2).sum()*cluster_weights)`` and
+        ``B.power(2).sum()*len(cluster_weights)``
     :rtype: tuple[float,float]
     """
     BB = compute_block_linv_shared(
@@ -554,7 +595,8 @@ def compute_B(
     n_c: int = 10,
     drop: list[int] | None = None,
 ) -> float | tuple[float, float]:
-    """Solves ``L @ B = P @ lTerm.D_J_emb`` for ``B``, then returns ``B.power(2).sum()`` or two approximations of this (for very big factor smooth models).
+    """Solves ``L @ B = P @ lTerm.D_J_emb`` for ``B``, then returns ``B.power(2).sum()`` or two
+    approximations of this (for very big factor smooth models).
 
     :param L: Lower triangular sparse matrix
     :type L: scp.sparse.csc_array
@@ -566,7 +608,9 @@ def compute_B(
     :type n_c: int, optional
     :param drop: Any parameters (columns/rows of ``lTerm.D_J_emb``) to drop, defaults to None
     :type drop: list[int] | None, optional
-    :return: ``sum(B.power(2).sum()`` or  ``sum(B.power(2).sum()*cluster_weights)`` and ``B.power(2).sum()*len(cluster_weights)`` with cluster weights obtained from :func:`mssm.src.python.formula.__cluster_discretize`.
+    :return: ``sum(B.power(2).sum()`` or  ``sum(B.power(2).sum()*cluster_weights)`` and
+        ``B.power(2).sum()*len(cluster_weights)`` with cluster weights obtained from
+        :func:`mssm.src.python.formula.__cluster_discretize`.
     :rtype: float | tuple[float, float]
     """
     # Solves L @ B = P @ D for B, parallelizing over column
@@ -577,7 +621,7 @@ def compute_B(
     idx = np.arange(lTerm.S_J_emb.shape[1])
     if drop is None:
         drop = []
-    keep = idx[np.isin(idx, drop) == False]
+    keep = idx[np.isin(idx, drop) == False]  # noqa: E712
 
     if lTerm.clust_series is None:
 
@@ -602,7 +646,7 @@ def compute_B(
             D_idx = idx[D_start:D_end]
 
             # Now check if dropped column is included, if so remove and update length.
-            D_idx = D_idx[np.isin(D_idx, drop) == False]
+            D_idx = D_idx[np.isin(D_idx, drop) == False]  # noqa: E712
             D_len = len(D_idx)
             PD = P @ lTerm.D_J_emb[:, D_idx][keep, :]
 
@@ -676,7 +720,9 @@ def compute_B(
         P
         @ lTerm.D_J_emb[
             :,
-            (D_start + (s * n_coef)) : (D_start + ((s + 1) * n_coef) - (n_coef - rank)),
+            (D_start + (s * n_coef)) : (  # noqa: E203
+                D_start + ((s + 1) * n_coef) - (n_coef - rank)
+            ),
         ]
         for s in lTerm.clust_series
     ]
@@ -744,7 +790,8 @@ def compute_block_linv_shared(
     nnz: int,
     T: scp.sparse.csc_array,
 ) -> scp.sparse.csc_array:
-    """Solves ``L@B = T`` where ``L`` is available in shared memory and ``T`` is a column subset of the identity matrix.
+    """Solves ``L@B = T`` where ``L`` is available in shared memory and ``T`` is a column subset of
+    the identity matrix.
 
     :param address_dat: Address to data array of ``L``
     :type address_dat: str
@@ -781,7 +828,8 @@ def compute_block_linv_shared(
 
 
 def compute_Linv(L: scp.sparse.csc_array, n_c: int = 10) -> scp.sparse.csc_array:
-    """Solves ``L @ inv(L) = I`` for ``inv(L)`` optionally parallelizing over column blocks of ``I``.
+    """Solves ``L @ inv(L) = I`` for ``inv(L)`` optionally parallelizing over column blocks of
+    ``I``.
 
     :param L: Lower triangular sparse matrix
     :type L: scp.sparse.csc_array
