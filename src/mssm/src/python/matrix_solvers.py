@@ -593,7 +593,7 @@ def compute_B(
     P: scp.sparse.csc_array,
     lTerm: LambdaTerm,
     n_c: int = 10,
-    drop: list[int] | None = None,
+    drop: np.typing.NDArray[np.int_] | None = None,
 ) -> float | tuple[float, float]:
     """Solves ``L @ B = P @ lTerm.D_J_emb`` for ``B``, then returns ``B.power(2).sum()`` or two
     approximations of this (for very big factor smooth models).
@@ -606,8 +606,8 @@ def compute_B(
     :type lTerm: LambdaTerm
     :param n_c: Number of cores, defaults to 10
     :type n_c: int, optional
-    :param drop: Any parameters (columns/rows of ``lTerm.D_J_emb``) to drop, defaults to None
-    :type drop: list[int] | None, optional
+    :param drop: Array of parameters (columns/rows of ``lTerm.D_J_emb``) to drop, defaults to None
+    :type drop: np.typing.NDArray[np.int_] | None, optional
     :return: ``sum(B.power(2).sum()`` or  ``sum(B.power(2).sum()*cluster_weights)`` and
         ``B.power(2).sum()*len(cluster_weights)`` with cluster weights obtained from
         :func:`mssm.src.python.formula.__cluster_discretize`.
@@ -620,7 +620,7 @@ def compute_B(
     D_start = lTerm.start_index
     idx = np.arange(lTerm.S_J_emb.shape[1])
     if drop is None:
-        drop = []
+        drop = np.array([])
     keep = idx[np.isin(idx, drop) == False]  # noqa: E712
 
     if lTerm.clust_series is None:

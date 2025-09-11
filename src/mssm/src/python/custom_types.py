@@ -144,9 +144,9 @@ class Fit_info:
         ``H`` is the final estimate of the negative Hessian of the penalized likelihood.
         Only available if ``check_cond>0`` when ``model.fit()`` is called for any model
         (i.e., GAMM, GAMMLSS, GSMM). Initialized with ``None``.
-    :ivar [int] dropped: The final set of coefficients dropped during GAMMLSS/GSMM estimation when
-        using ``method in ["QR/Chol","LU/Chol","Direct/Chol"]`` or ``None`` in which case no
-        coefficients were dropped. Initialized with 0.
+    :ivar np.typing.NDArray[np.int_] dropped: The final set of coefficients dropped during
+        GAMMLSS/GSMM estimation when using ``method in ["QR/Chol","LU/Chol","Direct/Chol"]`` or
+        ``None`` in which case no coefficients were dropped. Initialized with None.
     """
 
     lambda_updates: int = 0
@@ -154,7 +154,7 @@ class Fit_info:
     code: int = 1
     eps: float | None = None
     K2: float | None = None
-    dropped: list[int] | None = None
+    dropped: np.typing.NDArray[np.int_] | None = None
 
 
 @dataclass

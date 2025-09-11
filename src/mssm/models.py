@@ -447,11 +447,13 @@ class GSMM:
 
         keep = None
         if self.info.dropped is not None:
-            keep = [
-                cidx
-                for cidx in range(self.hessian.shape[1])
-                if cidx not in self.info.dropped
-            ]
+            keep = np.array(
+                [
+                    cidx
+                    for cidx in range(self.hessian.shape[1])
+                    if cidx not in self.info.dropped
+                ]
+            )
 
         # fmt: off
         reml = REML(llk, -1 * self.hessian, self.coef, 1, self.overall_penalties, keep)[0, 0]
@@ -1566,11 +1568,13 @@ class GAMMLSS(GSMM):
 
         keep = None
         if self.info.dropped is not None:
-            keep = [
-                cidx
-                for cidx in range(self.hessian.shape[1])
-                if cidx not in self.info.dropped
-            ]
+            keep = np.array(
+                [
+                    cidx
+                    for cidx in range(self.hessian.shape[1])
+                    if cidx not in self.info.dropped
+                ]
+            )
         # fmt: off
         reml = REML(llk, -1 * self.hessian, self.coef, 1, self.overall_penalties, keep)[0, 0]
         # fmt: on
@@ -2582,11 +2586,13 @@ class GAMM(GAMMLSS):
 
         keep = None
         if self.info.dropped is not None:
-            keep = [
-                cidx
-                for cidx in range(self.hessian.shape[1])
-                if cidx not in self.info.dropped
-            ]
+            keep = np.array(
+                [
+                    cidx
+                    for cidx in range(self.hessian.shape[1])
+                    if cidx not in self.info.dropped
+                ]
+            )
 
         # fmt: off
         reml = REML(llk, nH, self.coef, scale, self.overall_penalties, keep)[0, 0]
@@ -3094,9 +3100,8 @@ class GAMM(GAMMLSS):
             self.Wr = Wr
             self.WN = WN
 
-            if (
-                fit_info.dropped is not None
-            ):  # Make sure hessian has zero columns/rows for unidentifiable coef.
+            # Make sure hessian has zero columns/rows for unidentifiable coef.
+            if fit_info.dropped is not None:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     model_mat[:, fit_info.dropped] = 0

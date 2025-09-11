@@ -1637,7 +1637,7 @@ def compute_reml_candidate_GAMM(
                 )
 
         # Now compute REML for candidate
-        reml = REML(llk, nH / scale, coef, scale, penalties)
+        reml = REML(llk, nH / scale, coef, scale, penalties, keep)
 
         Linv = None
         if compute_inv or origNH is not None:
@@ -1752,7 +1752,7 @@ def compute_REML_candidate_GSMM(
                 __old_opt.form = "SR1"
                 __old_opt.bfgs_options = bfgs_options
 
-            coef, H, L, LV, c_llk, _, _, _, _ = update_coef_gen_smooth(
+            coef, H, L, LV, c_llk, _, _, keep, drop = update_coef_gen_smooth(
                 family,
                 y,
                 Xs,
@@ -1815,7 +1815,7 @@ def compute_REML_candidate_GSMM(
             c_llk = family.llk(y, *mus)
 
             # Estimate coefficients
-            coef, split_coef, mus, etas, H, L, LV, c_llk, _, _, _, _ = (
+            coef, split_coef, mus, etas, H, L, LV, c_llk, _, _, keep, drop = (
                 update_coef_gammlss(
                     family,
                     mus,
@@ -1833,7 +1833,7 @@ def compute_REML_candidate_GSMM(
                     100,
                     100,
                     conv_tol,
-                    "Chol",
+                    method,
                     None,
                     None,
                 )
@@ -1845,7 +1845,7 @@ def compute_REML_candidate_GSMM(
         # Remaining computations are shared for GAMMLSS and GSMM
 
         # Compute reml
-        reml = REML(c_llk, nH, coef, 1, penalties)[0, 0]
+        reml = REML(c_llk, nH, coef, 1, penalties, keep)[0, 0]
 
         # Compute edf
         lgdetDs = []
@@ -1887,7 +1887,7 @@ def REML(
     coef: np.ndarray,
     scale: float,
     penalties: list[LambdaTerm],
-    keep: list[int] | None = None,
+    keep: np.typing.NDArray[np.int_] | None = None,
 ) -> float | np.ndarray:
     """
     Based on Wood (2011). Exact REML for Gaussian GAM, Laplace approximate (Wood, 2016) for
@@ -1914,11 +1914,11 @@ def REML(
     :type scale: float
     :param penalties: List of penalties that were part of the model.
     :type penalties: [LambdaTerm]
-    :param keep: Optional List of indices corresponding to identifiable coefficients. Coefficients
+    :param keep: Optional array of indices corresponding to identifiable coefficients. Coefficients
         not in this list (not identifiable) are dropped from the negative hessian of the penalized
         log-likelihood. Can also be set to ``None`` (default) in which case all coefficients are
         treated as identifiable.
-    :type keep: list[int]|None, optional
+    :type keep: np.typing.NDArray[np.int_]|None, optional
     :return: (Approximate) REML score
     :rtype: float|np.ndarray
     """

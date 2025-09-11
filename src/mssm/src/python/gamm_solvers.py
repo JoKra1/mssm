@@ -121,9 +121,9 @@ def step_fellner_schall_sparse(
     :return: The additive update to ``cLam``
     :rtype: float
     """
-    num = max(0, lgdet_deriv - ldet_deriv)
+    num = max(0.0, lgdet_deriv - ldet_deriv)
 
-    denom = max(0, bSb)
+    denom = max(0.0, bSb)
 
     # Especially when using Null-penalties denom can realisitically become
     # equal to zero: every coefficient of a term is penalized away. In that
@@ -585,11 +585,11 @@ def update_PIRLS(
     return yb, Xb, z, Wr
 
 
-def compute_eigen_perm(Pr: list[int]) -> scp.sparse.csc_array:
+def compute_eigen_perm(Pr: list[int] | np.ndarray) -> scp.sparse.csc_array:
     """Internal function. Computes column permutation matrix obtained from Eigen.
 
     :param Pr: List of column indices
-    :type Pr: list[int]
+    :type Pr: list[int] | np.ndarray
     :return: Permutation matrix as sparse array
     :rtype: scp.sparse.csc_array
     """
@@ -678,14 +678,14 @@ def computetrVS3(
 
 def calculate_edf(
     LP: scp.sparse.csc_array | None,
-    Pr: list[int],
+    Pr: list[int] | None,
     InvCholXXS: scp.sparse.csc_array | scp.sparse.linalg.LinearOperator | None,
     merged_penalties: list[LambdaTerm],
     lgdetDs: list[float] | None,
     colsX: int,
     n_c: int,
-    drop: list[int] | None,
-    S_emb: scp.sparse.csc_array,
+    drop: np.typing.NDArray[np.int_] | None,
+    S_emb: scp.sparse.csc_array | None,
 ) -> tuple[float, list[float], list[float]]:
     """Internal function. Follows steps outlined by Wood & Fasiolo (2017) to compute total degrees
     of freedom by the model.
@@ -710,7 +710,7 @@ def calculate_edf(
     :param LP: Pivoted Cholesky of negative penalzied hessian or None
     :type LP: scp.sparse.csc_array | None
     :param Pr: Permutation list of ``LP``
-    :type Pr: list[int]
+    :type Pr: list[int] | None
     :param InvCholXXS: Unpivoted Inverse of ``LP``, or a quasi-newton approximation of it
         (for the L-qEFS update), or None
     :type InvCholXXS: scp.sparse.csc_array | scp.sparse.linalg.LinearOperator | None
@@ -725,9 +725,9 @@ def calculate_edf(
     :param n_c: Number of cores to use for computations
     :type n_c: int
     :param drop: List of dropped coefficients - can be None
-    :type drop: list[int]
+    :type drop: np.typing.NDArray[np.int_]
     :param S_emb: Total penalty matrix
-    :type S_emb: scp.sparse.csc_array
+    :type S_emb: scp.sparse.csc_array | None
     :return: A tuple containing the total estimated degrees of freedom, the amount of parameters
         penalized away by individual penalties in a list, and a list of the aforementioned sum
         of the elements of the aforementioned B matrices raised to the power of 2.
@@ -958,8 +958,8 @@ def update_scale_edf(
     Lrhoi: scp.sparse.csc_array | None,
     family: Family,
     penalties: list[LambdaTerm],
-    keep: list[int] | None,
-    drop: list[int],
+    keep: np.typing.NDArray[np.int_] | None,
+    drop: np.typing.NDArray[np.int_] | None,
     n_c: int,
 ) -> tuple[
     np.ndarray,
@@ -1006,10 +1006,10 @@ def update_scale_edf(
     :type family: Family
     :param penalties: List of penalties
     :type penalties: list[LambdaTerm]
-    :param keep: List of coefficients to keep, can be None -> keep all
-    :type keep: list[int] | None
-    :param drop: List of coefficients to drop
-    :type drop: list[int]
+    :param keep: Array of coefficients to keep, can be None -> keep all
+    :type keep: np.typing.NDArray[np.int_] | None
+    :param drop: Array of coefficients to drop
+    :type drop: np.typing.NDArray[np.int_] | None
     :param n_c: Number of cores to use
     :type n_c: int
     :return: a tuple containing the working residuals, optionally the unpivoted inverse of ``LP``,
@@ -1112,8 +1112,8 @@ def update_coef(
     list[int],
     scp.sparse.csc_array,
     scp.sparse.csc_array,
-    list[int] | None,
-    list[int] | None,
+    np.typing.NDArray[np.int_] | None,
+    np.typing.NDArray[np.int_] | None,
 ]:
     """Internal function. Estimates the coefficients of the model and updates the linear predictor
     and mean estimates.
@@ -1145,10 +1145,10 @@ def update_coef(
     :type offset: float | np.ndarray
     :return: A tuple containing the linear predictor ``eta``, the estimated means ``mu``, the
         estimated coefficients, the column permutation indices ``Pr``, the column permutation
-        matrix ``P``, the cholesky of the pivoted penalized negative hessian, an optional list
-        of the coefficients to keep, an optional list of the estimated coefficients to drop
+        matrix ``P``, the cholesky of the pivoted penalized negative hessian, an optional array
+        of the coefficients to keep, an optional array of the estimated coefficients to drop
     :rtype: tuple[np.ndarray, np.ndarray, np.ndarray, list[int], scp.sparse.csc_array,
-        scp.sparse.csc_array, list[int]|None, list[int]|None]
+        scp.sparse.csc_array, np.typing.NDArray[np.int_]|None, np.typing.NDArray[np.int_]|None]
     """
     # Solves the coefficients of an additive model, given weights and penalty.
     keep = None
@@ -1234,21 +1234,21 @@ def update_coef(
 def update_coef_and_scale(
     y: np.ndarray,
     yb: np.ndarray,
-    z: np.ndarray,
-    Wr: scp.sparse.csc_array,
+    z: np.ndarray | None,
+    Wr: scp.sparse.csc_array | None,
     rowsX: int,
     colsX: int,
-    X: scp.sparse.csc_array,
+    X: scp.sparse.csc_array | None,
     Xb: scp.sparse.csc_array,
     Lrhoi: scp.sparse.csc_array | None,
     family,
     S_emb: scp.sparse.csc_array,
     S_root: scp.sparse.csc_array | None,
-    S_pinv: scp.sparse.csc_array,
-    FS_use_rank: list[bool],
-    penalties: list[LambdaTerm],
+    S_pinv: scp.sparse.csc_array | None,
+    FS_use_rank: list[bool] | None,
+    penalties: list[LambdaTerm] | None,
     n_c: int,
-    formula: Formula,
+    formula: Formula | None,
     form_Linv: bool,
     offset: float | np.ndarray,
 ) -> tuple[
@@ -1264,8 +1264,8 @@ def update_coef_and_scale(
     list[float],
     float,
     np.ndarray,
-    list[int] | None,
-    list[int] | None,
+    np.typing.NDArray[np.int_] | None,
+    np.typing.NDArray[np.int_] | None,
 ]:
     """Internal function to update the coefficients and (optionally) scale parameter of the model.
 
@@ -1281,15 +1281,15 @@ def update_coef_and_scale(
     :param yb: vector of observations of the working model
     :type yb: np.ndarray
     :param z: vector of pseudo-data (can contain NaNs for invalid observations)
-    :type z: np.ndarray
+    :type z: np.ndarray | None
     :param Wr: diagonal sparse matrix holding the **root** of the Fisher weights
-    :type Wr: scp.sparse.csc_array
+    :type Wr: scp.sparse.csc_array | None
     :param rowsX: Rows of model matrix
     :type rowsX: int
     :param colsX: Cols of model matrix
     :type colsX: int
     :param X: Model matrix
-    :type X: scp.sparse.csc_array
+    :type X: scp.sparse.csc_array | None
     :param Xb: Model matrix of working model
     :type Xb: scp.sparse.csc_array
     :param Lrhoi: Optional covariance matrix of an ar1 model
@@ -1301,16 +1301,16 @@ def update_coef_and_scale(
     :param S_root: Root of total penalty matrix or None
     :type S_root: scp.sparse.csc_array | None
     :param S_pinv: Generalized inverse of total penalty matrix
-    :type S_pinv: scp.sparse.csc_array
+    :type S_pinv: scp.sparse.csc_array | None
     :param FS_use_rank: A list of bools indicating for which EFS updates the rank rather than the
         generalized inverse should be used
-    :type FS_use_rank: list[bool]
+    :type FS_use_rank: list[bool] | None
     :param penalties: List of penalties
-    :type penalties: list[LambdaTerm]
+    :type penalties: list[LambdaTerm] | None
     :param n_c: Number of cores
     :type n_c: int
-    :param formula: Formula of the model
-    :type formula: Formula
+    :param formula: (Optionally) Formula of the model
+    :type formula: Formula | None
     :param form_Linv: Whether to form the inverse of the cholesky of the negative penalzied hessian
         or not
     :type form_Linv: bool
@@ -1321,11 +1321,12 @@ def update_coef_and_scale(
         the inverse of the former (optional), derivative of :math:`log(|\\mathbf{S}_\\lambda|_+)`
         with respect to lambdas, cCoef.T@emb_SJ@cCoef for each SJ, total edf, termwise edf, 
         a list of the aforementioned sum of the elements of the aforementioned B matrices raised to
-        the power of 2, scale estimate, working residuals, an optional list of the coefficients to
-        keep, an optional list of the estimated coefficients to drop
+        the power of 2, scale estimate, working residuals, an optional array of the coefficients to
+        keep, an optional array of the estimated coefficients to drop
     :rtype: tuple[np.ndarray, np.ndarray, np.ndarray, scp.sparse.csc_array | None,
         scp.sparse.csc_array|None, list[float], list[float], float, list[float],
-        list[float], float, np.ndarray, list[int]|None, list[int]|None]
+        list[float], float, np.ndarray, np.typing.NDArray[np.int_]|None,
+        np.typing.NDArray[np.int_]|None]
     """
     # Solves the additive model for a given set of weights and penalty
     eta, mu, coef, Pr, P, LP, keep, drop = update_coef(
@@ -1416,14 +1417,14 @@ def init_step_gam(
     eta: np.ndarray,
     rowsX: int,
     colsX: int,
-    X: scp.sparse.csc_array,
+    X: scp.sparse.csc_array | None,
     Xb: scp.sparse.csc_array,
     family: Family,
     col_S: int,
     penalties: list[LambdaTerm],
     pinv: str,
     n_c: int,
-    formula: Formula,
+    formula: Formula | None,
     form_Linv: bool,
     method: str,
     offset: float | np.ndarray,
@@ -1469,7 +1470,7 @@ def init_step_gam(
     :param colsX: Cols of model matrix
     :type colsX: int
     :param X: Model matrix
-    :type X: scp.sparse.csc_array
+    :type X: scp.sparse.csc_array | None
     :param Xb: Model matrix of working model
     :type Xb: scp.sparse.csc_array
     :param family: Family of model
@@ -1482,8 +1483,8 @@ def init_step_gam(
     :type pinv: str
     :param n_c: Number of cores to use
     :type n_c: int
-    :param formula: Formula of the model
-    :type formula: Formula
+    :param formula: (Optionally) Formula of the model
+    :type formula: Formula | None
     :param form_Linv: Whether to form the inverse of the cholesky of the negative penalzied hessian
         or not
     :type form_Linv: bool
@@ -1608,10 +1609,10 @@ def correct_coef_step(
     eta: np.ndarray,
     mu: np.ndarray,
     y: np.ndarray,
-    X: scp.sparse.csc_array,
+    X: scp.sparse.csc_array | None,
     n_pen: float,
     S_emb: scp.sparse.csc_array,
-    formula: Formula,
+    formula: Formula | None,
     n_c: int,
     offset: float | np.ndarray,
 ) -> tuple[float, float, np.ndarray, np.ndarray, np.ndarray]:
@@ -1641,16 +1642,16 @@ def correct_coef_step(
     :type eta: np.ndarray
     :param mu: vector of mean estimates - under new coefficient estimate
     :type mu: np.ndarray
-    :param y: vector of observations of the working model
+    :param y: vector of observations
     :type y: np.ndarray
-    :param X: Model matrix of working model
-    :type X: scp.sparse.csc_array
+    :param X: Model matrix
+    :type X: scp.sparse.csc_array | None
     :param n_pen: total penalty under new coefficient estimate
     :type n_pen: float
     :param S_emb: Total penalty matrix
     :type S_emb: scp.sparse.csc_array
-    :param formula: Formula of model
-    :type formula: Formula
+    :param formula: (optionally) Formula of model
+    :type formula: Formula | None
     :param n_c: Number of cores
     :type n_c: int
     :param offset: Offset (fixed effect) to add to ``eta``
@@ -1748,7 +1749,7 @@ def extend_lambda_step(
     extend_by: dict,
     was_extended: list[bool],
     method: str,
-) -> tuple[float, dict, bool]:
+) -> tuple[float, dict, list[bool]]:
     """Internal function. Performs an update to the lambda parameter, ideally extending the step
     taken without overshooting the objective.
 
@@ -1761,12 +1762,12 @@ def extend_lambda_step(
     :param extend_by: Extension info dictionary
     :type extend_by: dict
     :param was_extended: List holding indication per lambda parameter whether it was extended or not
-    :type was_extended: bool
+    :type was_extended: list[bool]
     :param method: Extension method to use.
     :type method: str
     :raises ValueError: If requested method is not implemented
-    :return: Updated values for dLam,extend_by,was_extended
-    :rtype: tuple[float,dict,bool]
+    :return: Updated values for dLam, extend_by, was_extended
+    :rtype: tuple[float,dict,list[bool]]
     """
 
     if method == "nesterov" or method == "nesterov2":
@@ -1822,7 +1823,7 @@ def undo_extension_lambda_step(
     extend_by: dict,
     was_extended: list[bool],
     method: str,
-    family: Family,
+    family: Family | None,
 ) -> tuple[float, float]:
     """Internal function. Deals with resetting any extension terms.
 
@@ -1838,8 +1839,8 @@ def undo_extension_lambda_step(
     :type was_extended: bool
     :param method: Extension method to use.
     :type method: str
-    :param family: model family
-    :type family: Family
+    :param family: Deprecated. model family
+    :type family: Family | None
     :raises ValueError: If requested method is not implemented
     :return: Updated values for lam and dlam
     :rtype: tuple[float,float]
@@ -1861,11 +1862,11 @@ def undo_extension_lambda_step(
 def correct_lambda_step(
     y: np.ndarray,
     yb: np.ndarray,
-    z: np.ndarray,
-    Wr: scp.sparse.csc_array,
+    z: np.ndarray | None,
+    Wr: scp.sparse.csc_array | None,
     rowsX: int,
     colsX: int,
-    X: scp.sparse.csc_array,
+    X: scp.sparse.csc_array | None,
     Xb: scp.sparse.csc_array,
     coef: np.ndarray,
     Lrhoi: scp.sparse.csc_array | None,
@@ -1884,7 +1885,7 @@ def correct_lambda_step(
     extend_lambda: bool,
     exclude_lambda: bool,
     extension_method_lam: str,
-    formula: Formula,
+    formula: Formula | None,
     form_Linv: bool,
     method: str,
     offset: float | np.ndarray,
@@ -1909,8 +1910,8 @@ def correct_lambda_step(
     list[bool],
     scp.sparse.csc_array,
     int,
-    list[int] | None,
-    list[int] | None,
+    np.typing.NDArray[np.int_] | None,
+    np.typing.NDArray[np.int_] | None,
 ]:
     """Performs step-length control for lambda.
 
@@ -1933,15 +1934,15 @@ def correct_lambda_step(
     :param yb: vector of observations of the working model
     :type yb: np.ndarray
     :param z: pseudo-data (can have NaNs for invalid observations)
-    :type z: np.ndarray
+    :type z: np.ndarray | None
     :param Wr: diagonal sparse matrix holding the **root** of the Fisher weights
-    :type Wr: scp.sparse.csc_array
+    :type Wr: scp.sparse.csc_array | None
     :param rowsX: Rows of model matrix
     :type rowsX: int
     :param colsX: Cols of model matrix
     :type colsX: int
     :param X: Model matrix
-    :type X: scp.sparse.csc_array
+    :type X: scp.sparse.csc_array | None
     :param Xb: Model matrix of working model
     :type Xb: scp.sparse.csc_array
     :param coef: Current coefficient estimate
@@ -1987,8 +1988,8 @@ def correct_lambda_step(
     :param extension_method_lam: **Experimental - do not change!** Which method to use to extend
         lambda proposals. Set to 'nesterov' by default.
     :type extension_method_lam: str
-    :param formula: Formula of model
-    :type formula: Formula
+    :param formula: (Optionally) Formula of model
+    :type formula: Formula | None
     :param form_Linv: Whether to form the inverse of the cholesky of the negative penalzied hessian
         or not
     :type form_Linv: bool
@@ -2001,12 +2002,12 @@ def correct_lambda_step(
     :return: Tuple containing updated values for yb, Xb, z, Wr, eta, mu, n_coef, the Cholesky of
         the penalzied hessian ``CholXXS``, the inverse of the former ``InvCholXXS``, total edf,
         term-wse edfs, updated scale, working residuals, accepted update to lambda, extend_by,
-        penalties, was_extended, updated S_emb, number of lambda updates, an optional list of the
-        coefficients to keep, an optional list of the estimated coefficients to drop
+        penalties, was_extended, updated S_emb, number of lambda updates, an optional array of the
+        coefficients to keep, an optional array of the estimated coefficients to drop
     :rtype: tuple[np.ndarray, scp.sparse.csc_array, np.ndarray, scp.sparse.csc_array, np.ndarray,
         np.ndarray, np.ndarray, scp.sparse.csc_array, scp.sparse.csc_array|None, float, list[float],
         float, np.ndarray, np.ndarray, dict, list[LambdaTerm], list[bool], scp.sparse.csc_array,
-        int, list[int]|None, list[int]|None]
+        int, np.typing.NDArray[np.int_]|None, np.typing.NDArray[np.int_]|None]
     """
     # Propose & perform step-length control for the lambda parameters via the Fellner Schall method
     # by Wood & Fasiolo (2016)
@@ -2775,7 +2776,10 @@ def solve_gamm_sparse(
                 offset,
             )
 
-        fit_info.dropped = drop
+        if drop is not None and len(drop) > 0:
+            fit_info.dropped = drop
+        else:
+            fit_info.dropped = None
 
         # Check condition number of current system.
         if check_cond == 2:
@@ -3374,7 +3378,7 @@ def form_eta_mp(
     return eta_file
 
 
-def read_eta(file, formula: Formula, coef: np.ndarray, nc: int) -> np.ndarray:
+def read_eta(file, formula: Formula, coef: np.ndarray, nc: int) -> list[float]:
     """Computes ``X@coef`` in parallel, where ``X`` is the model matrix based on this ``file`` and
     ``coef`` is the current coefficient estimate.
 
@@ -3387,7 +3391,7 @@ def read_eta(file, formula: Formula, coef: np.ndarray, nc: int) -> np.ndarray:
     :param nc: Number of cores to use
     :type nc: int
     :return: X@coef
-    :rtype: np.ndarray
+    :rtype: list[float]
     """
 
     terms = formula.terms
@@ -3450,7 +3454,7 @@ def read_eta(file, formula: Formula, coef: np.ndarray, nc: int) -> np.ndarray:
     return eta
 
 
-def keep_eta(formula: Formula, coef: np.ndarray, nc: int) -> np.ndarray:
+def keep_eta(formula: Formula, coef: np.ndarray, nc: int) -> list[float]:
     """Computes ``X@coef`` in parallel, where ``X`` is the overall model matrix and ``coef`` is
     current coefficient estimate.
 
@@ -3461,7 +3465,7 @@ def keep_eta(formula: Formula, coef: np.ndarray, nc: int) -> np.ndarray:
     :param nc: Number of cores to use
     :type nc: int
     :return: X@coef
-    :rtype: np.ndarray
+    :rtype: list[float]
     """
 
     terms = formula.terms
@@ -4416,7 +4420,7 @@ def correct_coef_step_gammlss(
 
 def identify_drop(
     H: scp.sparse.csc_array, S_scaled: scp.sparse.csc_array, method: str = "QR"
-) -> tuple[list[int] | None, list[int] | None]:
+) -> tuple[np.typing.NDArray[np.int_], np.typing.NDArray[np.int_]]:
     """
     Routine to (approximately) identify the rank of the scaled negative hessian of the penalized
     likelihood based on a rank revealing QR decomposition or the methods by Foster (1986) and
@@ -4451,9 +4455,9 @@ def identify_drop(
     :type S_scaled: scp.sparse.csc_array
     :param method: Which method to use to check for rank deficiency, defaults to 'QR'
     :type method: str, optional
-    :return: A tuple containing lists of the coefficients to keep and to drop, both of which are
-        None when we don't need to drop any.
-    :rtype: tuple[list[int]|None,list[int]|None]
+    :return: A tuple containing arrays of the coefficients to keep and to drop. The latter will be
+        empty if no coefficients need to be dropped.
+    :rtype: tuple[np.typing.NDArray[np.int_],np.typing.NDArray[np.int_]]
     """
 
     rank = H.shape[1]
@@ -4503,6 +4507,8 @@ def identify_drop(
 
         K2, _, _, Kcode = est_condition(L, LV, verbose=False)  # noqa: F405
         if Kcode == 0:
+            drop = np.sort(drop)
+            keep = np.sort(keep)
             return keep, drop
 
     # Negative penalized hessian is not of full rank. Need to fix that.
@@ -4556,6 +4562,8 @@ def identify_drop(
                 )
             except:  # noqa: E722
                 # Solver failed.. get out and try again later.
+                drop = np.sort(drop)
+                keep = np.sort(keep)
                 return keep, drop
 
         # w needs to be of original shape!
@@ -4602,14 +4610,14 @@ def identify_drop(
 
 
 def drop_terms_X(
-    Xs: list[scp.sparse.csc_array], keep: list[int]
+    Xs: list[scp.sparse.csc_array], keep: np.typing.NDArray[np.int_]
 ) -> tuple[list[scp.sparse.csc_array], list[int]]:
     """Drops cols of model matrices corresponding to dropped terms.
 
     :param Xs: List of model matrices included in the model formula.
     :type Xs: list[scp.sparse.csc_array]
-    :param keep: List of columns to keep.
-    :type keep: list[int]
+    :param keep: Array of columns to keep.
+    :type keep: np.typing.NDArray[np.int_]
     :return: Tuple, containing a list of updated model matrices - a copy is made - and a new
         list conatining the indices by which to split the coefficient vector.
     :rtype: tuple[list[scp.sparse.csc_array],list[int]]
@@ -4642,9 +4650,9 @@ def check_drop_valid_gammlss(
     coef_split_idx: list[int],
     Xs: list[scp.sparse.csc_array],
     S_emb: scp.sparse.csc_array,
-    keep: list[int],
+    keep: np.typing.NDArray[np.int_],
     family: GAMLSSFamily,
-) -> tuple[bool, float]:
+) -> tuple[bool, float | None]:
     """Checks whether an identified set of coefficients to be dropped from the model results in a
     valid log-likelihood.
 
@@ -4659,13 +4667,13 @@ def check_drop_valid_gammlss(
     :type Xs: list[scp.sparse.csc_array]
     :param S_emb: Total penalty matrix
     :type S_emb: scp.sparse.csc_array
-    :param keep: List of coefficients to retain
-    :type keep: list[int]
+    :param keep: Array of coefficients to retain
+    :type keep: np.typing.NDArray[np.int_]
     :param family: Model family
     :type family: GAMLSSFamily
     :return: tuple holding bool indicating if likelihood is valid and penalized log-likelihood
-        under dropped set.
-    :rtype: tuple[bool,float]
+        under dropped set (or None if invalid).
+    :rtype: tuple[bool,float | None]
     """
     # Drop from coef
     dropcoef = coef[keep]
@@ -4712,7 +4720,7 @@ def handle_drop_gammlss(
     family: GAMLSSFamily,
     y: np.ndarray,
     coef: np.ndarray,
-    keep: list[int],
+    keep: np.typing.NDArray[np.int_],
     Xs: list[scp.sparse.csc_array],
     S_emb: scp.sparse.csc_array,
 ) -> tuple[
@@ -4735,8 +4743,8 @@ def handle_drop_gammlss(
     :type y: np.ndarray
     :param coef: Vector of coefficients
     :type coef: np.ndarray
-    :param keep: List of parameter indices to keep.
-    :type keep: list[int]
+    :param keep: Array of parameter indices to keep.
+    :type keep: np.typing.NDArray[np.int_]
     :param Xs: List of model matrices
     :type Xs: list[scp.sparse.csc_array]
     :param S_emb: Total penalty matrix.
@@ -4902,9 +4910,9 @@ def update_coef_gammlss(
     coef_split_idx: list[int],
     S_emb: scp.sparse.csc_array,
     S_norm: scp.sparse.csc_array,
-    S_pinv: scp.sparse.csc_array,
-    FS_use_rank: list[bool],
-    gammlss_penalties: list[LambdaTerm],
+    S_pinv: scp.sparse.csc_array | None,
+    FS_use_rank: list[bool] | None,
+    gammlss_penalties: list[LambdaTerm] | None,
     c_llk: float,
     outer: int,
     max_inner: int,
@@ -4912,7 +4920,7 @@ def update_coef_gammlss(
     conv_tol: float,
     method: str,
     piv_tol: float,
-    keep_drop: list[list[int], list[int]] | None,
+    keep_drop: tuple[np.typing.NDArray[np.int_], np.typing.NDArray[np.int_]] | None,
 ) -> tuple[
     np.ndarray,
     list[np.ndarray],
@@ -4924,8 +4932,8 @@ def update_coef_gammlss(
     float,
     float,
     float,
-    list[int] | None,
-    list[int] | None,
+    np.typing.NDArray[np.int_] | None,
+    np.typing.NDArray[np.int_] | None,
 ]:
     """Repeatedly perform Newton update with step length control to the coefficient vector -
     essentially implements algorithm 3 from the paper by Krause et al. (submitted).
@@ -4955,15 +4963,15 @@ def update_coef_gammlss(
     :type coef_split_idx: list[int]
     :param S_emb: Total penalty matrix
     :type S_emb: scp.sparse.csc_array
-    :param S_emb: Total penalty matrix - normalized/scaled for rank checks
-    :type S_emb: scp.sparse.csc_array
+    :param S_norm: Total penalty matrix - normalized/scaled for rank checks
+    :type S_norm: scp.sparse.csc_array
     :param S_pinv: Generalized inverse of total penalty matrix
-    :type S_pinv: scp.sparse.csc_array
+    :type S_pinv: scp.sparse.csc_array | None
     :param FS_use_rank: A list of bools indicating for which EFS updates the rank rather than the
         generalized inverse should be used
-    :type FS_use_rank: list[bool]
+    :type FS_use_rank: list[bool] | None
     :param gammlss_penalties: List of penalties
-    :type gammlss_penalties: list[LambdaTerm]
+    :type gammlss_penalties: list[LambdaTerm] | None
     :param c_llk: Current llk
     :type c_llk: float
     :param outer: Index of outer iteration
@@ -4978,17 +4986,17 @@ def update_coef_gammlss(
     :type method: str
     :param piv_tol: Deprecated
     :type piv_tol: float
-    :param keep_drop: Set of previously dropped coeeficients or None
-    :type keep_drop: list[list[int],list[int]] | None
+    :param keep_drop: Set of previously kept and dropped coeeficients or None
+    :type keep_drop: tuple[np.typing.NDArray[np.int_],np.typing.NDArray[np.int_]] | None
     :return: A tuple containing an estimate of all coefficients, a split version of the former,
         updated values for mus, etas, the negative hessian of the log-likelihood, cholesky of
         negative hessian of the penalized log-likelihood, inverse of the former, new llk, new
         penalized llk, the multiple (float) added to the diagonal of the negative penalized hessian
-        to make it invertible, an optional list of the coefficients to keep, an optional list of the
-        estimated coefficients to drop
+        to make it invertible, an optional array of the coefficients to keep, an optional array of
+        the estimated coefficients to drop
     :rtype: tuple[np.ndarray, list[np.ndarray], list[np.ndarray], list[np.ndarray],
         scp.sparse.csc_array, scp.sparse.csc_array, scp.sparse.csc_array, float, float, float,
-        list[int] | None, list[int] | None]
+        np.typing.NDArray[np.int_] | None, np.typing.NDArray[np.int_] | None]
     """
     grad_only = method == "Grad"
     a = 0.1  # Step-size for gradient only
@@ -5255,7 +5263,7 @@ def correct_lambda_step_gamlss(
     conv_tol: float,
     method: str,
     piv_tol: float,
-    keep_drop: list[list[int], list[int]] | None,
+    keep_drop: tuple[np.typing.NDArray[np.int_], np.typing.NDArray[np.int_]] | None,
     extend_lambda: bool,
     extension_method_lam: str,
     control_lambda: int,
@@ -5272,8 +5280,8 @@ def correct_lambda_step_gamlss(
     float,
     float,
     float,
-    list[int],
-    list[int],
+    np.typing.NDArray[np.int_] | None,
+    np.typing.NDArray[np.int_] | None,
     scp.sparse.csc_array,
     list[LambdaTerm],
     float,
@@ -5339,8 +5347,8 @@ def correct_lambda_step_gamlss(
     :type method: str
     :param piv_tol: Deprecated
     :type piv_tol: float
-    :param keep_drop: Set of previously dropped coeeficients or None
-    :type keep_drop: list[list[int],list[int]] | None
+    :param keep_drop: Set of previously kept and dropped coeeficients or None
+    :type keep_drop: tuple[np.typing.NDArray[np.int_],np.typing.NDArray[np.int_]] | None
     :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the
         number of new smoothing penalty proposals necessary
     :type extend_lambda: bool
@@ -5361,13 +5369,13 @@ def correct_lambda_step_gamlss(
         next etas, the negative hessian of the log-likelihood, cholesky of negative hessian of the
         penalized log-likelihood, inverse of the former, new llk, new penalized llk, the multiple
         (float) added to the diagonal of the negative penalized hessian to make it invertible, an
-        optional list of the coefficients to keep, an optional list of the estimated coefficients
+        optional array of the coefficients to keep, an optional array of the estimated coefficients
         to drop, the new total penalty matrix, the new list of penalties, total edf, term-wise edfs,
         the update to the lambda vector
     :rtype: tuple[np.ndarray, list[np.ndarray], list[np.ndarray], list[np.ndarray],
         scp.sparse.csc_array, scp.sparse.csc_array, scp.sparse.csc_array, float, float, float,
-        list[int], list[int], scp.sparse.csc_array, list[LambdaTerm], float, list[float],
-        np.ndarray]
+        np.typing.NDArray[np.int_] | None, np.typing.NDArray[np.int_] | None, scp.sparse.csc_array,
+        list[LambdaTerm], float, list[float], np.ndarray]
     """
 
     # Fitting routine with step size control for smoothing parameters of GAMMLSS models.
@@ -5915,7 +5923,7 @@ def solve_gammlss_sparse(
 
         if drop is not None:
             if should_keep_drop:
-                keep_drop = [keep, drop]
+                keep_drop = (keep, drop)
 
         fit_info.iter += 1
 
@@ -6178,7 +6186,7 @@ def check_drop_valid_gensmooth(
     coef: np.ndarray,
     Xs: list[scp.sparse.csc_array | None],
     S_emb: scp.sparse.csc_array,
-    keep: list[int],
+    keep: np.typing.NDArray[np.int_],
     family: GSMMFamily,
 ) -> tuple[bool, float | None]:
     """Checks whether an identified set of coefficients to be dropped from the model results in a
@@ -6192,8 +6200,8 @@ def check_drop_valid_gensmooth(
     :type Xs: list[scp.sparse.csc_array | None]
     :param S_emb: Total Penalty matrix
     :type S_emb: scp.sparse.csc_array
-    :param keep: List of coefficients to retain
-    :type keep: list[int]
+    :param keep: Array of coefficients to retain
+    :type keep: np.typing.NDArray[np.int_]
     :param family: Model family
     :type family: GSMMFamily
     :return: tuple holding bool indicating if likelihood is valid and penalized log-likelihood
@@ -6222,9 +6230,9 @@ def check_drop_valid_gensmooth(
 
 def restart_coef(
     coef: np.ndarray,
-    c_llk: float,
-    c_pen_llk: float,
-    n_coef: np.ndarray,
+    c_llk: float | None,
+    c_pen_llk: float | None,
+    n_coef: int,
     coef_split_idx: list[int],
     ys: list[np.ndarray | None],
     Xs: list[scp.sparse.csc_array | None],
@@ -6242,7 +6250,7 @@ def restart_coef(
     :param c_pen_llk: Current penalized llk
     :type c_pen_llk: float
     :param n_coef: Number of coefficients
-    :type n_coef: np.ndarray
+    :type n_coef: int
     :param coef_split_idx: List with indices to split coef - one per parameter of response
         distribution
     :type coef_split_idx: list[int]
@@ -6370,7 +6378,7 @@ def handle_drop_gsmm(
     family: GSMMFamily,
     ys: list[np.ndarray | None],
     coef: np.ndarray,
-    keep: list[int],
+    keep: np.typing.NDArray[np.int_],
     Xs: list[scp.sparse.csc_array | None],
     S_emb: scp.sparse.csc_array,
 ) -> tuple[
@@ -6390,8 +6398,8 @@ def handle_drop_gsmm(
     :type ys: list[np.ndarray | None]
     :param coef: Vector of coefficients
     :type coef: np.ndarray
-    :param keep: List of parameter indices to keep.
-    :type keep: list[int]
+    :param keep: Array of parameter indices to keep.
+    :type keep: np.typing.NDArray[np.int_]
     :param Xs: List of model matrices
     :type Xs: list[scp.sparse.csc_array | None]
     :param S_emb: Total penalty matrix.
@@ -6428,9 +6436,9 @@ def update_coef_gen_smooth(
     coef_split_idx: list[int],
     S_emb: scp.sparse.csc_array,
     S_norm: scp.sparse.csc_array,
-    S_pinv: scp.sparse.csc_array,
-    FS_use_rank: list[bool],
-    smooth_pen: list[LambdaTerm],
+    S_pinv: scp.sparse.csc_array | None,
+    FS_use_rank: list[bool] | None,
+    smooth_pen: list[LambdaTerm] | None,
     c_llk: float,
     outer: int,
     max_inner: int,
@@ -6438,7 +6446,7 @@ def update_coef_gen_smooth(
     conv_tol: float,
     method: str,
     piv_tol: float,
-    keep_drop: list[list[int], list[int]] | None,
+    keep_drop: tuple[np.typing.NDArray[np.int_], np.typing.NDArray[np.int_]] | None,
     opt_raw: scp.sparse.linalg.LinearOperator | None,
 ) -> tuple[
     np.ndarray,
@@ -6448,8 +6456,8 @@ def update_coef_gen_smooth(
     float,
     float,
     float,
-    list[int] | None,
-    list[int] | None,
+    np.typing.NDArray[np.int_] | None,
+    np.typing.NDArray[np.int_] | None,
 ]:
     """Repeatedly perform Newton/Gradient/L-qEFS update with step length control to the coefficient
     vector - essentially completes the steps discussed in sections 3.3 and 4 of the paper by
@@ -6481,12 +6489,12 @@ def update_coef_gen_smooth(
         by it's norm).
     :type S_norm: scp.sparse.csc_array
     :param S_pinv: Generalized inverse of total penalty matrix
-    :type S_pinv: scp.sparse.csc_array
+    :type S_pinv: scp.sparse.csc_array | None
     :param FS_use_rank: A list of bools indicating for which EFS updates the rank rather than
         the generalized inverse should be used
-    :type FS_use_rank: list[bool]
+    :type FS_use_rank: list[bool] | None
     :param smooth_pen: List of penalties
-    :type smooth_pen: list[LambdaTerm]
+    :type smooth_pen: list[LambdaTerm] | None
     :param c_llk: Current llk
     :type c_llk: float
     :param outer: Index of outer iteration
@@ -6501,8 +6509,8 @@ def update_coef_gen_smooth(
     :type method: str
     :param piv_tol: Deprecated
     :type piv_tol: float
-    :param keep_drop: Set of previously dropped coeeficients or None
-    :type keep_drop: list[list[int],list[int]] | None
+    :param keep_drop: Set of previously kept and dropped coeeficients or None
+    :type keep_drop: tuple[np.typing.NDArray[np.int_],np.typing.NDArray[np.int_]] | None
     :param opt_raw: If the L-qEFS update is used to estimate coefficients/lambda parameters,
         then this is the previous state of the quasi-Newton approximations to the (inverse) of the
         hessian of the log-likelihood
@@ -6511,11 +6519,11 @@ def update_coef_gen_smooth(
         log-likelihood,cholesky of negative hessian of the penalized log-likelihood,inverse of the
         former (or another instance of :class:`scp.sparse.linalg.LinearOperator` representing the
         new quasi-newton approximation), new llk, new penalized llk, the multiple (float) added to
-        the diagonal of the negative penalized hessian to make it invertible, an optional list of
-        the coefficients to keep, an optional list of the estimated coefficients to drop
+        the diagonal of the negative penalized hessian to make it invertible, an optional array of
+        the coefficients to keep, an optional array of the estimated coefficients to drop
     :rtype: tuple[np.ndarray, scp.sparse.csc_array|None, scp.sparse.csc_array|None,
-        scp.sparse.csc_array|scp.sparse.linalg.LinearOperator, float, float, float, list[int]|None,
-        list[int]|None]
+        scp.sparse.csc_array|scp.sparse.linalg.LinearOperator, float, float, float,
+        np.typing.NDArray[np.int_] | None, np.typing.NDArray[np.int_] | None]
     """
     grad_only = method == "Grad"
     a = 0.1  # Step-size for gradient only
@@ -7178,7 +7186,7 @@ def correct_lambda_step_gen_smooth(
     __neg_pen_llk: Callable,
     __neg_pen_grad: Callable,
     piv_tol: float,
-    keep_drop: list[list[int], list[int]] | None,
+    keep_drop: tuple[np.typing.NDArray[np.int_], np.typing.NDArray[np.int_]] | None,
     extend_lambda: bool,
     extension_method_lam: str,
     control_lambda: int,
@@ -7191,12 +7199,11 @@ def correct_lambda_step_gen_smooth(
     scp.sparse.csc_array | None,
     scp.sparse.csc_array | None,
     scp.sparse.csc_array | scp.sparse.linalg.LinearOperator,
-    scp.sparse.csc_array | None,
     float,
     float,
     scp.sparse.linalg.LinearOperator | None,
-    list[int],
-    list[int],
+    np.typing.NDArray[np.int_] | None,
+    np.typing.NDArray[np.int_] | None,
     scp.sparse.csc_array,
     list[LambdaTerm],
     float,
@@ -7289,8 +7296,8 @@ def correct_lambda_step_gen_smooth(
     :type __neg_pen_grad: Callable
     :param piv_tol: Deprecated
     :type piv_tol: float
-    :param keep_drop: Set of previously dropped coeeficients or None
-    :type keep_drop: list[list[int],list[int]] | None
+    :param keep_drop: Set of previously kept and dropped coeeficients or None
+    :type keep_drop: tuple[np.typing.NDArray[np.int_],np.typing.NDArray[np.int_]] | None
     :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the
         number of new smoothing penalty proposals necessary
     :type extend_lambda: bool
@@ -7324,16 +7331,17 @@ def correct_lambda_step_gen_smooth(
     :return: coef estimate under corrected lambda, the negative hessian of the log-likelihood,
         cholesky of negative hessian of the penalized log-likelihood, inverse of the former
         (or another instance of :class:`scp.sparse.linalg.LinearOperator` representing the new
-        quasi-newton approximation), covariance matrix of coefficients, next llk, next penalized
-        llk, if the L-qEFS update is used to estimate coefficients/lambda parameters a
-        ``scp.sparse.linalg.LinearOperator`` holding the previous quasi-Newton approximations to
-        the (inverse) of the hessian of the log-likelihood, an optional list of the coefficients
-        to keep, an optional list of the estimated coefficients to drop, new total penalty matrix,
-        new list of penalties, total edf, term-wise edfs, the update to the lambda vector
+        quasi-newton approximation), next llk, next penalized llk, if the L-qEFS update is used to
+        estimate coefficients/lambda parameters a ``scp.sparse.linalg.LinearOperator`` holding the
+        previous quasi-Newton approximations to the (inverse) of the hessian of the log-likelihood,
+        an optional array of the coefficients to keep, an optional array of the estimated
+        coefficients to drop, new total penalty matrix, new list of penalties, total edf,
+        term-wise edfs, the update to the lambda vector
     :rtype: tuple[np.ndarray, scp.sparse.csc_array|None, scp.sparse.csc_array|None,
-        scp.sparse.csc_array|scp.sparse.linalg.LinearOperator, scp.sparse.csc_array|None, float,
-        float, scp.sparse.linalg.LinearOperator|None, list[int], list[int], scp.sparse.csc_array,
-        list[LambdaTerm], float, list[float], np.ndarray]
+        scp.sparse.csc_array|scp.sparse.linalg.LinearOperator, float,
+        float, scp.sparse.linalg.LinearOperator|None, np.typing.NDArray[np.int_]|None,
+        np.typing.NDArray[np.int_]|None, scp.sparse.csc_array, list[LambdaTerm], float,
+        list[float], np.ndarray]
     """
     # Fitting iteration and step size control for smoothing parameters of general smooth model.
     # Basically a more general copy of the function for gammlss. Again, step-size control is not
@@ -7475,8 +7483,6 @@ def correct_lambda_step_gen_smooth(
                 __old_opt = LV
                 __old_opt.bfgs_options = bfgs_options
                 __old_opt.init = True
-
-            V = None
 
         else:
             raise DeprecationWarning("Non-Newton optimizers are deprecated.")
@@ -7699,7 +7705,6 @@ def correct_lambda_step_gen_smooth(
         H,
         L,
         LV,
-        V,
         next_llk,
         next_pen_llk,
         __old_opt,
@@ -8033,7 +8038,6 @@ def solve_generalSmooth_sparse(
             H,
             L,
             LV,
-            V,
             c_llk,
             c_pen_llk,
             __old_opt,
@@ -8122,7 +8126,7 @@ def solve_generalSmooth_sparse(
 
         if drop is not None:
             if should_keep_drop:
-                keep_drop = [keep, drop]
+                keep_drop = (keep, drop)
 
         # Check overall convergence
         fit_info.iter += 1
