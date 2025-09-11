@@ -1690,6 +1690,9 @@ def compute_REML_candidate_GSMM(
     n_c: int = 10,
     bfgs_options: dict = {},
     origNH: scp.sparse.csc_array | None = None,
+    keep_drop: (
+        tuple[np.typing.NDArray[np.int_], np.typing.NDArray[np.int_]] | None
+    ) = None,
 ) -> tuple[float, scp.sparse.csc_array, scp.sparse.csc_array, np.ndarray, float, float]:
     """Allows to evaluate REML criterion (e.g., Wood, 2011; Wood, 2016) efficiently for a set of
     \\lambda values for a GSMM or GAMMLSS.
@@ -1726,6 +1729,8 @@ def compute_REML_candidate_GSMM(
     :type bfgs_options: dict, optional
     :param origNH: Optional external hessian matrix, defaults to None
     :type origNH: scp.sparse.csc_array | None, optional
+    :param keep_drop: Set of kept and dropped coeeficients during estimation or None
+    :type keep_drop: tuple[np.typing.NDArray[np.int_],np.typing.NDArray[np.int_]] | None
     :return: reml criterion,conditional covariance matrix of coefficients for this lambda,
         un-pivoted inverse of the pivoted Cholesky of the negative hessian of the penalized llk,
         coefficients, total edf, llk
@@ -1734,6 +1739,20 @@ def compute_REML_candidate_GSMM(
 
     # Build current penalties
     S_emb, S_pinv, _, FS_use_rank = compute_S_emb_pinv_det(n_coef, penalties, "svd")
+
+    S_norm = None
+
+    # Form balanced penalty
+    if method != "Chol":
+        S_norm = copy.deepcopy(penalties[0].S_J_emb) / scp.sparse.linalg.norm(
+            penalties[0].S_J_emb, ord=None
+        )
+        for peni in range(1, len(penalties)):
+            S_norm += penalties[peni].S_J_emb / scp.sparse.linalg.norm(
+                penalties[peni].S_J_emb, ord=None
+            )
+
+        S_norm /= scp.sparse.linalg.norm(S_norm, ord=None)
 
     try:
         if isinstance(family, GSMMFamily):  # GSMM
@@ -1759,7 +1778,7 @@ def compute_REML_candidate_GSMM(
                 coef,
                 coef_split_idx,
                 S_emb,
-                None,
+                S_norm,
                 None,
                 None,
                 None,
@@ -1770,7 +1789,7 @@ def compute_REML_candidate_GSMM(
                 conv_tol,
                 method,
                 None,
-                None,
+                keep_drop,
                 __old_opt,
             )
 
@@ -1835,7 +1854,7 @@ def compute_REML_candidate_GSMM(
                     conv_tol,
                     method,
                     None,
-                    None,
+                    keep_drop,
                 )
             )
 
@@ -2228,6 +2247,17 @@ def estimateVp(
             y = ys
             Xs = model.get_mmat(drop_NA=drop_NA)
 
+        keep_drop = None
+        if model.info.dropped is not None:
+            keep = np.array(
+                [
+                    cidx
+                    for cidx in range(model.hessian.shape[1])
+                    if cidx not in model.info.dropped
+                ]
+            )
+            keep_drop = (keep, model.info.dropped)
+
         X = Xs[0]
         orig_scale = 1
         init_coef = copy.deepcopy(model.coef)
@@ -2263,6 +2293,7 @@ def estimateVp(
                         n_c=n_c,
                         method=method,
                         bfgs_options=bfgs_options,
+                        keep_drop=keep_drop,
                     )
 
                 return -reml
@@ -2350,6 +2381,7 @@ def estimateVp(
             loc=np.ndarray.flatten(ep), shape=Vpr, df=df, size=n_est, random_state=seed
         )
         p_sample = np.exp(p_sample)
+        p_sample[np.isinf(p_sample)] = b
 
         if len(np.ndarray.flatten(ep)) == 1:  # Single lambda parameter in model
 
@@ -2516,6 +2548,7 @@ def estimateVp(
                     repeat(1),
                     repeat(bfgs_options),
                     repeat(origNH),
+                    repeat(keep_drop),
                 )
                 with mp.Pool(processes=n_c) as pool:
                     (
@@ -2538,6 +2571,7 @@ def estimateVp(
             loc=np.ndarray.flatten(ep), shape=Vpr, df=df, size=n_est, random_state=seed
         )
         p_sample = np.exp(p_sample)
+        p_sample[np.isinf(p_sample)] = b
 
         if len(np.ndarray.flatten(ep)) == 1:  # Single lambda parameter in model
 
@@ -2594,10 +2628,11 @@ def estimateVp(
                         n_c=n_c,
                         method=method,
                         bfgs_options=bfgs_options,
+                        keep_drop=keep_drop,
                     )
                 except:  # noqa: E722
                     warnings.warn(
-                        f"Unable to compute REML score for sample {np.exp(ps)}. Skipping."
+                        f"Unable to compute REML score for sample {ps}. Skipping."
                     )
                     continue
 
@@ -3039,7 +3074,8 @@ def compute_Vb_corr_WPS(
     penalties: list[LambdaTerm],
     coef: np.ndarray,
     scale: float = 1,
-) -> tuple[np.ndarray, np.ndarray]:
+    drop: np.typing.NDArray[np.int_] | None = None,
+) -> tuple[np.ndarray, np.ndarray | float]:
     """Computes both correction terms for ``Vb`` or :math:`\\mathbf{V}_{\\boldsymbol{\\beta}}`,
     which is the co-variance matrix for the conditional posterior of :math:`\\boldsymbol{\\beta}`
     so that :math:`\\boldsymbol{\\beta} | y, \\boldsymbol{\\lambda} \
@@ -3075,11 +3111,16 @@ def compute_Vb_corr_WPS(
     :param scale: Any scale parameter estimated as part of the model. Can be omitted for more
         generic models beyond GAMMs. Defaults to 1.
     :type scale: float
+    :param drop: Optional array of indices corresponding to unidentifiable coefficients.
+        Coefficients in this list (i.e., not identifiable) are dropped from the negative hessian of
+        the penalized log-likelihood. Can also be set to ``None`` (default) in which case all
+        coefficients are treated as identifiable.
     :raises ArithmeticError: Will throw an error when the negative Hessian of the penalized
         likelihood is ill-scaled so that a Cholesky decomposition fails.
     :return: A tuple containing: ``Vc`` and ``Vcc``. ``Vbr.T@Vbr*scale`` + ``Vc`` + ``Vcc`` is
-        then approximately the correction devised by WPS (2016).
-    :rtype: tuple[np.ndarray, np.ndarray]
+        then approximately the correction devised by WPS (2016). ``Vcc`` can simply be zero if
+        the negative penalized Hessian is not positive definite when coefficients have been dropped
+    :rtype: tuple[np.ndarray, np.ndarray | float]
     """
 
     # Get (unscaled) negative Hessian of the penalized likelihood.
@@ -3092,22 +3133,24 @@ def compute_Vb_corr_WPS(
     P = scp.sparse.diags(Sdiag, format="csc")
     LP, code = cpp_chol(PI @ nH @ PI)
     R = (P @ LP).T.toarray()
-    # R.sort_indices()
-
-    if code != 0:
-        raise ArithmeticError(
-            "Failed to compute Cholesky of negative Hessian of penalized likelihood."
-        )
-
     # print((R.T@R - nH).max())
 
     # Get partial derivatives of beta with respect to \rho, the log smoothing penalties
     dBetadRhos = np.zeros((len(coef), len(penalties)))
 
     # Vbr.T@Vbr = nH^{-1} - Vbr is in principle available in model.lvi or model.lvi after fitting,
-    # but we need Rinv anyway..
-    Rinv = scp.linalg.solve_triangular(R, np.identity(nH.shape[1]))
-    V = Rinv @ Rinv.T
+    # but we need Rinv anyway so we can form it from Rinv. The exception is if we have
+    # parameters dropped. Then we need to use Vbr which is padded with zeroes!
+    if drop is not None:
+        V = Vbr.T @ Vbr * scale
+
+        # Still need Rinv - if negative penalized hessian is sufficiently conditioned.
+        if code == 0:
+            Rinv = scp.linalg.solve_triangular(R, np.identity(nH.shape[1]))
+
+    else:
+        Rinv = scp.linalg.solve_triangular(R, np.identity(nH.shape[1]))
+        V = Rinv @ Rinv.T
 
     for peni, pen in enumerate(penalties):
         # Given in Wood (2017)
@@ -3120,6 +3163,11 @@ def compute_Vb_corr_WPS(
     # Can now compute first correction term
     Vcr = Vr @ dBetadRhos.T
     Vc = Vcr.T @ Vcr
+
+    # If penalized hessian is not invertible we have to return here, for example in case of
+    # dropped coef.
+    if code != 0:
+        return Vc, 0.0
 
     # Now second correction term. First need partial derivatives of elements in R^{-1} with
     # respect to each \rho Supplementary materials D in WPS (2016) show how to obtain those from
@@ -3505,6 +3553,17 @@ def correct_VB(
             y = ys
             Xs = model.get_mmat(drop_NA=drop_NA)
 
+        keep_drop = None
+        if model.info.dropped is not None:
+            keep = np.array(
+                [
+                    cidx
+                    for cidx in range(model.hessian.shape[1])
+                    if cidx not in model.info.dropped
+                ]
+            )
+            keep_drop = (keep, model.info.dropped)
+
         X = Xs[0]
         orig_scale = 1
         init_coef = copy.deepcopy(model.coef)
@@ -3542,6 +3601,7 @@ def correct_VB(
                         model.overall_penalties,
                         model.coef,
                         scale=orig_scale,
+                        drop=model.info.dropped,
                     )
                 else:
                     Vc, Vcc = compute_Vb_corr_WPS(
@@ -3552,6 +3612,7 @@ def correct_VB(
                         S_emb,
                         model.overall_penalties,
                         model.coef,
+                        drop=model.info.dropped,
                     )
             else:
                 # Only compute first correction term
@@ -3598,6 +3659,7 @@ def correct_VB(
                 random_state=seed,
             )
             p_sample = np.exp(p_sample)
+            p_sample[np.isinf(p_sample)] = b
 
             if len(np.ndarray.flatten(ep)) == 1:  # Single lambda parameter in model
 
@@ -3788,6 +3850,7 @@ def correct_VB(
                         repeat(1),
                         repeat(bfgs_options),
                         repeat(origNH),
+                        repeat(keep_drop),
                     )
                     with mp.Pool(processes=n_c) as pool:
                         (
@@ -3820,6 +3883,7 @@ def correct_VB(
                 random_state=seed,
             )
             p_sample = np.exp(p_sample)
+            p_sample[np.isinf(p_sample)] = b
 
             if len(np.ndarray.flatten(ep)) == 1:  # Single lambda parameter in model
 
@@ -3887,10 +3951,11 @@ def correct_VB(
                             n_c=n_c,
                             method=method,
                             bfgs_options=bfgs_options,
+                            keep_drop=keep_drop,
                         )
                     except:  # noqa: E722
                         warnings.warn(
-                            f"Unable to compute REML score for sample {np.exp(ps)}. Skipping."
+                            f"Unable to compute REML score for sample {ps}. Skipping."
                         )
                         continue
 
@@ -4198,9 +4263,53 @@ def correct_VB(
     # Check V is full rank - can use LV for sampling as well..
     LV, code = cpp_chol(scp.sparse.csc_array(V))
     if code != 0:
-        raise ValueError(
-            "Failed to estimate marginal covariance matrix for ecoefficients."
-        )
+
+        # Check first whether Cholesky can be formed for set of identifiable coefficients.
+        code2 = 1
+        if model.info.dropped is not None:
+
+            keep = np.array(
+                [
+                    cidx
+                    for cidx in range(model.hessian.shape[1])
+                    if cidx not in model.info.dropped
+                ]
+            )
+
+            Vdrop = V[keep, :]
+            Vdrop = Vdrop[:, keep]
+
+            LVdrop, code2 = cpp_chol(scp.sparse.csc_array(Vdrop))
+
+            if code2 == 0:
+
+                warnings.warn(
+                    (
+                        "Marginal covariance matrix is not of full rank. "
+                        "Possibly because coefficients were dropped. "
+                        "Returned Cholesky ``LV`` was computed based on set of coefficients "
+                        "deemed identifiable during estimation."
+                    )
+                )
+
+                LVdat, LVrow, LVcol = translate_sparse(LVdrop)
+                LVrow = keep[LVrow]
+                LVcol = keep[LVcol]
+
+                LV = scp.sparse.csc_array(
+                    (LVdat, (LVrow, LVcol)), shape=model.hessian.shape
+                )
+
+        # V is definitely not PD..
+        if code2 != 0:
+
+            warnings.warn(
+                (
+                    "Marginal covariance matrix is not of full rank. "
+                    "Possibly because coefficients were dropped. "
+                    "Returned Cholesky ``LV`` was set to identity and is invalid!"
+                )
+            )
 
     # Compute corrected edf (e.g., for AIC; Wood, Pya, & Saefken, 2016)
     F = V @ (nH)
