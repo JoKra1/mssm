@@ -216,7 +216,12 @@ def compare_CDL(
         numerically evaluate the expectations necessary for the uncertainty correction,
         defaults to 250
     :type nR: int, optional
-    :param n_c: Number of cores to use during parallel parts of the correction, defaults to 1
+    :param n_c: Number of cores to use during parallel parts of the correction. **Note**, if you
+        want to use more than one core for more generic models it will most likely be necessary
+        to install ``mssm`` with the extra ``mp`` dependency set. This installs the ``multiprocess``
+        package, which is necessary since most general models implement at least one local function
+        that cannot be serialized by the standard ``multiprocessing`` library. To install the
+        extra dependency set simply run ``pip install -U mssm[mp]``, defaults to 1
     :type n_c: int, optional
     :param alpha: alpha level of the GLRT. Defaults to 0.05
     :type alpha: float, optional

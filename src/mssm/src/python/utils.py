@@ -32,7 +32,12 @@ from ..python.gamm_solvers import (
     map_csc_to_eigen,
 )
 from ..python.terms import fs, rs
-from .file_loading import mp
+
+try:
+    import multiprocess as mp
+except ImportError:
+    from .file_loading import mp
+
 from .repara import reparam
 from ..python.exp_fam import Family, Gaussian, Identity, GAMLSSFamily, GSMMFamily
 from ..python.formula import Formula, LambdaTerm
@@ -2125,7 +2130,12 @@ def estimateVp(
         set of candidates. Setting this to ``np.inf`` means a multivariate normal is used for
         sampling, defaults to 40
     :type df: int, optional
-    :param n_c: Number of cores to use during parallel parts of the correction, defaults to 10
+    :param n_c: Number of cores to use during parallel parts of the correction. **Note**, if you
+        want to use more than one core for more generic models it will most likely be necessary
+        to install ``mssm`` with the extra ``mp`` dependency set. This installs the ``multiprocess``
+        package, which is necessary since most general models implement at least one local function
+        that cannot be serialized by the standard ``multiprocessing`` library. To install the
+        extra dependency set simply run ``pip install -U mssm[mp]``, defaults to 10
     :type n_c: int, optional
     :param drop_NA: Whether to drop rows in the **model matrices** corresponding to NAs in the
         dependent variable vector. Defaults to True.
@@ -3396,7 +3406,12 @@ def correct_VB(
         set of candidates. Setting this to ``np.inf`` means a multivariate normal is used for
         sampling, defaults to 40
     :type df: int, optional
-    :param n_c: Number of cores to use during parallel parts of the correction, defaults to 10
+    :param n_c: Number of cores to use during parallel parts of the correction. **Note**, if you
+        want to use more than one core for more generic models it will most likely be necessary
+        to install ``mssm`` with the extra ``mp`` dependency set. This installs the ``multiprocess``
+        package, which is necessary since most general models implement at least one local function
+        that cannot be serialized by the standard ``multiprocessing`` library. To install the
+        extra dependency set simply run ``pip install -U mssm[mp]``, defaults to 10
     :type n_c: int, optional
     :param form_t1: Whether or not the smoothness uncertainty + smoothness bias corrected edf should
         be computed, defaults to False
