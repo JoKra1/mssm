@@ -592,7 +592,7 @@ class Test_drop:
         method="LU/Chol",
         compute_Vcc=False,
         recompute_H=True,
-        nc=1,
+        n_c=1,
         seed=20,
         VP_grid_type="JJJ2",
         only_expected_edf=False,
@@ -603,7 +603,7 @@ class Test_drop:
     Vp2, _, _, _, _, _ = estimateVp(
         model,
         grid_type="JJJ2",
-        nc=1,
+        n_c=1,
         seed=20,
         method="LU/Chol",
         prior=None,

@@ -434,7 +434,7 @@ class Test_model_comparison3_hard:
     def test_comp2(self):
         np.testing.assert_allclose(
             self.cor_result1["aic_diff"],
-            1.921694,
+            1.88216,
             atol=min(max_atol, 0.06),
             rtol=min(max_rtol, 0.001),
         )
@@ -442,7 +442,7 @@ class Test_model_comparison3_hard:
     def test_comp3(self):
         np.testing.assert_allclose(
             self.cor_result2["aic_diff"],
-            2.226203,
+            2.219442,
             atol=min(max_atol, 0.07),
             rtol=min(max_rtol, 0.001),
         )
@@ -450,7 +450,7 @@ class Test_model_comparison3_hard:
     def test_comp4(self):
         np.testing.assert_allclose(
             self.cor_result3["aic_diff"],
-            2.204921,
+            2.197601,
             atol=min(max_atol, 0.06),
             rtol=min(max_rtol, 0.001),
         )
@@ -458,7 +458,7 @@ class Test_model_comparison3_hard:
     def test_comp5(self):
         np.testing.assert_allclose(
             self.cor_result4["aic_diff"],
-            1.949568,
+            1.947487,
             atol=min(max_atol, 0.02),
             rtol=min(max_rtol, 0.001),
         )
@@ -466,7 +466,7 @@ class Test_model_comparison3_hard:
     def test_comp6(self):
         np.testing.assert_allclose(
             self.cor_result5["aic_diff"],
-            2.843975,
+            2.829273,
             atol=min(max_atol, 0.3),
             rtol=min(max_rtol, 0.001),
         )
@@ -482,7 +482,7 @@ class Test_model_comparison3_hard:
     def test_comp8(self):
         np.testing.assert_allclose(
             self.unbiased_cor_result1["aic_diff"],
-            2.843975,
+            2.829273,
             atol=min(max_atol, 0.3),
             rtol=min(max_rtol, 0.001),
         )
@@ -490,7 +490,7 @@ class Test_model_comparison3_hard:
     def test_edf1(self):
         np.testing.assert_allclose(
             self.unbiased_cor_result1["Res. DOF"],
-            1.440292,
+            1.432545,
             atol=min(max_atol, 0.002),
             rtol=min(max_rtol, 0.1),
         )

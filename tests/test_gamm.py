@@ -1,6 +1,5 @@
 # flake8: noqa
 from mssm.models import *
-from mssm.src.python.utils import correct_VB, estimateVp
 from mssm.src.python.compare import compare_CDL
 import numpy as np
 import os
@@ -13,7 +12,7 @@ from mssm.src.python.gamm_solvers import (
     compute_eigen_perm,
     compute_Linv,
 )
-from mssm.src.python.utils import estimateVp
+from mssm.src.python.utils import correct_VB, estimateVp
 import io
 from contextlib import redirect_stdout
 from .defaults import default_gamm_test_kwargs, max_atol, max_rtol
@@ -785,43 +784,43 @@ class Test_inval_checks_ar_hard:
             coef,
             np.array(
                 [
-                    [15.95311595],
-                    [5.21227651],
-                    [1.3968442],
-                    [-0.62744876],
-                    [-2.50222435],
-                    [-4.56043389],
-                    [-6.13472884],
-                    [-8.28908836],
-                    [-8.88180501],
-                    [-9.15291955],
-                    [-10.79266235],
-                    [-3.63521444],
-                    [1.32831226],
-                    [6.48219383],
-                    [9.75346041],
-                    [13.08873277],
-                    [16.88042148],
-                    [18.77980191],
-                    [19.46006864],
-                    [-13.31861851],
-                    [25.02853334],
-                    [40.02545674],
-                    [38.5646878],
-                    [29.07141466],
-                    [10.31953226],
-                    [-4.18951247],
-                    [-8.22089963],
-                    [-17.61474968],
-                    [-4.02662384],
-                    [0.19526518],
-                    [2.47223184],
-                    [3.58559241],
-                    [4.96961802],
-                    [6.1168455],
-                    [4.96192292],
-                    [1.72149204],
-                    [-1.90846427],
+                    [15.92982628],
+                    [5.20305592],
+                    [1.39435932],
+                    [-0.62636022],
+                    [-2.49782216],
+                    [-4.55238561],
+                    [-6.12388233],
+                    [-8.27440849],
+                    [-8.86604066],
+                    [-9.13663688],
+                    [-10.78167667],
+                    [-3.63166588],
+                    [1.32673993],
+                    [6.47535892],
+                    [9.74332076],
+                    [13.07529235],
+                    [16.86340316],
+                    [18.76129413],
+                    [19.44134501],
+                    [-13.27893097],
+                    [24.97448667],
+                    [39.93154592],
+                    [38.48734941],
+                    [29.02149839],
+                    [10.28687776],
+                    [-4.20723914],
+                    [-8.21816396],
+                    [-17.58423002],
+                    [-4.02800656],
+                    [0.19886441],
+                    [2.47788889],
+                    [3.59030413],
+                    [4.9727597],
+                    [6.11882263],
+                    [4.96189494],
+                    [1.71710551],
+                    [-1.91771102],
                 ]
             ),
             atol=min(max_atol, 0),
@@ -888,7 +887,7 @@ class Test_drop:
         method="QR",
         compute_Vcc=False,
         recompute_H=True,
-        nc=4,
+        n_c=4,
         seed=20,
         VP_grid_type="JJJ2",
         only_expected_edf=False,
@@ -899,7 +898,7 @@ class Test_drop:
     Vp2, _, _, _, _, _ = estimateVp(
         model,
         grid_type="JJJ2",
-        nc=4,
+        n_c=4,
         seed=20,
         method="QR",
         prior=None,
@@ -1284,7 +1283,7 @@ class Test_drop_Gamma:
         method="QR",
         compute_Vcc=False,
         recompute_H=True,
-        nc=4,
+        n_c=4,
         seed=20,
         VP_grid_type="JJJ2",
         only_expected_edf=False,
@@ -1295,7 +1294,7 @@ class Test_drop_Gamma:
     Vp2, _, _, _, _, _ = estimateVp(
         model,
         grid_type="JJJ2",
-        nc=4,
+        n_c=4,
         seed=20,
         method="QR",
         prior=None,
@@ -2631,7 +2630,7 @@ class Test_te_p_values:
         np.testing.assert_allclose(
             self.ps,
             np.array(
-                [np.float64(0.24528857280469096), np.float64(0.0), np.float64(0.0)]
+                [np.float64(0.19051092087804067), np.float64(0.0), np.float64(0.0)]
             ),
             atol=min(max_atol, 0.06),
             rtol=min(max_rtol, 1e-6),

@@ -2698,14 +2698,14 @@ class PropHaz(GSMMFamily):
             mi = di + np.log(Si[0])
 
             if resid_type == "Martingale":
-                res[idx] = mi
+                res[idx] = mi[0]
             else:
                 # Deviance requires a bit more work
                 Di = np.sign(mi) * np.power(
                     -2 * (mi + di * np.log(-min(np.log(Si[0]), -np.finfo(float).eps))),
                     0.5,
                 )
-                res[idx] = Di
+                res[idx] = Di[0]
 
         # Return to order of original dataframe
         if reorder is not None:
