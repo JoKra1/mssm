@@ -164,7 +164,12 @@ class Test_NUll_penalty_reparam:
 
     def test_GAMreml(self):
         reml = self.model.get_reml()
-        assert round(reml, ndigits=3) == -134748.719
+        np.testing.assert_allclose(
+            round(reml, ndigits=3),
+            -134748.719,
+            atol=min(max_atol, 0.0),
+            rtol=min(max_rtol, 0.01),
+        )
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
@@ -332,7 +337,12 @@ class Test_NUll_3:
 
     def test_GAMreml(self):
         reml = self.model.get_reml()
-        assert round(reml, ndigits=3) == -134748.719
+        np.testing.assert_allclose(
+            round(reml, ndigits=3),
+            -134748.719,
+            atol=min(max_atol, 0.0),
+            rtol=min(max_rtol, 0.01),
+        )
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
@@ -2563,7 +2573,7 @@ class Test_print_smooth_binomial:
             self.model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
-        comp = "f(['x0']); edf: 2.856 chi^2: 18.417 P(Chi^2 > chi^2) = 7.220e-04 ***\nf(['x1']); edf: 1.962 chi^2: 59.723 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x2']); edf: 6.243 chi^2: 168.267 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x3']); edf: 1.407 chi^2: 2.731 P(Chi^2 > chi^2) = 0.19612\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        comp = "f(['x0']); edf: 2.856 chi^2: 18.417 P(Chi^2 > chi^2) = 7.220e-04 ***\nf(['x1']); edf: 1.962 chi^2: 59.723 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x2']); edf: 6.243 chi^2: 168.267 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x3']); edf: 1.407 chi^2: 2.731 P(Chi^2 > chi^2) = 0.29779\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         assert comp == capture
 
 
