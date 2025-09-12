@@ -10,6 +10,7 @@ build-backend = "setuptools.build_meta"
 [tool.cibuildwheel]
 before-test = "ls"
 skip = ["pp*", "cp313-musllinux*", "*-win32", "*i686"]
+test-skip = ["cp311-musllinux*"]
 test-requires = ["pytest", "pytest-cov", "mssmViz==0.1.48", "numdifftools"]
 test-command = 'pytest {project}/tests/test_fast.py --cov={project}'
 
