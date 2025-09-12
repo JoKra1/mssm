@@ -1319,7 +1319,7 @@ def update_coef_and_scale(
     :return: A tuple containing the linear predictor ``eta``, the estimated means ``mu``, the
         estimated coefficients, the unpivoted cholesky of the penalized negative hessian,
         the inverse of the former (optional), derivative of :math:`log(|\\mathbf{S}_\\lambda|_+)`
-        with respect to lambdas, cCoef.T@emb_SJ@cCoef for each SJ, total edf, termwise edf, 
+        with respect to lambdas, cCoef.T@emb_SJ@cCoef for each SJ, total edf, termwise edf,
         a list of the aforementioned sum of the elements of the aforementioned B matrices raised to
         the power of 2, scale estimate, working residuals, an optional array of the coefficients to
         keep, an optional array of the estimated coefficients to drop
