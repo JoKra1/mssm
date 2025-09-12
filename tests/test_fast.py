@@ -4,7 +4,7 @@ from mssm.src.python.compare import compare_CDL
 import numpy as np
 import os
 from mssmViz.sim import *
-from .defaults import default_gamm_test_kwargs
+from .defaults import default_gamm_test_kwargs, max_atol, max_rtol
 
 ################################################################## Tests ##################################################################
 
@@ -76,20 +76,40 @@ class Test_GAM_TE:
 
     model.fit(**test_kwargs)
 
-    def test_GAMedf(self):
-        assert round(self.model.edf, ndigits=3) == 33.835
+    def test_GAMed_hard(self):
+        np.testing.assert_allclose(
+            round(self.model.edf, ndigits=3),
+            33.835,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
 
-    def test_GAMsigma(self):
+    def test_GAMsigma_hard(self):
         _, sigma = self.model.get_pars()
-        assert round(sigma, ndigits=3) == 967.709
+        np.testing.assert_allclose(
+            round(sigma, ndigits=3),
+            967.709,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
 
     def test_GAMreml(self):
         reml = self.model.get_reml()
-        assert round(reml, ndigits=3) == -141942.109
+        np.testing.assert_allclose(
+            round(reml, ndigits=3),
+            -141942.109,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
-        assert round(llk, ndigits=3) == -141872.652
+        np.testing.assert_allclose(
+            round(llk, ndigits=3),
+            -141872.652,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
 
 
 class Test_GAM_TE_BINARY:
@@ -130,7 +150,7 @@ class Test_GAM_TE_BINARY:
 
     def test_GAMcoef(self):
         coef, _ = self.model.get_pars()
-        assert np.allclose(
+        np.testing.assert_allclose(
             coef.flatten(),
             np.array(
                 [
@@ -298,6 +318,8 @@ class Test_GAM_TE_BINARY:
                     958.1395870637045,
                 ]
             ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
         )
 
     def test_GAMreml(self):

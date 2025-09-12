@@ -1,6 +1,7 @@
 # flake8: noqa
 import mssm
 from mssm.models import *
+from mssm.src.python.utils import correct_VB, estimateVp
 import numpy as np
 import os
 import io
@@ -270,6 +271,8 @@ class Test_PropHaz_hard:
         warnings.simplefilter("ignore")
         gsmm_newton.fit(**test_kwargs)
 
+    resid = gsmm_newton.get_resid(resid_type="Martingale")
+
     gsmm_qefs_fam = PropHaz(ut, r)
     gsmm_qefs = GSMM([copy.deepcopy(sim_formula_m)], gsmm_qefs_fam)
 
@@ -298,6 +301,9 @@ class Test_PropHaz_hard:
         test_kwargs["bfgs_options"] = bfgs_opt
 
         gsmm_qefs.fit(**test_kwargs)
+
+    def resid_test(self):
+        assert self.resid.shape == (500, 1)
 
     def test_GAMcoef(self):
 
@@ -564,10 +570,96 @@ class Test_drop:
     test_kwargs["method"] = "LU/Chol"
     model.fit(**test_kwargs)
 
+    # More extensive selection + posterior sim checks
+    res = correct_VB(
+        model,
+        grid_type="JJJ1",
+        method="LU/Chol",
+        compute_Vcc=False,
+        form_t1=False,
+        n_c=1,
+        recompute_H=False,
+        only_expected_edf=False,
+        prior=None,
+        Vp_fidiff=False,
+    )
+
+    compute_bias_corrected_edf(model)
+
+    res2 = correct_VB(
+        model,
+        grid_type="JJJ3",
+        method="LU/Chol",
+        compute_Vcc=False,
+        recompute_H=True,
+        nc=1,
+        seed=20,
+        VP_grid_type="JJJ2",
+        only_expected_edf=False,
+        prior=None,
+        Vp_fidiff=False,
+    )
+
+    Vp2, _, _, _, _, _ = estimateVp(
+        model,
+        grid_type="JJJ2",
+        nc=1,
+        seed=20,
+        method="LU/Chol",
+        prior=None,
+        Vp_fidiff=False,
+    )
+
+    # Set up some new data for prediction
+    pred_dat = pd.DataFrame(
+        {
+            "x0": np.linspace(0, 1, 30),
+            "x4": ["f_12" for _ in range(30)],
+            "x5": ["l5.1" for _ in range(30)],
+            "x6": ["l6.1" for _ in range(30)],
+        }
+    )
+
+    _, pred_mat, _ = model.predict([3], pred_dat, par=0)
+
+    # `use_post` identifies only coefficients related to f(x0):x5 in the model
+    use_post = pred_mat.sum(axis=0) != 0
+    use_post = np.arange(0, pred_mat.shape[1])[use_post]
+    use_post
+
+    post = model.sample_post(10, use_post, seed=2000, par=0)
+
+    post2 = sample_MVN(
+        10,
+        model.coef.flatten(),
+        model.scale,
+        P=None,
+        L=None,
+        LI=res2[1].T,
+        use=use_post,
+        seed=2000,
+    )
+
     def test_GAMedf_hard(self):
         np.testing.assert_allclose(
             self.model.edf,
-            108.54783796715027,
+            107.54783796715027,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.03),
+        )
+
+    def test_GAMedf1_hard(self):
+        np.testing.assert_allclose(
+            self.res[-3],
+            self.model.edf1,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.03),
+        )
+
+    def test_GAMedf2_hard(self):
+        np.testing.assert_allclose(
+            self.res2[5],
+            107.96499018523079,
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.03),
         )
@@ -604,6 +696,227 @@ class Test_drop:
 
     def test_drop(self):
         assert len(self.model.info.dropped) == 1
+
+    def test_VP(self):
+        np.testing.assert_allclose(
+            self.res2[2], self.Vp2, atol=min(max_atol, 0), rtol=min(max_rtol, 1e-7)
+        )
+
+    def test_post(self):
+        np.testing.assert_allclose(
+            self.post,
+            np.array(
+                [
+                    [
+                        -0.4560724,
+                        -0.82602553,
+                        -0.26366509,
+                        -0.79786615,
+                        -0.44232674,
+                        -0.67485869,
+                        -0.57739543,
+                        -0.27754304,
+                        -0.62234539,
+                        -0.55592201,
+                    ],
+                    [
+                        0.89476297,
+                        -0.18902322,
+                        1.10211202,
+                        -0.17050216,
+                        0.18796238,
+                        0.2116602,
+                        0.26453479,
+                        1.02570765,
+                        -0.00924147,
+                        0.38500421,
+                    ],
+                    [
+                        1.51541037,
+                        0.32782496,
+                        1.42617662,
+                        0.78165293,
+                        0.51264206,
+                        0.813669,
+                        1.11409757,
+                        1.27888749,
+                        0.85963984,
+                        1.10545554,
+                    ],
+                    [
+                        1.77082129,
+                        0.93602721,
+                        1.75345879,
+                        1.21871887,
+                        1.2051166,
+                        1.16784506,
+                        1.37225383,
+                        1.77805868,
+                        1.27077078,
+                        1.18965051,
+                    ],
+                    [
+                        1.61898958,
+                        1.11364274,
+                        1.44364738,
+                        0.9361292,
+                        1.34435804,
+                        1.05360936,
+                        1.24873014,
+                        1.75792905,
+                        1.19790056,
+                        1.14207836,
+                    ],
+                    [
+                        1.28617459,
+                        1.00387152,
+                        0.91909753,
+                        1.00041709,
+                        0.83567829,
+                        0.61076833,
+                        0.87099997,
+                        0.90827492,
+                        1.04933694,
+                        0.75481523,
+                    ],
+                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [
+                        -1.39611824,
+                        -1.39641603,
+                        -1.67593239,
+                        -0.45435125,
+                        -1.30565055,
+                        -1.14315217,
+                        -1.16531328,
+                        -1.75208037,
+                        -0.91144856,
+                        -1.20208605,
+                    ],
+                    [
+                        -1.99219371,
+                        -2.59138925,
+                        -4.06696788,
+                        -1.01156424,
+                        -2.87855823,
+                        -2.04325337,
+                        -1.86322556,
+                        -3.32331569,
+                        -2.06247119,
+                        -2.41667238,
+                    ],
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
+        )
+
+    def test_post2(self):
+        np.testing.assert_allclose(
+            self.post2,
+            np.array(
+                [
+                    [
+                        -0.52690577,
+                        -0.4715939,
+                        -0.36183996,
+                        -0.32414943,
+                        -0.91275036,
+                        -1.20464412,
+                        -0.53649153,
+                        -0.53424599,
+                        -0.17486563,
+                        -0.64009102,
+                    ],
+                    [
+                        0.13960272,
+                        0.07430689,
+                        1.20721667,
+                        0.51614097,
+                        0.15821339,
+                        0.16708544,
+                        0.15951641,
+                        0.79152901,
+                        1.32990199,
+                        -0.60087287,
+                    ],
+                    [
+                        1.20015992,
+                        0.70737728,
+                        1.64223188,
+                        1.21192978,
+                        0.92281252,
+                        1.04721168,
+                        0.79654251,
+                        1.28795665,
+                        1.68626851,
+                        0.25138685,
+                    ],
+                    [
+                        1.45291242,
+                        1.09950355,
+                        1.49144334,
+                        1.24994881,
+                        1.52977727,
+                        1.30250982,
+                        1.09980782,
+                        1.83160369,
+                        1.59508934,
+                        0.88542369,
+                    ],
+                    [
+                        1.39519879,
+                        1.29707267,
+                        1.89537825,
+                        1.34566072,
+                        1.57058053,
+                        1.34524571,
+                        0.8432895,
+                        1.83913713,
+                        1.96249772,
+                        0.92134167,
+                    ],
+                    [
+                        1.05652733,
+                        1.01682158,
+                        1.16999037,
+                        1.32749258,
+                        0.98511004,
+                        1.25423487,
+                        0.66119846,
+                        1.2613252,
+                        1.25564428,
+                        0.48800746,
+                    ],
+                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [
+                        -1.15632245,
+                        -0.88634856,
+                        -0.77583557,
+                        -1.1710059,
+                        -1.33363731,
+                        -0.35665739,
+                        -1.50772735,
+                        -1.23046941,
+                        -1.03444225,
+                        -0.73559183,
+                    ],
+                    [
+                        -1.89692013,
+                        -1.36920399,
+                        -0.6712459,
+                        -2.38006835,
+                        -2.33193894,
+                        -0.1106398,
+                        -2.86704798,
+                        -1.96512643,
+                        -1.62278425,
+                        -1.73532027,
+                    ],
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
+        )
 
 
 class Test_shared:

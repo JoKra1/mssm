@@ -946,9 +946,9 @@ def calculate_term_edf(
 
 def update_scale_edf(
     y: np.ndarray,
-    z: np.ndarray,
+    z: np.ndarray | None,
     eta: np.ndarray,
-    Wr: scp.sparse.csc_array,
+    Wr: scp.sparse.csc_array | None,
     rowsX: int,
     colsX: int,
     LP: scp.sparse.csc_array | None,
@@ -982,11 +982,11 @@ def update_scale_edf(
     :param y: vector of observations
     :type y: np.ndarray
     :param z: vector of pseudo-data (can contain NaNs for invalid observations)
-    :type z: np.ndarray
+    :type z: np.ndarray | None
     :param eta: vector of linear predictors
     :type eta: np.ndarray
     :param Wr: diagonal sparse matrix holding the **root** of the Fisher weights
-    :type Wr: scp.sparse.csc_array
+    :type Wr: scp.sparse.csc_array | None
     :param rowsX: Rows of model matrix
     :type rowsX: int
     :param colsX: Cols of model matrix
@@ -5480,7 +5480,15 @@ def correct_lambda_step_gamlss(
             bsbs.append(bsb)
 
         total_edf, term_edfs, ldetHSs = calculate_edf(
-            None, None, LV, gamlss_pen_rp, lgdetDs, n_coef, n_c, None, None
+            None,
+            None,
+            LV,
+            gamlss_pen_rp,
+            lgdetDs,
+            n_coef - (len(drop) if drop is not None else 0),
+            n_c,
+            None,
+            None,
         )
         # print([l1-l2 for l1,l2 in zip(lgdetDs,ldetHSs)])
         # print(total_edf)
@@ -7503,7 +7511,15 @@ def correct_lambda_step_gen_smooth(
             bsbs.append(bsb * gamma)
 
         total_edf, term_edfs, ldetHSs = calculate_edf(
-            None, None, LV, smooth_pen_rp, lgdetDs, n_coef, n_c, None, S_emb
+            None,
+            None,
+            LV,
+            smooth_pen_rp,
+            lgdetDs,
+            n_coef - (len(drop) if drop is not None else 0),
+            n_c,
+            None,
+            S_emb,
         )
         fit_info.lambda_updates += 1
 

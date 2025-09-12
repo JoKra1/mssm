@@ -544,7 +544,7 @@ class Test_drop:
     def test_GAMedf_hard(self):
         np.testing.assert_allclose(
             self.model.edf,
-            108.54811953082891,
+            107.54811953082891,
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.03),
         )

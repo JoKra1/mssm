@@ -533,7 +533,7 @@ class Test_Vb_corrections:
     model2 = GAMM(sim_fit_formula2, Gaussian())
     model2.fit(**test_kwargs_model)
 
-    Vp1, _, _, _, _ = estimateVp(model, grid_type="JJJ1", verbose=True, seed=20)
+    Vp1, _, _, _, _, _ = estimateVp(model, grid_type="JJJ1", verbose=True, seed=20)
 
     _, _, Vp2, _, _, total_edf, _, _, _, _ = correct_VB(
         model, grid_type="JJJ1", verbose=True, seed=20, df=2

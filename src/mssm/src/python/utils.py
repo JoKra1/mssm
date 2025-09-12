@@ -2053,7 +2053,7 @@ def estimateVp(
     prior: Callable | None = None,
     seed: int | None = None,
     **bfgs_options,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Estimate covariance matrix :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` of posterior for
     :math:`\\boldsymbol{\\rho} = log(\\boldsymbol{\\lambda})`.
 
@@ -2088,12 +2088,12 @@ def estimateVp(
         # ep will be an estimate of the mean of the marginal posterior of log regularization
         # parameters (for ``grid_type="JJJ1"`` this will simply be the log of the estimated
         # regularization parameters)
-        Vp, Vpr, Ri, Rir, ep = estimateVp(model,grid_type="JJJ1",verbose=True,seed=20)
+        Vp, Vpr, Ri, Rir, ep, _ = estimateVp(model,grid_type="JJJ1",verbose=True,seed=20)
 
 
         # Compute MC estimate for generic model and given prior
         prior = DummyRhoPrior(b=np.log(1e12)) # Set up uniform prior
-        Vp_MC, Vpr_MC, Ri_MC, Rir_MC, ep_MC = estimateVp(model,
+        Vp_MC, Vpr_MC, Ri_MC, Rir_MC, ep_MC, _ = estimateVp(model,
             strategy="JJJ2",verbose=True,seed=20,use_importance_weights=True,prior=prior)
 
 
@@ -2177,11 +2177,13 @@ def estimateVp(
         to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100.
         Defaults to None.
     :type bfgs_options: key=value,optional
-    :return: A tuple with 5 elements: an estimate of the covariance matrix of the posterior for
+    :return: A tuple with 6 elements: an estimate of the covariance matrix of the posterior for
         :math:`\\boldsymbol{\\rho} = log(\\boldsymbol{\\lambda})`, a regularized version of the
-        former, a root of the covariance matrix, a root of the regularized covariance matrix, and
-        an estimate of the mean of the posterior
-    :rtype: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+        former, a root of the covariance matrix, a root of the regularized covariance matrix, an
+        estimate of the mean of the posterior, and a np.array of shape ((len(coef),len(penalties)))
+        containing in each row the partial derivative of the coefficients with respect to an
+        individual lambda parameter
+    :rtype: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
     """
     # np_gen = np.random.default_rng(seed)
 
@@ -2355,10 +2357,21 @@ def estimateVp(
             Rir = np.diag(ire2) @ U.T  # Root of regularized Vp
 
             Vpr = Rir.T @ Rir
+
+            # Get dBetadRhos still
+            _, _, _, _, _, dBetadRhos = compute_Vp_WPS(
+                model.lvi,
+                model.hessian,
+                S_emb,
+                model.overall_penalties,
+                model.coef,
+                scale=orig_scale if isinstance(family, Family) else 1,
+            )
+
             # print(eig,1/eig)
         else:
             # Take PQL approximation instead
-            Vp, Vpr, Ri, Rir, _, _ = compute_Vp_WPS(
+            Vp, Vpr, Ri, Rir, _, dBetadRhos = compute_Vp_WPS(
                 model.lvi,
                 model.hessian,
                 S_emb,
@@ -2368,7 +2381,7 @@ def estimateVp(
             )
 
         if grid_type == "JJJ1":
-            return Vp, Vpr, Ri, Rir, ep
+            return Vp, Vpr, Ri, Rir, ep, dBetadRhos
 
     # Strategies JJJ2
     rGrid = np.array([])
@@ -2419,8 +2432,10 @@ def estimateVp(
                 (np.array([pen2.lam for pen2 in rPen]).reshape(1, -1), p_sample), axis=0
             )
 
-        if isinstance(family, Gaussian) and isinstance(
-            family.link, Identity
+        if (
+            isinstance(family, Gaussian)
+            and isinstance(family.link, Identity)
+            and method == "Chol"
         ):  # Strictly additive case
             with (
                 managers.SharedMemoryManager() as manager,
@@ -2704,7 +2719,7 @@ def estimateVp(
 
     Vpr = Rir.T @ Rir
 
-    return Vp, Vpr, Ri, Rir, ep
+    return Vp, Vpr, Ri, Rir, ep, dBetadRhos
 
 
 def updateVp(ep: np.ndarray, ws: np.ndarray, rGrid: np.ndarray) -> np.ndarray:
@@ -3037,7 +3052,8 @@ def compute_Vp_WPS(
                 )
 
             # Collect result
-            Vpij = t1 - t2 + t3 + t4 - t5
+            Vpij = (t1 - t2 + t3 + t4 - t5)[0, 0]
+
             Vp[peni, penj] = Vpij
 
             if peni != penj:
@@ -3277,6 +3293,7 @@ def correct_VB(
     recompute_H: bool = False,
     seed: int | None = None,
     compute_Vcc: bool = True,
+    VP_grid_type: str = "JJJ1",
     **bfgs_options,
 ) -> tuple[
     scp.sparse.csc_array | None,
@@ -3465,6 +3482,10 @@ def correct_VB(
     :type compute_Vcc: bool, optional
     :param seed: Seed to use for random parts of the correction. Defaults to None
     :type seed: int|None,optional
+    :param VP_grid_type: **Experimental**. Optional parameter allowing control over the estimation
+        of the covariance matrix of the :math:`log(\\lambda)` parameters, see the
+        :func:`estimateVp` function for details. Defaults to 'JJJ1'
+    :type grid_type: str, optional
     :param bfgs_options: Any additional keyword arguments that should be passed on to the call of
         :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be
         initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically
@@ -3588,8 +3609,19 @@ def correct_VB(
     if grid_type == "JJJ1" or grid_type == "JJJ2" or grid_type == "JJJ3":
         # Approximate Vp via finitie differencing
         if Vp_fidiff:
-            Vp, Vpr, Vr, Vrr, _ = estimateVp(
+            Vp, Vpr, Vr, Vrr, _, dBetadRhos = estimateVp(
                 model, n_c=n_c, grid_type="JJJ1", Vp_fidiff=True
+            )
+        elif VP_grid_type != "JJJ1":
+            Vp, Vpr, Vr, Vrr, _, dBetadRhos = estimateVp(
+                model,
+                n_c=n_c,
+                grid_type=VP_grid_type,
+                Vp_fidiff=Vp_fidiff,
+                use_importance_weights=use_importance_weights,
+                prior=prior,
+                method=method,
+                seed=seed,
             )
         else:
             # Take PQL approximation instead
@@ -4030,10 +4062,14 @@ def correct_VB(
             if isinstance(family, Family):
                 yb = y
                 Xb = X
+                z = None
+                Wr = None
 
                 S_emb, _, S_root, _ = compute_S_emb_pinv_det(
                     X.shape[1], model.overall_penalties, "svd", method != "Chol"
                 )
+
+                eta = (X @ mean_coef).reshape(-1, 1) + model.offset
 
                 if isinstance(family, Gaussian) and isinstance(
                     family.link, Identity
@@ -4041,7 +4077,7 @@ def correct_VB(
                     nH = (-1 * model.hessian) * orig_scale
 
                 else:  # Generalized case
-                    eta = (X @ mean_coef).reshape(-1, 1) + model.offset
+
                     mu = family.link.fi(eta)
 
                     # Compute pseudo-dat and weights for mean coef
@@ -4067,7 +4103,7 @@ def correct_VB(
                     W = Wr_fix @ Wr_fix
                     nH = (X.T @ W @ X).tocsc()
 
-                    # Solve for coef to get Cholesky needed to re-compute scale
+                # Solve for coef to get Cholesky needed to re-compute scale
                 _, _, _, Pr, _, LP, keep, drop = update_coef(
                     yb, X, Xb, family, S_emb, S_root, n_c, None, model.offset
                 )

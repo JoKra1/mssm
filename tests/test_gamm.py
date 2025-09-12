@@ -1,5 +1,6 @@
 # flake8: noqa
 from mssm.models import *
+from mssm.src.python.utils import correct_VB, estimateVp
 from mssm.src.python.compare import compare_CDL
 import numpy as np
 import os
@@ -855,10 +856,96 @@ class Test_drop:
     model = GAMM(formula, Gaussian())
     model.fit(**test_kwargs)
 
+    # More extensive selection + posterior sim checks
+    res = correct_VB(
+        model,
+        grid_type="JJJ1",
+        method="QR",
+        compute_Vcc=False,
+        form_t1=False,
+        n_c=1,
+        recompute_H=False,
+        only_expected_edf=False,
+        prior=None,
+        Vp_fidiff=False,
+    )
+
+    compute_bias_corrected_edf(model)
+
+    res2 = correct_VB(
+        model,
+        grid_type="JJJ3",
+        method="QR",
+        compute_Vcc=False,
+        recompute_H=True,
+        nc=4,
+        seed=20,
+        VP_grid_type="JJJ2",
+        only_expected_edf=False,
+        prior=None,
+        Vp_fidiff=False,
+    )
+
+    Vp2, _, _, _, _, _ = estimateVp(
+        model,
+        grid_type="JJJ2",
+        nc=4,
+        seed=20,
+        method="QR",
+        prior=None,
+        Vp_fidiff=False,
+    )
+
+    # Set up some new data for prediction
+    pred_dat = pd.DataFrame(
+        {
+            "x0": np.linspace(0, 1, 30),
+            "x4": ["f_12" for _ in range(30)],
+            "x5": ["l5.1" for _ in range(30)],
+            "x6": ["l6.1" for _ in range(30)],
+        }
+    )
+
+    _, pred_mat, _ = model.predict([3], pred_dat, par=0)
+
+    # `use_post` identifies only coefficients related to f(x0):x5 in the model
+    use_post = pred_mat.sum(axis=0) != 0
+    use_post = np.arange(0, pred_mat.shape[1])[use_post]
+    use_post
+
+    post = model.sample_post(10, use_post, seed=2000, par=0)
+
+    post2 = sample_MVN(
+        10,
+        model.coef.flatten(),
+        model.scale,
+        P=None,
+        L=None,
+        LI=res2[1].T,
+        use=use_post,
+        seed=2000,
+    )
+
     def test_GAMedf_hard(self):
         np.testing.assert_allclose(
             self.model.edf,
             105.8437533607087,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.03),
+        )
+
+    def test_GAMedf1_hard(self):
+        np.testing.assert_allclose(
+            self.res[-3],
+            self.model.edf1,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.03),
+        )
+
+    def test_GAMedf2_hard(self):
+        np.testing.assert_allclose(
+            self.res2[5],
+            106.26517126946953,
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.03),
         )
@@ -891,6 +978,347 @@ class Test_drop:
         llk = self.model.get_llk(False)
         np.testing.assert_allclose(
             llk, -10436.834138445849, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
+        )
+
+    def test_drop(self):
+        assert len(self.model.info.dropped) == 1
+
+    def test_VP(self):
+        np.testing.assert_allclose(
+            self.res2[2], self.Vp2, atol=min(max_atol, 0), rtol=min(max_rtol, 1e-7)
+        )
+
+    def test_post(self):
+        np.testing.assert_allclose(
+            self.post,
+            np.array(
+                [
+                    [
+                        -0.20450685,
+                        -0.55404532,
+                        -0.12835239,
+                        -0.88806399,
+                        -0.37087577,
+                        -0.65576607,
+                        -0.27318399,
+                        -0.32180159,
+                        -0.83148069,
+                        -0.323851,
+                    ],
+                    [
+                        0.487708,
+                        0.06778094,
+                        0.72737646,
+                        0.8215387,
+                        0.33416501,
+                        -0.07580399,
+                        -0.11998745,
+                        0.48371935,
+                        0.38062297,
+                        0.2567328,
+                    ],
+                    [
+                        1.0781216,
+                        0.98005613,
+                        1.33541841,
+                        1.33421394,
+                        0.79740396,
+                        0.71500351,
+                        0.25855318,
+                        1.04483406,
+                        0.83310168,
+                        0.90248003,
+                    ],
+                    [
+                        1.52136679,
+                        1.30718454,
+                        1.29826372,
+                        1.79162056,
+                        0.72285125,
+                        1.15073818,
+                        0.95442794,
+                        1.00033799,
+                        1.42767567,
+                        1.28924757,
+                    ],
+                    [
+                        1.41109431,
+                        1.40768748,
+                        1.1946468,
+                        1.7006692,
+                        1.01659908,
+                        1.30628188,
+                        1.04565058,
+                        1.24843891,
+                        1.57539931,
+                        1.00681293,
+                    ],
+                    [
+                        0.73897403,
+                        0.95297849,
+                        0.47191431,
+                        1.17272045,
+                        0.84831068,
+                        0.94722309,
+                        0.46459534,
+                        0.74304449,
+                        1.16898336,
+                        0.65986357,
+                    ],
+                    [
+                        -0.25426606,
+                        0.0373777,
+                        -0.71577945,
+                        0.72021026,
+                        -0.22637632,
+                        0.08852591,
+                        -0.54930259,
+                        -0.49868811,
+                        0.59128045,
+                        -0.17501789,
+                    ],
+                    [
+                        -1.95712733,
+                        -1.35465835,
+                        -1.5800743,
+                        -0.5325116,
+                        -1.1166962,
+                        -0.71055709,
+                        -1.5604723,
+                        -1.62090308,
+                        -0.54938167,
+                        -0.91286259,
+                    ],
+                    [
+                        -3.26823004,
+                        -1.65025385,
+                        -2.40660115,
+                        -1.83902915,
+                        -1.89431058,
+                        -1.39347175,
+                        -2.11934415,
+                        -2.99049516,
+                        -1.91326988,
+                        -1.20348139,
+                    ],
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
+        )
+
+    def test_post2(self):
+        np.testing.assert_allclose(
+            self.post2,
+            np.array(
+                [
+                    [
+                        -0.58969978,
+                        -0.45762495,
+                        -0.20635549,
+                        -0.12487259,
+                        -1.48061495,
+                        -2.1540922,
+                        -0.60922374,
+                        -0.60559179,
+                        0.22067118,
+                        -0.85346274,
+                    ],
+                    [
+                        -0.09031124,
+                        -0.2860078,
+                        1.9473088,
+                        0.47497821,
+                        0.36716251,
+                        0.69964354,
+                        -0.04093981,
+                        1.27210715,
+                        2.00421941,
+                        -1.5045988,
+                    ],
+                    [
+                        1.46537568,
+                        0.42651864,
+                        2.24785898,
+                        1.30389918,
+                        1.34214687,
+                        1.90446929,
+                        0.67923771,
+                        1.70322115,
+                        2.14707242,
+                        -0.34351915,
+                    ],
+                    [
+                        1.66806326,
+                        0.87812887,
+                        1.70652538,
+                        1.07010206,
+                        2.32196418,
+                        2.22874478,
+                        0.97286712,
+                        2.55161443,
+                        1.70783284,
+                        0.55985965,
+                    ],
+                    [
+                        1.55042858,
+                        1.24158042,
+                        2.61123563,
+                        1.23274504,
+                        2.53186977,
+                        2.4561253,
+                        0.40023125,
+                        2.70691273,
+                        2.52755364,
+                        0.5428688,
+                    ],
+                    [
+                        1.2937071,
+                        1.09526394,
+                        1.79506514,
+                        1.71754123,
+                        1.94020383,
+                        3.00385906,
+                        0.24376597,
+                        2.22950797,
+                        1.75249573,
+                        -0.19550299,
+                    ],
+                    [
+                        0.37034317,
+                        0.32443744,
+                        0.53423691,
+                        0.50741044,
+                        0.85755008,
+                        1.72581553,
+                        -0.16159212,
+                        0.94273488,
+                        -0.13667816,
+                        -0.4537871,
+                    ],
+                    [
+                        -0.90706986,
+                        -0.41853814,
+                        0.08967159,
+                        -0.6928048,
+                        -1.10320734,
+                        1.27638547,
+                        -1.98287686,
+                        -0.58505599,
+                        -0.84739371,
+                        -0.88413497,
+                    ],
+                    [
+                        -1.47852923,
+                        -0.49585416,
+                        1.28438915,
+                        -2.10817684,
+                        -2.45878584,
+                        1.90603935,
+                        -3.58932576,
+                        -1.23550867,
+                        -0.71811315,
+                        -1.91406517,
+                    ],
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
+        )
+
+
+class Test_drop_Gamma:
+    sim_dat = sim13(5000, 2, c=0, seed=0, family=Gamma(), binom_offset=0, n_ranef=20)
+
+    formula = Formula(
+        lhs("y"),
+        [
+            i(),
+            l(["x5"]),
+            l(["x6"]),
+            f(["x0"], by="x5"),
+            f(["x0"], by="x6"),
+            fs(["x0"], rf="x4"),
+        ],
+        data=sim_dat,
+    )
+
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_inner"] = 1
+    test_kwargs["control_lambda"] = 2
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["progress_bar"] = True
+    test_kwargs["method"] = "QR"
+    model = GAMM(formula, Gamma())
+    model.fit(**test_kwargs)
+
+    # More extensive selection + posterior sim checks
+    res = correct_VB(
+        model,
+        grid_type="JJJ1",
+        method="QR",
+        compute_Vcc=False,
+        form_t1=False,
+        n_c=1,
+        recompute_H=False,
+        only_expected_edf=False,
+        prior=None,
+        Vp_fidiff=False,
+    )
+
+    compute_bias_corrected_edf(model)
+
+    res2 = correct_VB(
+        model,
+        grid_type="JJJ3",
+        method="QR",
+        compute_Vcc=False,
+        recompute_H=True,
+        nc=4,
+        seed=20,
+        VP_grid_type="JJJ2",
+        only_expected_edf=False,
+        prior=None,
+        Vp_fidiff=False,
+    )
+
+    Vp2, _, _, _, _, _ = estimateVp(
+        model,
+        grid_type="JJJ2",
+        nc=4,
+        seed=20,
+        method="QR",
+        prior=None,
+        Vp_fidiff=False,
+    )
+
+    def test_GAMedf_hard(self):
+        np.testing.assert_allclose(
+            self.model.edf,
+            129.31792469246903,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.03),
+        )
+
+    def test_GAMedf1_hard(self):
+        np.testing.assert_allclose(
+            self.res[-3],
+            self.model.edf1,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.03),
+        )
+
+    def test_GAMedf2_hard(self):
+        np.testing.assert_allclose(
+            self.res2[5],
+            129.63885675109287,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.03),
+        )
+
+    def test_VP(self):
+        np.testing.assert_allclose(
+            self.res2[2], self.Vp2, atol=min(max_atol, 0), rtol=min(max_rtol, 1e-7)
         )
 
     def test_drop(self):
@@ -2155,7 +2583,7 @@ class Test_Vp_estimation_hard:
 
     model.fit(**test_kwargs)
 
-    Vp, _, _, _, _ = estimateVp(model, strategy="JJJ1", Vp_fidiff=True)
+    Vp, _, _, _, _, _ = estimateVp(model, strategy="JJJ1", Vp_fidiff=True)
 
     def test_Vp(self):
         np.testing.assert_allclose(
