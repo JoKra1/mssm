@@ -31,3 +31,6 @@ jobs:
         run: |
           pip install pytest pytest-cov mssmViz==0.1.48 numdifftools
           pytest ./tests/test_segfault.py --cov=mssm --cov-report=xml --cov-report=html
+      - name: Setup tmate session
+        if: ${{ failure() }}
+        uses: mxschmitt/action-tmate@v3
