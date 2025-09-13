@@ -4,7 +4,7 @@ from mssm.models import *
 import copy
 
 max_atol = 100  # 0
-max_rtol = 100  # 0.001
+max_rtol = 100  # 1e-6
 
 default_compare_test_kwargs = {
     "correct_V": True,

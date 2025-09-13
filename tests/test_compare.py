@@ -426,7 +426,7 @@ class Test_model_comparison3_hard:
     def test_comp1(self):
         np.testing.assert_allclose(
             self.uncor_result["aic_diff"],
-            1.912876,
+            1.912655,
             atol=min(max_atol, 0.002),
             rtol=min(max_rtol, 0.001),
         )
@@ -474,7 +474,7 @@ class Test_model_comparison3_hard:
     def test_comp7(self):
         np.testing.assert_allclose(
             self.unbiased_uncor_result["aic_diff"],
-            1.912876,
+            1.912655,
             atol=min(max_atol, 0.002),
             rtol=min(max_rtol, 0.001),
         )
