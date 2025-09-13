@@ -27,6 +27,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install numpy==2.3.3 scipy==1.16.2 pandas==2.3.2
           pip install .
+      - name: Show Files
+        run: |
+          ls
       - name: Test with pytest
         run: |
           pip install pytest pytest-cov mssmViz==0.1.48 numdifftools
