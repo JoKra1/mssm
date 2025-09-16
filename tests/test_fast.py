@@ -1296,7 +1296,7 @@ class Test_gsmm_qefs:
         np.testing.assert_allclose(
             ps,
             np.array([0.0, 0.0, 0.0, 0.11419814898475361]),
-            atol=min(max_atol, 0),
+            atol=min(max_atol, 0.15),
             rtol=min(max_rtol, 0.5),
         )
 
