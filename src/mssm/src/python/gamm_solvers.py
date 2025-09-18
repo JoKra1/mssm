@@ -8113,8 +8113,10 @@ def solve_generalSmooth_sparse(
             else:
                 one_update_counter = 0
 
-            if one_update_counter > 3 and (
-                (outer <= 10) or (restart_counter < max_restarts)
+            if (
+                one_update_counter > 3
+                and ((outer <= 10) or (restart_counter < max_restarts))
+                and max_restarts >= 0
             ):
                 # Prevent getting stuck in local optimum (early on). Shrink coef towards
                 # random vector that still results in valid llk
