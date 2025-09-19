@@ -12,6 +12,7 @@ class PenType(Enum):
     DIFFERENCE = 2
     DISTANCE = 3
     REPARAM1 = 4  # Approximate Demmler & Reinsch (1975) parameterization for univariate smooths;
+    REPARAM2 = 10  # Natural parameterization by Wood (2006) for tensor smooths;
     NULL = 5
     DERIVATIVE = 6
     COEFFICIENTS = 7

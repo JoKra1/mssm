@@ -277,9 +277,13 @@ class f(GammTerm):
         ``ti()`` in mgcv (Wood, 2017). Otherwise, the term behaves like a ``te()`` term in mgcv -
         i.e., the marginal basis functions are not removed from the interaction.
     :type te: bool, optional
-    :param rp: Experimental - will currently break for tensor smooths or in case ``by`` is provided.
-        Whether or not to re-parameterize the term - see :func:`mssm.src.python.formula.reparam` for
-        details. Defaults to no re-parameterization.
+    :param rp: Whether or not to re-parameterize the term. Currently the Demmler & Reinsch
+        parameterization is supported for univariate smooth terms (``rp=1``) and the 'natural'
+        parameterization discussed by Wood (2006) for tensor smooth terms (``rp=2``). **Important**:
+        when relying on the ``qEFS`` update to estimate smoothing penalty parameters, performance
+        drops drastically for tensor smooth terms when **not** relying on the parameterization by
+        Wood (2006). Hence, it is reccomended that you set ``rp=2`` for tensor smooths when relying
+        on this update. Defaults to 0, meaning no re-parameterization.
     :type rp: int, optional
     :param constraint: What kind of identifiability constraints should be absorbed by the terms (if
         they are to be identifiable). Either QR-based constraints (default, well-behaved), by means
@@ -291,6 +295,11 @@ class f(GammTerm):
         (:math:`\\mathbf{X}` here is the spline matrix computed for the observed data; see Wood,
         2017 for details). Necessary in most cases to keep the model identifiable.
     :type identifiable: bool, optional
+    :param scale_te: Whether or not the penalty matrices of marginal smooths should be scaled
+        by their largest eigenvalue. This can improve numerical stability and is thus reccomended
+        when relying on the ``qEFS`` update to estimate smoothing penalty parameters.
+        Set to False by default.
+    :type scale_te: bool, optional
     :param basis: The basis functions to use to construct the spline matrix. By default a B-spline
         basis (Eilers & Marx, 2010) implemented in :func:`mssm.src.smooths.B_spline_basis`.
     :type basis: Callable, optional
@@ -330,6 +339,7 @@ class f(GammTerm):
         rp: int = 0,
         constraint: ConstType = ConstType.QR,
         identifiable: bool = True,
+        scale_te: bool = False,
         basis: Callable = smooths.B_spline_basis,
         basis_kwargs: dict = {},
         is_penalized: bool = True,
@@ -425,6 +435,7 @@ class f(GammTerm):
             self.nk = [nk for _ in range(len(variables))]
 
         self.te = te
+        self.scale_te = scale_te
 
         # Term name
         self.name = f"f({variables}"
@@ -437,9 +448,16 @@ class f(GammTerm):
         if by_cont is not None:
             self.name += f",by_c={by_cont})"
 
-    def absorb_repara(self, rpidx, X, cov):
+    def absorb_repara(self, rpidx, X, cov, min_c, max_c):
         """Computes all terms necessary to absorb a re-parameterization into the term and penalty
         matrix.
+
+        References:
+         - Wood, S. N. (2006). Low‐Rank Scale‐Invariant Tensor Product Smooths for Generalized \
+            Additive Mixed Models. Biometrics, 62(4), 1025–1036. \
+            https://doi.org/10.1111/j.1541-0420.2006.00574.x
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+            (2nd ed.).
 
         :param rpidx: Index to specific reparam. obejct. There must be a 1 to 1 relationship between
             reparam. objects and the number of marginals required by this smooth (i.e., the number
@@ -449,6 +467,10 @@ class f(GammTerm):
         :type X: scipy.sparse.csc_array
         :param cov: The covariate this term is a function of as a flattened numpy array.
         :type cov: np.ndarray
+        :param min_c: The minimum value of the covariate this term is a function of as a float.
+        :type min_c: float
+        :param max_c: The maximum value of the covariate this term is a function of as a float.
+        :type max_c: float
         :raises ValueError: If this method is called with ``rpidx`` exceeding the number of this
             term's RP objects (i.e., when ``rpidx > (len(self.RP) - 1)``) or if ``self.rp`` is
             equal to a value for which no reparameterisation is implemented.
@@ -477,6 +499,16 @@ class f(GammTerm):
             id_k = self.nk
 
         if self.should_rp == 1:
+
+            # Only supported for univariate terms, so check
+            if len(vars) > 1:
+                raise ValueError(
+                    (
+                        "Demmler & Reinsch re-parameterization was requested for a smooth term  "
+                        f"with more than one variable: {vars}."
+                    )
+                )
+
             # Demmler & Reinsch (1975) re-parameterization was requested - need penalty for this.
             pen_kwargs = self.pen_kwargs[rpidx]
             penalty = self.penalty[rpidx]
@@ -515,6 +547,83 @@ class f(GammTerm):
             self.RP[rpidx].rms1 = rms1
             self.RP[rpidx].rms2 = rms2
             self.RP[rpidx].rank = rank
+
+        elif self.should_rp == 2:
+
+            # This is the re-parameterization from Wood (2006) "Low-rank scale-invariant tensor
+            # product smooths for generalized additive mixed models".
+
+            # Only supported for tensor terms, so check
+            if len(vars) < 2:
+                raise ValueError(
+                    (
+                        "Tensor smooth re-parameterization was requested for a smooth term  "
+                        f"with a single variable: {vars}."
+                    )
+                )
+
+            constraint = None
+            if self.is_identifiable and self.te is False:
+                id_k += 1
+                constraint = self.Z[rpidx]
+
+            # Need to build matrix A from section 2 of Wood (2006)
+            A = self.basis(
+                np.linspace(min_c, max_c, X.shape[1]),
+                None,
+                id_k,
+                min_c=min_c,
+                max_c=max_c,
+                **self.basis_kwargs,
+            )
+
+            # Again get penalty elements used by this term.
+            pen_kwargs = self.pen_kwargs[rpidx]
+            penalty = self.penalty[rpidx]
+
+            # Extract penalty generator
+            pen_generator = penalty.constructor
+
+            # And build penalty
+            pen_data, pen_rows, pen_cols, _, _, _, rank = pen_generator(
+                id_k, constraint, **pen_kwargs
+            )
+
+            if self.is_identifiable and self.te is False:
+                A = A @ constraint.Z
+                id_k -= 1
+
+            # Need inverse of A
+            u, Sig, vt = scp.linalg.svd(A)
+            rs = [1 / s for s in Sig]
+            Ainv = vt.T @ np.diag(rs) @ u.T
+
+            # And penalty
+            S_J = scp.sparse.csc_array(
+                (pen_data, (pen_rows, pen_cols)), shape=(id_k, id_k)
+            )
+
+            Srp = Ainv.T @ S_J.toarray() @ Ainv
+
+            # Re-compute root
+            eig, U = scp.linalg.eigh(Srp)
+            Drp = scp.sparse.csc_array(
+                U
+                @ np.diag(
+                    [
+                        (
+                            np.power(e, 0.5)
+                            if e > np.power(sys.float_info.epsilon, 0.7)
+                            else 0
+                        )
+                        for e in eig
+                    ]
+                )
+            )
+
+            self.RP[rpidx].C = Ainv
+            self.RP[rpidx].Srp = scp.sparse.csc_array(Srp)  # Transformed penalty
+            self.RP[rpidx].Drp = Drp  # Transformed root of penalty
 
         else:
             raise ValueError(
@@ -609,10 +718,7 @@ class f(GammTerm):
                 )
 
             # Find correct transformation index
-            if len(vars) > 1:
-                rp_idx = penid
-            else:
-                rp_idx = 0
+            rp_idx = 0
 
             # Extract transformed penalty + root
             Srp = self.RP[rp_idx].Srp
@@ -624,6 +730,30 @@ class f(GammTerm):
 
             # Assign reparam type
             pen = PenType.REPARAM1
+
+        elif self.should_rp == 2:
+            # Only supported for tensor terms, so check
+            if len(vars) < 2:
+                raise ValueError(
+                    (
+                        f"Tensor smooth re-parameterization was requested for term {ti}  "
+                        f"with a single variable."
+                    )
+                )
+
+            # Find correct transformation index
+            rp_idx = penid
+
+            # Extract transformed penalty + root
+            Srp = self.RP[rp_idx].Srp
+            Drp = self.RP[rp_idx].Drp
+
+            # Update penalty and chol factor
+            pen_data, pen_rows, pen_cols = translate_sparse(Srp)
+            chol_data, chol_rows, chol_cols = translate_sparse(Drp)
+
+            # Assign reparam type
+            pen = PenType.REPARAM2
 
         # Create lambda term
         lTerm = LambdaTerm(start_index=cur_pen_idx, type=pen, term=ti)
@@ -651,6 +781,7 @@ class f(GammTerm):
                 penid % len(vars),
                 self.nk,
                 constraint,
+                self.scale_te,
             )
 
             # For te/ti terms, penalty dim are nk_1 * nk_2 * ... * nk_j over all j variables
@@ -1809,6 +1940,7 @@ class irf(GammTerm):
                 penid % len(vars),
                 self.nk,
                 constraint,
+                False,
             )
 
             # For te terms, penalty dim are nk_1 * nk_2 * ... * nk_j over all j variables

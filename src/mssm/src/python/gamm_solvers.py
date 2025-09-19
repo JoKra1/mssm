@@ -8212,7 +8212,7 @@ def solve_generalSmooth_sparse(
 
         # Call any provided callback function
         if callback is not None:
-            callback(outer, c_pen_llk, coef, [lterm.lam for lterm in smooth_pen])
+            callback(outer, c_pen_llk[0, 0], coef, [lterm.lam for lterm in smooth_pen])
 
         # We need the penalized likelihood of the model at this point for convergence control
         # (step 2 in Wood, 2017 based on step 4 in Wood, Goude, & Shaw, 2016)

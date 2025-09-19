@@ -645,6 +645,7 @@ def TP_pen(
     j: int,
     ks: list[int],
     constraint: Constraint | None,
+    scale_pen: bool,
 ) -> tuple[list[float], list[int], list[int], list[float], list[int], list[int], int]:
     """Computes a tensor smooth penalty + root as defined in section 5.6 of Wood (2017) based on
     marginal penalty matrix ``S_j``.
@@ -670,6 +671,14 @@ def TP_pen(
     """
     # Tensor smooth penalty - not including the reparameterization of Wood (2017) 5.6.2
     # but reflecting Eilers & Marx (2003) instead
+
+    # Apply scaling as done by mgcv to improve numerical stability of tensor smooth terms.
+    # see: https://github.com/cran/mgcv/blob/master/R/smooth.r#L824
+    if scale_pen:
+        eig, _ = scp.linalg.eigh(S_j.toarray())
+        S_j /= eig[-1]
+        D_j /= np.sqrt(eig[-1])
+
     if j == 0:
         S_TP = S_j
         D_TP = D_j

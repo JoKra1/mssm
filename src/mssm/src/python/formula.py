@@ -1339,7 +1339,11 @@ class Formula:
                         )
 
                         sterm.absorb_repara(
-                            vi, scp.sparse.csc_array(matrix_term_v), var_cov_flat
+                            vi,
+                            scp.sparse.csc_array(matrix_term_v),
+                            var_cov_flat,
+                            min_c=self.var_mins[vars[vi]],
+                            max_c=self.var_maxs[vars[vi]],
                         )
 
                 continue
@@ -1431,7 +1435,11 @@ class Formula:
                         )
 
                         sterm.absorb_repara(
-                            vi, scp.sparse.csc_array(matrix_term_v), var_cov_flat
+                            vi,
+                            scp.sparse.csc_array(matrix_term_v),
+                            var_cov_flat,
+                            min_c=self.var_mins[vars[vi]],
+                            max_c=self.var_maxs[vars[vi]],
                         )
 
                 continue
@@ -1480,8 +1488,11 @@ class Formula:
 
                 if sterm.should_rp > 0:
                     # Reparameterization of marginals was requested.
+                    if sterm.te:
+                        XPb = matrix_term_v
 
-                    if sterm.Z[vi].type == ConstType.QR:
+                    # For all non-te we have to absorb constraints first
+                    elif sterm.Z[vi].type == ConstType.QR:
                         XPb = matrix_term_v @ sterm.Z[vi].Z
                     elif sterm.Z[vi].type == ConstType.DROP:
                         XPb = np.delete(matrix_term_v, sterm.Z[vi].Z, axis=1)
@@ -1515,6 +1526,8 @@ class Formula:
                         vi,
                         scp.sparse.csc_array(XPb),
                         self.cov_flat[self.NOT_NA_flat, var_map[vars[vi]]],
+                        min_c=self.var_mins[vars[vi]],
+                        max_c=self.var_maxs[vars[vi]],
                     )
 
                 if sterm.te:
@@ -1673,9 +1686,9 @@ class Formula:
                             )
                             # fmt: on
 
-                    # Absorb reparam into marginal
-                    if sterm.should_rp > 0:
-                        matrix_term_v = matrix_term_v @ sterm.RP[vi].C
+                # Absorb reparam into marginal
+                if sterm.should_rp > 0:
+                    matrix_term_v = matrix_term_v @ sterm.RP[vi].C
 
                 # Prepare te/ti
                 if vi == 0:
@@ -1713,7 +1726,7 @@ class Formula:
                         )
                         # fmt: on
 
-                # Currently no further reparam for te implemented
+                # Currently no further reparam for te implemented based on full matrix
 
             # Now deal with by, binary, or by_cont
             # Multiply each row of model matrix by value in by_cont
