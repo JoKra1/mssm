@@ -1564,6 +1564,7 @@ class fs(f):
             rp,
             ConstType.QR,
             False,
+            False,
             basis,
             basis_kwargs,
             True,
