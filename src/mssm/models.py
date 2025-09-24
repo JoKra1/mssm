@@ -1158,7 +1158,10 @@ class GSMM:
         :return: A tuple with 3 entries. The first entry is the prediction ``pred`` based on
             the new data ``n_dat``. The second entry is the model matrix built for ``n_dat``
             that was post-multiplied with the model coefficients to obtain ``pred``. The third
-            entry is ``None`` if ``ci``==``False`` else the standard error ``se`` in the prediction.
+            entry is ``None`` if ``ci``==``False`` else the standard error ``se`` in the prediction
+            multiplied by the critical value determined by ``alpha`` (e.g., ~ 1.96 if ``alpha``
+            = 0.05). **If you want the function to return just the standard error**, set
+            ``alpha = 2 * (1 - scp.stats.norm.cdf(1))``.
         :rtype: (np.ndarray,scp.sparse.csc_array,np.ndarray or None)
         """
 
@@ -1312,8 +1315,10 @@ class GSMM:
             for a Multinomial GAMMLSS model, which is currently not supported.
         :return: A tuple with 2 entries. The first entry is the predicted difference (between the
             two data sets ``dat1`` & ``dat2``) ``diff``. The second entry is the standard error
-            ``se`` of the predicted difference. The difference CI is then
-            [``diff`` - ``se``, ``diff`` + ``se``]
+            ``se`` of the predicted difference multiplied by the critical value determined by
+            ``alpha`` (e.g., ~ 1.96 if ``alpha`` = 0.05). **If you want the function to return
+            just the standard error**, set ``alpha = 2 * (1 - scp.stats.norm.cdf(1))``. The
+            difference CI is then [``diff`` - ``se``, ``diff`` + ``se``]
         :rtype: (np.ndarray,np.ndarray)
         """
 
@@ -2184,7 +2189,10 @@ class GAMMLSS(GSMM):
         :return: A tuple with 3 entries. The first entry is the prediction ``pred`` based on the
             new data ``n_dat``. The second entry is the model matrix built for ``n_dat`` that
             was post-multiplied with the model coefficients to obtain ``pred``. The third entry
-            is ``None`` if ``ci``==``False`` else the standard error ``se`` in the prediction.
+            is ``None`` if ``ci``==``False`` else the standard error ``se`` in the prediction
+            multiplied by the critical value determined by ``alpha`` (e.g., ~ 1.96 if ``alpha``
+            = 0.05). **If you want the function to return just the standard error**, set
+            ``alpha = 2 * (1 - scp.stats.norm.cdf(1))``.
         :rtype: (np.ndarray,scp.sparse.csc_array,np.ndarray or None)
         """
         return super().predict(
@@ -2296,8 +2304,10 @@ class GAMMLSS(GSMM):
             computed for a Multinomial GAMMLSS model, which is currently not supported.
         :return: A tuple with 2 entries. The first entry is the predicted difference
             (between the two data sets ``dat1`` & ``dat2``) ``diff``. The second entry is the
-            standard error ``se`` of the predicted difference. The difference CI is then
-            [``diff`` - ``se``, ``diff`` + ``se``]
+            standard error ``se`` of the predicted difference multiplied by the critical value
+            determined by ``alpha`` (e.g., ~ 1.96 if ``alpha`` = 0.05). **If you want the function
+            to return just the standard error**, set ``alpha = 2 * (1 - scp.stats.norm.cdf(1))``.
+            The difference CI is then [``diff`` - ``se``, ``diff`` + ``se``]
         :rtype: (np.ndarray,np.ndarray)
         """
         return super().predict_diff(
@@ -3379,7 +3389,10 @@ class GAMM(GAMMLSS):
         :return: A tuple with 3 entries. The first entry is the prediction ``pred`` based on the
             new data ``n_dat``. The second entry is the model matrix built for ``n_dat`` that was
             post-multiplied with the model coefficients to obtain ``pred``. The third entry is
-            ``None`` if ``ci``==``False`` else the standard error ``se`` in the prediction.
+            ``None`` if ``ci``==``False`` else the standard error ``se`` in the prediction
+            multiplied by the critical value determined by ``alpha`` (e.g., ~ 1.96 if ``alpha``
+            = 0.05). **If you want the function to return just the standard error**, set
+            ``alpha = 2 * (1 - scp.stats.norm.cdf(1))``.
         :rtype: (np.ndarray,scp.sparse.csc_array,np.ndarray or None)
         """
         return super().predict(
@@ -3477,8 +3490,10 @@ class GAMM(GAMMLSS):
         :type seed: int or None, optional
         :return: A tuple with 2 entries. The first entry is the predicted difference
             (between the two data sets ``dat1`` & ``dat2``) ``diff``. The second entry is the
-            standard error ``se`` of the predicted difference. The difference CI is
-            then [``diff`` - ``se``, ``diff`` + ``se``]
+            standard error ``se`` of the predicted difference multiplied by the critical value
+            determined by ``alpha`` (e.g., ~ 1.96 if ``alpha`` = 0.05). **If you want the function
+            to return just the standard error**, set ``alpha = 2 * (1 - scp.stats.norm.cdf(1))``.
+            The difference CI is then [``diff`` - ``se``, ``diff`` + ``se``]
         :rtype: (np.ndarray,np.ndarray)
         """
         return super().predict_diff(
