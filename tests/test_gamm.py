@@ -1751,6 +1751,7 @@ class Test_no_pen:
 
     test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
     test_kwargs["max_outer"] = 100
+    test_kwargs["max_inner"] = 1
 
     model.fit(**test_kwargs)
 
@@ -2497,8 +2498,11 @@ class Test_3way_li:
     # ... and model
     model = GAMM(formula, Gaussian())
 
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_inner"] = 1
+
     # then fit
-    model.fit(**default_gamm_test_kwargs)
+    model.fit(**test_kwargs)
 
     def test_GAMedf(self):
         assert round(self.model.edf, ndigits=3) == 12
