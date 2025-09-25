@@ -782,6 +782,10 @@ class Formula:
         self.coef_names = []
         self.coef_per_term = np.zeros(len(terms), dtype=int)
 
+        # Need to enforce dummy coding for linear terms not just when there is an intercept, but
+        # also when we have multiple factor variables
+        has_constant = self.has_intercept
+
         for lti in self.get_linear_term_idx():
             # Calculate Coef names for linear terms
             lterm = terms[lti]
@@ -793,8 +797,16 @@ class Formula:
             else:
                 # Linear effects
                 t_total_coef, t_unpenalized_coef, t_coef_names = lterm.get_coef_info(
-                    self.has_intercept, var_types, factor_levels, coding_factors
+                    has_constant, var_types, factor_levels, coding_factors
                 )
+
+                # Check whether this term had a factor variable
+                if has_constant is False:
+                    for var in lterm.variables:
+                        if var_types[var] == VarType.FACTOR:
+                            has_constant = True
+                            break
+
             self.coef_names.extend(t_coef_names)
             self.coef_per_term[lti] = t_total_coef
             self.n_coef += t_total_coef
@@ -2498,6 +2510,11 @@ def build_sparse_matrix_from_formula(
     ridx = np.array([ri for ri in range(n_y)])  # ToDo: dtype=int?
 
     ci = 0
+
+    # Need to enforce dummy coding for linear terms not just when there is an intercept, but also
+    # when we have multiple factor variables
+    has_constant = has_intercept
+
     for lti in ltx:
         # Build matrix for linear terms
         lterm = terms[lti]
@@ -2508,15 +2525,10 @@ def build_sparse_matrix_from_formula(
                 ci, lti, ridx, use_only
             )
 
-            elements.extend(new_elements)
-            rows.extend(new_rows)
-            cols.extend(new_cols)
-            ci += new_ci
-
         else:
             # Linear term
             new_elements, new_rows, new_cols, new_ci = lterm.build_matrix(
-                has_intercept,
+                has_constant,
                 ci,
                 lti,
                 var_map,
@@ -2527,10 +2539,17 @@ def build_sparse_matrix_from_formula(
                 use_only,
             )
 
-            elements.extend(new_elements)
-            rows.extend(new_rows)
-            cols.extend(new_cols)
-            ci += new_ci
+            # Check whether this term had a factor variable
+            if has_constant is False:
+                for var in lterm.variables:
+                    if var_types[var] == VarType.FACTOR:
+                        has_constant = True
+                        break
+
+        elements.extend(new_elements)
+        rows.extend(new_rows)
+        cols.extend(new_cols)
+        ci += new_ci
 
     for irsti in irstx:
         # Impulse response terms need to be calculate for every series individually - costly

@@ -2927,13 +2927,6 @@ class GAMM(GAMMLSS):
         :type rho: float,optional
         """
 
-        # Initialize remaining arguments to defaults
-        if max_inner is None:
-            if rho is not None:
-                max_inner = 1
-            else:
-                max_inner = 500
-
         # We need to initialize penalties
         if not restart:
             if self.overall_penalties is not None:
@@ -2944,6 +2937,13 @@ class GAMM(GAMMLSS):
                 build_penalties(self.formulas[0])
             )
         penalties = self.overall_penalties
+
+        # Initialize remaining arguments to defaults
+        if max_inner is None:
+            if rho is not None or len(penalties) == 0:
+                max_inner = 1
+            else:
+                max_inner = 500
 
         # Some checks
         if penalties is None and restart:
@@ -2967,6 +2967,11 @@ class GAMM(GAMMLSS):
         if max_inner > 1 and rho is not None:
             raise ValueError(
                 "ar1 model of the residuals only supported for ``max_inner=1``."
+            )
+
+        if max_inner > 1 and len(penalties) == 0:
+            raise ValueError(
+                "Models without a single penalty are only supported for ``max_inner=1``."
             )
 
         self.offset = 0

@@ -1510,7 +1510,7 @@ def init_step_gam(
     else:
         S_emb = scp.sparse.csc_array((colsX, colsX), dtype=np.float64)
         S_pinv = None
-        S_root = None
+        S_root = S_emb if method == "QR" else None
         FS_use_rank = None
 
     # Estimate coefficients for starting lambda
@@ -1712,8 +1712,9 @@ def correct_coef_step(
         dev = family.deviance(y[inval == False], mu[inval == False])  # noqa: E712
 
         # And penalized deviance term
+        pen_dev = dev
         if n_pen > 0:
-            pen_dev = dev + n_coef.T @ S_emb @ n_coef
+            pen_dev += n_coef.T @ S_emb @ n_coef
         corrections += 1
 
     # Collect accepted coefficient
@@ -2766,7 +2767,7 @@ def solve_gamm_sparse(
                 Lrhoi,
                 family,
                 S_emb,
-                None,
+                S_emb if method == "QR" else None,
                 None,
                 None,
                 penalties,

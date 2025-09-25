@@ -2691,7 +2691,7 @@ def li(variables: list[str]):
     with: :math:`c` corresponding to a binary predictor variable created so that it is 1
     if "cond"=2 else 0.
 
-    To get a model with only main effects for "cond" and "x" :class:`li` **cannot be used** and
+    To get a model with only main effects for "cond" and "x" :func:`li` **cannot be used** and
     :class:`l` needs to be used instead::
 
       formula = Formula(lhs("y"),terms=[i(),l(["cond"]),l(["x"])])
@@ -3211,7 +3211,7 @@ def build_linear_term(
                         for fl in range(fl_start, len(factor_levels[var])):
                             new_interactions.append(old_inter)
                             new_idx = cov_flat[:, var_map[var]] == fl
-                            new_inter_idx.append(old_idx == new_idx)
+                            new_inter_idx.append(old_idx & new_idx)
 
             else:  # Interaction with continuous predictor as start
                 if len(interactions) == 0:
