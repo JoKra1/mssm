@@ -773,11 +773,12 @@ def print_smooth_terms(
         for rti in form.get_random_term_idx():
             rterm = terms[rti]
             if isinstance(rterm, rs):
-                if rterm.var_coef > 1 and len(rterm.variables) > 1:
-                    for li in range(rterm.var_coef):
+                if rterm.by is not None:
+                    for li in range(len(form.get_factor_levels()[rterm.by])):
                         print(
                             smooth_names[name_idx]
-                            + f":{li}; edf: {round(term_edf[edf_idx], ndigits=3)}"
+                            + f":{coding_factors[rterm.by][li]}; edf: "
+                            + f"{round(term_edf[edf_idx], ndigits=3)}"
                         )
                         edf_idx += 1
                 else:

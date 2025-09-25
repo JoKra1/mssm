@@ -2843,14 +2843,17 @@ class rs(GammTerm):
 
     :param variables: A list of variables. Can point to continuous and categorical variables.
     :type variables: [str]
-    :param rf: A factor variable. Identifies the random factor in the data.
-    :type rf: str
+    :param by: Optionally, the name of a factor variable. For each level of this factor, separate
+        random coefficients for ``variables`` and penalties will be estimated, defaults to None
+    :type by: str | None, optional
     :param id: Different random slopes with the same id share their :math:`\\lambda` values.
         Defaults to None.
-    :type id: int|None, optional
+    :type id: int | None, optional
     """
 
-    def __init__(self, variables: list[str], rf: str, id: int | None = None) -> None:
+    def __init__(
+        self, variables: list[str], by: str | None = None, id: int | None = None
+    ) -> None:
 
         # Initialization
         super().__init__(
@@ -2861,12 +2864,16 @@ class rs(GammTerm):
             [{}],
         )
         self.var_coef = None
-        self.by = rf
+        self.by = by
         self.by_cont = None
         self.id = id
 
         # Term name
-        self.name = f"rs({variables},{rf})"
+        self.name = f"rs({variables}"
+        if self.by is not None:
+            self.name += f",by={by})"
+        else:
+            self.name += ")"
 
     def build_penalty(
         self,
@@ -2900,24 +2907,20 @@ class rs(GammTerm):
             :class:`LambdaTerm` and the updated ``cur_pen_idx``
         :rtype: tuple[list[LambdaTerm],int]
         """
-        vars = self.variables
 
         if self.var_coef is None:
             raise ValueError(
                 "Number of coefficients for random slope were not initialized."
             )
 
-        if len(vars) > 1 and self.var_coef > 1:
-            # Separate penalties for interactions involving at least one categorical factor.
-            # In that case, a separate penalty will describe the random coefficients for the random
-            # factor (rterm.by) per level of the (interaction of) categorical factor(s) involved in
-            # the interaction. For interactions involving only continuous variables this condition
-            # will be false and a single penalty will be estimated.
-            idk = len(factor_levels[self.by])
+        idk = self.var_coef
+
+        if self.by is not None:
+            # Separate penalties and coefficients per level of by factor
             pen_data, pen_rows, pen_cols, chol_data, chol_rows, chol_cols, rank = (
                 self.penalty[0].constructor(idk, None)
             )
-            for ilvl in range(self.var_coef):
+            for ilvl in range(len(factor_levels[self.by])):
                 lTerm = LambdaTerm(
                     start_index=cur_pen_idx, type=PenType.IDENTITY, term=ti
                 )
@@ -2943,9 +2946,7 @@ class rs(GammTerm):
                 penalties.append(lTerm)
 
         else:
-            # Single penalty for random coefficients of a single variable (categorical or
-            # continuous) or an interaction of only continuous variables.
-            idk = len(factor_levels[self.by]) * self.var_coef
+            # Single penalty for random coefficients of all variables in ``self.variables``
             pen_data, pen_rows, pen_cols, chol_data, chol_rows, chol_cols, rank = (
                 self.penalty[0].constructor(idk, None)
             )
@@ -3013,15 +3014,19 @@ class rs(GammTerm):
         :return: matrix data, matrix row indices, matrix column indices, added columns
         :rtype: tuple[list[float],list[int],list[int],int]
         """
-        by_cov = cov_flat[:, var_map[self.by]]
-        by_levels = factor_levels[self.by]
-        old_ci = ci
 
         # First get all columns for all linear predictors associated with this
         # term - might involve interactions!
         lin_elements, lin_rows, lin_cols, lin_ci = build_linear_term(
             self, False, ci, ti, var_map, var_types, factor_levels, ridx, cov_flat, None
         )
+
+        if self.by is None:
+            return lin_elements, lin_rows, lin_cols, lin_ci
+
+        # Have by at this point
+        by_cov = cov_flat[:, var_map[self.by]]
+        by_levels = factor_levels[self.by]
 
         # Need to cast to np.array for indexing
         lin_elements = np.array(lin_elements)
@@ -3032,32 +3037,31 @@ class rs(GammTerm):
         new_rows = []
         new_cols = []
         new_ci = 0
+        old_ci = ci
 
-        # For every column
-        for coef_i in range(lin_ci):
-            # Collect the coefficinet column and row index
-            inter_i = lin_elements[lin_cols == old_ci]
-            rdx_i = lin_rows[lin_cols == old_ci]
-            # split the column over len(by_levels) columns for every level of the random factor
-            for fl in range(len(by_levels)):
-                # First check which of the remaining rows correspond to current level of
-                # random factor
-                fl_idx = by_cov == fl
+        # For every level of by factor...
+        for fl in range(len(by_levels)):
+            # Collect rows associated with the level of this factor
+            fl_idx = by_cov == fl
+
+            # For every coef of the linear terms..
+            for coef_i in range(lin_ci):
+                # Collect the coefficinet column and row index
+                inter_i = lin_elements[lin_cols == old_ci + coef_i]
+                rdx_i = lin_rows[lin_cols == old_ci + coef_i]
+
                 # Then adjust to the rows actually present in the interaction column
-                fl_idx = fl_idx[rdx_i]
+                fl_cidx = fl_idx[rdx_i]
+
                 # Now collect
                 if use_only is None or ti in use_only:
-                    new_elements.extend(inter_i[fl_idx])
-                    new_rows.extend(rdx_i[fl_idx])
-                    new_cols.extend([ci for _ in range(len(inter_i[fl_idx]))])
+                    new_elements.extend(inter_i[fl_cidx])
+                    new_rows.extend(rdx_i[fl_cidx])
+                    new_cols.extend([ci for _ in range(len(inter_i[fl_cidx]))])
                 new_ci += 1
                 ci += 1
-            old_ci += 1
 
-        # Matrix returned here holds for every linear coefficient one column for every level of
-        # the random
-        # factor. So: coef1_1, coef_1_2, coef1_3, ... coef_n_1, coef_n,2, coef_n_3
-
+        # Matrix returned here holds for every level of by factor all coefficients in lin_elements
         return new_elements, new_rows, new_cols, new_ci
 
     def get_coef_info(
@@ -3086,19 +3090,23 @@ class rs(GammTerm):
             self, False, var_types, factor_levels, coding_factors
         )
 
-        self.var_coef = (
-            t_total_coef  # We need t_total_coef penalties for this term later.
-        )
-        by_code_factors = coding_factors[self.by]
-        by_code_levels = factor_levels[self.by]
+        # We need the number of coefficients associated with self.variables
+        self.var_coef = t_total_coef
 
-        rf_coef_names = []
-        for cname in t_coef_names:
-            rf_coef_names.extend(
-                [f"{cname}_{by_code_factors[fl]}" for fl in range(len(by_code_levels))]
-            )
+        if self.by is None:
+            t_ncoef = t_total_coef
+            rf_coef_names = [f"rs({cname})" for cname in t_coef_names]
 
-        t_ncoef = len(rf_coef_names)
+        # But might need to multiply them by the levels of by
+        else:
+            by_code_factors = coding_factors[self.by]
+            by_code_levels = factor_levels[self.by]
+            t_ncoef = t_total_coef * len(by_code_levels)
+            rf_coef_names = []
+            for fl in range(len(by_code_levels)):
+                rf_coef_names.extend(
+                    [f"rs({cname}_{by_code_factors[fl]})" for cname in t_coef_names]
+                )
 
         return t_ncoef, 0, rf_coef_names
 
