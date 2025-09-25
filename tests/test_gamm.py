@@ -1374,6 +1374,72 @@ class Test_drop_Gamma:
         assert len(self.model.info.dropped) == 1
 
 
+class Test_drop_no_pen_order:
+    sim_dat = sim13(500, 2, c=0, seed=0, family=Gamma(), binom_offset=0, n_ranef=20)
+
+    formula1 = Formula(
+        lhs("y"),
+        [i(), *li(["x0", "x5", "x6", "x4"])],
+        data=sim_dat,
+    )
+
+    formula2 = Formula(
+        lhs("y"),
+        [i(), *li(["x5", "x6", "x0", "x4"])],
+        data=sim_dat,
+    )
+
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_inner"] = 1
+    test_kwargs["max_outer"] = 200
+    test_kwargs["control_lambda"] = 2
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["progress_bar"] = True
+    test_kwargs["method"] = "QR"
+    model1 = GAMM(formula1, Gamma())
+    model1.fit(**test_kwargs)
+    model2 = GAMM(formula2, Gamma())
+    model2.fit(**test_kwargs)
+
+    def test_drop(self):
+        assert len(self.model1.info.dropped) == 1
+
+    def test_drop(self):
+        assert len(self.model2.info.dropped) == 1
+
+    def test_order(self):
+        np.testing.assert_allclose(
+            np.sort(self.model1.coef.flatten()),
+            np.sort(self.model2.coef.flatten()),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1e-7),
+        )
+
+    def test_GAMllk1(self):
+        llk = self.model1.get_llk(False)
+        np.testing.assert_allclose(
+            llk, -2209.29436493949, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
+        )
+
+    def test_GAMllk2(self):
+        llk = self.model2.get_llk(False)
+        np.testing.assert_allclose(
+            llk, -2209.29436493949, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
+        )
+
+    def test_scale1(self):
+        scale = self.model1.scale
+        np.testing.assert_allclose(
+            scale, 1.9825008568078437, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
+        )
+
+    def test_scale2(self):
+        scale = self.model2.scale
+        np.testing.assert_allclose(
+            scale, 1.9825008568078437, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
+        )
+
+
 class Test_BIG_GAMM:
 
     file_paths = [
