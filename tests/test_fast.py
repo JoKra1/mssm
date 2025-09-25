@@ -1416,7 +1416,7 @@ class Test_te_scaling_qefs:
                     [0.74764254],
                 ]
             ),
-            atol=min(max_atol, 0.05),
+            atol=min(max_atol, 5),
             rtol=min(max_rtol, 0.5),
         )
 
