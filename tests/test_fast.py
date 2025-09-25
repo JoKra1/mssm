@@ -1377,7 +1377,7 @@ class Test_te_scaling_qefs:
     def test_GAMedf(self):
         np.testing.assert_allclose(
             self.model.edf,
-            14.247792840571222,
+            14.341231524859413,
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.1),
         )
@@ -1388,32 +1388,32 @@ class Test_te_scaling_qefs:
             coef,
             np.array(
                 [
-                    [2.49814714],
-                    [-0.24398288],
-                    [-1.02136494],
-                    [-3.08847422],
-                    [-6.22429345],
-                    [-0.30344321],
-                    [2.10916533],
-                    [0.69461804],
-                    [-1.68835253],
-                    [-3.26827593],
-                    [-1.2192533],
-                    [0.10401969],
-                    [0.33482174],
-                    [0.02300069],
-                    [-0.94663718],
-                    [-5.46723873],
-                    [-3.41984903],
-                    [-0.80752863],
-                    [0.49981411],
-                    [-0.41361054],
-                    [-11.85652936],
-                    [-7.1033939],
-                    [-3.36542176],
-                    [-1.46344653],
-                    [-2.29224609],
-                    [0.74751328],
+                    [2.50393671],
+                    [-0.19006892],
+                    [-0.9200236],
+                    [-3.03468937],
+                    [-6.26265612],
+                    [-0.29683714],
+                    [2.09812364],
+                    [0.68493905],
+                    [-1.6648717],
+                    [-3.20827957],
+                    [-1.23875673],
+                    [0.11846243],
+                    [0.35046264],
+                    [0.03397204],
+                    [-0.8974272],
+                    [-5.40098446],
+                    [-3.4023388],
+                    [-0.81103485],
+                    [0.4981881],
+                    [-0.41768678],
+                    [-11.6640486],
+                    [-6.98254206],
+                    [-3.29202113],
+                    [-1.43832468],
+                    [-2.29191932],
+                    [0.74764254],
                 ]
             ),
             atol=min(max_atol, 0.05),
@@ -1424,7 +1424,7 @@ class Test_te_scaling_qefs:
         lam = np.array([p.lam for p in self.model.overall_penalties])
         np.testing.assert_allclose(
             lam,
-            np.array([4.736870464101781, 6.889559299003233]),
+            np.array([5.616895730403687, 6.994302584439152]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 2.5),
         )
@@ -1432,13 +1432,13 @@ class Test_te_scaling_qefs:
     def test_GAMreml(self):
         reml = self.model.get_reml()
         np.testing.assert_allclose(
-            reml, -1739.7189966048559, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            reml, -1741.4936167870164, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
         np.testing.assert_allclose(
-            llk, -1717.530008546836, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            llk, -1717.744876097618, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_edf1(self):
@@ -1446,7 +1446,7 @@ class Test_te_scaling_qefs:
         edf1 = np.array([edf1 for edf1 in self.model.term_edf1])
         np.testing.assert_allclose(
             edf1,
-            np.array([14.202732809643035]),
+            np.array([14.233746794340137]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 1.5),
         )
@@ -1467,7 +1467,7 @@ class Test_te_scaling_qefs:
             Trs.extend(pTrs)
         np.testing.assert_allclose(
             Trs,
-            np.array([174.29805604977483]),
+            np.array([246.74060789276504]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 1.5),
         )
