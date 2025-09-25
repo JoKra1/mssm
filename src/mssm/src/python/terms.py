@@ -3015,6 +3015,10 @@ class rs(GammTerm):
         :rtype: tuple[list[float],list[int],list[int],int]
         """
 
+        new_elements = []
+        new_rows = []
+        new_cols = []
+
         # First get all columns for all linear predictors associated with this
         # term - might involve interactions!
         lin_elements, lin_rows, lin_cols, lin_ci = build_linear_term(
@@ -3022,7 +3026,12 @@ class rs(GammTerm):
         )
 
         if self.by is None:
-            return lin_elements, lin_rows, lin_cols, lin_ci
+            if use_only is None or ti in use_only:
+                new_elements = lin_elements
+                new_rows = lin_rows
+                new_cols = lin_cols
+
+            return new_elements, new_rows, new_cols, lin_ci
 
         # Have by at this point
         by_cov = cov_flat[:, var_map[self.by]]
@@ -3033,9 +3042,6 @@ class rs(GammTerm):
         lin_rows = np.array(lin_rows)
         lin_cols = np.array(lin_cols)
 
-        new_elements = []
-        new_rows = []
-        new_cols = []
         new_ci = 0
         old_ci = ci
 

@@ -2003,7 +2003,7 @@ class Test_te_rs_fact:
             self.model.print_smooth_terms()
         capture = capture.getvalue()
 
-        comp = "f(['time', 'x']); edf: 16.131\nrs(['fact'],sub); edf: 38.089\nrs(['x', 'fact'],sub):0; edf: 12.887\nrs(['x', 'fact'],sub):1; edf: 14.136\nrs(['x', 'fact'],sub):2; edf: 10.358\n"
+        comp = "f(['time', 'x']); edf: 16.131\nrs(['fact', 'sub']); edf: 38.089\nrs(['x', 'sub'],by=fact):fact_1; edf: 12.887\nrs(['x', 'sub'],by=fact):fact_2; edf: 14.136\nrs(['x', 'sub'],by=fact):fact_3; edf: 10.358\n"
         assert comp == capture
 
 
