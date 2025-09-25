@@ -2511,7 +2511,7 @@ class ri(GammTerm):
         coef_names = []
 
         for fl in range(len(factor_levels[vars[0]])):
-            coef_names.append(f"ri_{vars[0]}_{by_code_factors[fl]}")
+            coef_names.append(f"ri({vars[0]}_{by_code_factors[fl]})")
             n_coef += 1
 
         return n_coef, 0, coef_names

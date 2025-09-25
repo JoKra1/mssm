@@ -1491,7 +1491,7 @@ class Test_rs_ri:
     # Specify formula
     formula = Formula(
         lhs("y"),
-        [i(), *li(["x", "fact"]), ri("series"), rs(["x"], rf="series")],
+        [i(), *li(["x", "fact"]), ri("series"), rs(["x", "series"])],
         data=sim_dat,
     )
 
@@ -1797,8 +1797,8 @@ class Test_te_rs_fact:
         [
             i(),
             f(["time", "x"], te=True, nk=5),
-            rs(["fact"], rf="sub"),
-            rs(["x", "fact"], rf="sub"),
+            rs(["fact", "sub"]),
+            rs(["x", "sub"], by="fact"),
         ],
         data=sim_dat,
     )
@@ -2017,8 +2017,8 @@ class Test_te_rs_fact_QR:
         [
             i(),
             f(["time", "x"], te=True, nk=5),
-            rs(["fact"], rf="sub"),
-            rs(["x", "fact"], rf="sub"),
+            rs(["fact", "sub"]),
+            rs(["x", "sub"], by="fact"),
         ],
         data=sim_dat,
     )
@@ -2230,8 +2230,8 @@ class Test_print_parametric:
             i(),
             l(["fact"]),
             f(["time", "x"], te=True, nk=5),
-            rs(["fact"], rf="sub"),
-            rs(["x", "fact"], rf="sub"),
+            rs(["fact", "sub"]),
+            rs(["x", "sub"], by="fact"),
         ],
         data=sim_dat,
     )
@@ -2266,8 +2266,8 @@ class Test_ti_rs_fact:
             f(["x"]),
             f(["time"]),
             f(["time", "x"], te=False, nk=5),
-            rs(["fact"], rf="sub"),
-            rs(["x", "fact"], rf="sub"),
+            rs(["fact", "sub"]),
+            rs(["x", "sub"], by="fact"),
         ],
         data=sim_dat,
     )
@@ -2706,8 +2706,8 @@ class Test_diff:
             i(),
             l(["fact"]),
             f(["time"], by="fact"),
-            rs(["fact"], rf="sub"),
-            rs(["x", "fact"], rf="sub"),
+            rs(["fact", "sub"]),
+            rs(["x", "sub"], by="fact"),
         ],
         data=sim_dat,
     )
