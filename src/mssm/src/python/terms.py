@@ -83,11 +83,11 @@ class GammTerm:
 
     def build_matrix(self, *args, **kwargs):
         """Builds the design/term/model matrix associated with this term and returns it represented
-        as a list of values, a list of row indices, and a list of column indices.
+        as a list of values, a list of row indices, and a list of column indices. Also returns
+        an update to the column index (i.e., how many columns this matrix adds).
 
         This method is implemented by every implementation of the :class:`GammTerm` class.
-        The returned lists can then be used to create a sparse matrix for this term. Also returns
-        the number of additional columnsthat would be added to the total model matrix by this term.
+        The returned lists can then be used to create a sparse matrix for this term.
         """
         pass
 
@@ -1491,7 +1491,6 @@ class fs(f):
     that seed, ensuring that the clustering outcome (and hence model fit) is replicable.
 
     References:
-
      - Eilers, P., & Marx, B. (2010). Splines, knots, and penalties. \
         https://doi.org/10.1002/WICS.125
      - Marra, G., & Wood, S. N. (2011). Practical variable selection for generalized additive \
@@ -2048,14 +2047,7 @@ class irf(GammTerm):
         pool,
         tol: int = 0,
     ) -> tuple[list[float], list[int], list[int], int]:
-        """Builds the design/term/model matrix associated with this impulse response smooth term and
-        returns it represented as a list of values, a list of row indices, and a list of column
-        indices.
-
-        This method is implemented by every implementation of the :class:`GammTerm` class.
-        The returned lists can then be used to create a sparse matrix for this term. Also returns an
-        updated ``ci`` column index, reflecting how many additional columns would be added
-        to the total model matrix.
+        """Builds the design/term/model matrix associated with this impulse response smooth term.
 
         :param ci: Current column index.
         :type ci: int
@@ -2432,14 +2424,7 @@ class ri(GammTerm):
         cov_flat: np.ndarray,
         use_only: list[int],
     ) -> tuple[list[float], list[int], list[int], int]:
-        """Builds the design/term/model matrix associated with this random intercept term and
-        returns it represented as a list of values, a list of row indices, and a list of column
-        indices.
-
-        This method is implemented by every implementation of the :class:`GammTerm` class.
-        The returned lists can then be used to create a sparse matrix for this term. Also returns an
-        updated ``ci`` column index, reflecting how many additional columns would be added
-        to the total model matrix.
+        """Builds the design/term/model matrix associated with this random intercept term.
 
         :param ci: Current column index.
         :type ci: int
@@ -2582,13 +2567,7 @@ class l(GammTerm):  # noqa: E742
         cov_flat: np.ndarray,
         use_only: list[int],
     ) -> tuple[list[float], list[int], list[int], int]:
-        """Builds the design/term/model matrix associated with this linear term and returns it
-        represented as a list of values, a list of row indices, and a list of column indices.
-
-        This method is implemented by every implementation of the :class:`GammTerm` class.
-        The returned lists can then be used to create a sparse matrix for this term. Also returns an
-        updated ``ci`` column index, reflecting how many additional columns would be added
-        to the total model matrix.
+        """Builds the design/term/model matrix associated with this linear term.
 
         :param has_intercept: Whether or not the formula of which this term is part includes an
             intercept term.
@@ -2720,126 +2699,37 @@ def li(variables: list[str]):
 
 class rs(GammTerm):
     """
-    Adds random slopes for the effects of ``variables`` for each level of the
-    random factor ``rf``. The type of random slope created depends on the content of ``variables``.
+    Adds random coefficients for the (interaction) effect of ``variables``.
 
-    If ``len(variables)==1``, and the string in ``variables`` identifies a categorical variable in
-    the data, then a random offset adjustment (for every level of the categorical variable, so
-    without binary coding!) will be estimated for every level of the random factor ``rf``.
+    The term works exactly like ``s(var1,var2,...varK,bs='re',by=fact)`` works in ``mgcv``. That is,
+    if ``by=None`` the model matrix implied by ``l(vars)`` is added to the overall model matrix
+    (**without applying binary coding to ensure identifiability**), and the corresponding
+    coefficients are subjected to an identity penalty matrix.
 
-    Example: The factor variable "cond", with two levels "1" and "2" is assumed to have a general
-    effect on the DV "y". However, data was collected from multiple subjects (random factor
-    ``rf`` = "subject") and it is reasonable to assume that the effect of "cond" is slightly
-    different for every subject (it is also assumed that all subjects took part
-    in both conditions identified by "cond"). A model that accounts for this is estimated via::
+    As described in more detail in the doc string of the :class:`l` class, if multiple variables
+    are specified in ``variables``, the added model matrix will reflect the partial interaction
+    (**again without applying binary coding to ensure identifiability**) of the variables.
 
-      formula = Formula(lhs("y"),terms=[i(),l(["cond"]),rs(["cond"],rf="subject")])
-
-    This formula will estimate the following model:
-
-    .. math::
-
-      \\mu = a + b_1*c_i + a_{j(i),cc(i)}
-
-    Here, :math:`c` is again a binary predictor variable created so that it is 1 if "cond"=2 for
-    observation i else 0, :math:`cc(i)` indexes the level of "cond" at observation :math:`i`,
-    :math:`j(i)` indexes the level of "subject" at observation :math:`i`, and :math:`a_{j,cc(i)}`
-    identifies the random offset estimated for subject :math:`j` at the level of "cond"
-    indicated by :math:`cc(i)`. The :math:`a_{j,cc(i)}` are assumed to be i.i.d
-    :math:`\\sim N(0,\\sigma_a)`. Note that the fixed effect sturcture uses binary coding but the
-    random effect structure does not!
-
-    Hence, ``rs(["cond"],rf="subject")`` in ``mssm`` corresponds to adding the term below to a
-    ``mgcv`` model::
-
-      s(cond,subject,bs="re")
-
-    If all the strings in ``variables`` identify continuous variables in the data, then a random
-    slope for the len(``variables``)-way interaction (will simplify to a slope for a single
-    continuous variable if len(``variables``) == 1) will be estimated for every level of the random
-    factor ``rf``.
-
-    Example: The continuous variable "x" is assumed to have a general effect on the DV "y".
-    However, data was collected from multiple subjects (random factor ``rf`` ="subject") and it is
-    reasonable to assume that the effect of "x" is slightly different for every subject. A model
-    that accounts for this is estimated via::
-
-      formula = Formula(lhs("y"),terms=[i(),l(["x"]),rs(["x"],rf="subject")])
-
-    This formula will estimate the following model:
-
-    .. math::
-
-      \\mu = a + b*x_i + b_{j(i)} * x_i
-
-    Where, :math:`j(i)` again indexes the level of "subject" at observation :math:`i`,
-    :math:`b_j(i)` identifies the random slope (the subject-specific slope adjustment for :math:`b`)
-    for variable "x" estimated for subject :math:`j` and the :math:`b_{j(i)}` are again assumed to
-    be i.i.d from a **single** :math:`\\sim N(0,\\sigma_b)`
-
-    Note, lower-order interaction slopes (as well as main effects) are **not pulled in by default**!
-    Consider the following formula::
-
-      formula = Formula(lhs("y"),terms=[i(),*li(["x","z"]),rs(["x","z"],rf="subject")])
-
-    with another continuous variable "z". This corresponds to the model:
-
-    .. math::
-
-      \\mu = a + b_1*x_i + b_2*z_i + b_3*x_i*z_i + b_{j(i)}*x_i*z_i
-
-    With :math:`j(i)` again indexing the level of "subject" at observation i, :math:`b_{j(i)}`
-    identifying the random slope (the subject-specific slope adjustment for :math:`b_3`) for the
-    interaction of variables :math:`x` and :math:`z` estimated for subject :math:`j`. The
-    :math:`b_{j(i)}` are again assumed to be i.i.d from a **single** :math:`\\sim N(0,\\sigma_b)`.
-
-    To add random slopes for the main effects of either :math:`x` or :math:`z` as well as an
-    additional random intercept, additional :class:`rs` and a :class:`ri` terms would have to be
-    added to the formula::
-
-      formula = Formula(lhs("y"),terms=[i(),*li(["x","z"]),
-                                       ri("subject"),
-                                       rs(["x"],rf="subject"),
-                                       rs(["z"],rf="subject"),
-                                       rs(["x","z"],rf="subject")])
-
-    If ``len(variables) > 1`` and at least one string in ``variables`` identifies a categorical
-    variable in the data then random slopes for the len(``variables``)-way interaction will be
-    estimated for every level of the random factor ``rf``. Separate distribution parameters
-    (the :math:`\\sigma` of the Normal) will be estimated for every level of the resulting
-    interaction.
-
-    Example: The continuous variable "x" and the factor variable "cond", with two levels "1" and
-    "2" are assumed to have a general interaction effect on the DV "y". However, data was collected
-    from multiple subjects (random factor ``rf`` ="subject") and it is reasonable to assume
-    that their interaction effect is slightly different for every subject. A model that accounts
-    for this is estimated via::
-
-      formula = Formula(lhs("y"),terms=[i(),*li(["x","cond"]),rs(["x","cond"],rf="subject")])
-
-    This formula will estimate the following model:
-
-    .. math::
-
-      \\mu = a + b_1*c_i + b_2*x_i + b_3*x_i*c_i + b_{j(i),cc(i)}*x_i
-
-    With, :math:`c` corresponding to a binary predictor variable created so that it is 1 if "cond"=2
-    for observation :math:`i` else 0, :math:`cc(i)` corresponds to the level of "cond" at
-    observation :math:`i`, :math:`j(i)` corresponds to the level of "subject" at observation
-    :math:`i`, and :math:`b_{j(i),cc(i)}` identifies the random slope for variable :math:`x` at
-    "cond" = :math:`cc(i)` estimated for subject :math:`j`.
-    That is: the :math:`b_{j,cc(i)}` where :math:`cc(i)=1` are assumed to be i.i.d realizations
-    from normal distribution :math:`N(0,\\sigma_{b_1})` and the :math:`b_{j,cc(i)}` where
-    :math:`cc(i)=2` are assumed to be i.i.d realizations from a **separate normal distribution**
-    :math:`N(0,\\sigma_{b_2})`.
-
-    Hence, adding ``rs(["x","cond"],rf="subject")`` to a ``mssm`` model, is equivalent to adding
-    the term below to a ``mgcv`` model::
-
-      s(x,subject,by=cond,bs="re")
+    If ``by is not None``, separate identity penalties (and random coefficients), will be estimated
+    per level of the factor variable passed to ``by``.
 
     Correlations between random effects cannot be taken into account by means of parameters
     (this is possible for example in ``lme4``).
+
+    Examples:
+     - ``s(fact,bs='re')`` in ``mgcv`` is ``rs(["fact"])`` in ``mssm``
+     - ``s(cov,bs='re')`` in ``mgcv`` is ``rs(["cov"])`` in ``mssm``
+     - ``s(fact,cov,bs='re')`` in ``mgcv`` is ``rs(["fact","cov"])`` in ``mssm``
+     - ``s(fact,cov,bs='re',by=fact2)`` in ``mgcv`` is ``rs(["fact","cov"],by="fact2")`` in ``mssm``
+
+    where "fact" and "fact2" refer to categorical variables and "cov" refers to a continuous
+    variable.
+
+    References:
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
+        (2nd ed.). Chapman and Hall/CRC.
+     - Random effects in mgcv: see \
+        https://www.rdocumentation.org/packages/mgcv/topics/smooth.construct.re.smooth.spec
 
     :param variables: A list of variables. Can point to continuous and categorical variables.
     :type variables: [str]
@@ -2977,13 +2867,7 @@ class rs(GammTerm):
         cov_flat: np.ndarray,
         use_only: list[int],
     ) -> tuple[list[float], list[int], list[int], int]:
-        """Builds the design/term/model matrix associated with this random slope term and returns it
-        represented as a list of values, a list of row indices, and a list of column indices.
-
-        This method is implemented by every implementation of the :class:`GammTerm` class.
-        The returned lists can then be used to create a sparse matrix for this term. Also returns an
-        updated ``ci`` column index, reflecting how many additional columns would be added
-        to the total model matrix.
+        """Builds the design/term/model matrix associated with this random slope term.
 
         :param ci: Current column index.
         :type ci: int
