@@ -778,10 +778,10 @@ std::tuple<VectorXi64,long long int> id_dependencies(const Eigen::Ref<Eigen::Mat
                 B.applyOnTheLeft(qr1.householderQ().adjoint());
 
                 // Extract lower block
-                B = B(Eigen::seq(X1cols,Eigen::last),Eigen::all);
+                Eigen::MatrixXd Blb = B(Eigen::seq(X1cols,Eigen::last),Eigen::all);
                 
                 // Apply second QR decomposition, now with pivoting
-                Eigen::ColPivHouseholderQR<Eigen::MatrixXd> qr2(B);
+                Eigen::ColPivHouseholderQR<Eigen::MatrixXd> qr2(Blb);
                 
                 // Extract pivot and rank estimate
                 VectorXi64 piv = qr2.colsPermutation().indices().cast<long long int>();

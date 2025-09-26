@@ -31,7 +31,7 @@ jobs:
               pip install .
         - name: Install mssmViz
           run: |
-              pip install mssmViz==0.1.47
+              pip install mssmViz==0.1.49
         - name: Install sphinx
           run: |
                 pip install sphinx sphinx-rtd-theme myst-nb

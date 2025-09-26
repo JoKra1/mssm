@@ -10,7 +10,7 @@ build-backend = "setuptools.build_meta"
 [tool.cibuildwheel]
 before-test = "ls"
 skip = ["pp*", "cp313-musllinux*", "*-win32", "*i686"]
-test-requires = ["pytest", "pytest-cov", "mssmViz==0.1.47", "numdifftools"]
+test-requires = ["pytest", "pytest-cov", "mssmViz==0.1.49", "numdifftools"]
 test-command = 'pytest {project}/tests/test_fast.py --cov={project}'
 
 # Build for intel macs as well
@@ -39,3 +39,18 @@ dynamic = ["version"]
 [tool.setuptools_scm]
 # https://github.com/pypa/setuptools_scm/issues/342
 local_scheme = "no-local-version"
+
+[project.optional-dependencies]
+
+mp = ["multiprocess >= 0.70.18"]
+plot = ["mssmViz==0.1.49"]
+dev = [
+       "mssm[plot]",
+       "pytest >= 8.3.5",
+       "pytest-cov >= 6.1.1",
+       "numdifftools >= 0.9.41",
+       "flake8",
+       "sphinx >= 8.1.3",
+       "sphinx-rtd-theme >= 3.0.2",
+       "myst-nb >= 1.3.0",
+       ]

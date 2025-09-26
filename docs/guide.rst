@@ -89,7 +89,7 @@ The implementation of the :class:`mssm.src.python.penalties.Penalty` class is qu
         def __init__(self,pen_type:PenType) -> None:
             self.type = pen_type
         
-        def constructor(self,n:int,constraint:ConstType|None,*args,**kwargs) -> tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]:
+        def constructor(self,n:int,constraint:Constraint|None,*args,**kwargs) -> tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]:
             pass
 
 The ``__init__`` method receives only a single argument, a :class:`mssm.src.python.custom_types.PenType` (see the documentation for supported values). For example, the ``pen_type`` of the  :class:`mssm.src.python.penalties.DifferencePenalty` is simply set
@@ -102,7 +102,7 @@ The actual construction of the penalty matrix is then handled by the ``construct
 
 Your ``constructor`` method can also accept additional arguments and key-word arguments. For example, the method header of the ``constructor`` method of the :class:`mssm.src.python.penalties.DifferencePenalty` class looks like this::
 
-    constructor(self, n:int, constraint:ConstType|None, m:int=2) -> tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]:
+    constructor(self, n:int, constraint:Constraint|None, m:int=2) -> tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]:
 
 ``m`` here corresponds to the order of the difference penalty. How do these extra arguments get passed to the basis function?
 The :class:`mssm.src.python.terms.f`, :class:`mssm.src.python.terms.fs`, and :class:`mssm.src.python.terms.irf` classes all accept a list of dictionaries for the ``pen_kwargs`` argument - one for each penalty included in the list passed to the terms ``penalty`` argument.
