@@ -2145,7 +2145,7 @@ def correct_lambda_step(
                         lt_rank = lTerm.rank
 
                     lgdetD, bsb = compute_lgdetD_bsb(
-                        lt_rank, lTerm.lam, S_pinv, lTerm.S_J_emb, coef
+                        lt_rank, lTerm.lam, S_pinv, lTerm.S_J_emb, n_coef
                     )
                     lgdetDs.append(lgdetD)
                     bsbs.append(bsb)
