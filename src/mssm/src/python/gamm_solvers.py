@@ -2155,7 +2155,7 @@ def correct_lambda_step(
             if form_Linv:
                 InvCholXXSP = compute_Linv(LP, n_c)  # noqa: F405
 
-            wres, InvCholXXS, total_edf, term_edfs, _, scale = update_scale_edf(
+            wres, InvCholXXS, total_edf, term_edfs, Bs, scale = update_scale_edf(
                 y,
                 z,
                 eta,
