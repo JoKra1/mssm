@@ -2026,44 +2026,6 @@ def correct_lambda_step(
             col_S, penalties, pinv, method == "QR"
         )
 
-        # Update coefficients
-        (
-            eta,
-            mu,
-            n_coef,
-            CholXXS,
-            InvCholXXS,
-            lgdetDs,
-            bsbs,
-            total_edf,
-            term_edfs,
-            Bs,
-            scale,
-            wres,
-            keep,
-            drop,
-        ) = update_coef_and_scale(
-            y,
-            yb,
-            z,
-            Wr,
-            rowsX,
-            colsX,
-            X,
-            Xb,
-            Lrhoi,
-            family,
-            S_emb,
-            S_root,
-            S_pinv,
-            FS_use_rank,
-            penalties,
-            n_c,
-            formula,
-            form_Linv,
-            offset,
-        )
-
         # Optionally repeat PIRLS iteration until convergence - this is no longer PQL/Wood, 2017
         # but will generally be more stable (Wood & Fasiolo, 2017)
         if max_inner > 1 and (
@@ -2073,6 +2035,9 @@ def correct_lambda_step(
 
             # If coef. are updated to convergence, we have to check first iter against
             # incoming/old coef but under current penalty! (see Wood et al., 2017)
+            eta, mu, n_coef, _, _, _, keep, drop = update_coef(
+                yb, X, Xb, family, S_emb, S_root, n_c, None, offset
+            )
 
             # dev check holds current deviance
             c_dev_prev = dev_check + coef.T @ S_emb @ coef
@@ -2191,6 +2156,44 @@ def correct_lambda_step(
                 CholXXS = scp.sparse.csc_array(
                     (CholXXSdat, (CholXXSrow, CholXXScol)), shape=(colsX, colsX)
                 )
+        else:
+            # Update coefficients and scale once
+            (
+                eta,
+                mu,
+                n_coef,
+                CholXXS,
+                InvCholXXS,
+                lgdetDs,
+                bsbs,
+                total_edf,
+                term_edfs,
+                Bs,
+                scale,
+                wres,
+                keep,
+                drop,
+            ) = update_coef_and_scale(
+                y,
+                yb,
+                z,
+                Wr,
+                rowsX,
+                colsX,
+                X,
+                Xb,
+                Lrhoi,
+                family,
+                S_emb,
+                S_root,
+                S_pinv,
+                FS_use_rank,
+                penalties,
+                n_c,
+                formula,
+                form_Linv,
+                offset,
+            )
 
         # Compute gradient of REML with respect to lambda
         # to check if step size needs to be reduced (part of step 6 in Wood, 2017).
