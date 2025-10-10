@@ -1629,10 +1629,12 @@ def compute_reml_candidate_GAMM(
 
         if family.twopar:
             if mu_inval is None:
-                llk = family.llk(y, mu, scale)
+                llk = family.llk(y, mu, scale=scale)
             else:
                 llk = family.llk(
-                    y[mu_inval == False], mu[mu_inval == False], scale  # noqa: E712
+                    y[mu_inval == False],  # noqa: E712
+                    mu[mu_inval == False],  # noqa: E712
+                    scale=scale,
                 )
         else:
             if mu_inval is None:
@@ -4139,7 +4141,7 @@ def correct_VB(
                         nH[drop, :] = 0
 
             else:  # GSMM/GAMLSS case
-                if isinstance(Family, GAMLSSFamily):  # GAMLSS case
+                if isinstance(family, GAMLSSFamily):  # GAMLSS case
                     split_coef = np.split(mean_coef, model.coef_split_idx)
 
                     # Update etas and mus

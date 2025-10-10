@@ -2541,7 +2541,7 @@ class GAMM(GAMMLSS):
                     y = self.res_ar
                     mu = 0
 
-                return self.family.llk(y, mu, scale) - pen
+                return self.family.llk(y, mu, scale=scale) - pen
             else:
                 return self.family.llk(y, mu) - pen
         return None

@@ -537,7 +537,7 @@ class Family:
         model's log-likelihood (i.e., ``two_par=True``) must pass as key-word argument a ``scale``
         parameter with a default value, e.g.,::
 
-           def llk(self, mu, scale=1):
+           def llk(self, y, mu, scale=1):
               ...
 
         You can check the implementation of the :class:`Gaussian` Family for an example.
@@ -565,7 +565,7 @@ class Family:
         model's log-likelihood (i.e., ``two_par=True``) must pass as key-word argument a ``scale``
         parameter with a default value, e.g.,::
 
-           def lp(self, mu, scale=1):
+           def lp(self, y, mu, scale=1):
               ...
 
         You can check the implementation of the :class:`Gaussian` Family for an example.
@@ -619,6 +619,328 @@ class Family:
         :type mu: np.ndarray
         :return: a N-dimensional vector of shape (-1,1) containing the contribution of each
             observation to the overall deviance.
+        :rtype: np.ndarray
+        """
+        pass
+
+
+class ExtendedFamily(Family):
+    """
+    Base class to be implemented by any "extended family" member. This family, defined by
+    Wood et al. (2016) essentially includes any model which we can estimate via iterative
+    reweighted least-squares. Likelihood can have additional parameters beyond scale and mean
+    which can be estimated along model coefficients.
+
+    References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+    :param link: The link function to be used by the model of the mean of this family.
+    :type link: Link
+    :param twopar: Whether the family has a scale parameter (to be estimated) or not.
+    :type twopar: bool
+    :param scale: Known/fixed scale parameter for this family. Setting this to None means
+        the parameter has to be estimated. **Must be set to 1 if the family has no scale
+        parameter** (i.e., when ``twopar = False``)
+    :type scale: float or None, optional
+    :param theta: Any additional parameters of the likelihood. Array needs to be of shape (-1,1).
+        Setting this to None means the parameters have to be estimated.
+    :type theta: float or np.ndarray, optional
+    :ivar None | np.ndarray theta: The (estimated) extra parameters of the log-likelihood.
+        Each implementation of this class should initalize these if not provided and calls to
+        :func:`GAMM.fit` can overwrite them. Defaults to None
+    """
+
+    def __init__(
+        self,
+        link: Link,
+        twopar: bool,
+        scale: None | float = None,
+        theta: None | np.ndarray = None,
+    ):
+        super().__init__(link, twopar, scale)
+        self.est_theta = theta is None
+        self.theta = theta
+
+    def V(self, mu: np.ndarray) -> np.ndarray:
+        """
+        The variance function (of the mean; see Wood, 2017, 3.1.2) for an extended family
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :return: a N-dimensional vector of shape (-1,1) containing the variance function
+            evaluated for each mean
+        :rtype: np.ndarray
+        """
+        pass
+
+    def dVy1(self, mu: np.ndarray) -> np.ndarray | None:
+        """
+        The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with
+        respect ot the mean. Optional function that might simply return None
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the
+            response distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :return: a N-dimensional vector of shape (-1,1) containing the first derivative of
+            the variance function with respect to each mean or None
+        :rtype: np.ndarray | None
+        """
+        return None
+
+    def llk(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None, **kwargs
+    ) -> float:
+        """
+        log-probability of :math:`\\mathbf{y}` under this family with
+        mean = :math:`\\boldsymbol{\\mu}`. Essentially sum over all elements in the vector returned
+        by the :func:`lp` method.
+
+        Families with a scale parameter must pass as key-word argument a ``scale``
+        parameter with a default value, e.g.,::
+
+           def llk(self, y, mu, theta, scale=1):
+              ...
+
+        You can check the implementation of the :class:`Gaussian` Family for an example.
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Any additional parameters of the likelihood. Array needs to be of shape
+            (-1,1). When this is set to None, ``self.theta`` is used.
+        :type theta: float or np.ndarray, optional
+        :return: log-likelihood of the model under this family
+        :rtype: float
+        """
+        pass
+
+    def lp(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None, **kwargs
+    ) -> np.ndarray:
+        """
+        Log-probability of observing every value in :math:`\\mathbf{y}` under this family with
+        mean = :math:`\\boldsymbol{\\mu}`.
+
+        Families with a scale parameter must pass as key-word argument a ``scale``
+        parameter with a default value, e.g.,::
+
+           def lp(self, y, mu, theta, scale=1):
+              ...
+
+        You can check the implementation of the :class:`Gaussian` Family for an example.
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Any additional parameters of the likelihood. Array needs to be of shape
+            (-1,1). When this is set to None, ``self.theta`` is used.
+        :type theta: float or np.ndarray, optional
+        :return: a N-dimensional vector of shape (-1,1) containing the log-probability of observing
+            each data-point under the current model.
+        :rtype: np.ndarray
+        """
+        pass
+
+    def deviance(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+    ) -> float:
+        """
+        Deviance of the model under this family: 2 * (llk_max - llk_c) * scale
+        (Wood, 2017; Faraway, 2016).
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Any additional parameters of the likelihood. Array needs to be of shape
+            (-1,1). When this is set to None, ``self.theta`` is used.
+        :type theta: float or np.ndarray, optional
+        :return: Deviance of the model under this family
+        :rtype: float
+        """
+        pass
+
+    def D(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+    ) -> np.ndarray:
+        """
+        Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Any additional parameters of the likelihood. Array needs to be of shape
+            (-1,1). When this is set to None, ``self.theta`` is used.
+        :type theta: float or np.ndarray, optional
+        :return: a N-dimensional vector of shape (-1,1) containing the contribution of each
+            observation to the overall deviance.
+        :rtype: np.ndarray
+        """
+        pass
+
+    def gradientMU(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None, **kwargs
+    ) -> np.ndarray:
+        """
+        Computes gradient of the deviance **or twice the negative log-likelihood** with respect to
+        ``mu``.
+
+        Families with a scale parameter must pass as key-word argument a ``scale``
+        parameter with a default value, e.g.,::
+
+           def gradientMU(self, y, mu, theta, scale=1):
+              ...
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Any additional parameters of the likelihood. Array needs to be of shape
+            (-1,1). When this is set to None, ``self.theta`` is used.
+        :type theta: float or np.ndarray, optional
+        :return: a N-dimensional vector of shape ``(len(mu),1)`` containing the gradient of
+            the deviance with respect to ``mu``.
+        :rtype: np.ndarray
+        """
+        pass
+
+    def hessianMU(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None, **kwargs
+    ) -> np.ndarray:
+        """
+        Computes hessian of the deviance **or twice the negative log-likelihood** with respect to
+        ``mu``.
+
+        Families with a scale parameter must pass as key-word argument a ``scale``
+        parameter with a default value, e.g.,::
+
+           def hessianTheta(self, y, mu, theta, scale=1):
+              ...
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Any additional parameters of the likelihood. Array needs to be of shape
+            (-1,1). When this is set to None, ``self.theta`` is used.
+        :type theta: float or np.ndarray, optional
+        :return: a N-dimensional vector of shape ``(len(mu),len(mu))`` containing
+            the hessian of the deviance with respect to ``mu``.
+        :rtype: np.ndarray
+        """
+        pass
+
+    def gradientTheta(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None, **kwargs
+    ) -> np.ndarray:
+        """
+        Computes gradient of the log-likelihood with respect to ``self.theta``, given ``mu``
+        and any optional scale parameter.
+
+        Families with a scale parameter must pass as key-word argument a ``scale``
+        parameter with a default value, e.g.,::
+
+           def gradientTheta(self, y, mu, theta, scale=1):
+              ...
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Any additional parameters of the likelihood. Array needs to be of shape
+            (-1,1). When this is set to None, ``self.theta`` is used.
+        :type theta: float or np.ndarray, optional
+        :return: a N-dimensional vector of shape ``(len(self.theta),1)`` containing the gradient of
+            the log-likelihood with respect to theta.
+        :rtype: np.ndarray
+        """
+        pass
+
+    def hessianTheta(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None, **kwargs
+    ) -> np.ndarray:
+        """
+        Computes hessian of the log-likelihood with respect to ``self.theta``, given ``mu``
+        and any optional scale parameter.
+
+        Families with a scale parameter must pass as key-word argument a ``scale``
+        parameter with a default value, e.g.,::
+
+           def hessianTheta(self, y, mu, theta, scale=1):
+              ...
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Any additional parameters of the likelihood. Array needs to be of shape
+            (-1,1). When this is set to None, ``self.theta`` is used.
+        :type theta: float or np.ndarray, optional
+        :return: a N-dimensional vector of shape ``(len(self.theta),len(self.theta))`` containing
+            the hessian of the log-likelihood with respect to theta.
         :rtype: np.ndarray
         """
         pass
@@ -875,7 +1197,7 @@ class Gaussian(Family):
         """
         return np.zeros_like(mu)
 
-    def lp(self, y: np.ndarray, mu: np.ndarray, sigma: float = 1) -> np.ndarray:
+    def lp(self, y: np.ndarray, mu: np.ndarray, scale: float = 1) -> np.ndarray:
         """Log-probability of observing every proportion in :math:`\\mathbf{y}` under their
         respective Normal with mean = :math:`\\boldsymbol{\\mu}`.
 
@@ -888,15 +1210,15 @@ class Gaussian(Family):
         :param mu: A numpy array containing the predicted mean for the response distribution
             corresponding to each observation.
         :type mu: np.ndarray
-        :param sigma: The (estimated) sigma parameter, defaults to 1
-        :type sigma: float, optional
+        :param scale: The (estimated) sigma (variance) parameter, defaults to 1
+        :type scale: float, optional
         :return: a N-dimensional vector containing the log-probability of observing each data-point
             under the current model.
         :rtype: np.ndarray
         """
-        return scp.stats.norm.logpdf(y, loc=mu, scale=math.sqrt(sigma))
+        return scp.stats.norm.logpdf(y, loc=mu, scale=math.sqrt(scale))
 
-    def llk(self, y: np.ndarray, mu: np.ndarray, sigma: float = 1) -> float:
+    def llk(self, y: np.ndarray, mu: np.ndarray, scale: float = 1) -> float:
         """log-probability of data under given model. Essentially sum over all elements in the
         vector returned by the :func:`lp` method.
 
@@ -909,12 +1231,12 @@ class Gaussian(Family):
         :param mu: A numpy array containing the predicted mean for the response distribution
             corresponding to each observation.
         :type mu: np.ndarray
-        :param sigma: The (estimated) sigma parameter, defaults to 1
-        :type sigma: float, optional
+        :param scale: The (estimated) sigma (variance) parameter, defaults to 1
+        :type scale: float, optional
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
-        return sum(self.lp(y, mu, sigma))[0]
+        return sum(self.lp(y, mu, scale))[0]
 
     def deviance(self, y: np.ndarray, mu: np.ndarray) -> float:
         """Deviance of the model under this family: 2 * (llk_max - llk_c) * scale

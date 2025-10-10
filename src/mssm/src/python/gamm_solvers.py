@@ -2,6 +2,7 @@ import numpy as np
 import scipy as scp
 from .exp_fam import (
     Family,
+    ExtendedFamily,
     Gaussian,
     est_scale,
     GAMLSSFamily,
@@ -1870,6 +1871,7 @@ def correct_lambda_step(
     X: scp.sparse.csc_array | None,
     Xb: scp.sparse.csc_array,
     coef: np.ndarray,
+    scale: float,
     Lrhoi: scp.sparse.csc_array | None,
     family: Family,
     col_S: int,
@@ -1948,6 +1950,8 @@ def correct_lambda_step(
     :type Xb: scp.sparse.csc_array
     :param coef: Current coefficient estimate
     :type coef: np.ndarray
+    :param scale: Optional scale parameter of the family
+    :type scale: float
     :param Lrhoi: Optional covariance matrix of an ar1 model
     :type Lrhoi: scp.sparse.csc_array | None
     :param family: Model family
@@ -2069,6 +2073,23 @@ def correct_lambda_step(
                     n_c,
                     offset,
                 )
+
+                # Optionally update theta parameter for extended family models
+                if isinstance(family, ExtendedFamily) and family.est_theta:
+                    ntheta = updateTheta(mu, y, family, scale)
+                    family.theta = ntheta
+
+                    # Need to re-compute deviance + penalized one with new theta
+                    inval = np.isnan(mu).flatten()
+
+                    # fmt: off
+                    dev = family.deviance(y[inval == False], mu[inval == False])  # noqa: E712
+                    # fmt: on
+                    pen_dev = dev
+
+                    if len(penalties) > 0:
+                        # Has to be n_coef below since we already corrected
+                        pen_dev += n_coef.T @ S_emb @ n_coef
 
                 # Update PIRLS weights
                 yb, Xb, z, Wr = update_PIRLS(
@@ -2346,6 +2367,116 @@ def correct_lambda_step(
         keep,
         drop,
     )
+
+
+def updateTheta(
+    mu: np.ndarray, y: np.ndarray, family: ExtendedFamily, scale: float = 1.0
+) -> np.ndarray:
+    """Updates ``theta`` for a :class:`ExtendedFamily` instance given ``mu`` and optional
+    ``scale`` parameter. Returns the new estimate for ``theta``.
+
+    Relies on Newton's method and automatically performs step-length control. ``theta`` is chosen
+    to maximize the family's log-likelihood **not the REML criterion**. Implementation is
+    based on the ``estimate.theta`` function in ``mgcv`` which is used by the ``bam`` function.
+
+    References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+        Smooth Models.
+     - ``estimate.theta`` function in ``mgcv``: https://github.com/cran/mgcv/blob/master/R/efam.r#L5
+
+    :param mu: Vector of mean estimates - one per observation
+    :type mu: np.ndarray
+    :param y: Vector of observations
+    :type y: np.ndarray
+    :param family: Response family of the model
+    :type family: ExtendedFamily
+    :param scale: Optional scale parameter of the family
+    :type scale: float
+    :return: The updated estimate for ``theta`` in a np.ndarray of shape (-1,1)
+    :rtype: np.ndarray
+    """
+
+    # Keep track of theta variable
+    theta = copy.deepcopy(family.theta)
+
+    # Get current log-likelihood, gradient and hessian
+    cllk = (
+        family.llk(y, mu, theta, scale) if family.twopar else family.llk(y, mu, theta)
+    )
+    grad = (
+        family.gradientTheta(y, mu, theta, scale)
+        if family.twopar
+        else family.gradientTheta(y, mu, theta)
+    )
+    hess = (
+        family.hessianTheta(y, mu, theta, scale)
+        if family.twopar
+        else family.hessianTheta(y, mu, theta)
+    )
+
+    converged = False
+    for outer in range(200):
+
+        if (grad.T @ grad)[0, 0] < 1e-7 * abs(cllk):  # Check for onvergence
+            converged = True
+            break
+
+        # First get inverse of hess
+        eig, U = scp.linalg.eigh(-hess)
+
+        # If hessian is not PD find nearest pd
+        maxev = max(eig)
+        eig = [e if e > 0 else 1e-7 * maxev for e in eig]
+
+        # Now invert and compute Newton step
+        INH = U @ np.diag([1 / e for e in eig]) @ U.T
+        nTheta = theta + INH @ grad
+
+        # Compute new llk
+        nllk = (
+            family.llk(y, mu, nTheta, scale)
+            if family.twopar
+            else family.llk(y, mu, nTheta)
+        )
+
+        # Step length control
+        for n_checks in range(32):
+
+            if nllk >= cllk and (not np.isinf(nllk) and not np.isnan(nllk)):
+                break
+
+            if n_checks > 30:  # No suitable update found - just reset to last accepted
+                nTheta = theta
+
+            # Half it if we do not observe an increase in log-likelihood (WPS, 2016)
+            nTheta = (theta + nTheta) / 2
+
+            # Re-evaluate log-likelihood
+            nllk = (
+                family.llk(y, mu, nTheta, scale)
+                if family.twopar
+                else family.llk(y, mu, nTheta)
+            )
+
+        # Set cllk after step length control and re-compute gradient + hessian
+        cllk = nllk
+        theta = nTheta
+
+        grad = (
+            family.gradientTheta(y, mu, theta, scale)
+            if family.twopar
+            else family.gradientTheta(y, mu, theta)
+        )
+        hess = (
+            family.hessianTheta(y, mu, theta, scale)
+            if family.twopar
+            else family.hessianTheta(y, mu, theta)
+        )
+
+    if converged is False:
+        warnings.warn("Theta estimation routine did not converge.")
+
+    return theta
 
 
 ##################################### Main solver ##################################### # noqa: E266
@@ -2629,6 +2760,23 @@ def solve_gamm_sparse(
                     offset,
                 )
 
+                # Optionally update theta parameter for extended family models
+                if isinstance(family, ExtendedFamily) and family.est_theta:
+                    ntheta = updateTheta(mu, y, family, scale)
+                    family.theta = ntheta
+
+                    # Need to re-compute deviance + penalized one with new theta
+                    inval = np.isnan(mu).flatten()
+
+                    # fmt: off
+                    dev = family.deviance(y[inval == False], mu[inval == False])  # noqa: E712
+                    # fmt: on
+                    pen_dev = dev
+
+                    if len(penalties) > 0:
+                        # Has to be coef below since we already corrected
+                        pen_dev += coef.T @ S_emb @ coef
+
                 # Update pseudo-dat weights for next coefficient step (step 1 in Wood, 2017; but
                 # moved after the coef correction because z and Wr depend on
                 # mu and eta, which change during the correction but anything that needs to be
@@ -2715,6 +2863,7 @@ def solve_gamm_sparse(
                 X,
                 Xb,
                 coef,
+                scale,
                 Lrhoi,
                 family,
                 col_S,
@@ -3832,6 +3981,7 @@ def solve_gamm_sparse2(
                 None,
                 XX,
                 coef,
+                scale,
                 None,
                 family,
                 col_S,
@@ -4411,7 +4561,6 @@ def correct_coef_step_gammlss(
             y[inval == False], *[nmu[inval == False] for nmu in next_mus]  # noqa: E712
         )
         next_pen_llk = next_llk - 0.5 * next_coef.T @ S_emb @ next_coef
-        n_checks += 1
 
     # Update step-size for gradient
     if n_checks > 0 and a > 1e-9:
