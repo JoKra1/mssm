@@ -15,7 +15,6 @@ from ..python.gamm_solvers import (
     managers,
     shared_memory,
     update_PIRLS,
-    PIRLS_pdat_weights,
     correct_coef_step,
     update_coef_gen_smooth,
     cpp_cholP,
