@@ -416,6 +416,8 @@ def PIRLS_pdat_weights(
     Calculation is based on a(mu) = 1, so reflects Fisher scoring!
 
     References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+        Smooth Models.
      - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
         (2nd ed.).
 
@@ -433,13 +435,24 @@ def PIRLS_pdat_weights(
     :rtype: tuple[np.ndarray,np.ndarray,np.ndarray]
     """
 
-    with (
-        warnings.catch_warnings()
-    ):  # Catch divide by 0 in w and errors in dy1 computation
+    # Catch divide by 0 in w and errors in dy1 computation
+    with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        dy1 = family.link.dy1(mu)
-        z = dy1 * (y - mu) + eta
-        w = 1 / (np.power(dy1, 2) * family.V(mu))
+        if isinstance(family, ExtendedFamily):
+            # Extended Family case - derivation is provided in section 3.3 of Wood et al., (2016)
+            dy1 = family.link.dy1(mu)
+            dy2 = family.link.dy2(mu)
+            dDdmu = family.dDdmu(y, mu)
+            d2Ddmu = family.Ed2Ddmu(y, mu)
+            dDde = dDdmu / dy1
+            d2Dde = d2Ddmu / np.power(dy1, 2) - dDdmu * dy2 / np.power(dy1, 3)
+            # print(d2Dde)
+            w = 0.5 * d2Dde
+            z = eta - ((1 / (2 * w)) * dDde)
+        else:
+            dy1 = family.link.dy1(mu)
+            z = dy1 * (y - mu) + eta
+            w = 1 / (np.power(dy1, 2) * family.V(mu))
 
     # Prepare to take steps, if any of the weights or pseudo-data become nan or inf
     invalid_idx = np.isnan(w) | np.isnan(z) | np.isinf(w) | np.isinf(z)
@@ -463,6 +476,8 @@ def PIRLS_newton_weights(
     Calculation reflects full Newton scoring!
 
     References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+        Smooth Models.
      - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
         (2nd ed.).
 
@@ -480,20 +495,29 @@ def PIRLS_newton_weights(
     :rtype: tuple[np.ndarray,np.ndarray,np.ndarray]
     """
 
-    with (
-        warnings.catch_warnings()
-    ):  # Catch divide by 0 in w and errors in dy1 computation
+    # Catch divide by 0 in w and errors in dy1 computation
+    with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         dy1 = family.link.dy1(mu)
         dy2 = family.link.dy2(mu)
-        V = family.V(mu)
-        dVy1 = family.dVy1(mu)
+        if isinstance(family, ExtendedFamily):
+            # Extended Family case - derivation is provided in section 3.3 of Wood et al., (2016)
+            dDdmu = family.dDdmu(y, mu)
+            d2Ddmu = family.d2Ddmu(y, mu)
+            dDde = dDdmu / dy1
+            d2Dde = d2Ddmu / np.power(dy1, 2) - dDdmu * dy2 / np.power(dy1, 3)
+            # print(d2Dde)
+            w = 0.5 * d2Dde
+            z = eta - ((1 / (2 * w)) * dDde)
+        else:
+            V = family.V(mu)
+            dVy1 = family.dVy1(mu)
 
-        # Compute a(\mu) as shown in section 3.1.2 of Wood (2017)
-        a = 1 + (y - mu) * (dVy1 / V + dy2 / dy1)
+            # Compute a(\mu) as shown in section 3.1.2 of Wood (2017)
+            a = 1 + (y - mu) * (dVy1 / V + dy2 / dy1)
 
-        z = (dy1 * (y - mu) / a) + eta
-        w = a / (np.power(dy1, 2) * V)
+            z = (dy1 * (y - mu) / a) + eta
+            w = a / (np.power(dy1, 2) * V)
 
     # Prepare to take steps, if any of the weights or pseudo-data become nan or inf
     invalid_idx = np.isnan(w) | np.isnan(z) | np.isinf(w) | np.isinf(z)
@@ -1871,7 +1895,6 @@ def correct_lambda_step(
     X: scp.sparse.csc_array | None,
     Xb: scp.sparse.csc_array,
     coef: np.ndarray,
-    scale: float,
     Lrhoi: scp.sparse.csc_array | None,
     family: Family,
     col_S: int,
@@ -1950,8 +1973,6 @@ def correct_lambda_step(
     :type Xb: scp.sparse.csc_array
     :param coef: Current coefficient estimate
     :type coef: np.ndarray
-    :param scale: Optional scale parameter of the family
-    :type scale: float
     :param Lrhoi: Optional covariance matrix of an ar1 model
     :type Lrhoi: scp.sparse.csc_array | None
     :param family: Model family
@@ -2076,7 +2097,7 @@ def correct_lambda_step(
 
                 # Optionally update theta parameter for extended family models
                 if isinstance(family, ExtendedFamily) and family.est_theta:
-                    ntheta = updateTheta(mu, y, family, scale)
+                    ntheta = updateTheta(mu, y, family)
                     family.theta = ntheta
 
                     # Need to re-compute deviance + penalized one with new theta
@@ -2369,11 +2390,9 @@ def correct_lambda_step(
     )
 
 
-def updateTheta(
-    mu: np.ndarray, y: np.ndarray, family: ExtendedFamily, scale: float = 1.0
-) -> np.ndarray:
-    """Updates ``theta`` for a :class:`ExtendedFamily` instance given ``mu`` and optional
-    ``scale`` parameter. Returns the new estimate for ``theta``.
+def updateTheta(mu: np.ndarray, y: np.ndarray, family: ExtendedFamily) -> np.ndarray:
+    """Updates ``theta`` for a :class:`ExtendedFamily` instance given ``mu``. Returns the new
+    estimate for ``theta``.
 
     Relies on Newton's method and automatically performs step-length control. ``theta`` is chosen
     to maximize the family's log-likelihood **not the REML criterion**. Implementation is
@@ -2390,8 +2409,6 @@ def updateTheta(
     :type y: np.ndarray
     :param family: Response family of the model
     :type family: ExtendedFamily
-    :param scale: Optional scale parameter of the family
-    :type scale: float
     :return: The updated estimate for ``theta`` in a np.ndarray of shape (-1,1)
     :rtype: np.ndarray
     """
@@ -2400,24 +2417,15 @@ def updateTheta(
     theta = copy.deepcopy(family.theta)
 
     # Get current log-likelihood, gradient and hessian
-    cllk = (
-        family.llk(y, mu, theta, scale) if family.twopar else family.llk(y, mu, theta)
-    )
-    grad = (
-        family.gradientTheta(y, mu, theta, scale)
-        if family.twopar
-        else family.gradientTheta(y, mu, theta)
-    )
-    hess = (
-        family.hessianTheta(y, mu, theta, scale)
-        if family.twopar
-        else family.hessianTheta(y, mu, theta)
-    )
+    cllk = family.llk(y, mu, theta)
+    grad = family.gradientLTheta(y, mu, theta)
+    hess = family.hessianLTheta(y, mu, theta)
 
     converged = False
     for outer in range(200):
 
-        if (grad.T @ grad)[0, 0] < 1e-7 * abs(cllk):  # Check for onvergence
+        # Check for onvergence
+        if np.max(np.abs(grad)) < 1e-7 * abs(cllk):
             converged = True
             break
 
@@ -2425,53 +2433,42 @@ def updateTheta(
         eig, U = scp.linalg.eigh(-hess)
 
         # If hessian is not PD find nearest pd
-        maxev = max(eig)
-        eig = [e if e > 0 else 1e-7 * maxev for e in eig]
+        maxev = max(np.abs(eig))
+        eig = [max(e, 1e-5 * maxev) for e in eig]
 
         # Now invert and compute Newton step
         INH = U @ np.diag([1 / e for e in eig]) @ U.T
         nTheta = theta + INH @ grad
 
         # Compute new llk
-        nllk = (
-            family.llk(y, mu, nTheta, scale)
-            if family.twopar
-            else family.llk(y, mu, nTheta)
-        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            nllk = family.llk(y, mu, nTheta)
 
         # Step length control
         for n_checks in range(32):
 
-            if nllk >= cllk and (not np.isinf(nllk) and not np.isnan(nllk)):
+            if nllk > cllk and (not np.isinf(nllk) and not np.isnan(nllk)):
                 break
 
-            if n_checks > 30:  # No suitable update found - just reset to last accepted
-                nTheta = theta
+            if n_checks > 30:  # No suitable update found - just return theta
+                return theta
 
             # Half it if we do not observe an increase in log-likelihood (WPS, 2016)
             nTheta = (theta + nTheta) / 2
 
             # Re-evaluate log-likelihood
-            nllk = (
-                family.llk(y, mu, nTheta, scale)
-                if family.twopar
-                else family.llk(y, mu, nTheta)
-            )
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                nllk = family.llk(y, mu, nTheta)
+            # print(nTheta, nllk, cllk)
 
         # Set cllk after step length control and re-compute gradient + hessian
         cllk = nllk
         theta = nTheta
 
-        grad = (
-            family.gradientTheta(y, mu, theta, scale)
-            if family.twopar
-            else family.gradientTheta(y, mu, theta)
-        )
-        hess = (
-            family.hessianTheta(y, mu, theta, scale)
-            if family.twopar
-            else family.hessianTheta(y, mu, theta)
-        )
+        grad = family.gradientLTheta(y, mu, theta)
+        hess = family.hessianLTheta(y, mu, theta)
 
     if converged is False:
         warnings.warn("Theta estimation routine did not converge.")
@@ -2762,7 +2759,7 @@ def solve_gamm_sparse(
 
                 # Optionally update theta parameter for extended family models
                 if isinstance(family, ExtendedFamily) and family.est_theta:
-                    ntheta = updateTheta(mu, y, family, scale)
+                    ntheta = updateTheta(mu, y, family)
                     family.theta = ntheta
 
                     # Need to re-compute deviance + penalized one with new theta
@@ -2863,7 +2860,6 @@ def solve_gamm_sparse(
                 X,
                 Xb,
                 coef,
-                scale,
                 Lrhoi,
                 family,
                 col_S,
@@ -3981,7 +3977,6 @@ def solve_gamm_sparse2(
                 None,
                 XX,
                 coef,
-                scale,
                 None,
                 family,
                 col_S,

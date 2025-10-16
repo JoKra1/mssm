@@ -19,6 +19,8 @@ from .src.python.exp_fam import (  # noqa: F401
     Family,
     Binomial,
     Gaussian,
+    ExtendedFamily,
+    ScaledT,
     GAMLSSFamily,
     GAUMLSS,
     Gamma,
