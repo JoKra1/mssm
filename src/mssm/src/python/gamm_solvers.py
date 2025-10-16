@@ -2044,6 +2044,11 @@ def correct_lambda_step(
     # step-length (see Wood et al., 2017)
     pen_dev_check = dev_check + coef.T @ S_emb @ coef
 
+    # Keep track of any theta at entry
+    prev_theta = None
+    if max_inner > 1 and isinstance(family, ExtendedFamily) and family.est_theta:
+        prev_theta = copy.deepcopy(family.theta)
+
     while not lam_accepted:
 
         # Re-compute S_emb and S_pinv
@@ -2320,6 +2325,10 @@ def correct_lambda_step(
                 yb, Xb, z, Wr = update_PIRLS(
                     y, yb, mu, eta - offset, X, Xb, family, None
                 )
+
+                # Optionally reset theta parameters
+                if isinstance(family, ExtendedFamily) and family.est_theta:
+                    family.theta = prev_theta
 
         if check[0, 0] >= check_criterion or (control_lambda == 0) or lam_accepted:
             # Accept the step and propose a new one as well! (part of step 6 in Wood, 2017; her
