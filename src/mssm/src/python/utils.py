@@ -1622,6 +1622,7 @@ def compute_reml_candidate_GAMM(
                 Wr_fix = scp.sparse.spdiags([np.sqrt(np.ndarray.flatten(w))], [0])
             else:
                 Wr_fix = Wr
+            inval = inval.flatten()
 
             W = Wr_fix @ Wr_fix
             nH = (X.T @ W @ X).tocsc()
