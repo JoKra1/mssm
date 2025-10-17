@@ -914,7 +914,7 @@ class Gaussian(Family):
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
-        return sum(self.lp(y, mu, scale))[0]
+        return np.sum(self.lp(y, mu, scale))
 
     def deviance(self, y: np.ndarray, mu: np.ndarray) -> float:
         """Deviance of the model under this family: 2 * (llk_max - llk_c) * scale
@@ -1070,7 +1070,7 @@ class Gamma(Family):
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
-        return sum(self.lp(y, mu, scale))[0]
+        return np.sum(self.lp(y, mu, scale))
 
     def D(self, y: np.ndarray, mu: np.ndarray) -> np.ndarray:
         """Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
@@ -1226,7 +1226,7 @@ class InvGauss(Family):
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
-        return sum(self.lp(y, mu, scale))[0]
+        return np.sum(self.lp(y, mu, scale))
 
     def D(self, y: np.ndarray, mu: np.ndarray) -> np.ndarray:
         """Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
@@ -1368,7 +1368,7 @@ class Poisson(Family):
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
-        return sum(self.lp(y, mu))[0]
+        return np.sum(self.lp(y, mu))
 
     def D(self, y: np.ndarray, mu: np.ndarray) -> np.ndarray:
         """Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
@@ -2602,7 +2602,7 @@ class GAUMLSS(GAMLSSFamily):
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
-        return sum(self.lp(y, mu, sigma))[0]
+        return np.sum(self.lp(y, mu, sigma))
 
     def get_resid(self, y: np.ndarray, mu: np.ndarray, sigma: np.ndarray) -> float:
         """Get standardized residuals for a Normal GAMMLSS model (Rigby & Stasinopoulos, 2005).
@@ -2786,7 +2786,7 @@ class MULNOMLSS(GAMLSSFamily):
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
-        return sum(self.lp(y, *mus))[0]
+        return np.sum(self.lp(y, *mus))
 
     def get_resid(self, y: np.ndarray, *mus: list[np.ndarray]) -> None:
         """Placeholder function for residuals of a Multinomial model - yet to be implemented.
@@ -2942,7 +2942,7 @@ class GAMMALS(GAMLSSFamily):
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
-        return sum(self.lp(y, mu, scale))[0]
+        return np.sum(self.lp(y, mu, scale))
 
     def get_resid(self, y: np.ndarray, mu: np.ndarray, scale: np.ndarray) -> np.ndarray:
         """Get standardized residuals for a Gamma GAMMLSS model (Rigby & Stasinopoulos, 2005).
