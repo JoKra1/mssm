@@ -755,7 +755,7 @@ class Binomial(Family):
         :rtype: float
         """
         # y is observed proportion of success
-        return sum(self.lp(y, mu))[0]
+        return np.sum(self.lp(y, mu))
 
     def deviance(self, y: np.ndarray, mu: np.ndarray) -> float:
         """
