@@ -1777,9 +1777,12 @@ class ExtendedFamily(Family):
 class ScaledT(ExtendedFamily):
     """
     This class implements the scaled T family, based on the implementation in ``mgcv`` by
-    Natalya Pya. Specifically, we assume that :math:`(y_i-\\mu_i)/\\phi) \\sim t_{\\nu}`, so that
+    Natalya Pya.
+
+    Specifically, we assume that :math:`(y_i-\\mu_i)/\\phi) \\sim t_{\\nu}`, so that
     :math:`\\phi` takes on the role of the scale parameter and :math:`\\nu` are the degrees of
-    freedom of the T-distribution.
+    freedom of the T-distribution. Note, that as :math:`\\nu \\to \\infty`, this family will behave
+    like a Normal distribution with standard deviation :math:`\\phi`.
 
     Examples::
 
