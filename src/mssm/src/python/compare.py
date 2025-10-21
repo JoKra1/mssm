@@ -5,6 +5,7 @@ from ...models import (
     GAMMLSS,
     GSMM,
     Family,
+    ExtendedFamily,
     Gaussian,
     Identity,
 )
@@ -379,23 +380,7 @@ def compare_CDL(
     if type(model1.family) != type(model2.family):  # noqa: E721
         raise ValueError("Both models should be estimated using the same family.")
 
-    if (
-        perform_GLRT
-        and isinstance(model1.family, Family)
-        and model1.formulas[0].n_coef < model2.formulas[0].n_coef
-    ):
-        raise ValueError(
-            (
-                "For the GLRT, model1 needs to be set to the more complex model (i.e., needs to "
-                "have more coefficients than model2)."
-            )
-        )
-
-    if (
-        perform_GLRT
-        and isinstance(model1.family, Family) is False
-        and len(model1.coef) < len(model2.coef)
-    ):
+    if perform_GLRT and len(model1.coef) < len(model2.coef):
         raise ValueError(
             (
                 "For the GLRT, model1 needs to be set to the more complex model (i.e., needs to "
@@ -508,6 +493,18 @@ def compare_CDL(
             aic_DOF1 += 1
             aic_DOF2 += 1
 
+    # ... and theta parameters
+    if isinstance(model1.family, ExtendedFamily) and model1.family.est_theta:
+        DOF1 += len(model1.family.theta)
+
+        if model2.family.est_theta:
+            DOF2 += len(model2.family.theta)
+
+        if aic_DOF1 is not None:
+            aic_DOF1 += len(model1.family.theta)
+            if model2.family.est_theta:
+                aic_DOF2 += len(model2.family.theta)
+
     # Compute un-penalized likelihood
     llk1 = model1.get_llk(penalized=False)
     llk2 = model2.get_llk(penalized=False)
@@ -536,9 +533,8 @@ def compare_CDL(
         test_stat = -1 * test_stat
 
     # Compute p-value under reference distribution.
-    if (
-        perform_GLRT is False or test_stat < 0
-    ):  # Correct for aforementioned possibility 2: model 1 has lower llk and higher edf.
+    if perform_GLRT is False or test_stat < 0:
+        # Correct for aforementioned possibility 2: model 1 has lower llk and higher edf.
         H1 = np.nan
         p = np.nan
     else:

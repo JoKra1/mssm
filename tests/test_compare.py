@@ -496,6 +496,181 @@ class Test_model_comparison3_hard:
         )
 
 
+class Test_model_comparisons4:
+    sim_fit_dat = sim3(n=500, scale=2, c=0.0, family=Gaussian(), seed=2)
+
+    sim_fit_formula = Formula(
+        lhs("y"),
+        [i(), f(["x0"]), f(["x1"]), f(["x2"]), f(["x3"])],
+        data=sim_fit_dat,
+        print_warn=False,
+    )
+
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["method"] = "QR"
+    test_kwargs["control_lambda"] = 2
+    test_kwargs["max_inner"] = 1
+    test_kwargs["max_outer"] = 200
+    test_kwargs["extend_lambda"] = False
+
+    sim_fit_model = GAMM(sim_fit_formula, ScaledT(Identity(), theta=None))
+    sim_fit_model.fit(**test_kwargs)
+
+    sim_fit_formula2 = Formula(
+        lhs("y"),
+        [i(), f(["x1"]), f(["x2"]), f(["x3"])],
+        data=sim_fit_dat,
+        print_warn=False,
+    )
+
+    sim_fit_model2 = GAMM(sim_fit_formula2, ScaledT(Identity(), theta=None))
+    sim_fit_model2.fit(**test_kwargs)
+
+    prior = DummyRhoPrior(b=np.log(1e12))
+    # And perform a couple of bias corrected / smoothness uncertainty corrected / or not / comparisons...
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_V"] = False
+    test_kwargs["correct_t1"] = False
+    test_kwargs["seed"] = 22
+    uncor_result = compare_CDL(sim_fit_model, sim_fit_model2, **test_kwargs)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = False
+    test_kwargs["n_c"] = 1
+    test_kwargs["grid"] = "JJJ1"
+    test_kwargs["seed"] = 22
+    test_kwargs["Vp_fidiff"] = True
+    cor_result1 = compare_CDL(sim_fit_model, sim_fit_model2, **test_kwargs)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = False
+    test_kwargs["n_c"] = 10
+    test_kwargs["grid"] = "JJJ2"
+    test_kwargs["seed"] = 22
+    test_kwargs["only_expected_edf"] = True
+    test_kwargs["use_importance_weights"] = False
+    test_kwargs["Vp_fidiff"] = False
+    cor_result2 = compare_CDL(sim_fit_model, sim_fit_model2, **test_kwargs)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = False
+    test_kwargs["n_c"] = 10
+    test_kwargs["grid"] = "JJJ2"
+    test_kwargs["seed"] = 22
+    test_kwargs["use_importance_weights"] = False
+    test_kwargs["Vp_fidiff"] = False
+    cor_result3 = compare_CDL(sim_fit_model, sim_fit_model2, **test_kwargs)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = False
+    test_kwargs["n_c"] = 10
+    test_kwargs["grid"] = "JJJ3"
+    test_kwargs["seed"] = 22
+    test_kwargs["use_importance_weights"] = True
+    test_kwargs["Vp_fidiff"] = False
+    cor_result4 = compare_CDL(sim_fit_model, sim_fit_model2, **test_kwargs)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = False
+    test_kwargs["n_c"] = 10
+    test_kwargs["grid"] = "JJJ3"
+    test_kwargs["seed"] = 22
+    test_kwargs["use_importance_weights"] = True
+    test_kwargs["Vp_fidiff"] = False
+    test_kwargs["prior"] = prior
+    cor_result5 = compare_CDL(sim_fit_model, sim_fit_model2, **test_kwargs)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_V"] = False
+    test_kwargs["correct_t1"] = True
+    test_kwargs["n_c"] = 10
+    test_kwargs["grid"] = "JJJ3"
+    test_kwargs["seed"] = 22
+    unbiased_uncor_result = compare_CDL(sim_fit_model, sim_fit_model2, **test_kwargs)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_t1"] = True
+    test_kwargs["n_c"] = 10
+    test_kwargs["grid"] = "JJJ3"
+    test_kwargs["seed"] = 22
+    test_kwargs["use_importance_weights"] = True
+    test_kwargs["prior"] = prior
+    test_kwargs["recompute_H"] = True
+    unbiased_cor_result1 = compare_CDL(sim_fit_model, sim_fit_model2, **test_kwargs)
+
+    def test_comp1(self):
+        np.testing.assert_allclose(
+            self.uncor_result["aic_diff"],
+            0.3787553208994723,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_comp2(self):
+        np.testing.assert_allclose(
+            self.cor_result1["aic_diff"],
+            0.4677656167259556,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_comp3(self):
+        np.testing.assert_allclose(
+            self.cor_result2["aic_diff"],
+            0.421643767664591,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_comp4(self):
+        np.testing.assert_allclose(
+            self.cor_result3["aic_diff"],
+            0.421643767664591,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_comp5(self):
+        np.testing.assert_allclose(
+            self.cor_result4["aic_diff"],
+            0.47304417976920377,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_comp6(self):
+        np.testing.assert_allclose(
+            self.cor_result5["aic_diff"],
+            0.47304417976920377,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_comp7(self):
+        np.testing.assert_allclose(
+            self.unbiased_uncor_result["aic_diff"],
+            0.3787553208994723,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_comp8(self):
+        np.testing.assert_allclose(
+            self.unbiased_cor_result1["aic_diff"],
+            0.47304417976920377,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_edf1(self):
+        np.testing.assert_allclose(
+            self.unbiased_cor_result1["Res. DOF"],
+            1.0896620088519597,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+
 class Test_Vb_corrections:
     # Simulate some data - effect of x0 is very very small
     sim_fit_dat = sim3(n=500, scale=2, c=1, family=Gaussian(), seed=21)

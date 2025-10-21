@@ -15,7 +15,6 @@ from ..python.gamm_solvers import (
     managers,
     shared_memory,
     update_PIRLS,
-    PIRLS_pdat_weights,
     correct_coef_step,
     update_coef_gen_smooth,
     cpp_cholP,
@@ -30,6 +29,7 @@ from ..python.gamm_solvers import (
     deriv_transform_eta_beta,
     translate_sparse,
     map_csc_to_eigen,
+    updateTheta,
 )
 from ..python.terms import fs, rs
 
@@ -39,7 +39,14 @@ except ImportError:
     from .file_loading import mp
 
 from .repara import reparam
-from ..python.exp_fam import Family, Gaussian, Identity, GAMLSSFamily, GSMMFamily
+from ..python.exp_fam import (
+    Family,
+    ExtendedFamily,
+    Gaussian,
+    Identity,
+    GAMLSSFamily,
+    GSMMFamily,
+)
 from ..python.formula import Formula, LambdaTerm
 from ..python.penalties import split_shared_penalties, combine_shared_penalties
 import davies
@@ -1498,7 +1505,12 @@ def compute_reml_candidate_GAMM(
     # Need pseudo-data only in case of GAM
     z = None
     Wr = None
-    mu_inval = None
+    inval = None
+
+    # Keep track of any theta at entry
+    prev_theta = None
+    if isinstance(family, ExtendedFamily) and family.est_theta:
+        prev_theta = copy.deepcopy(family.theta)
 
     try:
         if isinstance(family, Gaussian) and isinstance(family.link, Identity):
@@ -1554,6 +1566,22 @@ def compute_reml_candidate_GAMM(
                         offset,
                     )
 
+                    # Optionally update theta parameter for extended family models
+                    if isinstance(family, ExtendedFamily) and family.est_theta:
+                        ntheta = updateTheta(mu, y, family)
+                        family.theta = ntheta
+
+                        # Need to re-compute deviance + penalized one with new theta
+                        inval = np.isnan(mu).flatten()
+
+                        # fmt: off
+                        dev = family.deviance(y[inval == False], mu[inval == False])  # noqa: E712
+                        # fmt: on
+                        pen_dev = dev
+
+                        # Has to be coef below since we already corrected
+                        pen_dev += coef.T @ S_emb @ coef
+
                 # Update PIRLS weights
                 yb, Xb, z, Wr = update_PIRLS(
                     y, yb, mu, eta - offset, X, Xb, family, None
@@ -1582,16 +1610,19 @@ def compute_reml_candidate_GAMM(
             # At this point, Wr/z might not match the dimensions of y and X, because observations
             # might be excluded at convergence. eta and mu are of correct dimension, so we need to
             # re-compute Wr - this time with a weight of zero for any dropped obs.
-            inval_check = np.any(np.isnan(z))
+            inval = np.isnan(z)
+            inval_check = np.any(inval)
 
             if inval_check:
-                _, w, inval = PIRLS_pdat_weights(y, mu, eta - offset, family)
-                w[inval] = 0
+                w_full = np.zeros_like(eta)
+                w_full[inval == False] = Wr.diagonal()  # noqa: E712
+                w = w_full
 
                 # Re-compute weight matrix
                 Wr_fix = scp.sparse.spdiags([np.sqrt(np.ndarray.flatten(w))], [0])
             else:
                 Wr_fix = Wr
+            inval = inval.flatten()
 
             W = Wr_fix @ Wr_fix
             nH = (X.T @ W @ X).tocsc()
@@ -1628,22 +1659,26 @@ def compute_reml_candidate_GAMM(
         # edf = (InvCholXXS.T@InvCholXXS@nH).trace()
 
         if family.twopar:
-            if mu_inval is None:
-                llk = family.llk(y, mu, scale)
+            if inval is None:
+                llk = family.llk(y, mu, scale=scale)
             else:
                 llk = family.llk(
-                    y[mu_inval == False], mu[mu_inval == False], scale  # noqa: E712
+                    y[inval == False],  # noqa: E712
+                    mu[inval == False],  # noqa: E712
+                    scale=scale,
                 )
         else:
-            if mu_inval is None:
+            if inval is None:
                 llk = family.llk(y, mu)
             else:
-                llk = family.llk(
-                    y[mu_inval == False], mu[mu_inval == False]  # noqa: E712
-                )
+                llk = family.llk(y[inval == False], mu[inval == False])  # noqa: E712
 
         # Now compute REML for candidate
         reml = REML(llk, nH / scale, coef, scale, penalties, keep)
+
+        # Optionally reset theta parameters
+        if isinstance(family, ExtendedFamily) and family.est_theta:
+            family.theta = prev_theta
 
         Linv = None
         if compute_inv or origNH is not None:
@@ -1669,6 +1704,11 @@ def compute_reml_candidate_GAMM(
                 edf = (Linv @ origNH @ Linv.T).trace() * scale
 
     except:  # noqa: E722
+
+        # Make sure to still reset theta parameters
+        if isinstance(family, ExtendedFamily) and family.est_theta:
+            family.theta = prev_theta
+
         return (
             -np.inf,
             scp.sparse.csc_matrix((len(coef), len(coef))),
@@ -4066,6 +4106,11 @@ def correct_VB(
                 z = None
                 Wr = None
 
+                # Keep track of theta
+                prev_theta = None
+                if isinstance(family, ExtendedFamily) and family.est_theta:
+                    prev_theta = copy.deepcopy(family.theta)
+
                 S_emb, _, S_root, _ = compute_S_emb_pinv_det(
                     X.shape[1], model.overall_penalties, "svd", method != "Chol"
                 )
@@ -4081,18 +4126,23 @@ def correct_VB(
 
                     mu = family.link.fi(eta)
 
+                    # Optionally update theta parameter for extended family models
+                    if isinstance(family, ExtendedFamily) and family.est_theta:
+                        ntheta = updateTheta(mu, y, family)
+                        family.theta = ntheta
+
                     # Compute pseudo-dat and weights for mean coef
                     yb, Xb, z, Wr = update_PIRLS(
                         y, yb, mu, eta - model.offset, X, Xb, family, None
                     )
 
-                    inval_check = np.any(np.isnan(z))
+                    inval = np.isnan(z)
+                    inval_check = np.any(inval)
 
                     if inval_check:
-                        _, w, inval = PIRLS_pdat_weights(
-                            y, mu, eta - model.offset, family
-                        )
-                        w[inval] = 0
+                        w_full = np.zeros_like(eta)
+                        w_full[inval == False] = Wr.diagonal()  # noqa: E712
+                        w = w_full
 
                         # Re-compute weight matrix
                         Wr_fix = scp.sparse.spdiags(
@@ -4103,6 +4153,10 @@ def correct_VB(
 
                     W = Wr_fix @ Wr_fix
                     nH = (X.T @ W @ X).tocsc()
+
+                    # Can reset theta now:
+                    if isinstance(family, ExtendedFamily) and family.est_theta:
+                        family.theta = prev_theta
 
                 # Solve for coef to get Cholesky needed to re-compute scale
                 _, _, _, Pr, _, LP, keep, drop = update_coef(
@@ -4139,7 +4193,7 @@ def correct_VB(
                         nH[drop, :] = 0
 
             else:  # GSMM/GAMLSS case
-                if isinstance(Family, GAMLSSFamily):  # GAMLSS case
+                if isinstance(family, GAMLSSFamily):  # GAMLSS case
                     split_coef = np.split(mean_coef, model.coef_split_idx)
 
                     # Update etas and mus

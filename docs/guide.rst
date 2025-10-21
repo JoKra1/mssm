@@ -10,14 +10,28 @@ Adding a New ``Family``
 
 Below we list the families already implemented, which can be estimated via the `GAMM` class:
 
-- Gaussian (G)AMMs (:func:`mssm.src.python.exp_fam.Gaussian`)
-- Gamma GAMMs (:func:`mssm.src.python.exp_fam.Gamma`)
-- Inverse Gaussian GAMMs (:func:`mssm.src.python.exp_fam.InvGauss`)
-- Binomial GAMMs (:func:`mssm.src.python.exp_fam.Binomial`)
-- Poisson GAMMs (:func:`mssm.src.python.exp_fam.Poisson`)
+- Gaussian (:func:`mssm.src.python.exp_fam.Gaussian`)
+- Gamma (:func:`mssm.src.python.exp_fam.Gamma`)
+- Inverse Gaussian (:func:`mssm.src.python.exp_fam.InvGauss`)
+- Binomial (:func:`mssm.src.python.exp_fam.Binomial`)
+- Poisson (:func:`mssm.src.python.exp_fam.Poisson`)
 
 Now, if you want to add a new ``Family``, your new family will have to implement the :func:`mssm.src.python.exp_fam.Family` base or template class. The documentation of the latter
 provides details on all the methods your family will have to implement. You can also check the source code of the Families already implemented to get examples!
+
+Adding a New ``ExtendedFamily``
+----------------
+
+Below we list the extended families already implemented, which can be estimated via the `GAMM` class:
+
+- scaled T (:func:`mssm.src.python.exp_fam.ScaledT`)
+
+Now, if you want to add a new ``ExtendedFamily``, your new family will have to implement the
+:func:`mssm.src.python.exp_fam.ExtendedFamily` base or template class. This class actually
+inherits from the :func:`mssm.src.python.exp_fam.Family` class and requires only a few additional
+methods that are necessary to estimate any additional parameters of the log-likelihood of the
+family. Again, the documentation provides details on all the methods your family will have to
+implement.
 
 Adding a New ``GAMLSSFamily``
 ----------------

@@ -2,6 +2,7 @@ import numpy as np
 import scipy as scp
 from .exp_fam import (
     Family,
+    ExtendedFamily,
     Gaussian,
     est_scale,
     GAMLSSFamily,
@@ -415,6 +416,8 @@ def PIRLS_pdat_weights(
     Calculation is based on a(mu) = 1, so reflects Fisher scoring!
 
     References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+        Smooth Models.
      - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
         (2nd ed.).
 
@@ -432,13 +435,24 @@ def PIRLS_pdat_weights(
     :rtype: tuple[np.ndarray,np.ndarray,np.ndarray]
     """
 
-    with (
-        warnings.catch_warnings()
-    ):  # Catch divide by 0 in w and errors in dy1 computation
+    # Catch divide by 0 in w and errors in dy1 computation
+    with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        dy1 = family.link.dy1(mu)
-        z = dy1 * (y - mu) + eta
-        w = 1 / (np.power(dy1, 2) * family.V(mu))
+        if isinstance(family, ExtendedFamily):
+            # Extended Family case - derivation is provided in section 3.3 of Wood et al., (2016)
+            dy1 = family.link.dy1(mu)
+            dy2 = family.link.dy2(mu)
+            dDdmu = family.dDdmu(y, mu)
+            d2Ddmu = family.Ed2Ddmu(y, mu)
+            dDde = dDdmu / dy1
+            d2Dde = d2Ddmu / np.power(dy1, 2) - dDdmu * dy2 / np.power(dy1, 3)
+            # print(d2Dde)
+            w = 0.5 * d2Dde
+            z = eta - ((1 / (2 * w)) * dDde)
+        else:
+            dy1 = family.link.dy1(mu)
+            z = dy1 * (y - mu) + eta
+            w = 1 / (np.power(dy1, 2) * family.V(mu))
 
     # Prepare to take steps, if any of the weights or pseudo-data become nan or inf
     invalid_idx = np.isnan(w) | np.isnan(z) | np.isinf(w) | np.isinf(z)
@@ -462,6 +476,8 @@ def PIRLS_newton_weights(
     Calculation reflects full Newton scoring!
 
     References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+        Smooth Models.
      - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
         (2nd ed.).
 
@@ -479,20 +495,29 @@ def PIRLS_newton_weights(
     :rtype: tuple[np.ndarray,np.ndarray,np.ndarray]
     """
 
-    with (
-        warnings.catch_warnings()
-    ):  # Catch divide by 0 in w and errors in dy1 computation
+    # Catch divide by 0 in w and errors in dy1 computation
+    with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         dy1 = family.link.dy1(mu)
         dy2 = family.link.dy2(mu)
-        V = family.V(mu)
-        dVy1 = family.dVy1(mu)
+        if isinstance(family, ExtendedFamily):
+            # Extended Family case - derivation is provided in section 3.3 of Wood et al., (2016)
+            dDdmu = family.dDdmu(y, mu)
+            d2Ddmu = family.d2Ddmu(y, mu)
+            dDde = dDdmu / dy1
+            d2Dde = d2Ddmu / np.power(dy1, 2) - dDdmu * dy2 / np.power(dy1, 3)
+            # print(d2Dde)
+            w = 0.5 * d2Dde
+            z = eta - ((1 / (2 * w)) * dDde)
+        else:
+            V = family.V(mu)
+            dVy1 = family.dVy1(mu)
 
-        # Compute a(\mu) as shown in section 3.1.2 of Wood (2017)
-        a = 1 + (y - mu) * (dVy1 / V + dy2 / dy1)
+            # Compute a(\mu) as shown in section 3.1.2 of Wood (2017)
+            a = 1 + (y - mu) * (dVy1 / V + dy2 / dy1)
 
-        z = (dy1 * (y - mu) / a) + eta
-        w = a / (np.power(dy1, 2) * V)
+            z = (dy1 * (y - mu) / a) + eta
+            w = a / (np.power(dy1, 2) * V)
 
     # Prepare to take steps, if any of the weights or pseudo-data become nan or inf
     invalid_idx = np.isnan(w) | np.isnan(z) | np.isinf(w) | np.isinf(z)
@@ -2019,6 +2044,11 @@ def correct_lambda_step(
     # step-length (see Wood et al., 2017)
     pen_dev_check = dev_check + coef.T @ S_emb @ coef
 
+    # Keep track of any theta at entry
+    prev_theta = None
+    if max_inner > 1 and isinstance(family, ExtendedFamily) and family.est_theta:
+        prev_theta = copy.deepcopy(family.theta)
+
     while not lam_accepted:
 
         # Re-compute S_emb and S_pinv
@@ -2069,6 +2099,23 @@ def correct_lambda_step(
                     n_c,
                     offset,
                 )
+
+                # Optionally update theta parameter for extended family models
+                if isinstance(family, ExtendedFamily) and family.est_theta:
+                    ntheta = updateTheta(mu, y, family)
+                    family.theta = ntheta
+
+                    # Need to re-compute deviance + penalized one with new theta
+                    inval = np.isnan(mu).flatten()
+
+                    # fmt: off
+                    dev = family.deviance(y[inval == False], mu[inval == False])  # noqa: E712
+                    # fmt: on
+                    pen_dev = dev
+
+                    if len(penalties) > 0:
+                        # Has to be n_coef below since we already corrected
+                        pen_dev += n_coef.T @ S_emb @ n_coef
 
                 # Update PIRLS weights
                 yb, Xb, z, Wr = update_PIRLS(
@@ -2279,6 +2326,10 @@ def correct_lambda_step(
                     y, yb, mu, eta - offset, X, Xb, family, None
                 )
 
+                # Optionally reset theta parameters
+                if isinstance(family, ExtendedFamily) and family.est_theta:
+                    family.theta = prev_theta
+
         if check[0, 0] >= check_criterion or (control_lambda == 0) or lam_accepted:
             # Accept the step and propose a new one as well! (part of step 6 in Wood, 2017; her
             #  uses efs from Wood & Fasiolo, 2017 to propose new lambda delta)
@@ -2346,6 +2397,92 @@ def correct_lambda_step(
         keep,
         drop,
     )
+
+
+def updateTheta(mu: np.ndarray, y: np.ndarray, family: ExtendedFamily) -> np.ndarray:
+    """Updates ``theta`` for a :class:`ExtendedFamily` instance given ``mu``. Returns the new
+    estimate for ``theta``.
+
+    Relies on Newton's method and automatically performs step-length control. ``theta`` is chosen
+    to maximize the family's log-likelihood **not the REML criterion**. Implementation is
+    based on the ``estimate.theta`` function in ``mgcv`` which is used by the ``bam`` function.
+
+    References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+        Smooth Models.
+     - ``estimate.theta`` function in ``mgcv``: https://github.com/cran/mgcv/blob/master/R/efam.r#L5
+
+    :param mu: Vector of mean estimates - one per observation
+    :type mu: np.ndarray
+    :param y: Vector of observations
+    :type y: np.ndarray
+    :param family: Response family of the model
+    :type family: ExtendedFamily
+    :return: The updated estimate for ``theta`` in a np.ndarray of shape (-1,1)
+    :rtype: np.ndarray
+    """
+
+    # Keep track of theta variable
+    theta = copy.deepcopy(family.theta)
+
+    # Get current log-likelihood, gradient and hessian
+    cllk = family.llk(y, mu, theta)
+    grad = family.gradientLTheta(y, mu, theta)
+    hess = family.hessianLTheta(y, mu, theta)
+
+    converged = False
+    for outer in range(200):
+
+        # Check for onvergence
+        if np.max(np.abs(grad)) < 1e-7 * abs(cllk):
+            converged = True
+            break
+
+        # First get inverse of hess
+        eig, U = scp.linalg.eigh(-hess)
+
+        # If hessian is not PD find nearest pd
+        maxev = max(np.abs(eig))
+        eig = [max(e, 1e-5 * maxev) for e in eig]
+
+        # Now invert and compute Newton step
+        INH = U @ np.diag([1 / e for e in eig]) @ U.T
+        nTheta = theta + INH @ grad
+
+        # Compute new llk
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            nllk = family.llk(y, mu, nTheta)
+
+        # Step length control
+        for n_checks in range(32):
+
+            if nllk > cllk and (not np.isinf(nllk) and not np.isnan(nllk)):
+                break
+
+            if n_checks > 30:  # No suitable update found - just return theta
+                return theta
+
+            # Half it if we do not observe an increase in log-likelihood (WPS, 2016)
+            nTheta = (theta + nTheta) / 2
+
+            # Re-evaluate log-likelihood
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                nllk = family.llk(y, mu, nTheta)
+            # print(nTheta, nllk, cllk)
+
+        # Set cllk after step length control and re-compute gradient + hessian
+        cllk = nllk
+        theta = nTheta
+
+        grad = family.gradientLTheta(y, mu, theta)
+        hess = family.hessianLTheta(y, mu, theta)
+
+    if converged is False:
+        warnings.warn("Theta estimation routine did not converge.")
+
+    return theta
 
 
 ##################################### Main solver ##################################### # noqa: E266
@@ -2628,6 +2765,23 @@ def solve_gamm_sparse(
                     n_c,
                     offset,
                 )
+
+                # Optionally update theta parameter for extended family models
+                if isinstance(family, ExtendedFamily) and family.est_theta:
+                    ntheta = updateTheta(mu, y, family)
+                    family.theta = ntheta
+
+                    # Need to re-compute deviance + penalized one with new theta
+                    inval = np.isnan(mu).flatten()
+
+                    # fmt: off
+                    dev = family.deviance(y[inval == False], mu[inval == False])  # noqa: E712
+                    # fmt: on
+                    pen_dev = dev
+
+                    if len(penalties) > 0:
+                        # Has to be coef below since we already corrected
+                        pen_dev += coef.T @ S_emb @ coef
 
                 # Update pseudo-dat weights for next coefficient step (step 1 in Wood, 2017; but
                 # moved after the coef correction because z and Wr depend on
@@ -4411,7 +4565,6 @@ def correct_coef_step_gammlss(
             y[inval == False], *[nmu[inval == False] for nmu in next_mus]  # noqa: E712
         )
         next_pen_llk = next_llk - 0.5 * next_coef.T @ S_emb @ next_coef
-        n_checks += 1
 
     # Update step-size for gradient
     if n_checks > 0 and a > 1e-9:
