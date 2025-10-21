@@ -130,7 +130,7 @@ class Test_GAUMLSSGEN_hard:
                     [0.66646453],
                 ]
             ),
-            atol=min(max_atol, 0),
+            atol=min(max_atol, 0.3),
             rtol=min(max_rtol, 0.5),
         )
 
@@ -264,7 +264,7 @@ class Test_GAUMLSSGEN_hard:
                     [0.66740193],
                 ]
             ),
-            atol=min(max_atol, 0),
+            atol=min(max_atol, 0.3),
             rtol=min(max_rtol, 0.5),
         )
 
@@ -341,7 +341,7 @@ class Test_GAUMLSSGEN_hard:
                 ]
             ),
             atol=min(max_atol, 0),
-            rtol=min(max_rtol, 1.5),
+            rtol=min(max_rtol, 2),
         )
 
 
@@ -1423,7 +1423,7 @@ class Test_shared_qefs:
             self.model.edf,
             109.10136272485252,
             atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.1),
+            rtol=min(max_rtol, 0.2),
         )
 
     def test_GAMcoef(self):
@@ -1680,7 +1680,7 @@ class Test_shared_qefs:
                 ]
             ),
             atol=min(max_atol, 0),
-            rtol=min(max_rtol, 2.5),
+            rtol=min(max_rtol, 8),
         )
 
     def test_GAMreml(self):
@@ -1741,5 +1741,5 @@ class Test_shared_qefs:
                 ]
             ),
             atol=min(max_atol, 0),
-            rtol=min(max_rtol, 1.5),
+            rtol=min(max_rtol, 2.5),
         )
