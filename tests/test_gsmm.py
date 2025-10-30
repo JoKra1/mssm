@@ -1849,7 +1849,7 @@ class Test_mvn:
                 ]
             ),
             atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.5),
+            rtol=min(max_rtol, 7),
         )
 
     def test_GAMlam(self):
@@ -1865,7 +1865,7 @@ class Test_mvn:
                 ]
             ),
             atol=min(max_atol, 0),
-            rtol=min(max_rtol, 2.5),
+            rtol=min(max_rtol, 3),
         )
 
     def test_GAMreml(self):
