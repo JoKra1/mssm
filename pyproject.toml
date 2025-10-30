@@ -10,7 +10,7 @@ build-backend = "setuptools.build_meta"
 [tool.cibuildwheel]
 before-test = "ls"
 skip = ["pp*", "cp313-musllinux*", "*-win32", "*i686"]
-test-requires = ["pytest", "pytest-cov", "mssmViz==0.1.49", "numdifftools"]
+test-requires = ["pytest", "pytest-cov", "mssmViz==0.1.5", "numdifftools"]
 test-command = 'pytest {project}/tests/test_fast.py --cov={project}'
 
 # Build for intel macs as well
@@ -43,7 +43,7 @@ local_scheme = "no-local-version"
 [project.optional-dependencies]
 
 mp = ["multiprocess >= 0.70.18"]
-plot = ["mssmViz==0.1.49"]
+plot = ["mssmViz==0.1.5"]
 dev = [
        "mssm[plot]",
        "pytest >= 8.3.5",
