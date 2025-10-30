@@ -51,6 +51,7 @@ Adding a New ``GSMMFamily``
 Below we list the GSMM families already implemented, which can be estimated via the `GSMM` class:
 
 - Cox proportional Hazard models (:func:`mssm.src.python.exp_fam.PropHaz`)
+- Multivariate additive models (:func:`mssm.src.python.exp_fam.MultiGauss`)
 
 To implement a new  member of the most general kind of smooth model, you will only need to implement the :func:`mssm.src.python.exp_fam.GSMMFamily` template class - ``mssm`` even supports completely derivative-free estimation.
 You can check the :class:`mssm.models.GSMM` documentation for an example or the tutorial included with this documentation - it contains step-by-step instructions on how to implement this family.

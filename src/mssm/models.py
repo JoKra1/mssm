@@ -30,6 +30,7 @@ from .src.python.exp_fam import (  # noqa: F401
     GSMMFamily,
     PropHaz,
     Poisson,
+    MultiGauss,
 )
 from .src.python.gamm_solvers import (  # noqa: F401
     solve_gamm_sparse,

@@ -3030,6 +3030,8 @@ class GSMMFamily:
     :ivar int, optional extra_coef: Number of extra coefficients required by specific family or
         ``None``. By default set to ``None`` and changed to ``int`` by specific families requiring
         this.
+    :ivar list[any] llkargs: A list holding any extra arguments passed to the constructor via
+        ``llkargs``.
 
     """
 
@@ -3508,10 +3510,10 @@ class PropHaz(GSMMFamily):
 
     def get_resid(
         self,
-        coef,
-        coef_split_idx,
-        ys,
-        Xs,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray],
+        Xs: list[scp.sparse.csc_array],
         resid_type: str = "Martingale",
         reorder: np.ndarray | None = None,
     ) -> np.ndarray:
@@ -3921,3 +3923,380 @@ class PropHaz(GSMMFamily):
             -1, 1
         )
         return coef
+
+
+class MultiGauss(GSMMFamily):
+    """Family for multivariate additive models - a type of General Smooth model as discussed by
+    Wood, Pya, & Säfken (2016).
+
+    Implementation based on Supplementary materials H in Wood, Pya, & Säfken (2016). Currently,
+    these models can only be estimated via the ``L-qEFS`` update in ``mssm``.
+
+    Examples::
+
+        from mssm.models import *
+        from mssmViz.sim import *
+        from mssmViz.plot import *
+        import matplotlib.pyplot as plt
+
+        # Simulate data
+        sim_dat = sim16(500,seed=1134,correlate=True)
+
+        # We need formulas for each mean!
+        formulas = [
+            Formula(lhs("y0"), [i(), f(["x0"])], data=sim_dat),
+            Formula(lhs("y1"), [i(), f(["x1"]), f(["x2"])], data=sim_dat),
+            Formula(lhs("y2"), [i(), f(["x3"])], data=sim_dat)
+        ]
+
+        # Now define the model...
+        model = GSMM(formulas, MultiGauss(3,[Identity() for _ in range(3)]))
+
+        # ... and fit!
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            model.fit(method='qEFS')
+
+        # Get overview:
+        model.print_parametric_terms()
+        model.print_smooth_terms(p_values=True)
+
+        # And plot smooth function estimates for mean at index 1
+        plot(model,dist_par=1)
+
+    References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for \
+        General Smooth Models.
+     - Nocedal & Wright (2006). Numerical Optimization. Springer New York.
+
+    :param pars: Number of means (i.e., dimension of the multivariate Gaussian)
+    :type pars: int
+    :param links: List of link functions for the models of the means. For example
+        ``[Identity() for _ in range(pars)]``.
+    :type links: list[Link]
+    """
+
+    def __init__(self, pars: int, links: list[Link]):
+        super().__init__(pars, links)
+
+        # Elements of cholesky of precision matrix of multivariate Gaussian
+        self.extra_coef = int(pars * (pars + 1) / 2)
+
+    def getR(self, theta: np.ndarray) -> tuple[np.ndarray, float]:
+        """Returns transpose of Cholesky of precision matrix of multivariate Gaussian.
+
+        Examples::
+
+            from mssm.models import *
+            from mssmViz.sim import *
+            from mssmViz.plot import *
+            import matplotlib.pyplot as plt
+
+            # Simulate data
+            sim_dat = sim16(500,seed=1134,correlate=True)
+
+            # We need formulas for each mean!
+            formulas = [
+                Formula(lhs("y0"), [i(), f(["x0"])], data=sim_dat),
+                Formula(lhs("y1"), [i(), f(["x1"]), f(["x2"])], data=sim_dat),
+                Formula(lhs("y2"), [i(), f(["x3"])], data=sim_dat)
+            ]
+
+            # Now define the model...
+            model = GSMM(formulas, MultiGauss(3,[Identity() for _ in range(3)]))
+
+            # ... and fit!
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                model.fit(method='qEFS')
+
+            # Extract R
+            split_coef = np.split(model.coef,model.coef_split_idx)
+            theta = split_coef[-1].flatten()
+            R,log_det = model.family.getR(theta)
+
+            # R is the transpose of the Cholesky of the precision matrix. So to get the
+            # Covariance matrix of the multivariate Gaussian we need to compute:
+            Sigma = np.linalg.inv(R.T@R)
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for \
+            General Smooth Models.
+
+        :param theta: Flattened array holding inverses of log(variance) and co-variance parameters
+        :type theta: np.ndarray
+        :return: Transpose of Cholesky as a numpy array and log-determinant of Cholesky
+        :rtype: tuple[np.ndarray,float]
+        """
+
+        R = np.zeros((self.n_par, self.n_par))
+
+        dat_idx = 0
+        logdet = 0
+        for m in range(self.n_par):
+
+            Rrow = theta[dat_idx : dat_idx + (self.n_par - m)]  # noqa: E203
+
+            logdet += Rrow[0]
+            Rrow[0] = np.exp(Rrow[0])
+            R[m, m:] = Rrow
+            dat_idx += self.n_par - m
+
+        return R, logdet
+
+    def llk(
+        self,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray],
+        Xs: list[scp.sparse.csc_array | None],
+    ) -> float:
+        """Computes the log-likelihood under a multivariate normal given coefficients in the
+        additive models of the mean and the log(variance) and co-variance parameters.
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for \
+            General Smooth Models.
+
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!). **Note** the last ``int(pars * (pars + 1) / 2)`` elements contain the
+            log(variance) and co-variance parameters.
+        :type coef: np.ndarray
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each mean and a final sub-set containing all log(variance) and
+            co-variance parameters.
+        :type coef_split_idx: [int]
+        :param ys: List containing the vectors of observations.
+        :type ys: [np.ndarray]
+        :param Xs: A list containing the sparse model matrices associated with the models of the
+            means. **Note**, this implementation allows to make use of the ``build_mat`` argument
+            of the :func:`GSMM.fit` method. Specifically, for means that have the same predictor
+            structure as the first mean we can set ``build_mat[idx] = False``. The code then
+            automatically assigns ``X[idx] = X[0]``. See the :func:`GSMM.fit` documentation for
+            more details.
+        :type Xs: [scp.sparse.csc_array | None]
+        """
+
+        # Extract extra info and fix model matrices, then compute mu and theta
+        Xfix = [X if X is not None else Xs[0] for X in Xs]
+        y = np.concatenate(ys, axis=1)
+        split_coef = np.split(coef, coef_split_idx)
+        mus = np.concatenate(
+            [
+                self.links[mui].fi(Xfix[mui] @ split_coef[mui])
+                for mui in range(self.n_par)
+            ],
+            axis=1,
+        )
+        theta = split_coef[-1].flatten()
+
+        # Get transpose of Cholesky of precision
+        R, logdet = self.getR(theta)
+
+        # yR is of shape n * m
+        yR = (y - mus) @ R.T
+
+        # Compute np.sum([yR[oi, :] @ yR.T[:, oi] for oi in range(Xfix[0].shape[0])]) as shown
+        # by WPS (2016)
+        llk = -0.5 * (yR * yR).sum() + yR.shape[0] * logdet
+
+        return llk
+
+    def gradient(
+        self,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray],
+        Xs: list[scp.sparse.csc_array | None],
+    ) -> np.ndarray:
+        """Computes gradient of a multivariate normal containing partial derivatives with
+        respect to coefficients in the additive models of the mean and the log(variance) and
+        co-variance parameters.
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for \
+            General Smooth Models.
+
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!). **Note** the last ``int(pars * (pars + 1) / 2)`` elements contain the
+            log(variance) and co-variance parameters.
+        :type coef: np.ndarray
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each mean and a final sub-set containing all log(variance) and
+            co-variance parameters.
+        :type coef_split_idx: [int]
+        :param ys: List containing the vectors of observations.
+        :type ys: [np.ndarray]
+        :param Xs: A list containing the sparse model matrices associated with the models of the
+            means. **Note**, this implementation allows to make use of the ``build_mat`` argument
+            of the :func:`GSMM.fit` method. Specifically, for means that have the same predictor
+            structure as the first mean we can set ``build_mat[idx] = False``. The code then
+            automatically assigns ``X[idx] = X[0]``. See the :func:`GSMM.fit` documentation for
+            more details.
+        :type Xs: [scp.sparse.csc_array | None]
+        :return: The gradient at the current parameters estimates in a numpy array of shape (-1,1)
+        :rtype: np.ndarray
+        """
+
+        # Extract extra info and fix model matrices, then compute mu and theta
+        Xfix = [X if X is not None else Xs[0] for X in Xs]
+        y = np.concatenate(ys, axis=1)
+        split_coef = np.split(coef, coef_split_idx)
+        mus = np.concatenate(
+            [
+                self.links[mui].fi(Xfix[mui] @ split_coef[mui].reshape(-1, 1))
+                for mui in range(self.n_par)
+            ],
+            axis=1,
+        )
+        theta = split_coef[-1].flatten()
+
+        # Get transpose of Cholesky of precision
+        R, logdet = self.getR(theta)
+        Rdiag = R.diagonal()
+
+        # yR is of shape n * m
+        yR = (y - mus) @ R.T
+        # RRy is of shape m * n
+        RRy = R.T @ yR.T
+
+        total_idx = 0
+        n_obs = Xfix[0].shape[0]
+        grad = np.zeros(coef.shape[0])
+
+        # Compute np.sum([xbarR[oi, :] @ yR.T[:, oi] for oi in range(n_obs)]) as
+        # shown by WPS (2016)
+        for mui in range(self.n_par):
+
+            yRmui = RRy[mui, :]
+
+            grad[total_idx : total_idx + Xfix[mui].shape[1]] = (  # noqa: E203
+                Xfix[mui] * yRmui[:, None]
+            ).sum(axis=0)
+            total_idx += Xfix[mui].shape[1]
+
+        # Now partials for variance parameters
+        Rp = np.zeros((self.n_par, self.n_par))  # partial of transpose of cholesky
+        for mr in range(self.n_par):
+
+            for mc in range(mr, self.n_par):
+
+                # Diagonal elements are exp(theta) so partial differs
+                Rp[mr, mc] = Rdiag[mr] if mr == mc else 1
+
+                # Compute np.sum([yR[oi, :] @ Rpy[:, oi] for oi in range(n_obs)]) as shown
+                # by Wps (2016)
+                yRp = (y - mus) @ Rp.T
+                dldtheta = -np.sum(yR * yRp)
+
+                # Index function part from WPS (2016)
+                if mr == mc:
+                    dldtheta += n_obs
+
+                grad[total_idx] = dldtheta
+
+                # Reset partial of R
+                Rp[mr, mc] = 0
+                total_idx += 1
+
+        return grad.reshape(-1, 1)
+
+    def get_resid(
+        self,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray],
+        Xs: list[scp.sparse.csc_array | None],
+        mean: int | None = None,
+    ) -> np.ndarray:
+        """Computes Deviance residuals of a multivariate normal model given coefficients in the
+        additive models of the mean and the log(variance) and co-variance parameters.
+
+        If the model is correct, each column in the returned matrix should look like an i.i.d sample
+        of size ``N`` from :math:`N(0,1)`.
+
+        Examples::
+
+            from mssm.models import *
+            from mssmViz.sim import *
+            from mssmViz.plot import *
+            import matplotlib.pyplot as plt
+
+            # Simulate data
+            sim_dat = sim16(500,seed=1134,correlate=True)
+
+            # We need formulas for each mean!
+            formulas = [
+                Formula(lhs("y0"), [i(), f(["x0"])], data=sim_dat),
+                Formula(lhs("y1"), [i(), f(["x1"]), f(["x2"])], data=sim_dat),
+                Formula(lhs("y2"), [i(), f(["x3"])], data=sim_dat)
+            ]
+
+            # Now define the model...
+            model = GSMM(formulas, MultiGauss(3,[Identity() for _ in range(3)]))
+
+            # ... and fit!
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                model.fit(method='qEFS')
+
+            # Can now extract the residual matrix
+            res = model.get_resid()
+
+            # The ``get_resid`` method supports a ``mean`` key-word to extract univariate residuals
+            # for an individual mean. We can use mssmViz's plot function to visualize these
+            # for example for mean at index 2:
+            plot_val(model,gsmm_kwargs={"mean":2})
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for \
+            General Smooth Models.
+
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!). **Note** the last ``int(pars * (pars + 1) / 2)`` elements contain the
+            log(variance) and co-variance parameters.
+        :type coef: np.ndarray
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each mean and a final sub-set containing all log(variance) and
+            co-variance parameters.
+        :type coef_split_idx: [int]
+        :param ys: List containing the vectors of observations.
+        :type ys: [np.ndarray]
+        :param Xs: A list containing the sparse model matrices associated with the models of the
+            means. **Note**, this implementation allows to make use of the ``build_mat`` argument
+            of the :func:`GSMM.fit` method. Specifically, for means that have the same predictor
+            structure as the first mean we can set ``build_mat[idx] = False``. The code then
+            automatically assigns ``X[idx] = X[0]``. See the :func:`GSMM.fit` documentation for
+            more details.
+        :type Xs: [scp.sparse.csc_array | None]
+        :param mean: Optionally, the index of a specific mean for which to extract the residuals.
+            This allows to extract univariate residuals for a specific mean. Setting this to
+            ``None`` means the ``(N * self.n_par)`` residual matrix is returned where ``N`` is the
+            number of observations. Defaults to None
+        :type mean: int | None, optional
+        :return: Residual matrix. Will be a residual vector if ``mean`` is not set to None.
+        :rtype: np.ndarray
+        """
+        # Extract extra info and fix model matrices, then compute mu and theta
+        Xfix = [X if X is not None else Xs[0] for X in Xs]
+        y = np.concatenate(ys, axis=1)
+        split_coef = np.split(coef, coef_split_idx)
+        mus = np.concatenate(
+            [
+                self.links[mui].fi(Xfix[mui] @ split_coef[mui].reshape(-1, 1))
+                for mui in range(self.n_par)
+            ],
+            axis=1,
+        )
+        theta = split_coef[-1].flatten()
+
+        # Get transpose of Cholesky of precision
+        R, logdet = self.getR(theta)
+
+        # Standard covariance transform for normal random variable:
+        res = (y - mus) @ R.T
+
+        if mean is not None:
+            res = res[:, mean].reshape(-1, 1)
+
+        return res
