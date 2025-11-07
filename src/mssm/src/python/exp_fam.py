@@ -2434,6 +2434,36 @@ class GAMLSSFamily:
         """
         return None
 
+    def rvs(
+        self, *mus: list[np.ndarray], size: int = 1, seed: int | None = 0
+    ) -> np.ndarray | None:
+        """Returns ``size`` random samples for each of the distributions parameterized by ``mus``.
+
+        **Note**, the returned array - if this function is implemented - will be of size
+        ``(size, mus[0].shape[0])``. I.e., ``size`` random samples will be obtained for each of
+        the ``mus[0].shape[0])`` distributions, all parameterized by their individual ``mus``.
+
+        **Important:** Families for which this function is not implemented can return None.
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param mus: A list including `self.n_par` lists - one for each parameter of the
+            distribution. Each of those lists contains a numpy array of shape (-1,1) holding the
+            expected value for a particular parmeter for each of the N observations.
+        :type mus: [np.ndarray]
+        :param size: Number of random samples to return per distribution. Defaults to 1.
+        :type size: int, optional
+        :param seed: Seed to use for random number generation. Defaults to 0.
+        :type seed: int, optional
+        :return: a numpy array of shape ``(size, mus[0].shape[0])`` containing random
+            samples from every distribution parameterized by their ``mus``. Can also return None if
+            this function is not implemented by the specific family.
+        :rtype: np.ndarray
+        """
+        return None
+
     def get_resid(
         self, y: np.ndarray, *mus: list[np.ndarray], **kwargs
     ) -> np.ndarray | None:
@@ -2606,6 +2636,36 @@ class GAUMLSS(GAMLSSFamily):
         :rtype: float
         """
         return np.sum(self.lp(y, mu, sigma))
+
+    def rvs(
+        self, mu: np.ndarray, sigma: np.ndarray, size: int = 1, seed: int | None = 0
+    ) -> np.ndarray:
+        """Returns ``size`` random samples for each of the distributions parameterized by ``mu``
+        and ``sigma``.
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param mu: A numpy array containing the predicted mean for each response distribution.
+        :type mu: np.ndarray
+        :param sigma: A numpy array containing the predicted stdandard deviation for each response
+            distribution.
+        :type sigma: np.ndarray
+        :param size: Number of random samples to return per distribution. Defaults to 1.
+        :type size: int, optional
+        :param seed: Seed to use for random number generation. Defaults to 0.
+        :type seed: int, optional
+        :return: a numpy array of shape ``(size, mu[0].shape[0])`` containing random
+            samples from every distribution parameterized by ``mu`` and ``sigma``.
+        :rtype: np.ndarray
+        """
+        return scp.stats.norm.rvs(
+            size=(size, mu.shape[0]),
+            loc=mu.flatten(),
+            scale=sigma.flatten(),
+            random_state=seed,
+        )
 
     def get_resid(self, y: np.ndarray, mu: np.ndarray, sigma: np.ndarray) -> float:
         """Get standardized residuals for a Normal GAMMLSS model (Rigby & Stasinopoulos, 2005).
@@ -2946,6 +3006,38 @@ class GAMMALS(GAMLSSFamily):
         :rtype: float
         """
         return np.sum(self.lp(y, mu, scale))
+
+    def rvs(
+        self, mu: np.ndarray, scale: np.ndarray, size: int = 1, seed: int | None = 0
+    ) -> np.ndarray:
+        """Returns ``size`` random samples for each of the distributions parameterized by ``mu``
+        and ``scale``.
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param mu: A numpy array containing the predicted mean for each response distribution.
+        :type mu: np.ndarray
+        :param scale: A numpy array containing the predicted stdandard deviation for each response
+            distribution.
+        :type scale: np.ndarray
+        :param size: Number of random samples to return per distribution. Defaults to 1.
+        :type size: int, optional
+        :param seed: Seed to use for random number generation. Defaults to 0.
+        :type seed: int, optional
+        :return: a numpy array of shape ``(size, mu[0].shape[0])`` containing random
+            samples from every distribution parameterized by ``mu`` and ``scale``.
+        :rtype: np.ndarray
+        """
+        alpha = 1 / scale
+        beta = alpha / mu
+        return scp.stats.gamma.rvs(
+            size=(size, mu.shape[0]),
+            a=alpha.flatten(),
+            scale=(1 / beta.flatten()),
+            random_state=seed,
+        )
 
     def get_resid(self, y: np.ndarray, mu: np.ndarray, scale: np.ndarray) -> np.ndarray:
         """Get standardized residuals for a Gamma GAMMLSS model (Rigby & Stasinopoulos, 2005).
@@ -4035,11 +4127,10 @@ class MultiGauss(GSMMFamily):
         logdet = 0
         for m in range(self.n_par):
 
-            Rrow = theta[dat_idx : dat_idx + (self.n_par - m)]  # noqa: E203
+            R[m, m:] = theta[dat_idx : dat_idx + (self.n_par - m)]  # noqa: E203
+            logdet += R[m, m]
+            R[m, m] = np.exp(R[m, m])
 
-            logdet += Rrow[0]
-            Rrow[0] = np.exp(Rrow[0])
-            R[m, m:] = Rrow
             dat_idx += self.n_par - m
 
         return R, logdet
@@ -4078,17 +4169,8 @@ class MultiGauss(GSMMFamily):
         """
 
         # Extract extra info and fix model matrices, then compute mu and theta
-        Xfix = [X if X is not None else Xs[0] for X in Xs]
         y = np.concatenate(ys, axis=1)
-        split_coef = np.split(coef, coef_split_idx)
-        mus = np.concatenate(
-            [
-                self.links[mui].fi(Xfix[mui] @ split_coef[mui])
-                for mui in range(self.n_par)
-            ],
-            axis=1,
-        )
-        theta = split_coef[-1].flatten()
+        mus, theta = self.predict(coef, coef_split_idx, Xs)
 
         # Get transpose of Cholesky of precision
         R, logdet = self.getR(theta)
@@ -4278,17 +4360,8 @@ class MultiGauss(GSMMFamily):
         :rtype: np.ndarray
         """
         # Extract extra info and fix model matrices, then compute mu and theta
-        Xfix = [X if X is not None else Xs[0] for X in Xs]
         y = np.concatenate(ys, axis=1)
-        split_coef = np.split(coef, coef_split_idx)
-        mus = np.concatenate(
-            [
-                self.links[mui].fi(Xfix[mui] @ split_coef[mui].reshape(-1, 1))
-                for mui in range(self.n_par)
-            ],
-            axis=1,
-        )
-        theta = split_coef[-1].flatten()
+        mus, theta = self.predict(coef, coef_split_idx, Xs)
 
         # Get transpose of Cholesky of precision
         R, logdet = self.getR(theta)
@@ -4300,3 +4373,168 @@ class MultiGauss(GSMMFamily):
             res = res[:, mean].reshape(-1, 1)
 
         return res
+
+    def predict(
+        self,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        Xs: list[scp.sparse.csc_array | None],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Gets the predicted means, variance, and co-variance parameters for given coefficients
+        and model matrices.
+
+        Examples::
+
+            from mssm.models import *
+            from mssmViz.sim import *
+            from mssmViz.plot import *
+            import matplotlib.pyplot as plt
+
+            # Simulate data
+            sim_dat = sim16(500,seed=1134,correlate=True)
+
+            # We need formulas for each mean!
+            formulas = [
+                Formula(lhs("y0"), [i(), f(["x0"])], data=sim_dat),
+                Formula(lhs("y1"), [i(), f(["x1"]), f(["x2"])], data=sim_dat),
+                Formula(lhs("y2"), [i(), f(["x3"])], data=sim_dat)
+            ]
+
+            # Now define the model...
+            model = GSMM(formulas, MultiGauss(3,[Identity() for _ in range(3)]))
+
+            # ... and fit!
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                model.fit(method='qEFS')
+
+            # Can now extract fitted means and theta vector
+            Xs = model.get_mmat()
+            mus, theta = model.family.predict(model.coef,model.coef_split_idx,Xs)
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for \
+            General Smooth Models.
+
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!). **Note** the last ``int(pars * (pars + 1) / 2)`` elements contain the
+            log(variance) and co-variance parameters.
+        :type coef: np.ndarray
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each mean and a final sub-set containing all log(variance) and
+            co-variance parameters.
+        :type coef_split_idx: [int]
+        :param ys: List containing the vectors of observations.
+        :type ys: [np.ndarray]
+        :param Xs: A list containing the sparse model matrices associated with the models of the
+            means. **Note**, this implementation allows to make use of the ``build_mat`` argument
+            of the :func:`GSMM.fit` method. Specifically, for means that have the same predictor
+            structure as the first mean we can set ``build_mat[idx] = False``. The code then
+            automatically assigns ``X[idx] = X[0]``. See the :func:`GSMM.fit` documentation for
+            more details.
+        :type Xs: [scp.sparse.csc_array | None]
+        :return: The predicted means as a ``(N, self.n_par)`` numpy array and the theta vector (as
+            a flattened numpy array), holding the variance and covariance parameters.
+        :rtype: tuple[np.ndarray, np.ndarray]
+        """
+
+        # Extract extra info and fix model matrices, then compute mu and theta
+        Xfix = [X if X is not None else Xs[0] for X in Xs]
+
+        split_coef = np.split(coef, coef_split_idx)
+        mus = np.concatenate(
+            [
+                self.links[mui].fi(Xfix[mui] @ split_coef[mui].reshape(-1, 1))
+                for mui in range(self.n_par)
+            ],
+            axis=1,
+        )
+        theta = split_coef[-1].flatten()
+
+        return mus, theta
+
+    def rvs(
+        self,
+        mus: np.ndarray,
+        theta: np.ndarray,
+        size: int = 1,
+        seed: int | None = 0,
+    ) -> np.ndarray:
+        """Computes Random samples from a multivariate normal model given coefficients in the
+        additive models of the mean and the log(variance) and co-variance parameters.
+
+        **Note**, the numpy array returned is of shape ``(size, self.n_pars, mus.shape[0])``. See
+        the return description for details.
+
+        Examples::
+
+            from mssm.models import *
+            from mssmViz.sim import *
+            from mssmViz.plot import *
+            import matplotlib.pyplot as plt
+
+            # Simulate data
+            sim_dat = sim16(500,seed=1134,correlate=True)
+
+            # We need formulas for each mean!
+            formulas = [
+                Formula(lhs("y0"), [i(), f(["x0"])], data=sim_dat),
+                Formula(lhs("y1"), [i(), f(["x1"]), f(["x2"])], data=sim_dat),
+                Formula(lhs("y2"), [i(), f(["x3"])], data=sim_dat)
+            ]
+
+            # Now define the model...
+            model = GSMM(formulas, MultiGauss(3,[Identity() for _ in range(3)]))
+
+            # ... and fit!
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                model.fit(method='qEFS')
+
+            # Can now extract fitted means and theta vector
+            Xs = model.get_mmat()
+            mus, theta = model.family.predict(model.coef,model.coef_split_idx,Xs)
+
+            # Can now generate random samples
+            # rvs will be of shape (10000, 3, 500) for 10000 samples, a 3 dimensional
+            # multivariate Gaussian, and 500 predicted mean vectors
+            rvs = model.family.rvs(mus,theta,size=10000)
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for \
+            General Smooth Models.
+
+        :param mus: Numpy array of shape ``(N, self.n_par)``, where ``self.n_par is the dimension of
+            the multivariate normal distributions.
+        :type mus: np.ndarray
+        :param theta: Flattened array holding inverses of log(variance) and co-variance parameters
+        :type theta: np.ndarray
+        :param size: Number of random samples to return per distribution. Defaults to 1.
+        :type size: int, optional
+        :param seed: Seed to use for random number generation. Defaults to 0.
+        :type seed: int, optional
+        :return: a numpy array of shape ``(size, self.n_pars, mus.shape[0])`` containing random
+            samples from ``i`` mulitvariate normal distributions with means ``mus[i,:]``.
+        :rtype: np.ndarray
+        """
+
+        rvs = np.zeros((size, self.n_par, mus.shape[0]))
+
+        # Get transpose of Cholesky of precision
+        R, _ = self.getR(theta)
+
+        cov = np.linalg.inv(R.T @ R)
+
+        for mui in range(mus.shape[0]):
+            rvs[:, :, mui] = scp.stats.multivariate_normal.rvs(
+                size=size,
+                mean=mus[mui, :],
+                cov=cov,
+                random_state=seed,
+            )
+
+            # Update seed
+            if seed is not None:
+                seed += 1
+
+        return rvs

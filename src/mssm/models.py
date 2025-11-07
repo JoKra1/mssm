@@ -939,11 +939,6 @@ class GSMM:
         # Otherwise again initialize with provided values or randomly
         if init_coef is not None:
             coef = np.array(init_coef).reshape(-1, 1)
-
-            if self.family.extra_coef is not None:
-                coef = np.concatenate(
-                    (coef, np.ones(self.family.extra_coef).reshape(-1, 1)), axis=0
-                )
         else:
             coef = scp.stats.norm.rvs(size=n_coef, random_state=seed).reshape(-1, 1)
 

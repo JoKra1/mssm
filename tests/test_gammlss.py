@@ -52,6 +52,16 @@ class Test_GAUMLS:
 
     model.fit(**test_kwargs)
 
+    size = 10
+    seed = 1
+    rvs = model.family.rvs(*model.mus, size=size, seed=seed)
+    rvs2 = scp.stats.norm.rvs(
+        size=(size, model.mus[0].shape[0]),
+        loc=model.mus[0].flatten(),
+        scale=model.mus[1].flatten(),
+        random_state=seed,
+    )
+
     def test_GAMedf(self):
         assert round(self.model.edf, ndigits=3) == 18.358
 
@@ -126,6 +136,11 @@ class Test_GAUMLS:
         comp1 = "\nDistribution parameter: 1\n\nf(['x0']); edf: 9.799 chi^2: 5630.989 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x0']); edf: 6.559 chi^2: 569.167 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         comp2 = "\nDistribution parameter: 1\n\nf(['x0']); edf: 9.799 chi^2: 5696.894 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x0']); edf: 6.559 chi^2: 571.891 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         assert (comp1 == capture) or (comp2 == capture)
+
+    def test_rvs(self):
+        np.testing.assert_allclose(
+            self.rvs, self.rvs2, atol=min(max_atol, 0), rtol=min(max_rtol, 1e-6)
+        )
 
 
 class Test_GAUMLS_MIXED:
@@ -214,6 +229,20 @@ class Test_GAMMALS:
 
     model.fit(**test_kwargs)
 
+    size = 10
+    seed = 1
+    rvs = model.family.rvs(*model.mus, size=size, seed=seed)
+
+    alpha = 1 / model.mus[1]
+    beta = alpha / model.mus[0]
+
+    rvs2 = scp.stats.gamma.rvs(
+        size=(size, model.mus[0].shape[0]),
+        a=alpha.flatten(),
+        scale=(1 / beta.flatten()),
+        random_state=seed,
+    )
+
     def test_GAMedf(self):
         assert round(self.model.edf, ndigits=3) == 12.268
 
@@ -260,6 +289,11 @@ class Test_GAMMALS:
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
         assert round(llk, ndigits=3) == -893.662
+
+    def test_rvs(self):
+        np.testing.assert_allclose(
+            self.rvs, self.rvs2, atol=min(max_atol, 0), rtol=min(max_rtol, 1e-6)
+        )
 
 
 class Test_mulnom:

@@ -1787,6 +1787,17 @@ class Test_mvn:
     res = model.get_resid()
     res0 = model.get_resid(mean=0)
 
+    # Get means and theta
+    Xs = model.get_mmat()
+    mus, theta = model.family.predict(model.coef, model.coef_split_idx, Xs)
+    R, _ = model.family.getR(theta)
+
+    # Get cov and rvs
+    size = 1000
+    seed = 1
+    rvs = model.family.rvs(mus, theta, size=size, seed=seed)
+    cov = np.linalg.inv(R.T @ R)
+
     def test_GAMedf(self):
         np.testing.assert_allclose(
             self.model.edf,
@@ -1935,4 +1946,33 @@ class Test_mvn:
             self.res0,
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 1e-6),
+        )
+
+    def test_fitted(self):
+        np.testing.assert_allclose(
+            np.concatenate(self.model.mus, axis=1),
+            self.mus,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1e-6),
+        )
+
+    def test_rvs(self):
+
+        seed = self.seed
+        size = self.size
+
+        rvs2 = np.zeros_like(self.rvs)
+
+        for mui in range(self.mus.shape[0]):
+            rvs2[:, :, mui] = scp.stats.multivariate_normal.rvs(
+                size=size,
+                mean=self.mus[mui, :],
+                cov=self.cov,
+                random_state=seed,
+            )
+
+            seed += 1
+
+        np.testing.assert_allclose(
+            self.rvs, rvs2, atol=min(max_atol, 0), rtol=min(max_rtol, 1e-6)
         )
