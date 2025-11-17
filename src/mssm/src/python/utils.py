@@ -55,14 +55,16 @@ from collections.abc import Callable
 
 
 def computeAr1Chol(formula: Formula, rho: float) -> tuple[scp.sparse.csc_array, float]:
-    """Computes the inverse of the cholesky of the (scaled) variance matrix of an ar1 model.
+    """Computes the inverse of the transpose of the cholesky of the co-variance (before scaling)
+    matrix of an ar1 model.
 
     :param formula: Formula of the model
     :type formula: Formula
     :param rho: ar1 weight.
     :type rho: float
-    :return: Tuple, containing banded inverse Cholesky as a scipy array and the correction needed
-        to get the likelihood of the ar1 model.
+    :return: Tuple, containing banded inverse Cholesky transpose as a scipy array and the correction
+        needed to get the log-likelihood of the ar1 model (i.e., the root of the log-determiant of
+        the inverse of the co-variance matrix (before scaling)).
     :rtype: tuple[scp.sparse.csc_array,float]
     """
 
@@ -81,10 +83,14 @@ def computeAr1Chol(formula: Formula, rho: float) -> tuple[scp.sparse.csc_array, 
 
         d0[sid0] = 1
         d1[sid1] = 0
+    else:
+        # Only correct first obs
+        d0[0] = 1
 
     Lrhoi = scp.sparse.diags_array([d0, d1], format="csr", offsets=[0, 1])
 
-    # Likelihood correction computed as done by mgcv. see:
+    # Log-likelihood correction computed as done by mgcv. Simply the root of the log-determinant of
+    # the inverse of the co-variance matrix (before scaling). see:
     # https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/bam.r#L2761
     llc = (n_y - (np.sum(start) if formula.series_id is not None else 1)) * np.log(
         1 / np.sqrt(1 - np.power(rho, 2))
