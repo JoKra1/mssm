@@ -1600,9 +1600,12 @@ def init_step_gam(
     if len(penalties) > 0:
         for lti, lTerm in enumerate(penalties):
 
-            dLam = step_fellner_schall_sparse(
-                lgdetDs[lti], Bs[lti], bsbs[lti], lTerm.lam, scale
-            )
+            if lTerm.frozen:
+                dLam = 0
+            else:
+                dLam = step_fellner_schall_sparse(
+                    lgdetDs[lti], Bs[lti], bsbs[lti], lTerm.lam, scale
+                )
             lam_delta.append(dLam)
 
         lam_delta = np.array(lam_delta).reshape(-1, 1)
@@ -2344,8 +2347,9 @@ def correct_lambda_step(
                 # If the ratio between those two gets close to zero, we drop the corresponding
                 # term from the next update.
                 if (
-                    not ((lTerm.lam > 1e5) and (((lGrad[0] ** 2) / lTerm.lam) < 1e-8))
-                ) or exclude_lambda is False:
+                    (not ((lTerm.lam > 1e5) and (((lGrad[0] ** 2) / lTerm.lam) < 1e-8)))
+                    or exclude_lambda is False
+                ) and lTerm.frozen is False:
 
                     dLam = step_fellner_schall_sparse(
                         lgdetDs[lti], Bs[lti], bsbs[lti], lTerm.lam, scale
@@ -5725,7 +5729,10 @@ def correct_lambda_step_gamlss(
         bsb = bsbs[lti]
 
         # print(lgdetD-ldetHS)
-        dLam = step_fellner_schall_sparse(lgdetD, ldetHS, bsb[0, 0], lTerm.lam, 1)
+        if lTerm.frozen:
+            dLam = 0
+        else:
+            dLam = step_fellner_schall_sparse(lgdetD, ldetHS, bsb[0, 0], lTerm.lam, 1)
         # print("Theorem 1:",lgdetD-ldetHS,bsb,lTerm.lam)
 
         # For poorly scaled/ill-identifiable problems we cannot rely on the theorems by Wood
@@ -5736,7 +5743,7 @@ def correct_lambda_step_gamlss(
             dLam = np.sign(dLam) * min(abs(lTerm.lam) * 0.001, abs(dLam))
             dLam = 0 if lTerm.lam + dLam < 0 else dLam
 
-        if extend_lambda:
+        if extend_lambda and lTerm.frozen is False:
             dLam, extend_by, was_extended = extend_lambda_step(
                 lti, lTerm.lam, dLam, extend_by, was_extended, extension_method_lam
             )
@@ -7785,7 +7792,10 @@ def correct_lambda_step_gen_smooth(
         ldetHS = ldetHSs[lti]
         bsb = bsbs[lti]
 
-        dLam = step_fellner_schall_sparse(lgdetD, ldetHS, bsb[0, 0], lTerm.lam, 1)
+        if lTerm.frozen:
+            dLam = 0
+        else:
+            dLam = step_fellner_schall_sparse(lgdetD, ldetHS, bsb[0, 0], lTerm.lam, 1)
         # print("Theorem 1:",lgdetD-ldetHS,bsb)
 
         # For poorly scaled/ill-identifiable problems we cannot rely on the theorems by Wood
@@ -7796,7 +7806,7 @@ def correct_lambda_step_gen_smooth(
             dLam = np.sign(dLam) * min(abs(lTerm.lam) * 0.001, abs(dLam))
             dLam = 0 if lTerm.lam + dLam < 0 else dLam
 
-        if extend_lambda:
+        if extend_lambda and lTerm.frozen is False:
             dLam, extend_by, was_extended = extend_lambda_step(
                 lti, lTerm.lam, dLam, extend_by, was_extended, extension_method_lam
             )

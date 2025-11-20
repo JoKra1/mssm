@@ -74,6 +74,9 @@ class LambdaTerm:
     :ivar list[int] | int term: The index (indices) of the term(s) in a
         :class:`mssm.src.python.formula.Formula` with which this penalty is associated.
         Initialized with ``None``.
+    :ivar bool frozen: Whether the penalty matrix with this term should be frozen during estimation
+        (i.e., preventing any update to the penalty) or not. Initialized with ``False``, meaning
+        the penalty is to be updated during estimation.
     """
 
     # Lambda term storage.
