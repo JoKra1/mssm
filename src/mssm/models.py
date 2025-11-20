@@ -781,17 +781,17 @@ class GSMM:
             :math:`\\lambda`` parameters, ``pen_llk`` is the current penalized log-likelihood,
             ``coef`` is the current coefficient estimate, and ``lam`` holds a list with the
             current :math:`lambda` parameters. Defaults to None.
-        :type callback: Callable | None ,optional
+        :type callback: Callable | None, optional
         :param init_bfgs_options: An optional dictionary holding the same key:value pairs that can
             be passed to ``bfgs_options`` but pased to the optimizer of the un-penalized problem.
             If this is None, it will be set to a copy of ``bfgs_options``. Only has an effect
             when ``qEFS_init_converge=True``. Defaults to None.
-        :type init_bfgs_options: dict,optional
+        :type init_bfgs_options: dict, optional
         :param bfgs_options: An optional dictionary holding arguments that should be passed on to
             the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If none are provided,
             the ``gtol`` argument will be initialized to ``conv_tol``. Note also, that in any case
             the ``maxiter`` argument is automatically set to ``max_inner``. Defaults to None.
-        :type bfgs_options: dict,optional
+        :type bfgs_options: dict, optional
         :raises ValueError: Will throw an error when ``optimizer`` is not 'Newton'.
         """
 
@@ -1623,9 +1623,13 @@ class GAMMLSS(GSMM):
                 "Residual computation for Multinomial model is not currently supported."
             )
 
-        return self.family.get_resid(
-            self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat], *self.mus, **kwargs
-        )
+        # Extract y
+        y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
+
+        if not self.formulas[0].get_lhs().f is None:
+            y = self.formulas[0].get_lhs().f(y)
+
+        return self.family.get_resid(y, *self.mus, **kwargs)
 
     ##################################### Summary ####################################  # noqa: E266
 
@@ -2515,6 +2519,7 @@ class GAMM(GAMMLSS):
                 mu = self.family.link.fi(self.preds[0])
 
             y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
+
             if not self.formulas[0].get_lhs().f is None:
                 y = self.formulas[0].get_lhs().f(y)
 
@@ -2669,6 +2674,9 @@ class GAMM(GAMMLSS):
             # data-point contributes to overall deviance. Implemented by the family members.
             mu = self.preds[0]
             y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
+
+            if not self.formulas[0].get_lhs().f is None:
+                y = self.formulas[0].get_lhs().f(y)
 
             if (
                 isinstance(self.family, Gaussian) is False
