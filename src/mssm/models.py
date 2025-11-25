@@ -2425,6 +2425,9 @@ class GAMM(GAMMLSS):
         Initialized with ``None``.
     :ivar np.ndarray res_ar: Holding the working residuals of the model corrected for any
         auto-correlation parameter used during estimation. Initialized with ``None``.
+    :ivar Callable transform_X: Any optional function of the form
+        ``def transform_X(X:scp.sparse.csc_array) -> scp.sparse.csc_array`` to transform the
+        model matrix, passed to the ``fit`` method. Initialized with ``None``.
     """
 
     def __init__(self, formula: Formula, family: Family):
@@ -2436,6 +2439,7 @@ class GAMM(GAMMLSS):
         self.hessian_obs: scp.sparse.csc_array | None = None
         self.rho: float | None = None
         self.res_ar: np.ndarray | None = None
+        self.transform_X: Callable | None = None
 
     ##################################### Getters ####################################  # noqa: E266
 
@@ -2453,8 +2457,12 @@ class GAMM(GAMMLSS):
 
     def get_mmat(self, use_terms: list[int] | None = None) -> scp.sparse.csc_array:
         """
-        Returns exaclty the model matrix used for fitting as a scipy.sparse.csc_array. Will
-        throw an error when called for a model for which the model matrix was never former
+        Returns exaclty the model matrix used for fitting as a scipy.sparse.csc_array.
+
+        Note, that this also means that any transformation of the model matrix, passed to the
+        ``fit`` method and stored in ``self.transform_X`` is applied before returning the matrix.
+
+        Will throw an error when called for a model for which the model matrix was never former
         completely - i.e., when :math:`\\mathbf{X}^T\\mathbf{X}` was formed iteratively for
         estimation, by setting the ``file_paths`` argument of the ``Formula`` to
         a non-empty list.
@@ -2479,7 +2487,12 @@ class GAMM(GAMMLSS):
                 "Cannot return the model-matrix if X.T@X was formed iteratively."
             )
 
-        return super().get_mmat(use_terms, par=0)
+        X = super().get_mmat(use_terms, par=0)
+
+        if self.transform_X is not None:
+            X = self.transform_X(X)
+
+        return X
 
     def get_llk(
         self, penalized: bool = True, ext_scale: float | None = None
@@ -2766,6 +2779,7 @@ class GAMM(GAMMLSS):
         n_cores: int = 10,
         offset: float | np.ndarray | None = None,
         rho: float | None = None,
+        transform_X: Callable | None = None,
     ):
         """
         Fit the specified model.
@@ -2861,16 +2875,16 @@ class GAMM(GAMMLSS):
             plot_val(model,resid_type="ar1")
 
         :param max_outer: The maximum number of fitting iterations. Defaults to 200.
-        :type max_outer: int,optional
+        :type max_outer: int, optional
         :param max_inner: The maximum number of fitting iterations to use by the inner Newton step
             updating the coefficients for Generalized models. Defaults to 500 for non ar1 models.
-        :type max_inner: int,optional
+        :type max_inner: int, optional
         :param conv_tol: The relative (change in penalized deviance is compared against
             ``conv_tol`` * previous penalized deviance) criterion used to determine convergence.
         :type conv_tol: float, optional
         :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the
             number of new smoothing penalty proposals necessary. Disabled by default.
-        :type extend_lambda: bool,optional
+        :type extend_lambda: bool, optional
         :param control_lambda: Whether lambda proposals should be checked (and if necessary
             decreased) for whether or not they (approxiately) increase the Laplace approximate
             restricted maximum likelihood of the model. Setting this to 0 disables control.
@@ -2878,17 +2892,17 @@ class GAMM(GAMMLSS):
             update but extensions will be removed in case the objective was exceeded. Setting it to
             2 means that steps will be halved if it fails to increase the approximate REML. Set to
             2 by default.
-        :type control_lambda: int,optional
+        :type control_lambda: int, optional
         :param exclude_lambda: Whether selective lambda terms should be excluded heuristically from
             updates. Can make each iteration a bit cheaper but is problematic when using additional
             Kernel penalties on terms. Thus, disabled by default.
-        :type exclude_lambda: bool,optional
+        :type exclude_lambda: bool, optional
         :param extension_method_lam: **Experimental - do not change!** Which method to use to extend
             lambda proposals. Set to 'nesterov' by default.
         :type extension_method_lam: str,optional
         :param restart: Whether fitting should be resumed. Only possible if the same model has
             previously completed at least one fitting iteration.
-        :type restart: bool,optional
+        :type restart: bool, optional
         :param method: Which method to use to solve for the coefficients. ("Chol") relies on
             Cholesky decomposition. This is extremely efficient but in principle less stable,
             numerically speaking. For a maximum of numerical stability set this to "QR". In that
@@ -2897,7 +2911,7 @@ class GAMM(GAMMLSS):
             of rank defficiency. This takes substantially longer. This argument is ignored if
             ``len(self.formulas[0].file_paths)>0`` that is, if :math:`\\mathbf{X}^T\\mathbf{X}` and
             :math:`\\mathbf{X}^T\\mathbf{y}` should be created iteratively. Defaults to "QR".
-        :type method: str,optional
+        :type method: str, optional
         :param check_cond: Whether to obtain an estimate of the condition number for the linear
             system that is solved. When ``check_cond=0``, no check will be performed. When
             ``check_cond=1``, an estimate of the condition number for the final system (at
@@ -2908,13 +2922,13 @@ class GAMM(GAMMLSS):
             estimated as too high given the chosen ``method``. Is ignored, if
             :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}` should be
             created iteratively. Defaults to 1.
-        :type check_cond: int,optional
+        :type check_cond: int, optional
         :param progress_bar: Whether progress should be displayed (convergence info and time
             estimate). Defaults to True.
         :type progress_bar: bool,optional
         :param n_cores: Number of cores to use during parts of the estimation that can be done in
             parallel. Defaults to 10.
-        :type n_cores: int,optional
+        :type n_cores: int, optional
         :param offset: Mimics the behavior of the ``offset`` argument for ``gam`` in ``mgcv`` in R.
             If a value is provided here (can either be a float or a numpy.array of shape (-1,1) -
             if it is an array, then the first dimension has to match the number of observations in
@@ -2924,13 +2938,24 @@ class GAMM(GAMMLSS):
             prediction). This argument is ignored if ``len(self.formulas[0].file_paths)>0`` that
             is, if :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}` should be
             created iteratively. Defaults to None.
-        :type offset: float or np.ndarray,optional
+        :type offset: float or np.ndarray, optional
         :param rho: Optional correlation parameter for an "ar1 residual model". Essentially mimics
             the behavior of the ``rho`` paramter for the ``bam`` function in ``mgcv``. **Note**,
             if you want to re-start the ar1 process multiple times (for example because you work
             with time-series data and have multiple time-series) then you must pass the
             ``series.id`` argument to the :class:`Formula` used for this model. Defaults to None.
-        :type rho: float,optional
+        :type rho: float, optional
+        :param transform_X: An optional function of the form
+            ``def transform_X(X:scp.sparse.csc_array) -> scp.sparse.csc_array`` to transform the
+            model matrix. **Only use this keyword if you know what you are doing!**.
+            This function is called with the final state of the model matrix, before
+            calling the fitting routine. The output of the function replaces the original input to
+            the fitting function. ``transform_X`` is stored in ``self.transform_X``, and applied
+            automatically by subsequent functions (i.e., ``self.get_mmat``). This argument is
+            ignored if ``len(self.formulas[0].file_paths)>0`` that is, if
+            :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}` should be created
+            iteratively. Defaults to None.
+        :type transform_X: Callable | None, optional
         """
 
         # We need to initialize penalties
@@ -3090,6 +3115,11 @@ class GAMM(GAMMLSS):
             if rho is not None:
                 self.rho = rho
                 Lrhoi, _ = computeAr1Chol(self.formulas[0], rho)
+
+            # Apply any optional transformation of the model matrix.
+            if transform_X is not None:
+                model_mat = transform_X(model_mat)
+                self.transform_X = transform_X
 
             # Now we have to estimate the model
             coef, eta, wres, Wr, WN, scale, LVI, edf, term_edf, penalty, fit_info = (

@@ -3391,3 +3391,70 @@ class Test_scaledT_inner:
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 1.5),
         )
+
+
+class Test_transformX:
+    sim_dat = sim11(
+        5000, 2, c=0, seed=20, family=Gaussian(), n_ranef=20, binom_offset=0
+    )
+
+    sim_dat = sim_dat.sort_values(["x4"], ascending=[True])
+
+    sim_formula = Formula(
+        lhs("y"),
+        [i(), f(["x0"]), f(["x1"]), f(["x2"]), f(["x3"])],
+        data=sim_dat,
+        series_id="x4",
+    )
+
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["rho"] = 0.7
+    test_kwargs["max_inner"] = 1
+
+    model = GAMM(sim_formula, Gaussian())
+    model.fit(**test_kwargs)
+
+    # Test model matrix transformation code against ar1 model
+    Lrhoi, llc = computeAr1Chol(model.formulas[0], model.rho)
+    sim_dat["y2"] = Lrhoi.T @ sim_dat["y"].values.reshape(-1, 1)
+    X = model.get_mmat()
+    LX = Lrhoi.T @ X
+    LX.sort_indices()
+
+    def transform_X(X):
+        return LX
+
+    test_kwargs["rho"] = None
+    test_kwargs["transform_X"] = transform_X
+
+    sim_formula2 = Formula(
+        lhs("y2"), [i(), f(["x0"]), f(["x1"]), f(["x2"]), f(["x3"])], data=sim_dat
+    )
+
+    model2 = GAMM(sim_formula2, Gaussian())
+    model2.fit(**test_kwargs)
+
+    # Check that VP is same as well
+    VP1 = estimateVp(model)
+    VP2 = estimateVp(model2)
+
+    def test_coef(self):
+        np.testing.assert_allclose(
+            self.model.coef,
+            self.model2.coef,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1e-6),
+        )
+
+    def test_X(self):
+        np.testing.assert_allclose(
+            self.LX.toarray(),
+            self.model2.get_mmat().toarray(),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1e-6),
+        )
+
+    def test_VP(self):
+        np.testing.assert_allclose(
+            self.VP1[0], self.VP2[0], atol=min(max_atol, 0), rtol=min(max_rtol, 1e-6)
+        )
