@@ -3421,7 +3421,7 @@ class Test_transformX:
     LX = Lrhoi.T @ X
     LX.sort_indices()
 
-    def transform_X(X):
+    def transform_X(X, LX=LX):
         return LX
 
     test_kwargs["rho"] = None
