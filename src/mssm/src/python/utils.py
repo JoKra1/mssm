@@ -1843,6 +1843,7 @@ def compute_REML_candidate_GSMM(
                 None,
                 keep_drop,
                 __old_opt,
+                False,
             )
 
             if method == "qEFS":

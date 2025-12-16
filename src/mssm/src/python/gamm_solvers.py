@@ -6620,6 +6620,7 @@ def update_coef_gen_smooth(
     piv_tol: float,
     keep_drop: tuple[np.typing.NDArray[np.int_], np.typing.NDArray[np.int_]] | None,
     opt_raw: scp.sparse.linalg.LinearOperator | None,
+    global_opt_qefs: bool,
 ) -> tuple[
     np.ndarray,
     scp.sparse.csc_array | None,
@@ -6687,6 +6688,10 @@ def update_coef_gen_smooth(
         then this is the previous state of the quasi-Newton approximations to the (inverse) of the
         hessian of the log-likelihood
     :type opt_raw: scp.sparse.linalg.LinearOperator | None
+    :param global_opt_qefs: Whether or not to use a stochastic global optimization algorithm to
+        estimate the coefficients when the L-qEFS update is used to estimate coefficients/lambda
+        parameters.
+    :type global_opt_qefs: bool
     :return: A tuple containing an estimate of all coefficients, the negative hessian of the
         log-likelihood,cholesky of negative hessian of the penalized log-likelihood,inverse of the
         former (or another instance of :class:`scp.sparse.linalg.LinearOperator` representing the
@@ -6732,14 +6737,27 @@ def update_coef_gen_smooth(
         eps = 0
 
         # Now optimize penalized problem
-        opt = scp.optimize.minimize(
-            __neg_llk,
-            np.ndarray.flatten(coef),
-            args=(coef_split_idx, ys, Xs, family, S_emb),
-            method="L-BFGS-B",
-            jac=__neg_grad,
-            options={"maxiter": max_inner, **opt_raw.bfgs_options},
-        )
+        if global_opt_qefs is False:
+            opt = scp.optimize.minimize(
+                __neg_llk,
+                np.ndarray.flatten(coef),
+                args=(coef_split_idx, ys, Xs, family, S_emb),
+                method="L-BFGS-B",
+                jac=__neg_grad,
+                options={"maxiter": max_inner, **opt_raw.bfgs_options},
+            )
+        else:
+            opt = scp.optimize.basinhopping(
+                __neg_llk,
+                x0=np.ndarray.flatten(coef),
+                niter_success=5,
+                minimizer_kwargs={
+                    "method": "L-BFGS-B",
+                    "args": (coef_split_idx, ys, Xs, family, S_emb),
+                    "jac": __neg_grad,
+                    "options": {"maxiter": max_inner, **opt_raw.bfgs_options},
+                },
+            )
 
         coef = opt["x"].reshape(-1, 1)
         c_llk = family.llk(coef, coef_split_idx, ys, Xs)
@@ -7213,7 +7231,7 @@ def update_coef_gen_smooth(
             else:
                 break
 
-        if eps <= 0 and outer > 0 and inner >= (min_inner - 1):
+        if eps <= 0 and outer > 0 and inner >= (min_inner - 1) and method != "qEFS":
             break  # end inner loop and immediately optimize lambda again.
 
         inner += 1
@@ -7366,6 +7384,7 @@ def correct_lambda_step_gen_smooth(
     n_c: int,
     init_bfgs_options: dict,
     bfgs_options: dict,
+    global_opt_qefs: bool,
 ) -> tuple[
     np.ndarray,
     scp.sparse.csc_array | None,
@@ -7500,6 +7519,10 @@ def correct_lambda_step_gen_smooth(
     :param bfgs_options: An optional dictionary holding arguments that should be passed on to the
         call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``.
     :type bfgs_options: dict
+    :param global_opt_qefs: Whether or not to use a stochastic global optimization algorithm to
+        estimate the coefficients when the L-qEFS update is used to estimate coefficients/lambda
+        parameters.
+    :type global_opt_qefs: bool
     :return: coef estimate under corrected lambda, the negative hessian of the log-likelihood,
         cholesky of negative hessian of the penalized log-likelihood, inverse of the former
         (or another instance of :class:`scp.sparse.linalg.LinearOperator` representing the new
@@ -7648,6 +7671,7 @@ def correct_lambda_step_gen_smooth(
                     piv_tol,
                     keep_drop,
                     __old_opt,
+                    global_opt_qefs,
                 )
             )
 
@@ -7948,6 +7972,7 @@ def solve_generalSmooth_sparse(
         "maxls": 100,
         "maxfun": 1e7,
     },
+    global_opt_qefs=False,
 ) -> tuple[
     np.ndarray,
     scp.sparse.csc_array | None,
@@ -8087,11 +8112,15 @@ def solve_generalSmooth_sparse(
     :param init_bfgs_options: An optional dictionary holding the same key:value pairs that can be
         passed to ``bfgs_options`` but pased to the optimizer of the un-penalized problem, defaults
         to {"gtol":1e-9,"ftol":1e-9,"maxcor":30,"maxls":100,"maxfun":1e7}
-    :type init_bfgs_options: _type_, optional
+    :type init_bfgs_options: dict, optional
     :param bfgs_options: An optional dictionary holding arguments that should be passed on to the
         call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``, defaults to
         {"gtol":1e-9,"ftol":1e-9,"maxcor":30,"maxls":100,"maxfun":1e7}
-    :type bfgs_options: _type_, optional
+    :type bfgs_options: dict, optional
+    :param global_opt_qefs: Whether or not to use a stochastic global optimization algorithm to
+        estimate the coefficients when the L-qEFS update is used to estimate coefficients/lambda
+        parameters.
+    :type global_opt_qefs: bool
     :return: coef estimate, the negative hessian of the log-likelihood, inverse of cholesky of
         negative hessian of the penalized log-likelihood, if ``method=='qEFS'`` an instance of
         :class:`scp.sparse.linalg.LinearOperator` representing the new quasi-newton approximation,
@@ -8190,6 +8219,7 @@ def solve_generalSmooth_sparse(
             piv_tol,
             None,
             None,
+            False,
         )
 
         if repara:
@@ -8270,6 +8300,7 @@ def solve_generalSmooth_sparse(
             n_c,
             init_bfgs_options,
             bfgs_options,
+            global_opt_qefs,
         )
 
         # Monitor whether we keep changing lambda but not actually updating coefficients..

@@ -628,6 +628,7 @@ class GSMM:
         callback: Callable | None = None,
         init_bfgs_options: dict | None = None,
         bfgs_options: dict | None = None,
+        global_opt_qefs: bool = False,
     ):
         """
         Fit the specified model.
@@ -792,6 +793,10 @@ class GSMM:
             the ``gtol`` argument will be initialized to ``conv_tol``. Note also, that in any case
             the ``maxiter`` argument is automatically set to ``max_inner``. Defaults to None.
         :type bfgs_options: dict, optional
+        :param global_opt_qefs: Whether or not to use a stochastic global optimization algorithm to
+            estimate the coefficients when the L-qEFS update is used to estimate coefficients/lambda
+            parameters. Defaults to False, which means standard quasi-Newton is used.
+        :type global_opt_qefs: bool, optional
         :raises ValueError: Will throw an error when ``optimizer`` is not 'Newton'.
         """
 
@@ -985,6 +990,7 @@ class GSMM:
                 callback,
                 init_bfgs_options,
                 bfgs_options,
+                global_opt_qefs,
             )
         )
 
