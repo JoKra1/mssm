@@ -6600,6 +6600,201 @@ def handle_drop_gsmm(
     return coef, rcoef_split_idx, rXs, rS_emb, c_llk, c_pen_llk
 
 
+def update_ys_qefs(
+    yks: np.ndarray,
+    sks: np.ndarray,
+    rhos: np.ndarray,
+    grad_up: np.ndarray,
+    next_grad_up: np.ndarray,
+    step: np.ndarray,
+    alpha: float,
+    skip: bool,
+    form: str,
+    H0: scp.sparse.csc_array | None,
+    maxcor: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, bool]:
+    """Determines new update vectors ``yk`` and ``sk`` as well as new values for ``rho`` and
+    ``omega`` and, for the "SR1" update decides whether they should be collected and used for the
+    quasi-Newton approximation to the hessian/inverse.
+
+    :param yks: Previous update vector sks
+    :type yks: np.ndarray
+    :param sks: Previous update vectors sk
+    :type sks: np.ndarray
+    :param rhos: Previous rhos
+    :type rhos: np.ndarray
+    :param grad_up: Gradient of unpenalized log-likelihood before taking ``step`` as np.array
+    :type grad_up: np.ndarray
+    :param next_grad_up: Gradient of unpenalized log-likelihood after taking ``step`` as np.array
+    :type next_grad_up: np.ndarray
+    :param step: Quasi-newton step direction as np.array
+    :type step: np.ndarray
+    :param alpha: Step extension factor determined by Wolfe/Armijo conditions
+    :type alpha: float
+    :param skip: Whether to skip accumulating the update vectors based on ``grad_up``, ``step``,
+        and ``next_grad_up`` (For example if step search failed).
+    :type skip: bool
+    :param form: Which update to use: "SR1" or "LBFGS"
+    :type form: str
+    :param H0: Initial estimate of the hessian matrix (identity multiplied by omega). Only needed
+        if ``form!='SR1'``.
+    :type H0: scp.sparse.csc_array | None
+    :param maxcor: Maximum number of update vectors to retain as part of the limited memory
+        approximations to the hessian/inverse.
+    :type maxcor: int
+    :return: Updated values for ``yks``, ``sks``, ``rhos``, as well as ``omega`` (latest
+        estimate of eigenvalue of hessian) and ``skip`` reflecting the updated decision on whether
+        to collect the update vectors for the "SR1" update (is always the same if ``form='LBFGS'``).
+    :rtype: tuple[np.ndarray, np.ndarray, np.ndarray, float, bool]
+    """
+
+    # Compute update vectors for quasi-Newton approximations to Hessian and inverse.
+    yk = (-1 * next_grad_up) - (-1 * grad_up)
+    sk = alpha * step
+    rhok = 1 / (yk.T @ sk)
+
+    if form == "SR1" and skip is False:
+        # Check if SR1 update is defined (see Nocedal & Wright, 2004)
+        skip = test_SR1(sk, yk, rhok, sks, yks, rhos)
+
+    if skip is False:
+        # Wolfe/Armijo met, can collect update vectors
+
+        if form != "SR1" and len(sks) > 0:
+            # But first dampen for BFGS update - see Nocedal & Wright (2004):
+            Ht1, _, Ht2, Ht3 = computeH(sks, yks, rhos, H0, explicit=False)
+            Bs = H0 @ sk + Ht1 @ Ht2 @ Ht3 @ sk
+            sBs = sk.T @ Bs
+
+            if sk.T @ yk < 0.2 * sBs:
+                theta = (0.8 * sBs) / (sBs - sk.T @ yk)
+                yk = theta * yk + (1 - theta) * Bs
+
+        if len(sks) == 0:
+            sks = sk.T
+            yks = yk.T
+            rhos = np.array([rhok[0, 0]])
+        else:
+            sks = np.append(sks, sk.T, axis=0)
+            yks = np.append(yks, yk.T, axis=0)
+            rhos = np.append(rhos, rhok[0, 0])
+
+        # Discard oldest update vector
+        if sks.shape[0] > maxcor:
+            sks = np.delete(sks, 0, axis=0)
+            yks = np.delete(yks, 0, axis=0)
+            rhos = np.delete(rhos, 0)
+
+    # Update omega to better scale hessian (again see Nocedal & Wright, 2004)
+    omega = 1
+    if sks.shape[0] > 0 and yk.T @ sk > 0:
+        omega = np.dot(yks[-1], yks[-1]) / np.dot(yks[-1], sks[-1])
+        if omega < 0 or (sks.shape[0] == 1 and form == "SR1"):
+            # Cannot use scaling for first update vector since inverse of hessian will
+            # result in zero t2 term due to cancellation
+            omega = 1
+
+    # Return updated quantities
+    return yks, sks, rhos, omega, skip
+
+
+def update_inv_hessians_qefs(
+    yks: np.ndarray,
+    sks: np.ndarray,
+    rhos: np.ndarray,
+    omega: float,
+    H0: scp.sparse.csc_array,
+    V0: scp.sparse.csc_array,
+    pV0: scp.sparse.csc_array,
+    form: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Updates compact representations of the quasi-Newton approximations to the inverses of
+    the negative Hessian of the log-likelihood and penalized log-likelihood.
+
+    :param yks: Previous update vector sks
+    :type yks: np.ndarray
+    :param sks: Previous update vectors sk
+    :type sks: np.ndarray
+    :param rhos: Previous rhos
+    :type rhos: np.ndarray
+    :param omega: Latest estimate of Eigenvalue of Hessian of the llk
+    :type omega: float
+    :param H0: Initial estimate of the negative hessian matrix of the llk (identity multiplied by
+        omega).
+    :type H0: scp.sparse.csc_array
+    :param V0: Initial estimate of the inverse of the negative hessian matrix of the llk (identity
+        multiplied by 1/omega).
+    :type V0: scp.sparse.csc_array
+    :param pV0: Initial estimate of the inverse of the negative hessian matrix of the penalized llk
+        (inverse of ``H0 + S_emb``).
+    :type pV0: scp.sparse.csc_array
+    :param form: Which update to use: "SR1" or "LBFGS"
+    :type form: str
+    :return: Six np.arrays: ``t1_llk``, ``t2_llk``, ``t3_llk``, ``t1``, ``t2``, ``t3``. The updated
+        approximation of the inverse of the negative Hessian of the llk is:
+        ``V0 + t1_llk @ t3_llk @ t3_llk``. For the penalized llk:
+        ``pV0 - t1 @ t2 @ t3``
+    :rtype: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+    """
+
+    # Compute updated estimate of inverse of negative hessian of llk (implicitly)
+    if form == "SR1":
+        t1_llk, t2_llk, t3_llk = computeVSR1(
+            sks, yks, rhos, V0, 1 / omega, make_psd=True, explicit=False
+        )
+    else:
+        t1_llk, t2_llk, t3_llk = computeV(sks, yks, rhos, V0, explicit=False)
+
+    # Can now form penalized gradient and approximate penalized hessian to update
+    # penalized coefficients. Important: pass un-penalized hessian here!
+    # Because # Below we get int2
+    # H = H0 + nt1 @ int2 @ nt3; that is the estimate of the negative un-penalized
+    # hessian of llk.
+    # Now we replace H0 with pH0 - which is really: H0 + S_emb.
+    # Now H is our estimate of the negative hessian of the penalized llk.
+    # Now, using the Woodbury identity:
+    # pV = (H)^-1 = pV0 - pV0@nt1@ (int2^-1 + nt3@pV0@nt1)^-1 @ nt3@pV0
+    #
+    # since nt3=nt1.T, and int2^-1 = nt2 we have:
+    #
+    # pV = pV0 - pV0@nt1@ (nt2 + nt1.T@pV0@nt1)^-1 @ nt1.t@pV0
+
+    # Compute inverse:
+    if form != "SR1":
+        nt1, nt2, int2, nt3 = computeH(sks, yks, rhos, H0, explicit=False)
+
+        invt2 = nt2 + nt3 @ pV0 @ nt1
+
+        U, sv_invt2, VT = scp.linalg.svd(invt2, lapack_driver="gesvd")
+
+        # Nowe we can compute all parts for the Woodbury identy to obtain pV
+        t2 = VT.T @ np.diag(1 / sv_invt2) @ U.T
+
+        t1 = pV0 @ nt1
+        t3 = nt3 @ pV0
+    else:
+        nt1, int2, nt3 = computeHSR1(
+            sks, yks, rhos, H0, omega, make_psd=True, explicit=False
+        )
+
+        # When using SR1 int2 is potentially singular, so we need a modified
+        # Woodbury inverse that accounts for that.
+        # This is given by eq. 23 in Henderson & Searle (1981):
+        invt2 = np.identity(int2.shape[1]) + int2 @ nt3 @ pV0 @ nt1
+
+        U, sv_invt2, VT = scp.linalg.svd(invt2, lapack_driver="gesvd")
+
+        # Nowe we can compute all parts for the modified Woodbury identy to obtain V
+        t2 = VT.T @ np.diag(1 / sv_invt2) @ U.T
+
+        t1 = pV0 @ nt1
+        t3 = int2 @ nt3 @ pV0
+    # We now have: pV = pV0 - pV0@nt1@t2@nt3@pV0, but don't have to form that
+    # explcitly!
+
+    return t1_llk, t2_llk, t3_llk, t1, t2, t3
+
+
 def update_coef_gen_smooth(
     family: GSMMFamily,
     ys: list[np.ndarray | None],
@@ -6867,6 +7062,8 @@ def update_coef_gen_smooth(
                 else:
                     step = V0 @ grad_up
 
+                # Initial check for skip based on line-search:
+                skip = False
                 if form == "SR1":
                     # Find step satisfying armijo condition
                     alpha = back_track_alpha(
@@ -6881,10 +7078,9 @@ def update_coef_gen_smooth(
                         S_up,
                         alpha_max=1,
                     )
-                    new_slope = 1
                 else:
                     # Find a step that meets the Wolfe conditions (Nocedal & Wright, 2004)
-                    alpha, _, _, _, _, new_slope = scp.optimize.line_search(
+                    alpha, _, _, _, _, _ = scp.optimize.line_search(
                         __neg_llk,
                         __neg_grad,
                         coef.flatten(),
@@ -6894,8 +7090,9 @@ def update_coef_gen_smooth(
                         amax=1,
                     )
 
+                # Line search failed, do not accumulate update vectors
                 if alpha is None:
-                    new_slope = None
+                    skip = True
                     alpha = 1e-7
 
                 # Compute gradient at new point
@@ -6911,69 +7108,37 @@ def update_coef_gen_smooth(
                     ).reshape(-1, 1)
 
                 # Form update vectors for limited memory representation of hessian of negative llk
-                yk = (-1 * next_grad_up) - (-1 * grad_up)
-                sk = alpha * step
-                rhok = 1 / (yk.T @ sk)
+                yks, sks, rhos, omega, skip = update_ys_qefs(
+                    yks,
+                    sks,
+                    rhos,
+                    grad_up,
+                    next_grad_up,
+                    step,
+                    alpha,
+                    skip,
+                    form,
+                    H0,
+                    maxcor,
+                )
 
-                if form == "SR1":
-                    # Check if SR1 update is defined (see Nocedal & Wright, 2004)
-                    skip = test_SR1(sk, yk, rhok, sks, yks, rhos)
-
-                    if outer == 0 and len(sks) == 0 and (skip or new_slope is None):
-                        # Potentially very bad start estimate, try find a better one
-                        coef, _, _ = restart_coef(
-                            coef,
-                            None,
-                            None,
-                            len(coef),
-                            coef_split_idx,
-                            ys,
-                            Xs,
-                            S_emb,
-                            family,
-                            inner,
-                            0,
-                        )
-                        c_llk = family.llk(coef, coef_split_idx, ys, Xs)
-                        grad = family.gradient(coef, coef_split_idx, ys, Xs)
-
-                if new_slope is not None and (form != "SR1" or (skip is False)):
-                    # Wolfe/Armijo met, can collect update vectors
-
-                    if form != "SR1" and len(sks) > 0:
-                        # But first dampen for BFGS update - see Nocedal & Wright (2004):
-                        Ht1, _, Ht2, Ht3 = computeH(sks, yks, rhos, H0, explicit=False)
-                        Bs = H0 @ sk + Ht1 @ Ht2 @ Ht3 @ sk
-                        sBs = sk.T @ Bs
-
-                        if sk.T @ yk < 0.2 * sBs:
-                            theta = (0.8 * sBs) / (sBs - sk.T @ yk)
-                            yk = theta * yk + (1 - theta) * Bs
-
-                    if len(sks) == 0:
-                        sks = sk.T
-                        yks = yk.T
-                        rhos = np.array([rhok[0, 0]])
-                    else:
-                        sks = np.append(sks, sk.T, axis=0)
-                        yks = np.append(yks, yk.T, axis=0)
-                        rhos = np.append(rhos, rhok[0, 0])
-
-                    # Discard oldest update vector
-                    if sks.shape[0] > maxcor:
-                        sks = np.delete(sks, 0, axis=0)
-                        yks = np.delete(yks, 0, axis=0)
-                        rhos = np.delete(rhos, 0)
-
-                # Update omega to better scale hessian (again see Nocedal & Wright, 2004)
-                if sks.shape[0] > 0 and yk.T @ sk > 0:
-                    omega = np.dot(yks[-1], yks[-1]) / np.dot(yks[-1], sks[-1])
-                    if omega < 0 or (sks.shape[0] == 1 and form == "SR1"):
-                        # Cannot use scaling for first update vector since inverse of hessian will
-                        # result in zero t2 term due to cancellation
-                        omega = 1
-                else:
-                    omega = 1
+                if form == "SR1" and outer == 0 and len(sks) == 0 and skip:
+                    # Potentially very bad start estimate, try find a better one
+                    coef, _, _ = restart_coef(
+                        coef,
+                        None,
+                        None,
+                        len(coef),
+                        coef_split_idx,
+                        ys,
+                        Xs,
+                        S_emb,
+                        family,
+                        inner,
+                        0,
+                    )
+                    c_llk = family.llk(coef, coef_split_idx, ys, Xs)
+                    grad = family.gradient(coef, coef_split_idx, ys, Xs)
 
                 omegas.append(omega)
 
@@ -6993,64 +7158,10 @@ def update_coef_gen_smooth(
 
                 if sks.shape[0] > 0:
 
-                    # Compute updated estimate of inverse of negative hessian of llk (implicitly)
-                    if form == "SR1":
-                        t1_llk, t2_llk, t3_llk = computeVSR1(
-                            sks, yks, rhos, V0, 1 / omega, make_psd=True, explicit=False
-                        )  #
-                    else:
-                        t1_llk, t2_llk, t3_llk = computeV(
-                            sks, yks, rhos, V0, explicit=False
-                        )
-
-                    # Can now form penalized gradient and approximate penalized hessian to update
-                    # penalized coefficients. Important: pass un-penalized hessian here!
-                    # Because # Below we get int2
-                    # H = H0 + nt1 @ int2 @ nt3; that is the estimate of the negative un-penalized
-                    # hessian of llk.
-                    # Now we replace H0 with pH0 - which is really: H0 + S_emb.
-                    # Now H is our estimate of the negative hessian of the penalized llk.
-                    # Now, using the Woodbury identity:
-                    # pV = (H)^-1 = pV0 - pV0@nt1@ (int2^-1 + nt3@pV0@nt1)^-1 @ nt3@pV0
-                    #
-                    # since nt3=nt1.T, and int2^-1 = nt2 we have:
-                    #
-                    # pV = pV0 - pV0@nt1@ (nt2 + nt1.T@pV0@nt1)^-1 @ nt1.t@pV0
-
-                    # Compute inverse:
-                    if form != "SR1":
-                        nt1, nt2, int2, nt3 = computeH(
-                            sks, yks, rhos, H0, explicit=False
-                        )
-
-                        invt2 = nt2 + nt3 @ pV0 @ nt1
-
-                        U, sv_invt2, VT = scp.linalg.svd(invt2, lapack_driver="gesvd")
-
-                        # Nowe we can compute all parts for the Woodbury identy to obtain pV
-                        t2 = VT.T @ np.diag(1 / sv_invt2) @ U.T
-
-                        t1 = pV0 @ nt1
-                        t3 = nt3 @ pV0
-                    else:
-                        nt1, int2, nt3 = computeHSR1(
-                            sks, yks, rhos, H0, omega, make_psd=True, explicit=False
-                        )
-
-                        # When using SR1 int2 is potentially singular, so we need a modified
-                        # Woodbury inverse that accounts for that.
-                        # This is given by eq. 23 in Henderson & Searle (1981):
-                        invt2 = np.identity(int2.shape[1]) + int2 @ nt3 @ pV0 @ nt1
-
-                        U, sv_invt2, VT = scp.linalg.svd(invt2, lapack_driver="gesvd")
-
-                        # Nowe we can compute all parts for the modified Woodbury identy to obtain V
-                        t2 = VT.T @ np.diag(1 / sv_invt2) @ U.T
-
-                        t1 = pV0 @ nt1
-                        t3 = int2 @ nt3 @ pV0
-                    # We now have: pV = pV0 - pV0@nt1@t2@nt3@pV0, but don't have to form that
-                    # explcitly!
+                    # Compute updated inverse of negative hessian of (penalized) llk (implicitly)
+                    t1_llk, t2_llk, t3_llk, t1, t2, t3 = update_inv_hessians_qefs(
+                        yks, sks, rhos, omega, H0, V0, pV0, form
+                    )
 
                 # All we need at this point is to form the penalized gradient. # And then we can
                 # compute next_coef via quasi newton step as well (handled below).
@@ -7076,9 +7187,7 @@ def update_coef_gen_smooth(
                 pen_step = pV0 @ pgrad
 
                 # Line search on penalized problem to ensure we make some progress.
-            with (
-                warnings.catch_warnings()
-            ):  # Line search might fail, but we handle that.
+            with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 # Find step satisfying armijo condition
                 alpha_pen = back_track_alpha(
