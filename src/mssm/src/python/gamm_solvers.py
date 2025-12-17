@@ -6476,6 +6476,7 @@ def test_SR1(
     sks: np.ndarray,
     yks: np.ndarray,
     rhos: np.ndarray,
+    omega0: float | None,
 ) -> bool:
     """Test whether SR1 update is well-defined for both V and H.
 
@@ -6498,6 +6499,8 @@ def test_SR1(
     :type yks: np.ndarray
     :param rhos: Previous rhos
     :type rhos: np.ndarray
+    :param omega0: A provided value for omega that is to be used in the check.
+    :type omega0: float
     :return: Check whether SR1 update is well-defined for both V and H.
     :rtype: bool
     """
@@ -6512,7 +6515,9 @@ def test_SR1(
         rhos = np.append(rhos, rho[0, 0])
 
     # Compute new omega to better scale hessian (again see Nocedal & Wright, 2004)
-    if sks.shape[0] > 0 and yk.T @ sk > 0:
+    if omega0 is not None:
+        omega = omega0
+    elif sks.shape[0] > 0 and yk.T @ sk > 0:
         omega = np.dot(yks[-1], yks[-1]) / np.dot(yks[-1], sks[-1])
         if omega < 0 or (sks.shape[0] == 1):
             # Cannot use scaling for first update vector since inverse of hessian will result in
@@ -6601,22 +6606,38 @@ def handle_drop_gsmm(
 
 
 def update_ys_qefs(
+    yk: np.ndarray | None,
+    sk: np.ndarray | None,
+    rhok: np.ndarray | None,
     yks: np.ndarray,
     sks: np.ndarray,
     rhos: np.ndarray,
-    grad_up: np.ndarray,
-    next_grad_up: np.ndarray,
-    step: np.ndarray,
-    alpha: float,
+    grad_up: np.ndarray | None,
+    next_grad_up: np.ndarray | None,
+    step: np.ndarray | None,
+    alpha: float | None,
     skip: bool,
     form: str,
     H0: scp.sparse.csc_array | None,
     maxcor: int,
+    omega0: float | None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, bool]:
     """Determines new update vectors ``yk`` and ``sk`` as well as new values for ``rho`` and
     ``omega`` and, for the "SR1" update decides whether they should be collected and used for the
     quasi-Newton approximation to the hessian/inverse.
 
+    **Note**, thta you must either provide ``yk``, ``sk``, and ``rhok``, or ``grad_up``,
+    ``next_grad_up``, ``step``, and ``alpha``.
+
+    :param yk: New yk, if this is None ``grad_up``, ``next_grad_up``, ``step``, and ``alpha`` must
+        be provided instead.
+    :type yk: np.ndarray | None
+    :param sk: New sk, if this is None ``grad_up``, ``next_grad_up``, ``step``, and ``alpha`` must
+        be provided instead.
+    :type sk: np.ndarray | None
+    :param rhok: New rho, if this is None ``grad_up``, ``next_grad_up``, ``step``, and ``alpha``
+        must be provided instead.
+    :type rhok: np.ndarray | None
     :param yks: Previous update vector sks
     :type yks: np.ndarray
     :param sks: Previous update vectors sk
@@ -6624,13 +6645,13 @@ def update_ys_qefs(
     :param rhos: Previous rhos
     :type rhos: np.ndarray
     :param grad_up: Gradient of unpenalized log-likelihood before taking ``step`` as np.array
-    :type grad_up: np.ndarray
+    :type grad_up: np.ndarray | None
     :param next_grad_up: Gradient of unpenalized log-likelihood after taking ``step`` as np.array
-    :type next_grad_up: np.ndarray
+    :type next_grad_up: np.ndarray | None
     :param step: Quasi-newton step direction as np.array
-    :type step: np.ndarray
+    :type step: np.ndarray | None
     :param alpha: Step extension factor determined by Wolfe/Armijo conditions
-    :type alpha: float
+    :type alpha: float | None
     :param skip: Whether to skip accumulating the update vectors based on ``grad_up``, ``step``,
         and ``next_grad_up`` (For example if step search failed).
     :type skip: bool
@@ -6642,6 +6663,9 @@ def update_ys_qefs(
     :param maxcor: Maximum number of update vectors to retain as part of the limited memory
         approximations to the hessian/inverse.
     :type maxcor: int
+    :param omega0: A provided value for omega that is to be used in the check for the 'SR1' update
+        and overwrites the omega computed by the function.
+    :type omega0: float
     :return: Updated values for ``yks``, ``sks``, ``rhos``, as well as ``omega`` (latest
         estimate of eigenvalue of hessian) and ``skip`` reflecting the updated decision on whether
         to collect the update vectors for the "SR1" update (is always the same if ``form='LBFGS'``).
@@ -6649,13 +6673,14 @@ def update_ys_qefs(
     """
 
     # Compute update vectors for quasi-Newton approximations to Hessian and inverse.
-    yk = (-1 * next_grad_up) - (-1 * grad_up)
-    sk = alpha * step
-    rhok = 1 / (yk.T @ sk)
+    if yk is None:
+        yk = (-1 * next_grad_up) - (-1 * grad_up)
+        sk = alpha * step
+        rhok = 1 / (yk.T @ sk)
 
     if form == "SR1" and skip is False:
         # Check if SR1 update is defined (see Nocedal & Wright, 2004)
-        skip = test_SR1(sk, yk, rhok, sks, yks, rhos)
+        skip = test_SR1(sk, yk, rhok, sks, yks, rhos, omega0)
 
     if skip is False:
         # Wolfe/Armijo met, can collect update vectors
@@ -6686,16 +6711,242 @@ def update_ys_qefs(
             rhos = np.delete(rhos, 0)
 
     # Update omega to better scale hessian (again see Nocedal & Wright, 2004)
-    omega = 1
-    if sks.shape[0] > 0 and yk.T @ sk > 0:
+    if omega0 is not None:
+        omega = omega0
+    elif sks.shape[0] > 0 and yk.T @ sk > 0:
         omega = np.dot(yks[-1], yks[-1]) / np.dot(yks[-1], sks[-1])
         if omega < 0 or (sks.shape[0] == 1 and form == "SR1"):
             # Cannot use scaling for first update vector since inverse of hessian will
             # result in zero t2 term due to cancellation
             omega = 1
+    else:
+        omega = 1
 
     # Return updated quantities
     return yks, sks, rhos, omega, skip
+
+
+def sample_ys_qefs(
+    family: GSMMFamily,
+    ys: list[np.ndarray | None],
+    Xs: list[scp.sparse.csc_array | None],
+    coef: np.ndarray,
+    coef_split_idx: list[int],
+    S_emb: scp.sparse.csc_array,
+    form: str,
+    H0: scp.sparse.csc_array,
+    maxcor: int,
+    method: int,
+    seed: int,
+    sample_kwargs: dict,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, int]:
+    """Function to sample the limited-memory quasi-Newton approximation at estimate ``coef``,
+    based on Berahas et al. (2021).
+
+    ``method`` determines whether to use version 1 (``method==0``) or version 2 (``method==1``) of
+    their sampling algorithm. Note, that we have modified version 1 to automatically determine
+    the radius of the sampled pertubation based on computing the Metropolis Hastings acceptance
+    ratio for the proposed pertubation and the penalized log-likelihood. If the radius is not
+    accepted (stochastically) it is reduced.
+
+    Finite differencing is used to approximate the Hessian vector product required when
+    ``method==1`` (see Pearlmutter).
+
+    References:
+      - Berahas, A. S., Jahani, M., Richtárik, P., & Takáč, M. (2022). Quasi-Newton methods for\
+        machine learning: Forget the past, just sample.\
+        https://doi.org/10.1080/10556788.2021.1977806
+      - Pearlmutter, B. A., (1993) Fast Exact Multiplication by the Hessian.
+      - Kirkpatrick, S., Gelatt, C. D., & Vecchi, M. P. (1983). Optimization by Simulated Annealing\
+        . https://doi.org/10.1126/science.220.4598.671
+
+    :param family: Family of model for which we can compute the gradient of the log-likelihood.
+    :type family: GSMMFamily
+    :param ys: List of observation vectors
+    :type ys: list[np.ndarray | None]
+    :param Xs: List of model matrices
+    :type Xs: list[scp.sparse.csc_array | None]
+    :param coef: Coefficient estimate (maximizer of pealized llk)
+    :type coef: np.ndarray
+    :param coef_split_idx: The indices at which to split the overall coefficient vector into
+        separate lists - one per parameter of llk.
+    :type coef_split_idx: list[int]
+    :param S_emb: Total penalty matrix
+    :type S_emb: scp.sparse.csc_array
+    :param form: Which update to use: "SR1" or "LBFGS"
+    :type form: str
+    :param H0: Initial estimate of the hessian matrix (identity multiplied by omega). Only needed
+        if ``form!='SR1'``.
+    :type H0: scp.sparse.csc_array | None
+    :param maxcor: Maximum number of update vectors to retain as part of the limited memory
+        approximations to the hessian/inverse.
+    :type maxcor: int
+    :param method: Which (modified) method of Berahas et al. (2021) to use to sample the Hessian
+        approximations. ``method==0`` will generally be faster, but ``method==1`` might work better
+        for some models.
+    :type method: int
+    :param seed: Seed to use to generate random permutations
+    :type seed: int
+    :param sample_kwargs: A dictionary with values for hyper-parameters used by the two sampling
+        methods. If ``method==0``, this should contain values for ``T`` (the temperature as a float
+        used when computing the acceptance probability of a permutation), ``min_r`` (the minimum
+        multiplication factor applied to a random gaussian permutation with mean zero and variance
+        of 1), ``max_r`` (the maximum multiplication factor), ``omega`` (a pre-specified value for
+        the multiple of the identity matrix used as the hessian approximation in the absence of any
+        update vectors), ``omega_func`` (a function that receives as argument a finite difference
+        approximation of the diagonal of the negative hessian of the log-likelihood and should
+        return a value for ``omega`` as a float. If this argument is specified, any value for
+        ``omega`` is ignored and you **must** also specify ``omega_func_calls``), and
+        ``omega_func_calls`` (the maximum number of times ``omega_func`` should be called. Set this
+        to 1 if you only want to approximate ``omega`` once or to ``max_outer`` if you want to
+        re-approximate ``omega`` at every iteration to update the coefficient estimates).
+        If ``method==1``, this dictionary is passed to
+        ``scp.differentiate.jacobian``, which is used to approximate the Hessian vector product.
+        You can check the scipy documentation to see which keyword arguments are supported.
+    :type sample_kwargs: dict
+    :return: Updated values for the update vectors and rho variables ``yks``, ``sks``, ``rhos``,
+        as well as ``omega`` (latest estimate of eigenvalue of hessian) and ``updates`` (number of
+        accepted samples).
+    :rtype: tuple[np.ndarray, np.ndarray, np.ndarray, float, int]
+    """
+    sks = np.array([])
+    yks = np.array([])
+    rhos = np.array([])
+
+    np_gen = np.random.default_rng(seed)
+
+    updates = 0
+    omega = 1
+
+    if method == 0:
+
+        min_r = sample_kwargs["min_r"] if "min_r" in sample_kwargs else 1e-2
+        max_r = sample_kwargs["max_r"] if "max_r" in sample_kwargs else 1000
+        T = sample_kwargs["T"] if "T" in sample_kwargs else 1
+
+        # Get gradient and pen. llk at maximizer
+        grad = family.gradient(coef, coef_split_idx, ys, Xs)
+        c_llk = family.llk(coef, coef_split_idx, ys, Xs)
+        c_pen_llk = c_llk - 0.5 * coef.T @ S_emb @ coef
+
+        for _ in range(maxcor):
+
+            # Sample random pertubation
+            step0 = scp.stats.norm.rvs(size=len(coef), random_state=np_gen).reshape(
+                -1, 1
+            )
+
+            # Accept radius based on Metropolis equation computed on pen llk
+            r = max_r
+            sk = r * step0
+            n_coef = coef + sk
+            while r > min_r:
+
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    n_llk = family.llk(n_coef, coef_split_idx, ys, Xs)
+                    n_pen_llk = n_llk - 0.5 * n_coef.T @ S_emb @ n_coef
+
+                u = np_gen.random()
+                # Acceptance function for simulated annealing as defined by scipy:
+                # if not func(xnew) < func(xold):
+                #   exp( -(func(xnew) - func(xold)) / T ) > u
+                # Let func = - llk
+                # if not llk(xnew) > llk(xold):
+                #   exp( - (-llk(xnew) - - llk(xold)) / T) > u
+                #   = exp( - (-llk(xnew) + llk(xold)) / T) > u
+                #   = exp( (llk(xnew) - llk(xold)) / T ) > u
+                if (
+                    not np.isinf(n_pen_llk[0, 0])
+                    and not np.isnan(n_pen_llk[0, 0])
+                    and (
+                        (n_pen_llk > c_pen_llk)
+                        or np.exp((n_pen_llk - c_pen_llk) / T) >= u
+                    )
+                ):
+                    break
+
+                # If we did not accept update r, sk, and n_coef
+                r /= 10
+                sk = r * step0
+                n_coef = coef + sk
+
+            # Compute gradient at n_coef
+            n_grad = family.gradient(n_coef, coef_split_idx, ys, Xs)
+
+            # Collect update vectors
+            yks, sks, rhos, omega, skip = update_ys_qefs(
+                None,
+                None,
+                None,
+                yks,
+                sks,
+                rhos,
+                grad,
+                n_grad,
+                step0,
+                r,
+                False,
+                form,
+                H0,
+                maxcor,
+                sample_kwargs["omega"] if "omega" in sample_kwargs else None,
+            )
+
+            # Check if update was accepted
+            if skip is False:
+                updates += 1
+
+    elif method == 1:
+
+        for _ in range(maxcor):
+
+            # Sample random pertubation
+            sk = scp.stats.norm.rvs(size=len(coef), random_state=np_gen).reshape(-1, 1)
+
+            # Pearlmutter:
+            def __pearlmutter(r):
+                # Function to evaluate Hessian vector product via Pearlmutter's algorithm
+                # taking derivative of gradient with respect to permutation r of sk at r=0
+                n_coef = coef + r[0] * sk
+
+                n_grad = family.gradient(n_coef, coef_split_idx, ys, Xs)
+
+                return -1 * n_grad.flatten()
+
+            def vectorized_pearl(r):
+                return np.apply_along_axis(__pearlmutter, axis=0, arr=r)
+
+            nHsk = scp.differentiate.jacobian(
+                vectorized_pearl, np.array([0]), **sample_kwargs
+            )
+            yk = nHsk.df
+            rhok = 1 / (yk.T @ sk)
+
+            # Collect update vectors
+            yks, sks, rhos, omega, skip = update_ys_qefs(
+                yk,
+                sk,
+                rhok,
+                yks,
+                sks,
+                rhos,
+                None,
+                None,
+                None,
+                None,
+                False,
+                form,
+                H0,
+                maxcor,
+                None,
+            )
+
+            # Check if update was accepted
+            if skip is False:
+                updates += 1
+
+    return yks, sks, rhos, omega, updates
 
 
 def update_inv_hessians_qefs(
@@ -6793,6 +7044,48 @@ def update_inv_hessians_qefs(
     # explcitly!
 
     return t1_llk, t2_llk, t3_llk, t1, t2, t3
+
+
+def fdnddllk(
+    family: GSMMFamily,
+    ys: list[np.ndarray | None],
+    Xs: list[scp.sparse.csc_array | None],
+    coef: np.ndarray,
+    coef_split_idx: list[int],
+) -> np.ndarray:
+    """Compute finite difference approximation of diagonal of negative hessian of the
+    log-likelihood.
+
+    :param family: Family of model for which we can compute the gradient of the log-likelihood.
+    :type family: GSMMFamily
+    :param ys: List of observation vectors
+    :type ys: list[np.ndarray | None]
+    :param Xs: List of model matrices
+    :type Xs: list[scp.sparse.csc_array | None]
+    :param coef: Coefficient estimate (maximizer of pealized llk)
+    :type coef: np.ndarray
+    :param coef_split_idx: The indices at which to split the overall coefficient vector into
+        separate lists - one per parameter of llk.
+    :return: Approximate diagonal of negative hessian as np.array
+    :rtype: np.ndarray
+    """
+
+    # Finite difference approximations of diagonal of negative hessian of llk
+    nHdiag = []
+
+    for ci in range(len(coef)):
+
+        def llk_dd_warp(x: np.ndarray) -> float:
+            n_coef = copy.deepcopy(coef)
+            n_coef[ci] = x[0]
+            return -1 * family.gradient(n_coef, coef_split_idx, ys, Xs)[ci, 0]
+
+        llkdd = scp.optimize.approx_fprime(coef[ci], llk_dd_warp)
+
+        nHdiag.append(llkdd[0])
+
+    nHdiag = np.array(nHdiag)
+    return nHdiag
 
 
 def update_coef_gen_smooth(
@@ -6927,6 +7220,11 @@ def update_coef_gen_smooth(
         shrinkage = False
         form = opt_raw.form
 
+        # Sampling options
+        sample_hessian = opt_raw.sample_hessian
+        sample_hessian_method = opt_raw.sample_hessian_method
+        sample_hessian_kwargs = opt_raw.sample_hessian_kwargs
+
         H = None
         L = None
         eps = 0
@@ -6979,8 +7277,24 @@ def update_coef_gen_smooth(
         else:
             omega = 1
 
-        # omega can fluctuate between updates.. keep track of smallest one within an update series
-        # and use that for scaling efs update later - no longer doing that!
+        if sample_hessian and "omega_func" in sample_hessian_kwargs:
+
+            if sample_hessian_kwargs["omega_func_calls"] > 0:
+
+                # Compute better omega approximation:
+                nHdiag = fdnddllk(family, ys, Xs, coef, coef_split_idx)
+
+                # Compute omega based on function passed along
+                omega = sample_hessian_kwargs["omega_func"](nHdiag)
+
+                if omega < 0:
+                    omega = 1
+
+                # Collect and update remaining number of calls
+                sample_hessian_kwargs["omega"] = omega
+                sample_hessian_kwargs["omega_func_calls"] -= 1
+
+        # Keep track of omega history
         omegas = [omega]
         updates = 0
 
@@ -6988,7 +7302,37 @@ def update_coef_gen_smooth(
         H0 = scp.sparse.identity(len(coef), format="csc") * omega
         V0 = scp.sparse.identity(len(coef), format="csc") * (1 / omega)
 
-        if len(sks) > 0:
+        # Can now sample the Hessian approximation
+        if sample_hessian:
+
+            if not opt["success"]:
+                warnings.warn(
+                    f"Quasi-Newton step did not converge! Message was: {opt['message']}"
+                )
+
+            # Will also need penalized llk, since we skip inner ``while`` routine
+            c_pen_llk = c_llk - 0.5 * coef.T @ S_emb @ coef
+
+            # Now sample update vectors
+            yks, sks, rhos, omega, updates = sample_ys_qefs(
+                family,
+                ys,
+                Xs,
+                coef,
+                coef_split_idx,
+                S_emb,
+                form,
+                H0,
+                maxcor,
+                sample_hessian_method,
+                outer,
+                sample_hessian_kwargs,
+            )
+
+            if updates == 0:
+                warnings.warn("Failed to sample any update vectors for the Hessian!")
+
+        if len(sks) > 0 and sample_hessian is False:
             if form == "SR1":
                 t1_llk, t2_llk, t3_llk = computeVSR1(
                     opt_raw.sk,
@@ -7005,18 +7349,19 @@ def update_coef_gen_smooth(
                 )
 
         # Also compute H0 and V0 for penalized problem.
-        pH0 = scp.sparse.identity(len(coef), format="csc") * omega
-        Lp, Pr, _ = cpp_cholP(pH0 + S_emb)  # noqa: F405
-        LVp0 = compute_Linv(Lp, 10)  # noqa: F405
-        LV0 = apply_eigen_perm(Pr, LVp0)
-        pV0 = LV0.T @ LV0
+        if sample_hessian is False:
+            pH0 = scp.sparse.identity(len(coef), format="csc") * omega
+            Lp, Pr, _ = cpp_cholP(pH0 + S_emb)  # noqa: F405
+            LVp0 = compute_Linv(Lp, 10)  # noqa: F405
+            LV0 = apply_eigen_perm(Pr, LVp0)
+            pV0 = LV0.T @ LV0
 
-        # Should hessian be estimated on gradients from completely un-penalized problem or on
-        # problem with a little shrinkage?
-        # Latter might be more appropriate for random effects where hessian is far from PD!
-        S_up = scp.sparse.csc_matrix((len(coef), len(coef)))
-        if shrinkage:
-            S_up = scp.sparse.identity(len(coef), format="csc") * 1e-3
+            # Should hessian be estimated on gradients from completely un-penalized problem or on
+            # problem with a little shrinkage?
+            # Latter might be more appropriate for random effects where hessian is far from PD!
+            S_up = scp.sparse.csc_matrix((len(coef), len(coef)))
+            if shrinkage:
+                S_up = scp.sparse.identity(len(coef), format="csc") * 1e-3
 
     # Update coefficients:
     full_coef = None
@@ -7035,7 +7380,7 @@ def update_coef_gen_smooth(
             family, ys, coef, keep, Xs, S_emb
         )  # Drop
 
-    converged = False
+    converged = method == "qEFS" and sample_hessian
     checked_identifiable = False
     inner = 0
     while converged is False:
@@ -7109,6 +7454,9 @@ def update_coef_gen_smooth(
 
                 # Form update vectors for limited memory representation of hessian of negative llk
                 yks, sks, rhos, omega, skip = update_ys_qefs(
+                    None,
+                    None,
+                    None,
                     yks,
                     sks,
                     rhos,
@@ -7120,6 +7468,7 @@ def update_coef_gen_smooth(
                     form,
                     H0,
                     maxcor,
+                    None,
                 )
 
                 if form == "SR1" and outer == 0 and len(sks) == 0 and skip:
@@ -7186,7 +7535,7 @@ def update_coef_gen_smooth(
             else:
                 pen_step = pV0 @ pgrad
 
-                # Line search on penalized problem to ensure we make some progress.
+            # Line search on penalized problem to ensure we make some progress.
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 # Find step satisfying armijo condition
@@ -7354,6 +7703,9 @@ def update_coef_gen_smooth(
         LV.method = "qEFS"
         LV.updates = updates
         LV.form = form
+        LV.sample_hessian = sample_hessian
+        LV.sample_hessian_method = sample_hessian_method
+        LV.sample_hessian_kwargs = sample_hessian_kwargs
 
     # Need to fill full_coef at this point and pad LV if we dropped
     if drop is not None:
@@ -7494,6 +7846,9 @@ def correct_lambda_step_gen_smooth(
     init_bfgs_options: dict,
     bfgs_options: dict,
     global_opt_qefs: bool,
+    sample_hessian: bool,
+    sample_hessian_method: int,
+    sample_hessian_kwargs: dict,
 ) -> tuple[
     np.ndarray,
     scp.sparse.csc_array | None,
@@ -7632,6 +7987,15 @@ def correct_lambda_step_gen_smooth(
         estimate the coefficients when the L-qEFS update is used to estimate coefficients/lambda
         parameters.
     :type global_opt_qefs: bool
+    :param sample_hessian: Whether or not to sample the quasi-Newton approximation of the negative
+        Hessians of the penalized log-likelihood and log-likelihood.
+    :type sample_hessian: bool
+    :param sample_hessian_method: Method to use for hessian sampling step. See
+        :func:`sample_ys_qefs` docstring for details.
+    :type sample_hessian_method: int
+    :param sample_hessian_kwargs: Optional key-word arguments determining behavior of hessian
+        sampling step. See :func:`sample_ys_qefs` docstring for details.
+    :type sample_hessian_kwargs: dict
     :return: coef estimate under corrected lambda, the negative hessian of the log-likelihood,
         cholesky of negative hessian of the penalized log-likelihood, inverse of the former
         (or another instance of :class:`scp.sparse.linalg.LinearOperator` representing the new
@@ -7758,6 +8122,9 @@ def correct_lambda_step_gen_smooth(
                 __old_opt.method = "qEFS"
                 __old_opt.form = qEFSH
                 __old_opt.bfgs_options = bfgs_options
+                __old_opt.sample_hessian = sample_hessian
+                __old_opt.sample_hessian_method = sample_hessian_method
+                __old_opt.sample_hessian_kwargs = sample_hessian_kwargs
 
             next_coef, H, L, LV, next_llk, next_pen_llk, eps, keep, drop = (
                 update_coef_gen_smooth(
@@ -8081,7 +8448,10 @@ def solve_generalSmooth_sparse(
         "maxls": 100,
         "maxfun": 1e7,
     },
-    global_opt_qefs=False,
+    global_opt_qefs: bool = False,
+    sample_hessian: bool = False,
+    sample_hessian_method: int = 0,
+    sample_hessian_kwargs: dict = {},
 ) -> tuple[
     np.ndarray,
     scp.sparse.csc_array | None,
@@ -8228,8 +8598,17 @@ def solve_generalSmooth_sparse(
     :type bfgs_options: dict, optional
     :param global_opt_qefs: Whether or not to use a stochastic global optimization algorithm to
         estimate the coefficients when the L-qEFS update is used to estimate coefficients/lambda
-        parameters.
-    :type global_opt_qefs: bool
+        parameters. Defaults to False
+    :type global_opt_qefs: bool, optional
+    :param sample_hessian: Whether or not to sample the quasi-Newton approximation of the negative
+        Hessians of the penalized log-likelihood and log-likelihood. Defaults to False
+    :type sample_hessian: bool, optional
+    :param sample_hessian_method: Method to use for hessian sampling step. See
+        :func:`sample_ys_qefs` docstring for details. Defaults to 0
+    :type sample_hessian_method: int, optional
+    :param sample_hessian_kwargs: Optional key-word arguments determining behavior of hessian
+        sampling step. See :func:`sample_ys_qefs` docstring for details. Defaults to ``{}``
+    :type sample_hessian_kwargs: dict, optional
     :return: coef estimate, the negative hessian of the log-likelihood, inverse of cholesky of
         negative hessian of the penalized log-likelihood, if ``method=='qEFS'`` an instance of
         :class:`scp.sparse.linalg.LinearOperator` representing the new quasi-newton approximation,
@@ -8410,6 +8789,9 @@ def solve_generalSmooth_sparse(
             init_bfgs_options,
             bfgs_options,
             global_opt_qefs,
+            sample_hessian,
+            sample_hessian_method,
+            sample_hessian_kwargs,
         )
 
         # Monitor whether we keep changing lambda but not actually updating coefficients..

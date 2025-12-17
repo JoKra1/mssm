@@ -629,6 +629,9 @@ class GSMM:
         init_bfgs_options: dict | None = None,
         bfgs_options: dict | None = None,
         global_opt_qefs: bool = False,
+        sample_hessian: bool = False,
+        sample_hessian_method: int = 0,
+        sample_hessian_kwargs: dict = {},
     ):
         """
         Fit the specified model.
@@ -797,6 +800,16 @@ class GSMM:
             estimate the coefficients when the L-qEFS update is used to estimate coefficients/lambda
             parameters. Defaults to False, which means standard quasi-Newton is used.
         :type global_opt_qefs: bool, optional
+        :param sample_hessian: Whether or not to sample the quasi-Newton approximation of the
+            negative Hessians of the penalized log-likelihood and log-likelihood. Defaults to False
+        :type sample_hessian: bool, optional
+        :param sample_hessian_method: Method to use for hessian sampling step. See
+            :func:`mssm.src.python.gamm_solvers.sample_ys_qefs` docstring for details. Defaults to 0
+        :type sample_hessian_method: int, optional
+        :param sample_hessian_kwargs: Optional key-word arguments determining behavior of hessian
+            sampling step. See :func:`mssm.src.python.gamm_solvers.sample_ys_qefs` docstring for
+            details. Defaults to ``{}``
+        :type sample_hessian_kwargs: dict, optional
         :raises ValueError: Will throw an error when ``optimizer`` is not 'Newton'.
         """
 
@@ -991,6 +1004,9 @@ class GSMM:
                 init_bfgs_options,
                 bfgs_options,
                 global_opt_qefs,
+                sample_hessian,
+                sample_hessian_method,
+                sample_hessian_kwargs,
             )
         )
 
