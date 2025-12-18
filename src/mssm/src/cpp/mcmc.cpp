@@ -135,7 +135,8 @@ std::tuple<Eigen::MatrixXd, // statem
            size_t, // nprime
            int, // sprime
            double, //aprime
-           size_t // naprime
+           size_t, // naprime
+           double // Lprime
 >
 build_tree(
     const Eigen::Ref<Eigen::MatrixXd> &state,
@@ -168,13 +169,14 @@ M. J. Betancourt (2013,2018) - requiring book-keeping for the additional rsum va
     int sprime;
     double aprime;
     size_t naprime;
+    double Lprime;
     
     // Base case
     if (j == 0)
     {
         Eigen::MatrixXd grad = grad_fun(state);
         Eigen::MatrixXd gradprime;
-        double Lprime;
+        
         std::tie(stateprime,gradprime,rprime,Lprime) = leap_frog(state,grad,r,M,
                                                                  v*epsilon,llk_fun,
                                                                  grad_fun);
@@ -200,7 +202,7 @@ M. J. Betancourt (2013,2018) - requiring book-keeping for the additional rsum va
 
         return std::make_tuple(std::move(statem),std::move(statep),std::move(stateprime),
                                std::move(rm),std::move(rp),std::move(rprime),std::move(rsum),
-                               nprime,sprime,aprime,naprime);
+                               nprime,sprime,aprime,naprime,Lprime);
     }
     else
     {
@@ -208,8 +210,8 @@ M. J. Betancourt (2013,2018) - requiring book-keeping for the additional rsum va
 
         std::tie(statem,statep,stateprime,rm,rp,
                  rprime,rsum,nprime,sprime,
-                 aprime,naprime) = build_tree(state,r,M,logu,v,j-1,epsilon,H0,
-                                              DeltaMax,llk_fun,grad_fun);
+                 aprime,naprime,Lprime) = build_tree(state,r,M,logu,v,j-1,epsilon,H0,
+                                                     DeltaMax,llk_fun,grad_fun);
         
         if (sprime == 1)
         {
@@ -226,22 +228,23 @@ M. J. Betancourt (2013,2018) - requiring book-keeping for the additional rsum va
             int sprime2;
             double aprime2;
             size_t naprime2;
+            double Lprime2;
             
             if (v == -1)
             {
                 // Backward integration
                 std::tie(statem,statepm,stateprime2,rm,rpm,
                          rprime2,rsum2,nprime2,sprime2,
-                         aprime2,naprime2) = build_tree(statem,rm,M,logu,v,j-1,epsilon,H0,
-                                                        DeltaMax,llk_fun,grad_fun);
+                         aprime2,naprime2,Lprime2) = build_tree(statem,rm,M,logu,v,j-1,epsilon,H0,
+                                                                DeltaMax,llk_fun,grad_fun);
             }
             else
             {
                 // Forward integration
                 std::tie(statemp,statep,stateprime2,rmp,rp,
                          rprime2,rsum2,nprime2,sprime2,
-                         aprime2,naprime2) = build_tree(statep,rp,M,logu,v,j-1,epsilon,H0,
-                                                        DeltaMax,llk_fun,grad_fun);
+                         aprime2,naprime2,Lprime2) = build_tree(statep,rp,M,logu,v,j-1,epsilon,H0,
+                                                                DeltaMax,llk_fun,grad_fun);
             }
 
             // integrate over r (Betancourt, 2013,2018)
@@ -260,6 +263,7 @@ M. J. Betancourt (2013,2018) - requiring book-keeping for the additional rsum va
             )
             {
                 stateprime = stateprime2;
+                Lprime = Lprime2;
             }
 
             aprime += aprime2;
@@ -279,7 +283,7 @@ M. J. Betancourt (2013,2018) - requiring book-keeping for the additional rsum va
         // Return else case
         return std::make_tuple(std::move(statem),std::move(statep),std::move(stateprime),
                                std::move(rm),std::move(rp),std::move(rprime),std::move(rsum),
-                               nprime,sprime,aprime,naprime);
+                               nprime,sprime,aprime,naprime,Lprime);
     }
 }
 
@@ -317,7 +321,7 @@ public:
     );
     // Advance chain
     void init_chain();
-    Eigen::MatrixXd advance_chain();
+    std::tuple<double,Eigen::MatrixXd> advance_chain();
 private:
     /*
     Need external functions for log-likelihood and gradient.
@@ -331,6 +335,7 @@ private:
     // Need current state
     long long int n_coef;
     Eigen::MatrixXd cstate;
+    double cL; // current log joint prob
     size_t max_j = 10;
     // And a bunch of hyper parameters, some of which we expose
     double DeltaMax = 10000;
@@ -376,7 +381,11 @@ NUTS::NUTS(
         (Eigen::SparseMatrix<double,0,long long int>::Scalar*) Mdata.data()
     );
 
+    // Init state (coef and llk)
     cstate = init_coef;
+    cL = llk(cstate);
+
+    // Set chosen hyper-parameters
     this->Madapt = Madapt;
     this->delta = delta;
 }
@@ -385,15 +394,16 @@ void NUTS::init_chain()
 {
     // Find suitable epsilon
     Eigen::MatrixXd cgrad = grad(cstate);
-    double cL = llk(cstate);
-
+    
     epsilon = find_reasonable_epsilon(cstate,cgrad,M,cL,llk,grad,r_sampler);
     mu = log(10 * epsilon);
     m = 0;
     //py::print(epsilon);
 }
 
-Eigen::MatrixXd NUTS::advance_chain()
+std::tuple<double,
+           Eigen::MatrixXd
+>NUTS::advance_chain()
 /*
 Complete one step of algorithm 6 as defined by Hoffman & Gelman (2014) to sample next state.
 */
@@ -407,7 +417,6 @@ Complete one step of algorithm 6 as defined by Hoffman & Gelman (2014) to sample
     Eigen::MatrixXd r0 = r_sampler();
 
     // Compute H0
-    double cL = llk(cstate);
     double H0 = cL - compute_energy(r0,M);
 
     // Sample log(u) where u is U[0,exp(H0)]
@@ -441,6 +450,7 @@ Complete one step of algorithm 6 as defined by Hoffman & Gelman (2014) to sample
     Eigen::MatrixXd rsumprime;
     size_t nprime;
     int sprime;
+    double Lprime;
 
     while (s == 1 and j < max_j)
     {
@@ -451,16 +461,16 @@ Complete one step of algorithm 6 as defined by Hoffman & Gelman (2014) to sample
             // Backward integration
             std::tie(statem,statepm,stateprime,rm,rpm,
                      rprime,rsumprime,nprime,sprime,
-                     a,na) = build_tree(statem,rm,M,logu,v,j,epsilon,H0,
-                                        DeltaMax,llk,grad);
+                     a,na,Lprime) = build_tree(statem,rm,M,logu,v,j,epsilon,H0,
+                                               DeltaMax,llk,grad);
         }
         else
         {
             // Forward integration
             std::tie(statemp,statep,stateprime,rmp,rp,
                      rprime,rsumprime,nprime,sprime,
-                     a,na) = build_tree(statep,rp,M,logu,v,j,epsilon,H0,
-                                        DeltaMax,llk,grad);
+                     a,na,Lprime) = build_tree(statep,rp,M,logu,v,j,epsilon,H0,
+                                               DeltaMax,llk,grad);
         }
 
         // integrate over r (Betancourt, 2013,2018)
@@ -473,6 +483,7 @@ Complete one step of algorithm 6 as defined by Hoffman & Gelman (2014) to sample
             if (((1.0 * nprime) / n) > U(gen))
             {
                 cstate = stateprime;
+                cL = Lprime;
             }
         }
 
@@ -506,7 +517,7 @@ Complete one step of algorithm 6 as defined by Hoffman & Gelman (2014) to sample
     }
     //py::print(epsilon);
     
-    return cstate;
+    return std::make_tuple(Lprime,cstate);
 }
 
 
