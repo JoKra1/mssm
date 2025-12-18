@@ -19,7 +19,8 @@ double compute_energy(
     const Eigen::SparseMatrix<double,0,long long int> &M
 )
 /*
-Computes current energy of Hamiltonian after subtracting logp(state)
+Computes current kinetic energy of Hamiltonian after subtracting logp(state) as defined
+by Betancourt (2013,2018).
 */
 {
     Eigen::MatrixXd energy = 0.5 * r.transpose() * M * r;
@@ -152,7 +153,7 @@ build_tree(
 /*
 Tree building algorithm as described in Algorithm 6 of Hoffman & Gelman (2014), but adapted
 to work with the dynamic termination criterion for Riemannian metrices proposed by
-M. J. Betancourt (2013) - requiring book-keeping for the additional rsum variable.
+M. J. Betancourt (2013,2018) - requiring book-keeping for the additional rsum variable.
 */
 {
     // Single prime variables
@@ -243,7 +244,7 @@ M. J. Betancourt (2013) - requiring book-keeping for the additional rsum variabl
                                                         DeltaMax,llk_fun,grad_fun);
             }
 
-            // integrate over r (Betancourt, 2013)
+            // integrate over r (Betancourt, 2013,2018)
 
             rsum += rsum2;
 
@@ -264,7 +265,7 @@ M. J. Betancourt (2013) - requiring book-keeping for the additional rsum variabl
             aprime += aprime2;
             naprime += naprime2;
 
-            // Now new divergence check by Betancourt (2013)
+            // Now new divergence check by Betancourt (2013,2018)
             Eigen::MatrixXd rpsharp = M * rp;
             Eigen::MatrixXd rmsharp = M * rm;
             Eigen::MatrixXd Dp = rpsharp.transpose() * rsum;
@@ -284,8 +285,16 @@ M. J. Betancourt (2013) - requiring book-keeping for the additional rsum variabl
 
 class NUTS
 /*
-Implementation of the No-U-Turn Sampler defined by Hoffman & Gelman (2014).
-Adapted to work with any Riemannian metric, based on M. J. Betancourt (2013).
+Class to hold current states of a No-U-Turn Sampler defined by Hoffman & Gelman (2014).
+Adapted to work with any Riemannian metric, based on M. J. Betancourt (2013,2018).
+
+References:
+ - Hoffman, M. D., & Gelman, A. (2014). The No-U-Turn Sampler: Adaptively Setting Path Lengths in\
+    Hamiltonian Monte Carlo. Journal of Machine Learning Research, 15(47), 1593–1623.
+ - Betancourt, M. J. (2013). Generalizing the No-U-Turn Sampler to Riemannian Manifolds\
+    (No. arXiv:1304.1920). arXiv. https://doi.org/10.48550/arXiv.1304.1920
+ - Betancourt, M. (2018). A Conceptual Introduction to Hamiltonian Monte Carlo\
+    (No. arXiv:1701.02434). arXiv. https://doi.org/10.48550/arXiv.1701.02434
 */
 {
 public:
@@ -294,6 +303,7 @@ public:
     (
         long long int, // n_coef
         size_t, // Madapt
+        double delta, // Expected Metropolis acceptance prob. Used to tune epsilon
         Eigen::MatrixXd, // init_coef
         std::function<double(const Eigen::Ref<Eigen::MatrixXd>&)>, // llk
         std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)>, // grad
@@ -320,8 +330,9 @@ private:
     Eigen::SparseMatrix<double,0,long long int> M;
     // Need current state
     long long int n_coef;
-    size_t max_j;
     Eigen::MatrixXd cstate;
+    size_t max_j = 10;
+    // And a bunch of hyper parameters, some of which we expose
     double DeltaMax = 10000;
     double epsilon;
     double mu;
@@ -339,6 +350,7 @@ private:
 NUTS::NUTS(
     long long int n_coef_external,
     size_t Madapt,
+    double delta,
     Eigen::MatrixXd init_coef,
     std::function<double(const Eigen::Ref<Eigen::MatrixXd>&)> llk_external,
     std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)> grad_external,
@@ -350,7 +362,7 @@ NUTS::NUTS(
     py::array_t<long long int, py::array::f_style | py::array::forcecast> Midptr,
     py::array_t<long long int, py::array::f_style | py::array::forcecast> Mindices
 )
-// Constructor.
+// Constructor for the NUTS sampler.
 {
     n_coef = n_coef_external;
     llk = llk_external;
@@ -366,7 +378,7 @@ NUTS::NUTS(
 
     cstate = init_coef;
     this->Madapt = Madapt;
-    this->max_j = 10;
+    this->delta = delta;
 }
 
 void NUTS::init_chain()
@@ -383,7 +395,7 @@ void NUTS::init_chain()
 
 Eigen::MatrixXd NUTS::advance_chain()
 /*
-Complete one step of algorithm 6 as defined by Hoffman & Gelman (2014) to sample next state
+Complete one step of algorithm 6 as defined by Hoffman & Gelman (2014) to sample next state.
 */
 {
     std::random_device rd;
@@ -399,6 +411,10 @@ Complete one step of algorithm 6 as defined by Hoffman & Gelman (2014) to sample
     double H0 = cL - compute_energy(r0,M);
 
     // Sample log(u) where u is U[0,exp(H0)]
+    // If u1 is U[0,1]
+    // Then: u would be 0 + (exp(H0) - 0)*u1 (see Wikipedia...)
+    // Taking log(exp(H0)*u1) gives
+    // H0 + log(u1). Finally, -log(u1) ~ exp(1)
     double logu = H0 - ed(gen);
     int v;
 
@@ -447,7 +463,7 @@ Complete one step of algorithm 6 as defined by Hoffman & Gelman (2014) to sample
                                         DeltaMax,llk,grad);
         }
 
-        // integrate over r (Betancourt, 2013)
+        // integrate over r (Betancourt, 2013,2018)
         rsum += rsumprime;
         //py::print(j,s,sprime,logu,v,nprime,n);
 
@@ -463,7 +479,7 @@ Complete one step of algorithm 6 as defined by Hoffman & Gelman (2014) to sample
         // Update variables
         n += nprime;
 
-        // New divergence check by Betancourt (2013)
+        // New divergence check by Betancourt (2013,2018)
         Eigen::MatrixXd rpsharp = M * rp;
         Eigen::MatrixXd rmsharp = M * rm;
         Eigen::MatrixXd Dp = rpsharp.transpose() * rsum;
@@ -475,7 +491,7 @@ Complete one step of algorithm 6 as defined by Hoffman & Gelman (2014) to sample
 
     m += 1;
 
-    // Complete dual averaging to tune epsilon
+    // Complete dual averaging to tune epsilon, final part of algorithm 6 by Hoffman & Gelman (2014)
     if (m <= Madapt)
     {
         double oomt = 1.0 / (m + t0);
@@ -498,6 +514,7 @@ PYBIND11_MODULE(mcmc, m) {
     py::class_<NUTS>(m,"NUTS")
         .def(py::init<long long int,
              size_t,
+             double,
              Eigen::MatrixXd,
              std::function<double(const Eigen::Ref<Eigen::MatrixXd>&)>,
              std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)>,
