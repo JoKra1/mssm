@@ -7250,6 +7250,7 @@ def update_coef_gen_smooth(
                     "jac": __neg_grad,
                     "options": {"maxiter": max_inner, **opt_raw.bfgs_options},
                 },
+                seed=outer,
             )
 
         coef = opt["x"].reshape(-1, 1)

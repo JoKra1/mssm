@@ -32,6 +32,9 @@ from .src.python.exp_fam import (  # noqa: F401
     Poisson,
     MultiGauss,
 )
+
+from .src.python.hsmm import HSMMFamily, FTPHSMMFamily  # noqa: F401
+
 from .src.python.gamm_solvers import (  # noqa: F401
     solve_gamm_sparse,
     mp,

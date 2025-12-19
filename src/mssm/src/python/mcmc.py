@@ -40,9 +40,9 @@ from tqdm import tqdm
 HAS_ARVIZ = True
 try:
     import arviz
-except:  # noqa
-    HAS_ARVIZ = False
+except ImportError:
     warnings.warn("Convergence checks are only available when `arviz` is installed.")
+    HAS_ARVIZ = False
 
 
 def check_convergence(
