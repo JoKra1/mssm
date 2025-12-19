@@ -452,7 +452,7 @@ Complete one step of algorithm 6 as defined by Hoffman & Gelman (2014) to sample
     int sprime;
     double Lprime;
 
-    while (s == 1 and j < max_j)
+    while (s == 1 && j < max_j)
     {
         v = int(2 * (U(gen) >= 0.5)) - 1;
 
