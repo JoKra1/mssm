@@ -17,6 +17,8 @@ from .defaults import (
     init_coef_gaumlss_tests,
 )
 
+from mssm.src.python.mcmc import sample_mssm
+
 mssm.src.python.exp_fam.GAUMLSS.init_coef = init_coef_gaumlss_tests
 mssm.src.python.exp_fam.GAMMALS.init_coef = init_coef_gammals_tests
 mssm.src.python.exp_fam.GAUMLSS.init_lambda = init_penalties_tests_gammlss
@@ -1470,4 +1472,39 @@ class Test_te_scaling_qefs:
             np.array([175.62432886646718]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 1.5),
+        )
+
+
+class Test_NUTS:
+    sim_dat = sim4(500, 2, family=Gamma(), seed=0)
+
+    # We again need to model the mean: \mu_i = \alpha + f(x0) + f(x1) + f_{x4}(x0)
+    sim_formula_m = Formula(
+        lhs("y"), [i(), f(["x0"]), f(["x1"]), f(["x2"]), f(["x3"])], data=sim_dat
+    )
+
+    # and the standard deviation
+    sim_formula_sd = Formula(lhs("y"), [i()], data=sim_dat)
+
+    family = GAMMALS([LOG(), LOGb(-0.0001)])
+
+    model = GAMMLSS([sim_formula_m, sim_formula_sd], family)
+    model.fit(**default_gammlss_test_kwargs)
+
+    def test_NUTS(self):
+        llks, coef_samples, rho_samples = sample_mssm(
+            self.model,
+            auto_converge=False,
+            M_adapt=100,
+            parallelize_chains=False,
+            n_chains=1,
+            sample_rho=False,
+            delta=0.6,
+            n_iter=100,
+        )
+
+        assert (
+            rho_samples is None
+            and coef_samples.shape == (1, 100, len(self.model.coef))
+            and llks.shape == (1, 100, 1)
         )
