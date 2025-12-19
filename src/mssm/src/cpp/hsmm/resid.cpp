@@ -9,21 +9,26 @@
 
 namespace py = pybind11;
 
-py::array_t<double> forward_resid(py::array_t<double, py::array::f_style | py::array::forcecast> cbs_a,
-                                  py::array_t<double, py::array::f_style | py::array::forcecast> bs_a,
-                                  py::array_t<double, py::array::f_style | py::array::forcecast> ds_a,
-                                  py::array_t<double, py::array::f_style | py::array::forcecast> T_a,
-                                  py::array_t<double, py::array::f_style | py::array::forcecast> pi_a,
-                                  py::array_t<double, py::array::f_style | py::array::forcecast> weights_a,
-                                  double scale, size_t n_T, size_t D, size_t n_S, size_t M, size_t event_width,
-                                  bool starts_with_first, bool ends_with_last,bool ends_in_last, int hmp_code) {
+py::array_t<
+            double
+> forward_resid(py::array_t<double, py::array::f_style | py::array::forcecast> cbs_a,
+                py::array_t<double, py::array::f_style | py::array::forcecast> bs_a,
+                py::array_t<double, py::array::f_style | py::array::forcecast> ds_a,
+                py::array_t<double, py::array::f_style | py::array::forcecast> T_a,
+                py::array_t<double, py::array::f_style | py::array::forcecast> pi_a,
+                py::array_t<double, py::array::f_style | py::array::forcecast> weights_a,
+                double scale, size_t n_T, size_t D, size_t n_S, size_t M, size_t event_width,
+                bool starts_with_first, bool ends_with_last,bool ends_in_last, int hmp_code) {
     /*
-    Compute forward "pseudo-residuals" (also known as "independent quantile residuals") as defined by Zucchini et al. (2017)
-    and Dunn & Smyth (1996).
+    Compute forward "pseudo-residuals" (also known as "independent quantile residuals") as defined
+    by Zucchini et al. (2017) and Dunn & Smyth (1996).
 
     References:
-      - Zucchini, W., MacDonald, I. L., & Langrock, R. (2017). Hidden Markov Models for Time Series: An Introduction Using R, Second Edition (2nd ed.). Chapman and Hall/CRC. https://doi.org/10.1201/b20790
-      - Dunn, P. K., & Smyth, G. K. (1996). Randomized Quantile Residuals. Journal of Computational and Graphical Statistics, 5(3), 236–244. https://doi.org/10.2307/1390802
+      - Zucchini, W., MacDonald, I. L., & Langrock, R. (2017). Hidden Markov Models for Time\
+        Series: An Introduction Using R, Second Edition (2nd ed.). Chapman and Hall/CRC.\
+        https://doi.org/10.1201/b20790
+      - Dunn, P. K., & Smyth, G. K. (1996). Randomized Quantile Residuals. Journal of Computational\
+        and Graphical Statistics, 5(3), 236–244. https://doi.org/10.2307/1390802
     */
    
     auto Lam_a = py::array_t<double>(n_T);
@@ -96,7 +101,8 @@ py::array_t<double> forward_resid(py::array_t<double, py::array::f_style | py::a
                                     for (size_t m = 0; m < M; m++)
                                     {   
                                         // c prob for signal m in bump
-                                        clam(t,m,d,j) = lam(t-1,d+1,j)*cbs(t,m,(event_width-1) - d,j);
+                                        clam(t,m,d,j) = lam(t-1,d+1,j) *
+                                                        cbs(t,m,(event_width-1) - d,j);
                                     }
                                     lam(t,d,j) = lam(t-1,d+1,j)*bs(t,(event_width-1) - d,j);
                                 }
@@ -130,7 +136,8 @@ py::array_t<double> forward_resid(py::array_t<double, py::array::f_style | py::a
                         
                     }
                         
-                    // Probability of other state ending on previous time point and transitioning to current state with dur d
+                    // Probability of other state ending on previous time point and transitioning
+                    // to current state with dur d
                     tp = 0.0;
                     for (size_t i = 0; i < n_S; i++)
                     {
@@ -149,7 +156,7 @@ py::array_t<double> forward_resid(py::array_t<double, py::array::f_style | py::a
                         if(j % 2 == 0)
                         {
                             // If we have an ar1 model first obs prob for flats depends on lag of
-                            // previous bump (only for states > 0, but this is taken care of outside)
+                            // previous bump (only for states > 0, but this is handled outside)
                             b2 = bs(t,1,j);
                         }
 
@@ -178,7 +185,8 @@ py::array_t<double> forward_resid(py::array_t<double, py::array::f_style | py::a
 
                         for (size_t m = 0; m < M; m++)
                         {
-                            clam(t,m,d,j) += tp * cbs(t,j,m) * ds(d,(starts_with_first) ? j : j + n_S);
+                            clam(t,m,d,j) += tp * cbs(t,j,m) *
+                                             ds(d,(starts_with_first) ? j : j + n_S);
 
                             // Scaling to get conditional probability
                             clam(t,m,d,j) /= Lam(t-1);
@@ -244,16 +252,18 @@ py::array_t<double> forward_resid(py::array_t<double, py::array::f_style | py::a
     return resid_a;
 }
 
-py::array_t<double> predictive_resid(py::array_t<double, py::array::f_style | py::array::forcecast> y_a,
-                                     py::array_t<double, py::array::f_style | py::array::forcecast> bs_a,
-                                     py::array_t<double, py::array::f_style | py::array::forcecast> mus_a,
-                                     py::array_t<double, py::array::f_style | py::array::forcecast> ds_a,
-                                     py::array_t<double, py::array::f_style | py::array::forcecast> T_a,
-                                     py::array_t<double, py::array::f_style | py::array::forcecast> pi_a,
-                                     py::array_t<double, py::array::f_style | py::array::forcecast> weights_a,
-                                     double scale, size_t n_T, size_t D, size_t n_S, size_t M, size_t event_width,
-                                     bool starts_with_first, bool ends_with_last,bool ends_in_last, int hmp_code,
-                                    double rho) {
+py::array_t<
+            double
+> predictive_resid(py::array_t<double, py::array::f_style | py::array::forcecast> y_a,
+                   py::array_t<double, py::array::f_style | py::array::forcecast> bs_a,
+                   py::array_t<double, py::array::f_style | py::array::forcecast> mus_a,
+                   py::array_t<double, py::array::f_style | py::array::forcecast> ds_a,
+                   py::array_t<double, py::array::f_style | py::array::forcecast> T_a,
+                   py::array_t<double, py::array::f_style | py::array::forcecast> pi_a,
+                   py::array_t<double, py::array::f_style | py::array::forcecast> weights_a,
+                   double scale, size_t n_T, size_t D, size_t n_S, size_t M, size_t event_width,
+                   bool starts_with_first, bool ends_with_last,bool ends_in_last, int hmp_code,
+                   double rho) {
     /*
     Compute "predictive-residuals" defined by Buckby et al. (2020).
 
@@ -432,7 +442,7 @@ py::array_t<double> predictive_resid(py::array_t<double, py::array::f_style | py
                         if(j % 2 == 0)
                         {
                             // If we have an ar1 model first obs prob for flats depends on lag of
-                            // previous bump (only for states > 0, but this is taken care of outside)
+                            // previous bump (only for states > 0, but this is handled outside)
                             b2 = bs(t,1,j);
                         }
 
@@ -451,14 +461,16 @@ py::array_t<double> predictive_resid(py::array_t<double, py::array::f_style | py
                                     ebump *= d0;
                                 }
                                 
-                                elam(t,m,d,j) += tp * ebump * ds(d,(starts_with_first) ? j : j + n_S);
+                                elam(t,m,d,j) += tp * ebump *
+                                                 ds(d,(starts_with_first) ? j : j + n_S);
                             }
                             else if (rho < 999)
                             {
                                 // Lag of previous bump carries over
                                 ebump = d1 * weights(event_width-1) * mus(t-1,m,j-1);
 
-                                elam(t,m,d,j) += tp * ebump * ds(d,(starts_with_first) ? j : j + n_S);
+                                elam(t,m,d,j) += tp * ebump *
+                                                 ds(d,(starts_with_first) ? j : j + n_S);
 
                             }
 

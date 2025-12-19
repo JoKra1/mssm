@@ -11,18 +11,21 @@
 namespace py = pybind11;
 
 
-std::tuple<int,py::array_t<int>,py::array_t<double>,py::array_t<int>> viterbi(
-                                            py::array_t<double, py::array::f_style | py::array::forcecast> lbs_a,
-                                            py::array_t<double, py::array::f_style | py::array::forcecast> lds_a,
-                                            py::array_t<double, py::array::f_style | py::array::forcecast> lT_a,
-                                            py::array_t<double, py::array::f_style | py::array::forcecast> lpi_a,
-                                            py::array_t<double, py::array::f_style | py::array::forcecast> weights_a,
-                                            double scale, size_t n_T, size_t D, size_t n_S, size_t event_width,
-                                            bool starts_with_first, bool ends_with_last,bool ends_in_last,
-                                            int hmp_code) {
+std::tuple<
+           int,
+           py::array_t<int>,
+           py::array_t<double>,
+           py::array_t<int>
+> viterbi(py::array_t<double, py::array::f_style | py::array::forcecast> lbs_a,
+          py::array_t<double, py::array::f_style | py::array::forcecast> lds_a,
+          py::array_t<double, py::array::f_style | py::array::forcecast> lT_a,
+          py::array_t<double, py::array::f_style | py::array::forcecast> lpi_a,
+          py::array_t<double, py::array::f_style | py::array::forcecast> weights_a,
+          double scale, size_t n_T, size_t D, size_t n_S, size_t event_width,
+          bool starts_with_first, bool ends_with_last,bool ends_in_last,
+          int hmp_code) {
     
-    /*
-    Viterbi algorithm (see Rabiner, 1990) adapted for the forward pass defined by Yu & Kobayashi
+    /* Viterbi algorithm (see Rabiner, 1990) adapted for the forward pass defined by Yu & Kobayashi
     (2006).
 
     References:
@@ -107,7 +110,8 @@ std::tuple<int,py::array_t<int>,py::array_t<double>,py::array_t<int>> viterbi(
                             tmp_j = j;
                         }
                     }
-                    // Probability of other state ending on previous time point and transitioning to current state with dur d
+                    // Probability of other state ending on previous time point and transitioning to
+                    // current state with dur d
                     for (size_t i = 0; i < n_S; i++)
                     {
                         if (i == j)
@@ -120,15 +124,18 @@ std::tuple<int,py::array_t<int>,py::array_t<double>,py::array_t<int>> viterbi(
                             lb2 = lbs(t,0,j);
                             if(j % 2 == 0)
                             {
-                                // If we have an ar1 model first obs prob for flats depends on lag of
-                                // previous bump (only for states > 0, but this is taken care of outside)
+                                // If we have an ar1 model first obs prob for flats depends on lag
+                                // of previous bump (only for states > 0, but this is taken care of
+                                // outside)
                                 lb2 = lbs(t,1,j);
                             }
-                            tmp_d2 = delta(t-1,0,i) + lT(i,j) + lb2 + lds(d,(starts_with_first) ? j : j + n_S);
+                            tmp_d2 = delta(t-1,0,i) + lT(i,j) + lb2 +
+                                     lds(d,(starts_with_first) ? j : j + n_S);
                         }
                         else
                         {
-                            tmp_d2 = delta(t-1,0,i) + lT(i,j) + lbs(t,j) + lds(d,(starts_with_first) ? j : j + n_S);
+                            tmp_d2 = delta(t-1,0,i) + lT(i,j) + lbs(t,j) +
+                                     lds(d,(starts_with_first) ? j : j + n_S);
                         }
                         
 
@@ -231,7 +238,10 @@ std::tuple<int,py::array_t<int>,py::array_t<double>,py::array_t<int>> viterbi(
     return std::make_tuple(max_ed,std::move(states_a),std::move(delta_a),std::move(psi_a));;
 }
 
-std::tuple<py::array_t<int>,py::array_t<int>> sample_backwards(
+std::tuple<
+           py::array_t<int>,
+           py::array_t<int>
+> sample_backwards(
               py::array_t<double, py::array::f_style | py::array::forcecast> bs_a,
               py::array_t<double, py::array::f_style | py::array::forcecast> ds_a,
               py::array_t<double, py::array::f_style | py::array::forcecast> T_a,
@@ -240,8 +250,7 @@ std::tuple<py::array_t<int>,py::array_t<int>> sample_backwards(
               double scale, size_t n_T, size_t D, size_t n_S, size_t event_width, size_t n_samples,
               bool starts_with_first,bool ends_with_last,bool ends_in_last,int hmp_code, int seed) {
     
-    /*
-    Backwards sampling algorithm to obtain samples from the posterior of state sequences given
+    /* Backwards sampling algorithm to obtain samples from the posterior of state sequences given
     paratmeters and data, based on Dewar et al. (2012). Adapted for the forward pass defined by
     Yu & Kobayashi (2006).
 
@@ -344,7 +353,8 @@ std::tuple<py::array_t<int>,py::array_t<int>> sample_backwards(
                         if(j % 2 == 0)
                         {
                             // If we have an ar1 model first obs prob for flats depends on lag of
-                            // previous bump (only for states > 0, but this is taken care of outside)
+                            // previous bump (only for states > 0, but this is taken care of
+                            // outside)
                             b2 = bs(t,1,j);
                         }
                         tp *= b2*ds(d,(starts_with_first) ? j : j + n_S);

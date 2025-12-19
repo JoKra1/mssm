@@ -18,7 +18,17 @@ double llk(py::array_t<double, py::array::f_style | py::array::forcecast> bs_a,
               py::array_t<double, py::array::f_style | py::array::forcecast> weights_a,
               double scale, size_t n_T, size_t D, size_t n_S, size_t event_width,
               bool starts_with_first,bool ends_with_last,bool ends_in_last,int hmp_code) {
-   
+    
+    /* Compute log-likelihood for a hsmm model, using scaled forward variables which are
+    a combination of those by Yu & Kobayashi (2005) and Lystig & Hughes (2002).
+
+    References:
+     - Yu, S.-Z., & Kobayashi, H. (2006). Practical implementation of an efficient forward-backward\
+        algorithm for an explicit-duration hidden Markov model. IEEE Transactions on Signal\
+        Processing, 54(5), 1947–1951. https://doi.org/10.1109/TSP.2006.872540
+     - Lystig, T. C., & Hughes, J. P. (2002). Exact Computation of the Observed Information Matrix\
+        for Hidden Markov Models. Journal of Computational and Graphical Statistics, 11(3), 678–689.
+    */
     
     auto Lam_a = py::array_t<double>(n_T);
     auto lam_a = py::array_t<double>({n_T,D-1,n_S});
@@ -112,7 +122,7 @@ double llk(py::array_t<double, py::array::f_style | py::array::forcecast> bs_a,
                         if(j % 2 == 0)
                         {
                             // If we have an ar1 model first obs prob for flats depends on lag of
-                            // previous bump (only for states > 0, but this is taken care of outside)
+                            // previous bump (only for states > 0, but this is handled outside)
                             b2 = bs(t,1,j);
                         }
                         tp *= b2*ds(d,(starts_with_first) ? j : j + n_S);
@@ -167,23 +177,35 @@ double llk(py::array_t<double, py::array::f_style | py::array::forcecast> bs_a,
     return llk;
 }
 
-py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::array::forcecast> bs_a,
-                               py::array_t<double, py::array::f_style | py::array::forcecast> y_a,
-                               py::array_t<double, py::array::f_style | py::array::forcecast> mu_a,
-                               py::array_t<double, py::array::f_style | py::array::forcecast> ds_a,
-                               py::array_t<double, py::array::f_style | py::array::forcecast> T_a,
-                               py::array_t<double, py::array::f_style | py::array::forcecast> pi_a,
-                               py::array_t<double, py::array::f_style | py::array::forcecast> b_grad_a,
-                               py::array_t<double, py::array::f_style | py::array::forcecast> d_grad_a,
-                               //py::array_t<double, py::array::f_style | py::array::forcecast> T_grad_a,
-                               //py::array_t<double, py::array::f_style | py::array::forcecast> pi_grad_a,
-                               py::array_t<size_t, py::array::c_style | py::array::forcecast> m_idx_grad_a,
-                               py::array_t<size_t, py::array::c_style | py::array::forcecast> j_idx_grad_a,
-                               py::array_t<double, py::array::c_style | py::array::forcecast> weights_a,
-                               double scale, size_t n_T, size_t D, size_t n_S, size_t n_coef, size_t M,
-                               size_t event_width, bool starts_with_first, bool ends_with_last, 
-                               bool ends_in_last, int hmp_code, double rho) {
-   
+py::array_t<
+            double
+> llkFTPgrad(py::array_t<double, py::array::f_style | py::array::forcecast> bs_a,
+             py::array_t<double, py::array::f_style | py::array::forcecast> y_a,
+             py::array_t<double, py::array::f_style | py::array::forcecast> mu_a,
+             py::array_t<double, py::array::f_style | py::array::forcecast> ds_a,
+             py::array_t<double, py::array::f_style | py::array::forcecast> T_a,
+             py::array_t<double, py::array::f_style | py::array::forcecast> pi_a,
+             py::array_t<double, py::array::f_style | py::array::forcecast> b_grad_a,
+             py::array_t<double, py::array::f_style | py::array::forcecast> d_grad_a,
+             py::array_t<size_t, py::array::c_style | py::array::forcecast> m_idx_grad_a,
+             py::array_t<size_t, py::array::c_style | py::array::forcecast> j_idx_grad_a,
+             py::array_t<double, py::array::c_style | py::array::forcecast> weights_a,
+             double scale, size_t n_T, size_t D, size_t n_S, size_t n_coef, size_t M,
+             size_t event_width, bool starts_with_first, bool ends_with_last, 
+             bool ends_in_last, int hmp_code, double rho) {
+    
+    /* Compute gradient of log-likelihood for a hsmm model with known (or assumed known) transtion
+    matrix and initial state distribution, using scaled forward variables which are a combination of
+    those by Yu & Kobayashi (2005) and Lystig & Hughes (2002).
+
+    References:
+     - Yu, S.-Z., & Kobayashi, H. (2006). Practical implementation of an efficient forward-backward\
+        algorithm for an explicit-duration hidden Markov model. IEEE Transactions on Signal\
+        Processing, 54(5), 1947–1951. https://doi.org/10.1109/TSP.2006.872540
+     - Lystig, T. C., & Hughes, J. P. (2002). Exact Computation of the Observed Information Matrix\
+        for Hidden Markov Models. Journal of Computational and Graphical Statistics, 11(3), 678–689.
+    
+    */
     
     auto Lam_a = py::array_t<double>(n_T);
     auto lam_a = py::array_t<double>({n_T,D-1,n_S});
@@ -261,19 +283,24 @@ py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::arra
                     }
 
                     // Now compute deriv of pi(j)*bs(t,j)*ds(d,j) with respect to individual coef.
-                    // **NOTE**: Generally deriv will be single product, not sum over three products because the remaining
-                    // sums will cancel, since each coef will only be associated with either pi, bs, or ds!
+                    // **NOTE**: Generally deriv will be single product, not sum over three products
+                    // because the remaining sums will cancel, since each coef will only be
+                    // associated with either pi, bs, or ds!
                     tci = 0;
                     for (size_t ci = 0; ci < b_grad_a.shape(1); ci++)
                     {
 
                         if (j_idx_grad(tci) == j)
                         {
-                            // Compute deriv of bs(t,j) with respect to individual coef. Remember, bs(t,j) is a product over M signals:
+                            // Compute deriv of bs(t,j) with respect to individual coef. Remember,
+                            // bs(t,j) is a product over M signals:
                             // bs(t,j) = bs(t,j,1) * bs(t,j,2) * ... * bs(t,j,M)
-                            // So deriv is sum over M products over M signals with one bs(t,j,...) replaced by deriv of bs(t,j,...) with
-                            // respect to coef. Because we assume no coef shared between terms all but 1 of those products cancel due to zero derivative.
-                            // Hence we only need to evaluate the product and then multiply with the correct gradient - automatically transforming it out of log-scale.
+                            // So deriv is sum over M products over M signals with one bs(t,j,...)
+                            // replaced by deriv of bs(t,j,...) with
+                            // respect to coef. Because we assume no coef shared between terms all
+                            // but 1 of those products cancel due to zero derivative.
+                            // Hence we only need to evaluate the product and then multiply with the
+                            // correct gradient - automatically transforming it out of log-scale.
                             
                             if (hmp_code != 0)
                             {
@@ -295,7 +322,8 @@ py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::arra
                                 b_grad_c = bs(t,j) * b_grad(t,ci);
                             }
                             
-                            // Remaining sums cancels, since pi in this implementation does not depend on beta and because ds(d,j) does not depend on coef(ci)
+                            // Remaining sums cancels, since pi in this implementation does not
+                            // depend on beta and because ds(d,j) does not depend on coef(ci)
                             psi(t1,d,j,tci) = pi(j)*b_grad_c*ds(d,j);
                         } else
                         {
@@ -305,7 +333,8 @@ py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::arra
                     }
                     for (size_t ci = 0; ci < d_grad_a.shape(1); ci++)
                     {
-                        // Now onto deriv of ds(d,j) with respect to individual coef. Similar to above but simpler - gradient has already been transformed out
+                        // Now onto deriv of ds(d,j) with respect to individual coef. Similar to
+                        // above but simpler - gradient has already been transformed out
                         // of log-scale
                         if (j_idx_grad(tci) == j)
                         {
@@ -355,7 +384,8 @@ py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::arra
                         
                     }
 
-                    // Probability of other state ending on previous time point and transitioning to current state with dur d
+                    // Probability of other state ending on previous time point and transitioning
+                    // to current state with dur d
                     tp = 0.0;
                     for (size_t i = 0; i < n_S; i++)
                     {
@@ -386,7 +416,8 @@ py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::arra
 
                     lam(t,d,j) += tp;
 
-                    // Now compute deriv of lam(t-1,d+1,j)*bs(t,j) + (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j) with respect to individual coef.
+                    // Now compute deriv of lam(t-1,d+1,j)*bs(t,j) + (\sum_{i \in S/j}
+                    // lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j) with respect to individual coef.
                     tci = 0;
                     for (size_t ci = 0; ci < b_grad_a.shape(1); ci++)
                     {
@@ -394,14 +425,18 @@ py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::arra
                         // Coef ci is in model of state j
                         if (j_idx_grad(tci) == j)
                         {
-                            // Start with computing deriv of lam(t-1,d+1,j)*bs(t,j) with respect to individual coef. Remember, bs(t,j) is again a product over M signals!
-                            // All but one deriv of bs(t,j) again cancel so we again only need to compute the remaining product and then multiply that
-                            // by lam(t-1,d+1,j). Then we have to add psi(t-1,d+1,j,tci) * bs(t,j) to that to account for the fact that lam(t-1,d+1,j) depends
+                            // Start with computing deriv of lam(t-1,d+1,j)*bs(t,j) with respect to
+                            // individual coef. Remember, bs(t,j) is again a product over M signals!
+                            // All but one deriv of bs(t,j) again cancel so we again only need to
+                            // compute the remaining product and then multiply that
+                            // by lam(t-1,d+1,j). Then we have to add psi(t-1,d+1,j,tci) * bs(t,j)
+                            // to that to account for the fact that lam(t-1,d+1,j) depends
                             // on coef(ci) as well
 
                             if ((d+1) <= (D-2))
                             {
-                                // And now multiply with previous lam and the correct gradient - first has to be transformed out of log scale - then add
+                                // And now multiply with previous lam and the correct gradient -
+                                // first has to be transformed out of log scale - then add
                                 // to rest of derivative.
                                 if (hmp_code != 0)
                                 {
@@ -453,11 +488,14 @@ py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::arra
                                 psi(t1,d,j,tci) = 0;
                             }
 
-                            // Compute deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j) with respect to individual coef:
+                            // Compute deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*
+                            // ds(d,j) with respect to individual coef:
 
-                            // Start with computing (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) and it's derivative. Technically the latter is
-                            // a sum of two products, but T(i,j) does not depend on coef in this implementation - so this is only sum over
-                            // previous psi variables multiplied by T(i,j).
+                            // Start with computing (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) and it's
+                            // derivative. Technically the latter is
+                            // a sum of two products, but T(i,j) does not depend on coef in this
+                            // implementation - so this is only sum over previous psi variables
+                            // multiplied by T(i,j).
                             tp = 0.0;
                             tpg = 0.0;
 
@@ -472,8 +510,10 @@ py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::arra
                                 tpg += psi(t2,0,i,tci)*T(i,j);
                             }
 
-                            // Now derivative. Technically sum of three products - but final one cancels because ds(d,j) does not depend on coef.
-                            // First is deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j):
+                            // Now derivative. Technically sum of three products - but final one
+                            // cancels because ds(d,j) does not depend on coef.
+                            // First is deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*
+                            // ds(d,j):
                             if (hmp_code != 0)
                             {
                                 psi(t1,d,j,tci) += tpg*bs(t,0,j)*ds(d,(starts_with_first) ? j : j + n_S);
@@ -492,16 +532,20 @@ py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::arra
                                                          (y(t,m_idx_grad(ci)) - ebump)
                                                         ) / scale) * dbump;
 
-                                // Next is (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * deriv of bs(t,j) *
-                                // ds(d,j):
-                                psi(t1,d,j,tci) += tp*b_grad_c*ds(d,(starts_with_first) ? j : j + n_S);
+                                // Next is (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * deriv of
+                                // bs(t,j) * ds(d,j):
+                                psi(t1,d,j,tci) += tp*b_grad_c*
+                                                   ds(d,(starts_with_first) ? j : j + n_S);
                             }
                             else
                             {
-                                psi(t1,d,j,tci) += tpg*bs(t,j)*ds(d,(starts_with_first) ? j : j + n_S);
+                                psi(t1,d,j,tci) += tpg*bs(t,j)*
+                                                   ds(d,(starts_with_first) ? j : j + n_S);
 
-                                // Next is (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * deriv of bs(t,j) * ds(d,j):
-                                psi(t1,d,j,tci) += tp*b_grad(t,ci) * bs(t,j)*ds(d,(starts_with_first) ? j : j + n_S);
+                                // Next is (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * deriv of bs(t,j)
+                                // * ds(d,j):
+                                psi(t1,d,j,tci) += tp*b_grad(t,ci) * bs(t,j)*
+                                                   ds(d,(starts_with_first) ? j : j + n_S);
                             }
                         
                         }
@@ -509,7 +553,8 @@ py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::arra
                         else
                         {
                             // Again, start with computing deriv of lam(t-1,d+1,j)*bs(t,j).
-                            // Only need deriv of lam(t-1,d+1,j) with respect to individual coef, since bs(t,j) does not depend on coef not in model of state j
+                            // Only need deriv of lam(t-1,d+1,j) with respect to individual coef,
+                            // since bs(t,j) does not depend on coef not in model of state j
                             if ((d+1) <= (D-2))
                             {
                                 if (hmp_code != 0)
@@ -527,7 +572,8 @@ py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::arra
                             }
                             
                                 
-                            // Compute deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j) with respect to individual coef:
+                            // Compute deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*
+                            // ds(d,j) with respect to individual coef:
                             
                             tp = 0.0;
                             tpg = 0.0;
@@ -543,7 +589,8 @@ py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::arra
                             }
 
                             // Only need derivative of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)),
-                            // since neither bs(t,j) nor ds(d,j)) depend on coef not in model of state j
+                            // since neither bs(t,j) nor ds(d,j)) depend on coef not in model of
+                            // state j
                             if (hmp_code != 0)
                             {
                                 
@@ -553,18 +600,20 @@ py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::arra
                                     
                                     b2 = bs(t,1,j);
                                     
-                                    // Unless we have rho, then bs(t,j) depends on coef in obs model of
-                                    // previous state if for flat states > 0!
+                                    // Unless we have rho, then bs(t,j) depends on coef in obs
+                                    // model of previous state if for flat states > 0!
                                     if (rho < 999 & (j_idx_grad(tci) == (j-1)))
                                     {
-                                        ebump = d1 * weights(event_width-1) * mu(t-1,m_idx_grad(ci),j-1);
+                                        ebump = d1 * weights(event_width-1) *
+                                                mu(t-1,m_idx_grad(ci),j-1);
                                         dbump = d1 * weights(event_width-1) * b_grad(t-1,ci);
 
                                         b_grad_c = b2 * ((((hmp_code == 1) ? 2 : 1) *
                                                             (y(t,m_idx_grad(ci)) - ebump)
                                                             ) / scale) * dbump;
 
-                                        psi(t1,d,j,tci) += tp * b_grad_c * ds(d,(starts_with_first) ? j : j + n_S);
+                                        psi(t1,d,j,tci) += tp * b_grad_c *
+                                                           ds(d,(starts_with_first) ? j : j + n_S);
                                     }
                                 }
                                 psi(t1,d,j,tci) += tpg*b2*ds(d,(starts_with_first) ? j : j + n_S);
@@ -572,7 +621,8 @@ py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::arra
                             }
                             else
                             {
-                                psi(t1,d,j,tci) += tpg*bs(t,j)*ds(d,(starts_with_first) ? j : j + n_S);
+                                psi(t1,d,j,tci) += tpg*bs(t,j)*
+                                                   ds(d,(starts_with_first) ? j : j + n_S);
                             }
                         }
 
@@ -581,13 +631,15 @@ py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::arra
 
                     for (size_t ci = 0; ci < d_grad_a.shape(1); ci++)
                     {
-                        // Now onto deriv of ds(d,j) with respect to individual coef. Again similar to above but again simpler
+                        // Now onto deriv of ds(d,j) with respect to individual coef.
+                        // Again similar to above but again simpler
 
                         // Coef ci is in model of state j
                         if (j_idx_grad(tci) == ((starts_with_first) ? j : j + n_S))
                         {
                             
-                            // Compute deriv of lam(t-1,d+1,j)*bs(t,j) with respect to individual coef. Since bs(t,j) does not depend on this
+                            // Compute deriv of lam(t-1,d+1,j)*bs(t,j) with respect to individual
+                            // coef. Since bs(t,j) does not depend on this
                             // coef, all that remains is:
                             if ((d+1) <= (D-2))
                             {
@@ -605,9 +657,11 @@ py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::arra
                                 psi(t1,d,j,tci) = 0;
                             }
                             
-                            // Compute deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j) with respect to individual coef:
+                            // Compute deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*
+                            // ds(d,j) with respect to individual coef:
 
-                            // Again start with computing (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) and it's derivative. Again simplifies to sum of two products
+                            // Again start with computing (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j))
+                            // and it's derivative. Again simplifies to sum of two products
                             // now because bs(t,j) does not depend on coef.
                             tp = 0.0;
                             tpg = 0.0;
@@ -628,23 +682,29 @@ py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::arra
                                 b2 = bs(t,0,j);
                                 if(j % 2 == 0)
                                 {
-                                    // If we have an ar1 model first obs prob for flats depends on lag of
-                                    // previous bump (only for states > 0, but this is taken care of outside)
+                                    // If we have an ar1 model first obs prob for flats depends on
+                                    // lag of previous bump (only for states > 0, but this is taken
+                                    // care of outside)
                                     b2 = bs(t,1,j);
                                 }
                                 
-                                // First is deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j) - same as before:
+                                // First is deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) *
+                                // bs(t,j)*ds(d,j) - same as before:
                                 psi(t1,d,j,tci) += tpg*b2*ds(d,(starts_with_first) ? j : j + n_S);
 
-                                // Second is the third product missing before: (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j) * deriv of ds(d,j)
+                                // Second is the third product missing before: (\sum_{i \in S/j}
+                                // lam(t-1,1,i)*T(i,j)) * bs(t,j) * deriv of ds(d,j)
                                 psi(t1,d,j,tci) += tp*b2*d_grad(d,ci);
                             }
                             else
                             {
-                                // First is deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j) - same as before:
-                                psi(t1,d,j,tci) += tpg*bs(t,j)*ds(d,(starts_with_first) ? j : j + n_S);
+                                // First is deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) *
+                                // bs(t,j)*ds(d,j) - same as before:
+                                psi(t1,d,j,tci) += tpg*bs(t,j)*
+                                                   ds(d,(starts_with_first) ? j : j + n_S);
 
-                                // Second is the third product missing before: (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j) * deriv of ds(d,j)
+                                // Second is the third product missing before: (\sum_{i \in S/j}
+                                // lam(t-1,1,i)*T(i,j)) * bs(t,j) * deriv of ds(d,j)
                                 psi(t1,d,j,tci) += tp*bs(t,j)*d_grad(d,ci);
                             }
                         }
@@ -652,7 +712,8 @@ py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::arra
                         else
                         {
                             // Again, start with computing deriv of lam(t-1,d+1,j)*bs(t,j).
-                            // Since bs(t,j) still does not depend on this coef, all that remains is:
+                            // Since bs(t,j) still does not depend on this coef, all that remains
+                            // is:
                             if ((d+1) <= (D-2))
                             {
                                 if (hmp_code != 0)
@@ -668,9 +729,11 @@ py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::arra
                             {
                                 psi(t1,d,j,tci) = 0;
                             }
-                            // Compute deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j) with respect to individual coef:
+                            // Compute deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*
+                            // ds(d,j) with respect to individual coef:
 
-                            // Again start with computing derivative of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j))
+                            // Again start with computing derivative of (\sum_{i \in S/j}
+                            // lam(t-1,1,i)*T(i,j))
                             tpg = 0.0;
                             for (size_t i = 0; i < n_S; i++)
                             {
@@ -682,15 +745,17 @@ py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::arra
                                 tpg += psi(t2,0,i,tci)*T(i,j);
                             }
                             
-                            // Only need deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j) - same as before:
+                            // Only need deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*
+                            // ds(d,j) - same as before:
                             if (hmp_code != 0)
                             {
                                 
                                 b2 = bs(t,0,j);
                                 if(j % 2 == 0)
                                 {
-                                    // If we have an ar1 model first obs prob for flats depends on lag of
-                                    // previous bump (only for states > 0, but this is taken care of outside)
+                                    // If we have an ar1 model first obs prob for flats depends on
+                                    // lag of previous bump (only for states > 0, but this is taken
+                                    // care of outside)
                                     b2 = bs(t,1,j);
                                 }
                                 psi(t1,d,j,tci) += tpg*b2*ds(d,(starts_with_first) ? j : j + n_S);
@@ -698,7 +763,8 @@ py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::arra
                             }
                             else
                             {
-                                psi(t1,d,j,tci) += tpg*bs(t,j)*ds(d,(starts_with_first) ? j : j + n_S);
+                                psi(t1,d,j,tci) += tpg*bs(t,j)*
+                                                   ds(d,(starts_with_first) ? j : j + n_S);
                             }
                             
                         }
@@ -793,18 +859,31 @@ py::array_t<double> llkFTPgrad(py::array_t<double, py::array::f_style | py::arra
     return grad_a;
 }
 
-py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::forcecast> bs_a,
-                            py::array_t<double, py::array::f_style | py::array::forcecast> ds_a,
-                            py::array_t<double, py::array::f_style | py::array::forcecast> T_a,
-                            py::array_t<double, py::array::f_style | py::array::forcecast> pi_a,
-                            py::array_t<double, py::array::f_style | py::array::forcecast> b_grad_a,
-                            py::array_t<double, py::array::f_style | py::array::forcecast> d_grad_a,
-                            py::array_t<double, py::array::f_style | py::array::forcecast> T_grad_a,
-                            py::array_t<double, py::array::f_style | py::array::forcecast> pi_grad_a,
-                            py::array_t<size_t, py::array::c_style | py::array::forcecast> j_idx_grad_a,
-                            size_t M, size_t n_T, size_t D, size_t n_S, size_t n_coef,
-                            bool starts_with_first, bool ends_with_last, bool ends_in_last,bool model_T) {
-   
+py::array_t<
+            double
+> llkgrad(py::array_t<double, py::array::f_style | py::array::forcecast> bs_a,
+          py::array_t<double, py::array::f_style | py::array::forcecast> ds_a,
+          py::array_t<double, py::array::f_style | py::array::forcecast> T_a,
+          py::array_t<double, py::array::f_style | py::array::forcecast> pi_a,
+          py::array_t<double, py::array::f_style | py::array::forcecast> b_grad_a,
+          py::array_t<double, py::array::f_style | py::array::forcecast> d_grad_a,
+          py::array_t<double, py::array::f_style | py::array::forcecast> T_grad_a,
+          py::array_t<double, py::array::f_style | py::array::forcecast> pi_grad_a,
+          py::array_t<size_t, py::array::c_style | py::array::forcecast> j_idx_grad_a,
+          size_t M, size_t n_T, size_t D, size_t n_S, size_t n_coef,
+          bool starts_with_first, bool ends_with_last, bool ends_in_last,bool model_T) {
+    
+    /* Compute gradient of log-likelihood for a hsmm model, using scaled forward variables which are
+    a combination of those by Yu & Kobayashi (2005) and Lystig & Hughes (2002).
+
+    References:
+     - Yu, S.-Z., & Kobayashi, H. (2006). Practical implementation of an efficient forward-backward\
+        algorithm for an explicit-duration hidden Markov model. IEEE Transactions on Signal\
+        Processing, 54(5), 1947–1951. https://doi.org/10.1109/TSP.2006.872540
+     - Lystig, T. C., & Hughes, J. P. (2002). Exact Computation of the Observed Information Matrix\
+        for Hidden Markov Models. Journal of Computational and Graphical Statistics, 11(3), 678–689.
+    
+    */
     
     auto Lam_a = py::array_t<double>(n_T);
     auto lam_a = py::array_t<double>({n_T,D-1,n_S});
@@ -852,22 +931,28 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
                     lam(t,d,j) = pi(j)*bs(t,j)*ds(d,j);
 
                     // Now compute deriv of pi(j)*bs(t,j)*ds(d,j) with respect to individual coef.
-                    // **NOTE**: Generally deriv will be single product, not sum over three products because the remaining
-                    // sums will cancel, since each coef will only be associated with either pi, bs, or ds!
+                    // **NOTE**: Generally deriv will be single product, not sum over three products
+                    // because the remaining sums will cancel, since each coef will only be
+                    // associated with either pi, bs, or ds!
                     tci = 0;
                     for (size_t ci = 0; ci < b_grad_a.shape(1); ci++)
                     {
 
                         if (j_idx_grad(tci) == j)
                         {
-                            // Compute deriv of bs(t,j) with respect to individual coef. Remember, bs(t,j) is a product over M signals:
+                            // Compute deriv of bs(t,j) with respect to individual coef. Remember,
+                            // bs(t,j) is a product over M signals:
                             // bs(t,j) = bs(t,j,1) * bs(t,j,2) * ... * bs(t,j,M)
-                            // So deriv is sum over M products over M signals with one bs(t,j,...) replaced by deriv of bs(t,j,...) with
-                            // respect to coef. Because we assume no coef shared between terms all but 1 of those products cancel due to zero derivative.
-                            // Hence we only need to evaluate the product and then multiply with the correct gradient - automatically transforming it out of log-scale.
+                            // So deriv is sum over M products over M signals with one bs(t,j,...)
+                            // replaced by deriv of bs(t,j,...) with
+                            // respect to coef. Because we assume no coef shared between terms all
+                            // but 1 of those products cancel due to zero derivative.
+                            // Hence we only need to evaluate the product and then multiply with the
+                            // correct gradient - automatically transforming it out of log-scale.
                             b_grad_c = bs(t,j) * b_grad(t,ci);
                             
-                            // Remaining sums cancels, since pi in this implementation does not depend on beta and because ds(d,j) does not depend on coef(ci)
+                            // Remaining sums cancels, since pi in this implementation does not
+                            // depend on beta and because ds(d,j) does not depend on coef(ci)
                             psi(t1,d,j,tci) = pi(j)*b_grad_c*ds(d,j);
                         } else
                         {
@@ -877,7 +962,8 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
                     }
                     for (size_t ci = 0; ci < d_grad_a.shape(1); ci++)
                     {
-                        // Now onto deriv of ds(d,j) with respect to individual coef. Similar to above but simpler - gradient has already been transformed out
+                        // Now onto deriv of ds(d,j) with respect to individual coef. Similar to
+                        // above but simpler - gradient has already been transformed out
                         // of log-scale
                         if (j_idx_grad(tci) == j)
                         {
@@ -893,14 +979,16 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
                     {
                         for (size_t ci = 0; ci < T_grad_a.shape(1); ci++)
                         {
-                            // Derivative of a_ij with respect to individual coef. Nothing to do here but update tci
+                            // Derivative of a_ij with respect to individual coef. Nothing to do
+                            // here but update tci
                             tci += 1;
                         }
                     }
 
                     for (size_t ci = 0; ci < pi_grad_a.shape(1); ci++)
                     {
-                        // Derivative of pi[j] with respect to individual coef. Similar to duration case.
+                        // Derivative of pi[j] with respect to individual coef. Similar to duration
+                        // case.
                         psi(t1,d,j,tci) = (pi(j) * pi_grad(j,ci))*bs(t,j)*ds(d,j);
                         
                         tci += 1;
@@ -914,7 +1002,8 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
                         lam(t,d,j) = lam(t-1,d+1,j)*bs(t,j);
                     }
 
-                    // Probability of other state ending on previous time point and transitioning to current state with dur d
+                    // Probability of other state ending on previous time point and transitioning to
+                    // current state with dur d
                     tp = 0.0;
                     for (size_t i = 0; i < n_S; i++)
                     {
@@ -930,7 +1019,8 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
 
                     lam(t,d,j) += tp;
 
-                    // Now compute deriv of lam(t-1,d+1,j)*bs(t,j) + (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j) with respect to individual coef.
+                    // Now compute deriv of lam(t-1,d+1,j)*bs(t,j) + (\sum_{i \in S/j} lam(t-1,1,i)*
+                    // T(i,j)) * bs(t,j)*ds(d,j) with respect to individual coef.
                     tci = 0;
                     for (size_t ci = 0; ci < b_grad_a.shape(1); ci++)
                     {
@@ -938,25 +1028,33 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
                         // Coef ci is in model of state j
                         if (j_idx_grad(tci) == j)
                         {
-                            // Start with computing deriv of lam(t-1,d+1,j)*bs(t,j) with respect to individual coef. Remember, bs(t,j) is again a product over M signals!
-                            // All but one deriv of bs(t,j) again cancel so we again only need to compute the remaining product and then multiply that
-                            // by lam(t-1,d+1,j). Then we have to add psi(t-1,d+1,j,tci) * bs(t,j) to that to account for the fact that lam(t-1,d+1,j) depends
+                            // Start with computing deriv of lam(t-1,d+1,j)*bs(t,j) with respect to
+                            // individual coef. Remember, bs(t,j) is again a product over M signals!
+                            // All but one deriv of bs(t,j) again cancel so we again only need to
+                            // compute the remaining product and then multiply that
+                            // by lam(t-1,d+1,j). Then we have to add psi(t-1,d+1,j,tci) * bs(t,j)
+                            // to that to account for the fact that lam(t-1,d+1,j) depends
                             // on coef(ci) as well
 
                             if ((d+1) <= (D-2))
                             {
-                                // And now multiply with previous lam and the correct gradient - first has to be transformed out of log scale - then add
+                                // And now multiply with previous lam and the correct gradient -
+                                // first has to be transformed out of log scale - then add
                                 // to rest of derivative.
-                                psi(t1,d,j,tci) = (psi(t2,d+1,j,tci) * bs(t,j)) + (b_grad(t,ci) * bs(t,j) * lam(t-1,d+1,j));
+                                psi(t1,d,j,tci) = (psi(t2,d+1,j,tci) * bs(t,j)) + (b_grad(t,ci) *
+                                                  bs(t,j) * lam(t-1,d+1,j));
                             } else
                             {
                                 psi(t1,d,j,tci) = 0;
                             }
 
-                            // Compute deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j) with respect to individual coef:
+                            // Compute deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*
+                            // ds(d,j) with respect to individual coef:
 
-                            // Start with computing (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) and it's derivative. Technically the latter is
-                            // a sum of two products, but T(i,j) does not depend on coef in this implementation - so this is only sum over
+                            // Start with computing (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) and
+                            // it's derivative. Technically the latter is
+                            // a sum of two products, but T(i,j) does not depend on coef in this
+                            // implementation - so this is only sum over
                             // previous psi variables multiplied by T(i,j).
                             tp = 0.0;
                             tpg = 0.0;
@@ -972,19 +1070,24 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
                                 tpg += psi(t2,0,i,tci)*T(i,j);
                             }
 
-                            // Now derivative. Technically sum of three products - but final one cancels because ds(d,j) does not depend on coef.
-                            // First is deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j):
+                            // Now derivative. Technically sum of three products - but final one
+                            // cancels because ds(d,j) does not depend on coef.
+                            // First is deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*
+                            // ds(d,j):
                             psi(t1,d,j,tci) += tpg*bs(t,j)*ds(d,(starts_with_first) ? j : j + n_S);
 
-                            // Next is (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * deriv of bs(t,j) * ds(d,j):
-                            psi(t1,d,j,tci) += tp*b_grad(t,ci) * bs(t,j)*ds(d,(starts_with_first) ? j : j + n_S);
+                            // Next is (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * deriv of bs(t,j) *
+                            // ds(d,j):
+                            psi(t1,d,j,tci) += tp*b_grad(t,ci) * bs(t,j)*
+                                               ds(d,(starts_with_first) ? j : j + n_S);
                         
                         }
                         // Coef ci is **NOT** in model of state j
                         else
                         {
                             // Again, start with computing deriv of lam(t-1,d+1,j)*bs(t,j).
-                            // Only need deriv of lam(t-1,d+1,j) with respect to individual coef, since bs(t,j) does not depend on coef not in model of state j
+                            // Only need deriv of lam(t-1,d+1,j) with respect to individual coef,
+                            // since bs(t,j) does not depend on coef not in model of state j
                             if ((d+1) <= (D-2))
                             {
                                 psi(t1,d,j,tci) = psi(t2,d+1,j,tci) * bs(t,j);
@@ -993,7 +1096,8 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
                                 psi(t1,d,j,tci) = 0;
                             }
                                 
-                            // Compute deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j) with respect to individual coef:
+                            // Compute deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*
+                            // ds(d,j) with respect to individual coef:
 
                             tpg = 0.0;
                             for (size_t i = 0; i < n_S; i++)
@@ -1006,7 +1110,8 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
                                 tpg += psi(t2,0,i,tci)*T(i,j);
                             }
 
-                            // Only need derivative of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)), since neither bs(t,j) nor ds(d,j)) depend on coef not in model of state j
+                            // Only need derivative of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)), since
+                            // neither bs(t,j) nor ds(d,j)) depend on coef not in model of state j
                             psi(t1,d,j,tci) += tpg*bs(t,j)*ds(d,(starts_with_first) ? j : j + n_S);
                         }
 
@@ -1015,13 +1120,15 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
 
                     for (size_t ci = 0; ci < d_grad_a.shape(1); ci++)
                     {
-                        // Now onto deriv of ds(d,j) with respect to individual coef. Again similar to above but again simpler
+                        // Now onto deriv of ds(d,j) with respect to individual coef. Again similar
+                        // to above but again simpler
 
                         // Coef ci is in model of state j
                         if (j_idx_grad(tci) == ((starts_with_first) ? j : j + n_S))
                         {
                             
-                            // Compute deriv of lam(t-1,d+1,j)*bs(t,j) with respect to individual coef. Since bs(t,j) does not depend on this
+                            // Compute deriv of lam(t-1,d+1,j)*bs(t,j) with respect to individual
+                            // coef. Since bs(t,j) does not depend on this
                             // coef, all that remains is:
                             if ((d+1) <= (D-2))
                             {
@@ -1030,9 +1137,11 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
                             {
                                 psi(t1,d,j,tci) = 0;
                             }
-                            // Compute deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j) with respect to individual coef:
+                            // Compute deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*
+                            // ds(d,j) with respect to individual coef:
 
-                            // Again start with computing (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) and it's derivative. Again simplifies to sum of two products
+                            // Again start with computing (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) and
+                            // it's derivative. Again simplifies to sum of two products
                             // now because bs(t,j) does not depend on coef.
                             tp = 0.0;
                             tpg = 0.0;
@@ -1048,10 +1157,12 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
                                 tpg += psi(t2,0,i,tci)*T(i,j);
                             }
                             
-                            // First is deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j) - same as before:
+                            // First is deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*
+                            // ds(d,j) - same as before:
                             psi(t1,d,j,tci) += tpg*bs(t,j)*ds(d,(starts_with_first) ? j : j + n_S);
 
-                            // Second is the third product missing before: (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j) * deriv of ds(d,j)
+                            // Second is the third product missing before: (\sum_{i \in S/j}
+                            // lam(t-1,1,i)*T(i,j)) * bs(t,j) * deriv of ds(d,j)
                             psi(t1,d,j,tci) += tp*bs(t,j)*d_grad(d,ci);
                         
                         }
@@ -1059,7 +1170,8 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
                         else
                         {
                             // Again, start with computing deriv of lam(t-1,d+1,j)*bs(t,j).
-                            // Since bs(t,j) still does not depend on this coef, all that remains is:
+                            // Since bs(t,j) still does not depend on this coef, all that remains
+                            // is:
                             if ((d+1) <= (D-2))
                             {
                                 psi(t1,d,j,tci) = psi(t2,d+1,j,tci) * bs(t,j);
@@ -1067,9 +1179,11 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
                             {
                                 psi(t1,d,j,tci) = 0;
                             }
-                            // Compute deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j) with respect to individual coef:
+                            // Compute deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*
+                            // ds(d,j) with respect to individual coef:
 
-                            // Again start with computing derivative of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j))
+                            // Again start with computing derivative of (\sum_{i \in S/j}
+                            // lam(t-1,1,i)*T(i,j))
                             tpg = 0.0;
                             for (size_t i = 0; i < n_S; i++)
                             {
@@ -1081,7 +1195,8 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
                                 tpg += psi(t2,0,i,tci)*T(i,j);
                             }
                             
-                            // Only need deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j) - same as before:
+                            // Only need deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*
+                            // ds(d,j) - same as before:
                             psi(t1,d,j,tci) += tpg*bs(t,j)*ds(d,(starts_with_first) ? j : j + n_S);
                         }
 
@@ -1096,7 +1211,8 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
                             if (j_idx_grad(tci) == j)
                             {
                                 
-                                // Compute deriv of lam(t-1,d+1,j)*bs(t,j) with respect to individual coef. Again only lam(t-1,d+1,j) depends on this coef.
+                                // Compute deriv of lam(t-1,d+1,j)*bs(t,j) with respect to
+                                // individual coef. Again only lam(t-1,d+1,j) depends on this coef.
                                 if ((d+1) <= (D-2))
                                 {
                                     psi(t1,d,j,tci) = psi(t2,d+1,j,tci) * bs(t,j);
@@ -1104,10 +1220,13 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
                                 {
                                     psi(t1,d,j,tci) = 0;
                                 }
-                                // Compute deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j) with respect to individual coef.
-                                // Have to be **careful** here: if j_idx_grad(tci) == j, then T(i,j) **does not** depend on this coef.
+                                // Compute deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)
+                                // *ds(d,j) with respect to individual coef.
+                                // Have to be **careful** here: if j_idx_grad(tci) == j, then
+                                // T(i,j) **does not** depend on this coef.
 
-                                // So we only need (\sum_{i \in S/j} psi(t-1,1,i,tci)*T(i,j)) * bs(t,j)*ds(d,j)
+                                // So we only need (\sum_{i \in S/j} psi(t-1,1,i,tci)*T(i,j)) *
+                                // bs(t,j)*ds(d,j)
                                 tpg = 0.0;
                                 for (size_t i = 0; i < n_S; i++)
                                 {
@@ -1119,7 +1238,8 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
                                     tpg += psi(t2,0,i,tci)*T(i,j);
                                 }
 
-                                // Hence, deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j):
+                                // Hence, deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) *
+                                // bs(t,j)*ds(d,j):
                                 psi(t1,d,j,tci) += tpg*bs(t,j)*ds(d,(starts_with_first) ? j : j + n_S);
                             
                             }
@@ -1127,7 +1247,8 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
                             else
                             {
                                 // Again, start with computing deriv of lam(t-1,d+1,j)*bs(t,j).
-                                // Since bs(t,j) still does not depend on this coef, all that remains is:
+                                // Since bs(t,j) still does not depend on this coef, all that
+                                // remains is:
                                 if ((d+1) <= (D-2))
                                 {
                                     psi(t1,d,j,tci) = psi(t2,d+1,j,tci) * bs(t,j);
@@ -1136,9 +1257,12 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
                                     psi(t1,d,j,tci) = 0;
                                 }
                                 
-                                // Compute deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j) with respect to individual coef.
-                                // This time T(i,j) might depend on this coef: if j_idx_grad(tci) == i in the sum below. For that case we need
-                                // to compute: psi(t-1,0,i,tci)*T(i,j) + lam(t-1,0,i)*(T(i,j) * T_grad(tidx,ci)), otherwise the second product cancels
+                                // Compute deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) *
+                                // bs(t,j)*ds(d,j) with respect to individual coef.
+                                // This time T(i,j) might depend on this coef: if
+                                // j_idx_grad(tci) == i in the sum below. For that case we need
+                                // to compute: psi(t-1,0,i,tci)*T(i,j) + lam(t-1,0,i)*(T(i,j) *
+                                // T_grad(tidx,ci)), otherwise the second product cancels
                                 // and we only need: psi(t-1,0,i,tci)*T(i,j)
                                 tpg = 0.0;
                                 for (size_t i = 0; i < n_S; i++)
@@ -1152,7 +1276,8 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
 
                                     if (j_idx_grad(tci) == i)
                                     {
-                                        // Figure out location of derivative of transition we need: away from i -> j
+                                        // Figure out location of derivative of transition we need:
+                                        // away from i -> j
                                         tidx = 0;
 
                                         for (size_t ti = 0; ti < n_S; ti++)
@@ -1184,7 +1309,8 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
                     for (size_t ci = 0; ci < pi_grad_a.shape(1); ci++)
                     {
 
-                        // Now onto deriv of pi(j) with respect to individual coef. Only lambda in the recursion depends on these coef, so it's simply
+                        // Now onto deriv of pi(j) with respect to individual coef. Only lambda in
+                        // the recursion depends on these coef, so it's simply
                         // the else case for all the above
 
                         // Again, start with computing deriv of lam(t-1,d+1,j)*bs(t,j).
@@ -1197,9 +1323,11 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
                             psi(t1,d,j,tci) = 0;
                         }
                         
-                        // Compute deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j) with respect to individual coef:
+                        // Compute deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j)
+                        // with respect to individual coef:
 
-                        // Again start with computing derivative of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j))                        
+                        // Again start with computing derivative of (\sum_{i \in S/j} lam(t-1,1,i)*
+                        // T(i,j))                        
                         tpg = 0.0;
                         for (size_t i = 0; i < n_S; i++)
                         {
@@ -1211,7 +1339,8 @@ py::array_t<double> llkgrad(py::array_t<double, py::array::f_style | py::array::
                             tpg += psi(t2,0,i,tci)*T(i,j);
                         }
                         
-                        // Only need deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*ds(d,j) - same as before:
+                        // Only need deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*
+                        // ds(d,j) - same as before:
                         psi(t1,d,j,tci) += tpg*bs(t,j)*ds(d,(starts_with_first) ? j : j + n_S);
 
                         tci += 1;
