@@ -23,7 +23,7 @@ jobs:
           pip install .
       - name: Test with pytest
         run: |
-          pip install pytest pytest-cov mssmViz==0.1.5 numdifftools arviz >= 0.23.0
+          pip install pytest pytest-cov mssmViz==0.1.5 numdifftools arviz>=0.23.0
           pytest ./tests --cov=mssm --cov-report=xml --cov-report=html
         
       # Also store coverage as artifact
