@@ -33,7 +33,7 @@ from .src.python.exp_fam import (  # noqa: F401
     MultiGauss,
 )
 
-from .src.python.hsmm import HSMMFamily, FTPHSMMFamily  # noqa: F401
+from .src.python.hsmm import HSMMFamily  # noqa: F401
 
 from .src.python.gamm_solvers import (  # noqa: F401
     solve_gamm_sparse,

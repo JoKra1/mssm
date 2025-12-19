@@ -305,14 +305,12 @@ class Test_MultivariateHSMM_hard:
         build_mat_idx=build_mat_idx,
     )
 
-    fam2 = FTPHSMMFamily(
+    fam2 = HSMMFamily(
         od_pars,
         od_links,
         n_S,
         obs_fams=obs_families,
         d_fams=d_families,
-        T=T,
-        pi=pi,
         sid=sid,
         tid=tid,
         D=D,
@@ -320,8 +318,8 @@ class Test_MultivariateHSMM_hard:
         starts_with_first=starts_with_first,
         ends_with_last=False,
         ends_in_last=False,
-        scale=None,
-        event_template=None,
+        T=T,
+        pi=pi,
         n_cores=1,
         build_mat_idx=od_build_mat_idx,
     )
@@ -1284,8 +1282,11 @@ class Test_UnivariateHMP:
     # Test gradients
     ars = [False, True]
     shared_ms = [False, True]
-    grad_diffs = []
-    total_coefs = []
+    init_coefs = []
+    coef_split_idxs = []
+    yss = []
+    Xss = []
+    families = []
 
     for ar in ars:
         for shared_m in shared_ms:
@@ -1421,14 +1422,18 @@ class Test_UnivariateHMP:
                     pars += 2
 
             # Initialize Family
-            fam = FTPHSMMFamily(
+            T = np.diag(
+                np.ones(n_S - 1), 1
+            )  # Super diagonal shift matrix for transitions
+
+            pi = np.zeros(n_S)  # Start in first state
+            pi[0] = 1
+            fam = HSMMFamily(
                 pars,
                 links,
                 n_S,
                 obs_fams=obs_families,
                 d_fams=d_families,
-                T=None,
-                pi=None,
                 sid=sid,
                 tid=tid,
                 D=D,
@@ -1436,6 +1441,8 @@ class Test_UnivariateHMP:
                 starts_with_first=True,
                 ends_with_last=True,
                 ends_in_last=True,
+                T=T,
+                pi=pi,
                 scale=1,
                 event_template=event_shape,
                 hmp_fam="Gaussian",
@@ -1455,35 +1462,50 @@ class Test_UnivariateHMP:
             total_coef = np.sum(form_n_coef)
             init_coef = np.array(init_coef).reshape(-1, 1)
 
-            # Test grad function
+            # Collect
+            init_coefs.append(copy.deepcopy(init_coef))
+            coef_split_idxs.append(copy.deepcopy(coef_split_idx))
+            yss.append(copy.deepcopy(ys))
+            Xss.append(copy.deepcopy(Xs))
+            families.append(copy.deepcopy(fam))
+
+    def test_grads(self):
+        # Test grad function
+        grad_diffs = []
+        for fam, init_coef, coef_split_idx, ys, Xs in zip(
+            self.init_coefs, self.coef_split_idxs, self.yss, self.Xss, self.families
+        ):
             grad = fam.gradient(init_coef, coef_split_idx, ys, Xs)
 
-            pos_llk_warp = lambda x: Test_UnivariateHMP.fam.llk(
+            pos_llk_warp = lambda x: fam.llk(
                 x.reshape(-1, 1),
-                Test_UnivariateHMP.coef_split_idx,
-                Test_UnivariateHMP.ys,
-                Test_UnivariateHMP.Xs,
+                coef_split_idx,
+                ys,
+                Xs,
             )
             grad2 = scp.optimize.approx_fprime(init_coef.flatten(), pos_llk_warp)
 
             grad_diff = np.abs(np.round(grad - grad2.reshape(-1, 1), decimals=3)).max()
             grad_diffs.append(grad_diff)
-            total_coefs.append(total_coef)
 
-    total_coefs = np.array(total_coefs)
-    grad_diffs = np.array(grad_diffs)
-
-    def test_grads(self):
+        grad_diffs = np.array(grad_diffs)
         np.testing.assert_allclose(
-            self.grad_diffs,
+            grad_diffs,
             np.array([0.001, 0.001, 0.001, 0.001]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.1),
         )
 
     def test_total_coef(self):
+        total_coefs = []
+        for fam, init_coef, coef_split_idx, ys, Xs in zip(
+            self.init_coefs, self.coef_split_idxs, self.yss, self.Xss, self.families
+        ):
+            total_coefs.append(len(init_coef))
+
+        total_coefs = np.array(total_coefs)
         np.testing.assert_allclose(
-            self.total_coefs,
+            total_coefs,
             np.array([39, 21, 39, 21]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.1),
