@@ -64,4 +64,15 @@ ext4 = Pybind11Extension(
     cxx_std=14,
 )
 
-setup(ext_modules=[ext1, ext2, ext3, ext4])
+ext5 = Pybind11Extension(
+    name="hsmm",
+    sources=[
+        "src/mssm/src/cpp/hsmm/hsmm.cpp",
+        "src/mssm/src/cpp/hsmm/llk.cpp",
+        "src/mssm/src/cpp/hsmm/decode.cpp",
+        "src/mssm/src/cpp/hsmm/resid.cpp",
+    ],
+    cxx_std=14,
+)
+
+setup(ext_modules=[ext1, ext2, ext3, ext4, ext5])
