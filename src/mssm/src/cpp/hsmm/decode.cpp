@@ -23,7 +23,7 @@ std::tuple<
           py::array_t<double, py::array::f_style | py::array::forcecast> weights_a,
           double scale, size_t n_T, size_t D, size_t n_S, size_t event_width,
           bool starts_with_first, bool ends_with_last,bool ends_in_last,
-          int hmp_code) {
+          int hmp_code, bool tvdtpi) {
     
     /* Viterbi algorithm (see Rabiner, 1990) adapted for the forward pass defined by Yu & Kobayashi
     (2006).
@@ -63,11 +63,11 @@ std::tuple<
                 {
                     if (hmp_code != 0)
                     {
-                        delta(t,d,j) = lpi(j)+lbs(t,0,j)+lds(d,j);
+                        delta(t,d,j) = lpi(j)+lbs(t,0,j)+((tvdtpi) ? lds(d,j,t) : lds(d,j));
                     }
                     else
                     {
-                        delta(t,d,j) = lpi(j)+lbs(t,j)+lds(d,j);
+                        delta(t,d,j) = lpi(j)+lbs(t,j)+((tvdtpi) ? lds(d,j,t) : lds(d,j));
                     }
                     
                 }
@@ -129,13 +129,15 @@ std::tuple<
                                 // outside)
                                 lb2 = lbs(t,1,j);
                             }
-                            tmp_d2 = delta(t-1,0,i) + lT(i,j) + lb2 +
-                                     lds(d,(starts_with_first) ? j : j + n_S);
+                            tmp_d2 = delta(t-1,0,i) + ((tvdtpi) ? lT(i,j,t-1): lT(i,j)) + lb2 +
+                                     ((tvdtpi) ? lds(d,(starts_with_first) ? j : j + n_S,t):
+                                                 lds(d,(starts_with_first) ? j : j + n_S));
                         }
                         else
                         {
-                            tmp_d2 = delta(t-1,0,i) + lT(i,j) + lbs(t,j) +
-                                     lds(d,(starts_with_first) ? j : j + n_S);
+                            tmp_d2 = delta(t-1,0,i) + ((tvdtpi) ? lT(i,j,t-1): lT(i,j)) + lbs(t,j) +
+                                     ((tvdtpi) ? lds(d,(starts_with_first) ? j : j + n_S,t):
+                                                 lds(d,(starts_with_first) ? j : j + n_S));
                         }
                         
 
@@ -248,7 +250,8 @@ std::tuple<
               py::array_t<double, py::array::f_style | py::array::forcecast> pi_a,
               py::array_t<double, py::array::f_style | py::array::forcecast> weights_a,
               double scale, size_t n_T, size_t D, size_t n_S, size_t event_width, size_t n_samples,
-              bool starts_with_first,bool ends_with_last,bool ends_in_last,int hmp_code, int seed) {
+              bool starts_with_first,bool ends_with_last,bool ends_in_last,int hmp_code, int seed,
+              bool tvdtpi) {
     
     /* Backwards sampling algorithm to obtain samples from the posterior of state sequences given
     paratmeters and data, based on Dewar et al. (2012). Adapted for the forward pass defined by
@@ -295,11 +298,11 @@ std::tuple<
                 {
                     if (hmp_code != 0)
                     {
-                        lam(t,d,j) = pi(j)*bs(t,0,j)*ds(d,j);
+                        lam(t,d,j) = pi(j)*bs(t,0,j)*((tvdtpi) ? ds(d,j,t): ds(d,j));
                     }
                     else
                     {
-                        lam(t,d,j) = pi(j)*bs(t,j)*ds(d,j);
+                        lam(t,d,j) = pi(j)*bs(t,j)*((tvdtpi) ? ds(d,j,t): ds(d,j));
                     }
                     
                 }
@@ -344,7 +347,7 @@ std::tuple<
                             continue;
                         }
 
-                        tp += lam(t-1,0,i)*T(i,j);
+                        tp += lam(t-1,0,i)*((tvdtpi) ? T(i,j,t-1): T(i,j));
                     }
                     
                     if (hmp_code != 0)
@@ -357,11 +360,13 @@ std::tuple<
                             // outside)
                             b2 = bs(t,1,j);
                         }
-                        tp *= b2*ds(d,(starts_with_first) ? j : j + n_S);
+                        tp *= b2*((tvdtpi) ? ds(d,(starts_with_first) ? j : j + n_S,t):
+                                             ds(d,(starts_with_first) ? j : j + n_S));
                     }
                     else
                     {
-                        tp *= bs(t,j)*ds(d,(starts_with_first) ? j : j + n_S);
+                        tp *= bs(t,j)*((tvdtpi) ? ds(d,(starts_with_first) ? j : j + n_S,t):
+                                                  ds(d,(starts_with_first) ? j : j + n_S));
                     }                    
 
                     lam(t,d,j) += tp;
@@ -518,8 +523,12 @@ std::tuple<
                 else
                 {
                     state_probs[i] = lam(t-1,0,i) *
-                                        T(i,tmp_j) *
-                                        ds(tmp_ed,(starts_with_first) ? tmp_j : tmp_j + n_S);
+                                        ((tvdtpi) ? T(i,tmp_j,t-1): T(i,tmp_j)) *
+                                        ((tvdtpi) ?
+                                            ds(tmp_ed,(starts_with_first) ? tmp_j : tmp_j + n_S,t-1)
+                                            :
+                                            ds(tmp_ed,(starts_with_first) ? tmp_j : tmp_j + n_S)
+                                        );
                 }
             }
             

@@ -23,13 +23,13 @@ except ImportError:
 
 def _split_matrices(
     ys: list[np.ndarray | None],
-    Xs: list[scp.sparse.csc_array],
+    Xs: list[scp.sparse.csc_array | None],
     shared_pars: list[int],
     shared_m: bool,
-    obs_fams: list[list[GAMLSSFamily | GSMMFamily]] | None,
-    d_fams: list[GAMLSSFamily] | None,
+    obs_fams: list[list[GAMLSSFamily | GSMMFamily | None]],
+    d_fams: list[GAMLSSFamily | None],
     sid: np.ndarray,
-    tid: np.ndarray | None,
+    tid: np.ndarray,
     n_S: int,
     M: int,
     model_T: bool,
@@ -203,14 +203,20 @@ def _split_matrices(
                 idx += 1
 
     # Now initial state probabilities #
+    # For pi we need to remember that we really only need trial-level model matrices
+    # even if tid = sid
     if model_pi:
         for _ in range(n_S - 1):
             X_split = None
             if Xs[idx] is not None:
                 Xidx = np.arange(Xs[idx].shape[0])
-                X_split = [Xs[idx][split, :] for split in np.split(Xidx, tid[1:])]
+                X_split = [Xs[idx][[split[0]], :] for split in np.split(Xidx, tid[1:])]
 
-            y_split = np.split(ys[idx], tid[1:]) if ys[idx] is not None else None
+            y_split = None
+            if ys[idx] is not None:
+                yidx = np.arange(ys[idx].shape[0])
+                y_split = [ys[idx][[split[0]], :] for split in np.split(yidx, tid[1:])]
+
             split_Xs.append(X_split)
             split_Ys.append(y_split)
             idx += 1
@@ -224,10 +230,10 @@ def _compute_series_probs(
     shared_pars: list[int],
     shared_m: bool,
     ys: list[np.ndarray | None],
-    Xs: list[scp.sparse.csc_array],
+    Xs: list[scp.sparse.csc_array | None],
     n_S: int,
-    obs_fams: list[list[GAMLSSFamily]] | None,
-    d_fams: list[GAMLSSFamily] | None,
+    obs_fams: list[list[GAMLSSFamily | GSMMFamily | None]],
+    d_fams: list[GAMLSSFamily | None],
     D: int,
     M: int,
     event_width: int | None,
@@ -241,7 +247,9 @@ def _compute_series_probs(
     is_hmp: bool = False,
     hmp_fam: str = "Exponential",
     rho: float | None = None,
+    tvdtpi: bool = False,
 ) -> tuple[
+    np.ndarray,
     np.ndarray,
     np.ndarray,
     np.ndarray,
@@ -329,7 +337,10 @@ def _compute_series_probs(
     n_T = len(ys[0])  # Number of time-points in this series
 
     # We can pre-compute the duration probabilities
-    ds = np.zeros((D - 1, n_S * (1 if starts_with_first else 2)), order="F")
+    if tvdtpi:
+        ds = np.zeros((D - 1, n_S * (1 if starts_with_first else 2), n_T), order="F")
+    else:
+        ds = np.zeros((D - 1, n_S * (1 if starts_with_first else 2)), order="F")
     d_val = np.arange(1, D).reshape(-1, 1)
 
     # We can also pre-compute the observation probabilities
@@ -635,7 +646,14 @@ def _compute_series_probs(
                 musdj.append(jdFam.links[par].fi(etasdj[-1]))
                 idx += 1
 
-            lpd = jdFam.lp(d_val, *musdj)
+            if tvdtpi:
+                lpd = []
+                for d in d_val:
+                    # print(d)
+                    lpdd = jdFam.lp(d.reshape(-1, 1), *musdj)
+                    lpd.append(lpdd)
+            else:
+                lpd = jdFam.lp(d_val, *musdj)
 
             mus_d.append(musdj)
 
@@ -643,21 +661,36 @@ def _compute_series_probs(
             if j % 2 == 1:
                 lpd = np.zeros(D - 1) - np.inf
                 lpd[int(event_width - 1)] = 0
+
+                if tvdtpi:
+                    lpd = [lpd for _ in range(D - 1)]
             else:
                 raise ValueError(f"Need distribution duration family for state {j}.")
 
             mus_d.append(None)
 
-        ds[:, j] = np.exp(lpd.flatten())
-        ds[:, j] /= np.sum(ds[:, j])
+        if tvdtpi:
+            for di in range(D - 1):
+                ds[di, j, :] = np.exp(lpd[di].flatten())
 
-        if log:
-            ds[:, j] = np.log(ds[:, j])
+            ds[:, j, :] /= np.sum(ds[:, j, :], axis=0)[None, :]
+
+            if log:
+                ds[:, j, :] = np.log(ds[:, j, :])
+        else:
+            ds[:, j] = np.exp(lpd.flatten())
+            ds[:, j] /= np.sum(ds[:, j])
+
+            if log:
+                ds[:, j] = np.log(ds[:, j])
 
     # Now state transition probabilities #
     T = None
     if model_t:
-        T = np.zeros((n_S, n_S))
+        if tvdtpi:
+            T = np.zeros((n_S, n_S, n_T), order="F")
+        else:
+            T = np.zeros((n_S, n_S), order="F")
         if n_S > 2:
             for j in range(n_S):
                 # No self-transitions!
@@ -668,21 +701,38 @@ def _compute_series_probs(
 
                 for par in range(jtFam.n_par):
                     etastj.append(Xs[idx] @ split_coef[idx])
-                    mustj.append(jtFam.links[par].fi(etastj[-1])[0, 0])
+                    if tvdtpi:
+                        mustj.append(jtFam.links[par].fi(etastj[-1]))
+                    else:
+                        mustj.append(jtFam.links[par].fi(etastj[-1])[0, 0])
                     idx += 1
 
                 # Transform now into the n_j state transition probabilities from j -> i(see the
                 # MULNOMLSS methods doc-strings for details):
-                mu_firstT = np.sum(mustj) + 1
-                mustj = [mu / mu_firstT for mu in mustj]
-                mustj.insert(0, 1 / mu_firstT)
-                # print(mustj)
-
                 Tj_idx = np.array([i for i in range(n_S) if i != j])
-                T[j, Tj_idx] = mustj
+                if tvdtpi:
+                    # print(mustj)
+                    mustj = np.array(mustj).reshape(n_S - 2, n_T)  # (n_S-2,n_T)
+                    # print(mustj.shape)
+                    mu_firstT = np.sum(mustj, axis=0) + 1
+                    # print(mustj)
+                    mustj /= mu_firstT[None, :]
+                    # print(mustj)
+                    # (j,n_S-1,n_T)
+                    # print(np.insert(mustj, 0, 1 / mu_firstT, axis=0).shape)
+                    T[j, Tj_idx, :] = np.insert(mustj, 0, 1 / mu_firstT, axis=0)
+                else:
+                    mu_firstT = np.sum(mustj) + 1
+                    mustj = [mu / mu_firstT for mu in mustj]
+                    mustj.insert(0, 1 / mu_firstT)
+                    # print(mustj)
+                    T[j, Tj_idx] = mustj
         else:
             T[0, 1] = 1
             T[1, 0] = 1
+
+            if tvdtpi:
+                T = np.stack([T for _ in range(n_T)], axis=2)
 
         if log:
             T = np.log(T)
@@ -879,6 +929,7 @@ def _compute_dur_res_series(
     mus_d: list[list[np.ndarray] | None],
     d_fams: list[GAMLSSFamily | None],
     starts_with_first: bool,
+    tvdtpi: bool,
 ) -> list[list[float] | float]:
     """Computes residual of a state duration agains the model for the stage duration.
 
@@ -901,6 +952,7 @@ def _compute_dur_res_series(
     d = 0
     j = states[0]
     transitions = 0
+    t = 0
 
     for s in states:
         if s == j:
@@ -915,13 +967,14 @@ def _compute_dur_res_series(
             else:
                 d_res = d_fams[(dj_idx)].get_resid(
                     np.array([d]).reshape(-1, 1), *mus_d[dj_idx]
-                )[0, 0]
+                )[t if tvdtpi else 0, 0]
 
                 # And collect
                 res[j].append(d_res)
             j = s
             d = 1
             transitions += 1
+        t += 1
 
     # Catch dur from last state
     dj_idx = j if (starts_with_first is True) else j + n_S
@@ -931,7 +984,7 @@ def _compute_dur_res_series(
     else:
         d_res = d_fams[(dj_idx)].get_resid(
             np.array([d]).reshape(-1, 1), *mus_d[dj_idx]
-        )[0, 0]
+        )[t - 1 if tvdtpi else 0, 0]
 
         res[j].append(d_res)
 
@@ -1061,6 +1114,15 @@ class HSMMFamily(GSMMFamily):
             if isinstance(state_obs[0], MultiGauss):
                 self.extra_coef += state_obs[0].extra_coef
 
+        # Check for time-varying duration, state transition, initial state models
+        self.tvdtpi = False
+        if tid is None and len(sid) > 1:
+            self.tvdtpi = True
+        elif tid is not None and len(tid) == len(sid) and len(sid) > 1:
+            stiddiff = [(sid[idx] - tid[idx]) > 0 for idx in range(len(sid))]
+            if not np.any(stiddiff):
+                self.tvdtpi = True
+
     def compute_od_probs(
         self,
         coef: np.ndarray,
@@ -1140,6 +1202,7 @@ class HSMMFamily(GSMMFamily):
                 is_hmp,
                 hmp_fam,
                 rho,
+                tvdtpi,
             )
             bs[(np.isnan(bs) | np.isinf(bs))] = -np.inf if log else 0
             ds[(np.isnan(ds) | np.isinf(ds))] = -np.inf if log else 0
@@ -1169,6 +1232,7 @@ class HSMMFamily(GSMMFamily):
         hmp_fam = self.llkargs[19]
         n_series = len(sid)
         is_hmp = self.is_hmp
+        tvdtpi = self.tvdtpi
         # fix_T_pi = self.fix_T_pi
 
         if tid is None:
@@ -1311,6 +1375,7 @@ class HSMMFamily(GSMMFamily):
                     True,
                     starts_with_first,
                     build_mat_idx,
+                    tvdtpi=tvdtpi,
                 )
 
             elif isinstance(T, list) and isinstance(pi, list):
@@ -1346,6 +1411,7 @@ class HSMMFamily(GSMMFamily):
         # hmp_fam = self.llkargs[19]
         n_series = len(sid)
         fix_T_pi = self.fix_T_pi
+        tvdtpi = self.tvdtpi
 
         # Initialize potential None arguments
 
@@ -1520,6 +1586,7 @@ class HSMMFamily(GSMMFamily):
                 is_hmp,
                 hmp_fam,
                 rho,
+                tvdtpi,
             )
 
             if fix_T_pi:
@@ -1548,7 +1615,9 @@ class HSMMFamily(GSMMFamily):
                 state = np_gen.choice(state_vals, p=pis)
 
                 # and duration of initial state
-                dur = np_gen.choice(d_vals, p=ds[:, state])
+                dur = np_gen.choice(
+                    d_vals, p=ds[0, :, state] if tvdtpi else ds[:, state]
+                )
 
                 if series_seed is not None:
                     series_seed += 1
@@ -1561,11 +1630,24 @@ class HSMMFamily(GSMMFamily):
                         if is_hmp and state == (n_S - 1):
                             dur += 1  # Simply keep extending last state's duration
                         else:
-                            state = np_gen.choice(state_vals, p=Ts[state, :])
+                            state = np_gen.choice(
+                                state_vals,
+                                p=Ts[state, :, t] if tvdtpi else Ts[state, :],
+                            )
 
                             dur = np_gen.choice(
                                 d_vals,
-                                p=ds[:, (state if starts_with_first else state + n_S)],
+                                p=(
+                                    ds[
+                                        :,
+                                        (state if starts_with_first else state + n_S),
+                                        t,
+                                    ]
+                                    if tvdtpi
+                                    else ds[
+                                        :, (state if starts_with_first else state + n_S)
+                                    ]
+                                ),
                             )
 
                     # Collect emission and state predictions
@@ -1655,6 +1737,7 @@ class HSMMFamily(GSMMFamily):
         n_series = len(sid)
         is_hmp = self.is_hmp
         fix_T_pi = self.fix_T_pi
+        tvdtpi = self.tvdtpi
 
         # Initialize potential None arguments
 
@@ -1813,6 +1896,7 @@ class HSMMFamily(GSMMFamily):
                 is_hmp,
                 hmp_fam,
                 rho,
+                tvdtpi,
             )
 
             if fix_T_pi:
@@ -1849,6 +1933,7 @@ class HSMMFamily(GSMMFamily):
                 ends_with_last,
                 ends_in_last,
                 hmp_code,
+                tvdtpi,
             )
 
             return max_ed, states
@@ -1883,6 +1968,7 @@ class HSMMFamily(GSMMFamily):
         n_series = len(sid)
         is_hmp = self.is_hmp
         fix_T_pi = self.fix_T_pi
+        tvdtpi = self.tvdtpi
 
         # Initialize potential None arguments
 
@@ -2051,6 +2137,7 @@ class HSMMFamily(GSMMFamily):
                 is_hmp,
                 hmp_fam,
                 rho,
+                tvdtpi,
             )
             if fix_T_pi:
                 if isinstance(T, list) and isinstance(pi, list):
@@ -2087,6 +2174,7 @@ class HSMMFamily(GSMMFamily):
                 ends_in_last,
                 hmp_code,
                 seed,
+                tvdtpi,
             )
 
             return eds, states
@@ -2120,6 +2208,7 @@ class HSMMFamily(GSMMFamily):
         n_series = len(sid)
         is_hmp = self.is_hmp
         fix_T_pi = self.fix_T_pi
+        tvdtpi = self.tvdtpi
 
         # Initialize potential None arguments
         if tid is None:
@@ -2300,6 +2389,7 @@ class HSMMFamily(GSMMFamily):
                 is_hmp,
                 hmp_fam,
                 rho,
+                tvdtpi,
             )
             if fix_T_pi:
                 if isinstance(T, list) and isinstance(pi, list):
@@ -2339,6 +2429,7 @@ class HSMMFamily(GSMMFamily):
                     ends_with_last,
                     ends_in_last,
                     hmp_code,
+                    tvdtpi,
                 )
 
             elif resid_type == "predictive":
@@ -2362,6 +2453,7 @@ class HSMMFamily(GSMMFamily):
                     ends_in_last,
                     hmp_code,
                     999 if rho is None else rho,
+                    tvdtpi,
                 )
 
             elif resid_type == "viterbi_dur":
@@ -2378,11 +2470,7 @@ class HSMMFamily(GSMMFamily):
                 )
 
                 res_sep = _compute_dur_res_series(
-                    viterbi[0][1],
-                    n_S,
-                    mus_d,
-                    d_fams,
-                    starts_with_first,
+                    viterbi[0][1], n_S, mus_d, d_fams, starts_with_first, tvdtpi
                 )
 
                 # Compute residual of duration MAP under model for stage durations
@@ -2421,6 +2509,7 @@ class HSMMFamily(GSMMFamily):
                         mus_d,
                         d_fams,
                         starts_with_first,
+                        tvdtpi,
                     )
 
                     # Compute residual of durations under model for stage durations
@@ -2464,6 +2553,7 @@ class HSMMFamily(GSMMFamily):
         n_series = len(sid)
         is_hmp = self.is_hmp
         fix_T_pi = self.fix_T_pi
+        tvdtpi = self.tvdtpi
 
         # Initialize potential None arguments
         if tid is None:
@@ -2627,6 +2717,7 @@ class HSMMFamily(GSMMFamily):
                 is_hmp,
                 hmp_fam,
                 rho,
+                tvdtpi,
             )
             if fix_T_pi:
                 if isinstance(T, list) and isinstance(pi, list):
@@ -2670,6 +2761,7 @@ class HSMMFamily(GSMMFamily):
                 ends_with_last,
                 ends_in_last,
                 hmp_code,
+                tvdtpi,
             )
             return llk
 
@@ -2699,6 +2791,7 @@ class HSMMFamily(GSMMFamily):
         n_series = len(sid)
         is_hmp = self.is_hmp
         fix_T_pi = self.fix_T_pi
+        tvdtpi = self.tvdtpi
 
         # Initialize potential None arguments
         if tid is None:
@@ -2865,7 +2958,12 @@ class HSMMFamily(GSMMFamily):
                 mus = None
                 bs = np.zeros((n_T, n_S), order="F")
 
-            ds = np.zeros((D - 1, n_S * (1 if starts_with_first else 2)), order="F")
+            if tvdtpi:
+                ds = np.zeros(
+                    (D - 1, n_S * (1 if starts_with_first else 2), n_T), order="F"
+                )
+            else:
+                ds = np.zeros((D - 1, n_S * (1 if starts_with_first else 2)), order="F")
             d_val = np.arange(1, D).reshape(-1, 1)
             state_vals = np.arange(0, n_S - 1).reshape(-1, 1)
             pi_vals = np.arange(0, n_S).reshape(-1, 1)
@@ -3239,7 +3337,13 @@ class HSMMFamily(GSMMFamily):
                         idx += 1
 
                     # Compute log-probs of durations under state j
-                    lpd = jdFam.lp(d_val, *musdj)
+                    if tvdtpi:
+                        lpd = []
+                        for d in d_val:
+                            lpdd = jdFam.lp(d.reshape(-1, 1), *musdj)
+                            lpd.append(lpdd)
+                    else:
+                        lpd = jdFam.lp(d_val, *musdj)
                     # lpd[np.isnan(lpd) | np.isinf(lpd)] = -np.inf
                     # print(lpd[1])
                     # print(jdFam.lp(d_val[1],musdj[0][0],musdj[1][0]))
@@ -3249,54 +3353,111 @@ class HSMMFamily(GSMMFamily):
 
                     # 1) Get partial first derivatives with respect to eta
                     if jdFam.d_eta is False:
-                        d1eta, _, _ = deriv_transform_mu_eta(d_val, musdj, jdFam)
+                        if tvdtpi:
+                            d1eta = []
+                            for d in d_val:
+                                d1etad, _, _ = deriv_transform_mu_eta(
+                                    d.reshape(-1, 1), musdj, jdFam
+                                )
+                                d1eta.append(d1etad)
+                        else:
+                            d1eta, _, _ = deriv_transform_mu_eta(d_val, musdj, jdFam)
                     else:
-                        d1eta = [fd1(d_val, *musdj) for fd1 in jdFam.d1]
+                        if tvdtpi:
+                            d1eta = []
+                            for d in d_val:
+                                d1etad = [
+                                    fd1(d.reshape(-1, 1), *musdj) for fd1 in jdFam.d1
+                                ]
+                                d1eta.append(d1etad)
+                        else:
+                            d1eta = [fd1(d_val, *musdj) for fd1 in jdFam.d1]
 
                     # 2) Get derivatives of log-likelihood of each observation with respect to coef
 
                     for par in range(jdFam.n_par):
                         # n_D * Xsj[par].shape[1] matrix. Each row holds partial derivative of
-                        # log-likelihood of corresponding duration with respect to coefficients in
-                        # model par.
-                        grad_par = d1eta[par] * Xsj[par]
+                        # log-likelihood of corresponding duration with respect to coefficients
+                        # in model par.
+                        if tvdtpi:
+                            # For tvdtpi case grad_par will be (n_T,Xsj[par].shape[1],D) after
+                            # stacking, so need to transpose in the end after normalizing.
+                            grad_par = []
 
-                        # Cast to array
-                        grad_par = (
-                            grad_par.toarray(order="F")
-                            if isinstance(grad_par, np.ndarray) is False
-                            else grad_par
-                        )
+                            for dderivi in range(D - 1):
+                                ddgrad = d1eta[dderivi][par] * Xsj[par]
 
-                        # So grad_par[0,:] holds partial derivatives of log(rds[0,j]) with respect
-                        # to coefj[par]. Hence:  rds[0,j] * grad_par[0,:] gives partial derivatives
-                        # of rds[0,j] with respect to coefj[par]:
-                        rds = np.exp(lpd)  # p(rds[:,j])
-                        grad_par_d = rds * grad_par
+                                ddgrad = (
+                                    ddgrad.toarray(order="F")
+                                    if isinstance(ddgrad, np.ndarray) is False
+                                    else ddgrad
+                                )
+                                grad_par.append(ddgrad)
 
-                        # To get partial derivatives of normalized probabilities
-                        # ds[0,j]=rds[0,j]/np.sum(rds[:,j]) with respect to
-                        # first coef for example, we need to compute:
-                        # (grad_par_d[0,0] * np.sum(rds[:,j]) - rds[0,j] *
-                        # (np.sum(grad_par_d[:,0]))) / np.power(np.sum(rds[:,j],2)
-                        norm = np.sum(rds)
-                        denom = np.power(norm, 2)
-                        normed_sum = np.sum(grad_par_d, axis=0)
+                            grad_par = np.stack(grad_par, axis=2)
 
-                        grad_par = grad_par_d * norm
-                        grad_par -= rds * normed_sum
-                        grad_par /= denom
+                        else:
+                            grad_par = d1eta[par] * Xsj[par]
+
+                            # Cast to array
+                            grad_par = (
+                                grad_par.toarray(order="F")
+                                if isinstance(grad_par, np.ndarray) is False
+                                else grad_par
+                            )
+
+                        # So grad_par[0,:] holds partial derivatives of log(rds[0,j]) with
+                        # respect to coefj[par]. Hence:  rds[0,j] * grad_par[0,:] gives partial
+                        # derivatives of rds[0,j] with respect to coefj[par]:
+                        if tvdtpi:
+                            # Each of the lpd is of shape (n_T,1) so now we get rds (n_T,D)
+                            rds = np.exp(np.concatenate(lpd, axis=1))
+                            grad_par_d = rds[:, None, :] * grad_par
+
+                            # For tv case, we need to compute norm over axis 1 to get sum of
+                            # probs per time-point
+                            norm = np.sum(rds, axis=1)  # (n_T,)
+
+                            denom = np.power(norm, 2)  # (n_T,)
+                            # (n_T,Xsj[par].shape[1])
+                            normed_sum = np.sum(grad_par_d, axis=2)
+
+                            # grad_par is (n_T,Xsj[par].shape[1],D)
+                            grad_par = grad_par_d * norm[:, None, None]
+                            grad_par -= rds[:, None, :] * normed_sum[:, :, None]
+                            grad_par /= denom[:, None, None]
+                            grad_par = grad_par.T
+                            # grad_par is now (D,Xsj[par].shape[1],n_T)
+
+                        else:
+                            rds = np.exp(lpd)  # p(rds[:,j])
+                            grad_par_d = rds * grad_par
+
+                            # To get partial derivatives of normalized probabilities
+                            # ds[0,j]=rds[0,j]/np.sum(rds[:,j]) with respect to
+                            # first coef for example, we need to compute:
+                            # (grad_par_d[0,0] * np.sum(rds[:,j]) - rds[0,j] *
+                            # (np.sum(grad_par_d[:,0]))) / np.power(np.sum(rds[:,j],2)
+                            norm = np.sum(rds)
+                            denom = np.power(norm, 2)
+                            normed_sum = np.sum(grad_par_d, axis=0)
+
+                            grad_par = grad_par_d * norm
+                            grad_par -= rds * normed_sum
+                            grad_par /= denom
 
                         grad_par[np.isnan(grad_par) | np.isinf(grad_par)] = 0
 
                         # Concatenate over pars so that in the end gradJ is a
                         # n_D * np.sum([x.shape[1] for x in Xsj]) matrix with each row holding
                         # partial derivatives of log-likelihood of corresponding duration
-                        # with respect to **all** coefficients involved in duration model of state j
+                        # with respect to **all** coefficients involved in duration model of
+                        # state j
                         if d_grad is None:
                             d_grad = grad_par
                         else:
                             d_grad = np.concatenate([d_grad, grad_par], axis=1)
+
                         j_idx_grad = np.concatenate(
                             [j_idx_grad, np.zeros(grad_par.shape[1]) + j]
                         )
@@ -3305,24 +3466,41 @@ class HSMMFamily(GSMMFamily):
                     if j % 2 == 1:
                         lpd = np.zeros(D - 1) - np.inf
                         lpd[int(event_width - 1)] = 0
+
+                        if tvdtpi:
+                            lpd = [lpd for _ in range(D - 1)]
                     else:
                         raise ValueError(
                             f"Need distribution duration family for state {j}."
                         )
 
                 # Collect duration probabilities associated with state j
-                ds[:, j] = np.exp(lpd.flatten())
-                ds[:, j] /= np.sum(ds[:, j])
+                if tvdtpi:
+                    for di in range(D - 1):
+                        ds[di, j, :] = np.exp(lpd[di].flatten())
 
-                if np.any(np.isnan(ds[:, j]) | np.isinf(ds[:, j])):
-                    # print("problem with ds",j)
-                    ds[(np.isnan(ds[:, j]) | np.isinf(ds[:, j])), j] = 0
+                    ds[:, j, :] /= np.sum(ds[:, j, :], axis=0)[None, :]
+
+                    if np.any(np.isnan(ds[:, j, :]) | np.isinf(ds[:, j, :])):
+                        # print("problem with ds",j)
+                        ds[(np.isnan(ds[:, j, :]) | np.isinf(ds[:, j, :])), j] = 0
+
+                else:
+                    ds[:, j] = np.exp(lpd.flatten())
+                    ds[:, j] /= np.sum(ds[:, j])
+
+                    if np.any(np.isnan(ds[:, j]) | np.isinf(ds[:, j])):
+                        # print("problem with ds",j)
+                        ds[(np.isnan(ds[:, j]) | np.isinf(ds[:, j])), j] = 0
 
             # Done at this point for models with fixed T and pi
             if fix_T_pi is False:
                 # Now state transition probabilities #
+
                 Ts = np.zeros((n_S, n_S), order="F")
                 if n_S > 2:
+                    if tvdtpi:
+                        Ts = np.zeros((n_S, n_S, n_T), order="F")
                     for j in range(n_S):
                         # No self-transitions!
                         jtFam = MULNOMLSS(n_S - 2)
@@ -3336,37 +3514,70 @@ class HSMMFamily(GSMMFamily):
                             Xsj.append(Xs[idx])
                             coefj.append(split_coef[idx])
                             etastj.append(Xs[idx] @ split_coef[idx])
-                            mustj_par = jtFam.links[par].fi(etastj[-1])[0, 0]
 
-                            # Expand for all possible transitions
-                            mustj_par_exp = np.array(
-                                [mustj_par for _ in range(n_S - 1)]
-                            ).reshape(-1, 1)
-                            mustj.append(mustj_par_exp)
+                            if tvdtpi:
+                                mustj_par = jtFam.links[par].fi(etastj[-1])
+                                mustj.append(mustj_par)  # (n_T,1)
+                            else:
+                                mustj_par = jtFam.links[par].fi(etastj[-1])[0, 0]
+                                # Expand for all possible transitions
+                                mustj_par_exp = np.array(
+                                    [mustj_par for _ in range(n_S - 1)]
+                                ).reshape(-1, 1)
+                                mustj.append(mustj_par_exp)  # (n_S-1,1)
 
                             total_coef += Xs[idx].shape[1]
                             idx += 1
                         # print(state_vals,mustj)
+
                         # 1) Get partial first derivatives with respect to eta
-                        if jtFam.d_eta is False:
-                            d1eta, _, _ = deriv_transform_mu_eta(
-                                state_vals, mustj, jtFam
-                            )
+                        if tvdtpi:
+                            d1eta = []
+                            for tr in state_vals:
+                                d1etaT = [
+                                    fd1(
+                                        np.array([tr for _ in range(n_T)]).reshape(
+                                            -1, 1
+                                        ),
+                                        *mustj,
+                                    )
+                                    for fd1 in jtFam.d1
+                                ]
+                                # print(d1etaT[0].shape)
+                                d1eta.append(d1etaT)
                         else:
                             d1eta = [fd1(state_vals, *mustj) for fd1 in jtFam.d1]
 
                         for par in range(jtFam.n_par):
-                            # (n_S-1) * Xsj[par].shape[1] matrix. Each row holds partial derivative
-                            # of log-likelihood of corresponding state transition with respect to
-                            # coefficients in model par.
-                            grad_par = d1eta[par] * Xsj[par]
+                            # (n_S-1) * Xsj[par].shape[1] matrix. Each row holds partial
+                            # derivative of log-likelihood of corresponding state transition
+                            # with respect to coefficients in model par.
+                            if tvdtpi:
 
-                            # Cast to array
-                            grad_par = (
-                                grad_par.toarray(order="F")
-                                if isinstance(grad_par, np.ndarray) is False
-                                else grad_par
-                            )
+                                # For tvdtpi case grad_par will be (n_T,Xsj[par].shape[1],n_S - 1)
+                                # after stacking. Thus need to transpose below!
+                                grad_par = []
+                                for Tderivi in range(n_S - 1):
+                                    Tdgrad = d1eta[Tderivi][par] * Xsj[par]
+
+                                    Tdgrad = (
+                                        Tdgrad.toarray(order="F")
+                                        if isinstance(Tdgrad, np.ndarray) is False
+                                        else Tdgrad
+                                    )
+                                    grad_par.append(Tdgrad)
+
+                                grad_par = np.stack(grad_par, axis=2)
+                                grad_par = grad_par.T
+                            else:
+                                grad_par = d1eta[par] * Xsj[par]
+
+                                # Cast to array
+                                grad_par = (
+                                    grad_par.toarray(order="F")
+                                    if isinstance(grad_par, np.ndarray) is False
+                                    else grad_par
+                                )
 
                             # Check for nans or infs
                             grad_par[np.isnan(grad_par) | np.isinf(grad_par)] = 0
@@ -3374,30 +3585,44 @@ class HSMMFamily(GSMMFamily):
                             # Concatenate over pars so that in the end gradJ is a
                             # (n_S-1) * np.sum([x.shape[1] for x in Xsj])
                             # matrix with each row holding partial derivatives of log-likelihood
-                            # of corresponding state transition with respect to **all** coefficients
+                            # of corresponding state transition with respect to **all**
+                            # coefficients
                             if T_grad is None:
                                 T_grad = grad_par
                             else:
                                 T_grad = np.concatenate([T_grad, grad_par], axis=1)
+
+                            # Again update j_idx_grad but only at first iter!
                             j_idx_grad = np.concatenate(
                                 [j_idx_grad, np.zeros(grad_par.shape[1]) + j]
                             )
 
-                        # Transform now into the n_j state transition probabilities from j -> i(see
-                        # the MULNOMLSS methods doc-strings for details):
-                        mu_lastT = np.sum(mustj, axis=0) + 1
-                        mustj = [mu / mu_lastT for mu in mustj]
-                        mustj.insert(0, 1 / mu_lastT)
-                        # print(state_vals,mustj)
-
                         # Collect final state transition probabilities
                         Tj_idx = np.array([i for i in range(n_S) if i != j])
-                        Ts[j, Tj_idx] = np.array([mu[0, 0] for mu in mustj])
+                        if tvdtpi:
+                            mustj = np.array(mustj).reshape(n_S - 2, n_T)  # (n_S-2,n_T)
+                            mu_firstT = np.sum(mustj, axis=0) + 1
+                            mustj /= mu_firstT[None, :]
+                            # (j,n_S-1,n_T)
+                            Ts[j, Tj_idx, :] = np.insert(
+                                mustj, 0, 1 / mu_firstT, axis=0
+                            )
+                        else:
+                            # Transform now into the n_j state transition probabilities
+                            # from j -> i(see the MULNOMLSS methods doc-strings for details):
+                            mu_lastT = np.sum(mustj, axis=0) + 1
+                            mustj = [mu / mu_lastT for mu in mustj]
+                            mustj.insert(0, 1 / mu_lastT)
+                            # print(state_vals,mustj)
+                            Ts[j, Tj_idx] = np.array([mu[0, 0] for mu in mustj])
                     # print(T)
                     Ts[np.isnan(Ts) | np.isinf(Ts)] = 0
                 else:
                     Ts[0, 1] = 1
                     Ts[1, 0] = 1
+
+                    if tvdtpi:
+                        Ts = np.stack([Ts for _ in range(n_T)], axis=2)
 
                     T_grad = np.ones(1)
 
@@ -3427,10 +3652,7 @@ class HSMMFamily(GSMMFamily):
                 # print(pi_vals,muspi)
 
                 # 1) Get partial first derivatives with respect to eta
-                if pi_fam.d_eta is False:
-                    d1eta, _, _ = deriv_transform_mu_eta(pi_vals, muspi, pi_fam)
-                else:
-                    d1eta = [fd1(pi_vals, *muspi) for fd1 in pi_fam.d1]
+                d1eta = [fd1(pi_vals, *muspi) for fd1 in pi_fam.d1]
 
                 for par in range(pi_fam.n_par):
                     # n_S * Xsj[par].shape[1] matrix. Each row holds partial derivative of
@@ -3512,6 +3734,7 @@ class HSMMFamily(GSMMFamily):
                     ends_with_last,
                     ends_in_last,
                     n_S > 2,
+                    tvdtpi,
                 )
             else:
                 # Still not done for hmp
@@ -3621,6 +3844,7 @@ class HSMMFamily(GSMMFamily):
                     ends_in_last,
                     hmp_code,
                     999 if rho is None else rho,
+                    tvdtpi,
                 )
 
             # Still need to compute unique gradient vector in case of shared coef.
@@ -3713,6 +3937,7 @@ class HSMMFamily(GSMMFamily):
         n_series = len(sid)
         is_hmp = self.is_hmp
         fix_T_pi = self.fix_T_pi
+        tvdtpi = self.tvdtpi
 
         # Initialize potential None arguments
         if tid is None:

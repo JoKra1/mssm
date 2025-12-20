@@ -18,7 +18,8 @@ py::array_t<
                 py::array_t<double, py::array::f_style | py::array::forcecast> pi_a,
                 py::array_t<double, py::array::f_style | py::array::forcecast> weights_a,
                 double scale, size_t n_T, size_t D, size_t n_S, size_t M, size_t event_width,
-                bool starts_with_first, bool ends_with_last,bool ends_in_last, int hmp_code) {
+                bool starts_with_first, bool ends_with_last,bool ends_in_last, int hmp_code,
+                bool tvdtpi) {
     /*
     Compute forward "pseudo-residuals" (also known as "independent quantile residuals") as defined
     by Zucchini et al. (2017) and Dunn & Smyth (1996).
@@ -66,20 +67,20 @@ py::array_t<
                 {
                     if (hmp_code != 0)
                     {
-                        lam(t,d,j) = pi(j)*bs(t,0,j)*ds(d,j);
+                        lam(t,d,j) = pi(j)*bs(t,0,j)*((tvdtpi) ? ds(d,j,t): ds(d,j));
 
                         for (size_t m = 0; m < M; m++)
                         {
-                            clam(t,m,d,j) = pi(j)*cbs(t,m,0,j)*ds(d,j);
+                            clam(t,m,d,j) = pi(j)*cbs(t,m,0,j)*((tvdtpi) ? ds(d,j,t): ds(d,j));
                         }
                     }
                     else
                     {
-                        lam(t,d,j) = pi(j)*bs(t,j)*ds(d,j);
+                        lam(t,d,j) = pi(j)*bs(t,j)*((tvdtpi) ? ds(d,j,t): ds(d,j));
 
                         for (size_t m = 0; m < M; m++)
                         {
-                            clam(t,m,d,j) = pi(j)*cbs(t,j,m)*ds(d,j);
+                            clam(t,m,d,j) = pi(j)*cbs(t,j,m)*((tvdtpi) ? ds(d,j,t): ds(d,j));
                         }
                     }
                     
@@ -146,7 +147,7 @@ py::array_t<
                             continue;
                         }
 
-                        tp += lam(t-1,0,i)*T(i,j);
+                        tp += lam(t-1,0,i)*((tvdtpi) ? T(i,j,t-1): T(i,j));
                     }
                     
                     if (hmp_code != 0)
@@ -160,7 +161,9 @@ py::array_t<
                             b2 = bs(t,1,j);
                         }
 
-                        lam(t,d,j) += tp * b2 * ds(d,(starts_with_first) ? j : j + n_S);
+                        lam(t,d,j) += tp * b2 * ((tvdtpi) ?
+                                      ds(d,(starts_with_first) ? j : j + n_S,t):
+                                      ds(d,(starts_with_first) ? j : j + n_S));
 
                         for (size_t m = 0; m < M; m++)
                         {
@@ -172,7 +175,9 @@ py::array_t<
                                 c2 = cbs(t,m,1,j);
                             }
                             
-                            clam(t,m,d,j) += tp * c2 * ds(d,(starts_with_first) ? j : j + n_S);
+                            clam(t,m,d,j) += tp * c2 * ((tvdtpi) ?
+                                             ds(d,(starts_with_first) ? j : j + n_S,t):
+                                             ds(d,(starts_with_first) ? j : j + n_S));
 
                             // Scaling to get conditional probability
                             clam(t,m,d,j) /= Lam(t-1);
@@ -181,12 +186,15 @@ py::array_t<
                     }
                     else
                     {
-                        lam(t,d,j) += tp * bs(t,j) * ds(d,(starts_with_first) ? j : j + n_S);
+                        lam(t,d,j) += tp * bs(t,j) * ((tvdtpi) ?
+                                      ds(d,(starts_with_first) ? j : j + n_S,t):
+                                      ds(d,(starts_with_first) ? j : j + n_S));
 
                         for (size_t m = 0; m < M; m++)
                         {
                             clam(t,m,d,j) += tp * cbs(t,j,m) *
-                                             ds(d,(starts_with_first) ? j : j + n_S);
+                                             ((tvdtpi) ? ds(d,(starts_with_first) ? j : j + n_S,t):
+                                                         ds(d,(starts_with_first) ? j : j + n_S));
 
                             // Scaling to get conditional probability
                             clam(t,m,d,j) /= Lam(t-1);
@@ -263,7 +271,7 @@ py::array_t<
                    py::array_t<double, py::array::f_style | py::array::forcecast> weights_a,
                    double scale, size_t n_T, size_t D, size_t n_S, size_t M, size_t event_width,
                    bool starts_with_first, bool ends_with_last,bool ends_in_last, int hmp_code,
-                   double rho) {
+                   double rho, bool tvdtpi) {
     /*
     Compute "predictive-residuals" defined by Buckby et al. (2020).
 
@@ -329,7 +337,7 @@ py::array_t<
                     if (hmp_code != 0)
                     {
                         
-                        lam(t,d,j) = pi(j)*bs(t,0,j)*ds(d,j);
+                        lam(t,d,j) = pi(j)*bs(t,0,j)*((tvdtpi) ? ds(d,j,t): ds(d,j));
 
                         for (size_t m = 0; m < M; m++)
                         {
@@ -344,18 +352,18 @@ py::array_t<
                                     ebump *= d0;
                                 }
                                 
-                                elam(t,m,d,j) = pi(j)*ebump*ds(d,j);
+                                elam(t,m,d,j) = pi(j)*ebump*((tvdtpi) ? ds(d,j,t): ds(d,j));
                             }
                         }
                     }
                     else
                     {
-                        lam(t,d,j) = pi(j)*bs(t,j)*ds(d,j);
+                        lam(t,d,j) = pi(j)*bs(t,j)*((tvdtpi) ? ds(d,j,t): ds(d,j));
 
                         for (size_t m = 0; m < M; m++)
                         {
                             // Expected value for signal m
-                            elam(t,m,d,j) = pi(j)*mus(t,m,j)*ds(d,j);
+                            elam(t,m,d,j) = pi(j)*mus(t,m,j)*((tvdtpi) ? ds(d,j,t): ds(d,j));
                         }
                     }                    
                 }
@@ -432,7 +440,7 @@ py::array_t<
                             continue;
                         }
 
-                        tp += lam(t-1,0,i)*T(i,j);
+                        tp += lam(t-1,0,i)*((tvdtpi) ? T(i,j,t-1): T(i,j));
                     }
                     
                     if (hmp_code != 0)
@@ -446,7 +454,9 @@ py::array_t<
                             b2 = bs(t,1,j);
                         }
 
-                        lam(t,d,j) += tp * b2 * ds(d,(starts_with_first) ? j : j + n_S);
+                        lam(t,d,j) += tp * b2 * ((tvdtpi) ?
+                                      ds(d,(starts_with_first) ? j : j + n_S,t):
+                                      ds(d,(starts_with_first) ? j : j + n_S));
 
                         for (size_t m = 0; m < M; m++)
                         {   
@@ -462,7 +472,9 @@ py::array_t<
                                 }
                                 
                                 elam(t,m,d,j) += tp * ebump *
-                                                 ds(d,(starts_with_first) ? j : j + n_S);
+                                                 ((tvdtpi) ?
+                                                 ds(d,(starts_with_first) ? j : j + n_S,t):
+                                                 ds(d,(starts_with_first) ? j : j + n_S));
                             }
                             else if (rho < 999)
                             {
@@ -470,7 +482,9 @@ py::array_t<
                                 ebump = d1 * weights(event_width-1) * mus(t-1,m,j-1);
 
                                 elam(t,m,d,j) += tp * ebump *
-                                                 ds(d,(starts_with_first) ? j : j + n_S);
+                                                 ((tvdtpi) ?
+                                                 ds(d,(starts_with_first) ? j : j + n_S,t):
+                                                 ds(d,(starts_with_first) ? j : j + n_S));
 
                             }
 
@@ -480,14 +494,17 @@ py::array_t<
                     }
                     else
                     {
-                        lam(t,d,j) += tp * bs(t,j) * ds(d,(starts_with_first) ? j : j + n_S);
+                        lam(t,d,j) += tp * bs(t,j) * ((tvdtpi) ?
+                                      ds(d,(starts_with_first) ? j : j + n_S,t):
+                                      ds(d,(starts_with_first) ? j : j + n_S));
 
                         for (size_t m = 0; m < M; m++)
                         {   
                             // Expected value for signal m
 
                             elam(t,m,d,j) += tp * mus(t,j) *
-                                            ds(d,(starts_with_first) ? j : j + n_S);
+                                            ((tvdtpi) ? ds(d,(starts_with_first) ? j : j + n_S,t):
+                                                        ds(d,(starts_with_first) ? j : j + n_S));
 
 
                             // Scaling to get conditional probability

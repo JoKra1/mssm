@@ -17,7 +17,8 @@ double llk(py::array_t<double, py::array::f_style | py::array::forcecast> bs_a,
               py::array_t<double, py::array::f_style | py::array::forcecast> pi_a,
               py::array_t<double, py::array::f_style | py::array::forcecast> weights_a,
               double scale, size_t n_T, size_t D, size_t n_S, size_t event_width,
-              bool starts_with_first,bool ends_with_last,bool ends_in_last,int hmp_code) {
+              bool starts_with_first,bool ends_with_last,bool ends_in_last,int hmp_code,
+              bool tvdtpi) {
     
     /* Compute log-likelihood for a hsmm model, using scaled forward variables which are
     a combination of those by Yu & Kobayashi (2005) and Lystig & Hughes (2002).
@@ -63,11 +64,11 @@ double llk(py::array_t<double, py::array::f_style | py::array::forcecast> bs_a,
                 {
                     if (hmp_code != 0)
                     {
-                        lam(t,d,j) = pi(j)*bs(t,0,j)*ds(d,j);
+                        lam(t,d,j) = pi(j)*bs(t,0,j)*((tvdtpi) ? ds(d,j,t): ds(d,j));
                     }
                     else
                     {
-                        lam(t,d,j) = pi(j)*bs(t,j)*ds(d,j);
+                        lam(t,d,j) = pi(j)*bs(t,j)*((tvdtpi) ? ds(d,j,t): ds(d,j));
                     }
                     
                 }
@@ -112,7 +113,7 @@ double llk(py::array_t<double, py::array::f_style | py::array::forcecast> bs_a,
                             continue;
                         }
 
-                        tp += lam(t-1,0,i)*T(i,j);
+                        tp += lam(t-1,0,i)*((tvdtpi) ? T(i,j,t-1): T(i,j));
                     }
                     
                     if (hmp_code != 0)
@@ -125,12 +126,14 @@ double llk(py::array_t<double, py::array::f_style | py::array::forcecast> bs_a,
                             // previous bump (only for states > 0, but this is handled outside)
                             b2 = bs(t,1,j);
                         }
-                        tp *= b2*ds(d,(starts_with_first) ? j : j + n_S);
+                        tp *= b2*((tvdtpi) ? ds(d,(starts_with_first) ? j : j + n_S,t):
+                                             ds(d,(starts_with_first) ? j : j + n_S));
                         
                     }
                     else
                     {
-                        tp *= bs(t,j)*ds(d,(starts_with_first) ? j : j + n_S);
+                        tp *= bs(t,j)*((tvdtpi) ? ds(d,(starts_with_first) ? j : j + n_S,t):
+                                                  ds(d,(starts_with_first) ? j : j + n_S));
                     }                    
 
                     lam(t,d,j) += tp;
@@ -192,7 +195,8 @@ py::array_t<
              py::array_t<double, py::array::c_style | py::array::forcecast> weights_a,
              double scale, size_t n_T, size_t D, size_t n_S, size_t n_coef, size_t M,
              size_t event_width, bool starts_with_first, bool ends_with_last, 
-             bool ends_in_last, int hmp_code, double rho) {
+             bool ends_in_last, int hmp_code, double rho,
+             bool tvdtpi) {
     
     /* Compute gradient of log-likelihood for a hsmm model with known (or assumed known) transtion
     matrix and initial state distribution, using scaled forward variables which are a combination of
@@ -275,11 +279,11 @@ py::array_t<
                     
                     if (hmp_code != 0)
                     {
-                        lam(t,d,j) = pi(j)*bs(t,0,j)*ds(d,j);
+                        lam(t,d,j) = pi(j)*bs(t,0,j)*((tvdtpi) ? ds(d,j,t): ds(d,j));
                     }
                     else
                     {
-                        lam(t,d,j) = pi(j)*bs(t,j)*ds(d,j);
+                        lam(t,d,j) = pi(j)*bs(t,j)*((tvdtpi) ? ds(d,j,t): ds(d,j));
                     }
 
                     // Now compute deriv of pi(j)*bs(t,j)*ds(d,j) with respect to individual coef.
@@ -324,7 +328,7 @@ py::array_t<
                             
                             // Remaining sums cancels, since pi in this implementation does not
                             // depend on beta and because ds(d,j) does not depend on coef(ci)
-                            psi(t1,d,j,tci) = pi(j)*b_grad_c*ds(d,j);
+                            psi(t1,d,j,tci) = pi(j)*b_grad_c*((tvdtpi) ? ds(d,j,t): ds(d,j));
                         } else
                         {
                             psi(t1,d,j,tci) = 0;
@@ -340,11 +344,13 @@ py::array_t<
                         {
                             if (hmp_code != 0)
                             {
-                                psi(t1,d,j,tci) = pi(j)*bs(t,0,j)*d_grad(d,ci);
+                                psi(t1,d,j,tci) = pi(j)*bs(t,0,j)*((tvdtpi) ? d_grad(d,ci,t):
+                                                                              d_grad(d,ci));
                             }
                             else
                             {
-                                psi(t1,d,j,tci) = pi(j)*bs(t,j)*d_grad(d,ci);
+                                psi(t1,d,j,tci) = pi(j)*bs(t,j)*((tvdtpi) ? d_grad(d,ci,t):
+                                                                            d_grad(d,ci));
                             }
                             
                         } else
@@ -393,7 +399,7 @@ py::array_t<
                         {
                             continue;
                         }
-                        tp += lam(t-1,0,i)*T(i,j);
+                        tp += lam(t-1,0,i)*((tvdtpi) ? T(i,j,t-1): T(i,j));
                         
                     }
                     
@@ -406,11 +412,13 @@ py::array_t<
                             // previous bump (only for states > 0, but this is taken care of outside)
                             b2 = bs(t,1,j);
                         }
-                        tp *= b2*ds(d,(starts_with_first) ? j : j + n_S);
+                        tp *= b2*((tvdtpi) ? ds(d,(starts_with_first) ? j : j + n_S,t):
+                                             ds(d,(starts_with_first) ? j : j + n_S));
                     }
                     else
                     {
-                        tp *= bs(t,j)*ds(d,(starts_with_first) ? j : j + n_S);
+                        tp *= bs(t,j)*((tvdtpi) ? ds(d,(starts_with_first) ? j : j + n_S,t):
+                                                  ds(d,(starts_with_first) ? j : j + n_S));
                     }
                     
 
@@ -506,8 +514,8 @@ py::array_t<
                                     continue;
                                 }
                                 
-                                tp += lam(t-1,0,i)*T(i,j);
-                                tpg += psi(t2,0,i,tci)*T(i,j);
+                                tp += lam(t-1,0,i)*((tvdtpi) ? T(i,j,t-1): T(i,j));
+                                tpg += psi(t2,0,i,tci)*((tvdtpi) ? T(i,j,t-1): T(i,j));
                             }
 
                             // Now derivative. Technically sum of three products - but final one
@@ -516,7 +524,10 @@ py::array_t<
                             // ds(d,j):
                             if (hmp_code != 0)
                             {
-                                psi(t1,d,j,tci) += tpg*bs(t,0,j)*ds(d,(starts_with_first) ? j : j + n_S);
+                                psi(t1,d,j,tci) += tpg*bs(t,0,j)*(
+                                                        (tvdtpi) ?
+                                                        ds(d,(starts_with_first) ? j : j + n_S,t):
+                                                        ds(d,(starts_with_first) ? j : j + n_S));
 
 
                                 ebump = weights(0)*mu(t,m_idx_grad(ci),j);
@@ -535,17 +546,23 @@ py::array_t<
                                 // Next is (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * deriv of
                                 // bs(t,j) * ds(d,j):
                                 psi(t1,d,j,tci) += tp*b_grad_c*
-                                                   ds(d,(starts_with_first) ? j : j + n_S);
+                                                   ((tvdtpi) ?
+                                                        ds(d,(starts_with_first) ? j : j + n_S,t):
+                                                        ds(d,(starts_with_first) ? j : j + n_S));
                             }
                             else
                             {
                                 psi(t1,d,j,tci) += tpg*bs(t,j)*
-                                                   ds(d,(starts_with_first) ? j : j + n_S);
+                                                   ((tvdtpi) ?
+                                                        ds(d,(starts_with_first) ? j : j + n_S,t):
+                                                        ds(d,(starts_with_first) ? j : j + n_S));
 
                                 // Next is (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * deriv of bs(t,j)
                                 // * ds(d,j):
                                 psi(t1,d,j,tci) += tp*b_grad(t,ci) * bs(t,j)*
-                                                   ds(d,(starts_with_first) ? j : j + n_S);
+                                                   ((tvdtpi) ?
+                                                        ds(d,(starts_with_first) ? j : j + n_S,t):
+                                                        ds(d,(starts_with_first) ? j : j + n_S));
                             }
                         
                         }
@@ -584,8 +601,8 @@ py::array_t<
                                     continue;
                                 }
                                 
-                                tp += lam(t-1,0,i)*T(i,j);
-                                tpg += psi(t2,0,i,tci)*T(i,j);
+                                tp += lam(t-1,0,i)*((tvdtpi) ? T(i,j,t-1): T(i,j));
+                                tpg += psi(t2,0,i,tci)*((tvdtpi) ? T(i,j,t-1): T(i,j));
                             }
 
                             // Only need derivative of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)),
@@ -613,16 +630,22 @@ py::array_t<
                                                             ) / scale) * dbump;
 
                                         psi(t1,d,j,tci) += tp * b_grad_c *
-                                                           ds(d,(starts_with_first) ? j : j + n_S);
+                                                           ((tvdtpi) ?
+                                                        ds(d,(starts_with_first) ? j : j + n_S,t):
+                                                        ds(d,(starts_with_first) ? j : j + n_S));
                                     }
                                 }
-                                psi(t1,d,j,tci) += tpg*b2*ds(d,(starts_with_first) ? j : j + n_S);
+                                psi(t1,d,j,tci) += tpg*b2*((tvdtpi) ?
+                                                        ds(d,(starts_with_first) ? j : j + n_S,t):
+                                                        ds(d,(starts_with_first) ? j : j + n_S));
 
                             }
                             else
                             {
                                 psi(t1,d,j,tci) += tpg*bs(t,j)*
-                                                   ds(d,(starts_with_first) ? j : j + n_S);
+                                                   ((tvdtpi) ?
+                                                   ds(d,(starts_with_first) ? j : j + n_S,t):
+                                                   ds(d,(starts_with_first) ? j : j + n_S));
                             }
                         }
 
@@ -673,8 +696,8 @@ py::array_t<
                                     continue;
                                 }
                                 
-                                tp += lam(t-1,0,i)*T(i,j);
-                                tpg += psi(t2,0,i,tci)*T(i,j);
+                                tp += lam(t-1,0,i)*((tvdtpi) ? T(i,j,t-1): T(i,j));
+                                tpg += psi(t2,0,i,tci)*((tvdtpi) ? T(i,j,t-1): T(i,j));
                             }
                             
                             if (hmp_code != 0)
@@ -690,22 +713,27 @@ py::array_t<
                                 
                                 // First is deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) *
                                 // bs(t,j)*ds(d,j) - same as before:
-                                psi(t1,d,j,tci) += tpg*b2*ds(d,(starts_with_first) ? j : j + n_S);
+                                psi(t1,d,j,tci) += tpg*b2*((tvdtpi) ?
+                                                        ds(d,(starts_with_first) ? j : j + n_S,t):
+                                                        ds(d,(starts_with_first) ? j : j + n_S));
 
                                 // Second is the third product missing before: (\sum_{i \in S/j}
                                 // lam(t-1,1,i)*T(i,j)) * bs(t,j) * deriv of ds(d,j)
-                                psi(t1,d,j,tci) += tp*b2*d_grad(d,ci);
+                                psi(t1,d,j,tci) += tp*b2*((tvdtpi) ? d_grad(d,ci,t): d_grad(d,ci));
                             }
                             else
                             {
                                 // First is deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) *
                                 // bs(t,j)*ds(d,j) - same as before:
                                 psi(t1,d,j,tci) += tpg*bs(t,j)*
-                                                   ds(d,(starts_with_first) ? j : j + n_S);
+                                                   ((tvdtpi) ?
+                                                        ds(d,(starts_with_first) ? j : j + n_S,t):
+                                                        ds(d,(starts_with_first) ? j : j + n_S));
 
                                 // Second is the third product missing before: (\sum_{i \in S/j}
                                 // lam(t-1,1,i)*T(i,j)) * bs(t,j) * deriv of ds(d,j)
-                                psi(t1,d,j,tci) += tp*bs(t,j)*d_grad(d,ci);
+                                psi(t1,d,j,tci) += tp*bs(t,j)*((tvdtpi) ? d_grad(d,ci,t):
+                                                                          d_grad(d,ci));
                             }
                         }
                         // Coef ci is **NOT** in model of state j
@@ -742,7 +770,7 @@ py::array_t<
                                     continue;
                                 }
 
-                                tpg += psi(t2,0,i,tci)*T(i,j);
+                                tpg += psi(t2,0,i,tci)*((tvdtpi) ? T(i,j,t-1): T(i,j));
                             }
                             
                             // Only need deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*
@@ -758,13 +786,17 @@ py::array_t<
                                     // care of outside)
                                     b2 = bs(t,1,j);
                                 }
-                                psi(t1,d,j,tci) += tpg*b2*ds(d,(starts_with_first) ? j : j + n_S);
+                                psi(t1,d,j,tci) += tpg*b2*((tvdtpi) ?
+                                                        ds(d,(starts_with_first) ? j : j + n_S,t):
+                                                        ds(d,(starts_with_first) ? j : j + n_S));
                                 
                             }
                             else
                             {
                                 psi(t1,d,j,tci) += tpg*bs(t,j)*
-                                                   ds(d,(starts_with_first) ? j : j + n_S);
+                                                   ((tvdtpi) ?
+                                                        ds(d,(starts_with_first) ? j : j + n_S,t):
+                                                        ds(d,(starts_with_first) ? j : j + n_S));
                             }
                             
                         }
@@ -871,7 +903,8 @@ py::array_t<
           py::array_t<double, py::array::f_style | py::array::forcecast> pi_grad_a,
           py::array_t<size_t, py::array::c_style | py::array::forcecast> j_idx_grad_a,
           size_t M, size_t n_T, size_t D, size_t n_S, size_t n_coef,
-          bool starts_with_first, bool ends_with_last, bool ends_in_last,bool model_T) {
+          bool starts_with_first, bool ends_with_last, bool ends_in_last,bool model_T,
+          bool tvdtpi) {
     
     /* Compute gradient of log-likelihood for a hsmm model, using scaled forward variables which are
     a combination of those by Yu & Kobayashi (2005) and Lystig & Hughes (2002).
@@ -928,7 +961,7 @@ py::array_t<
                 if (t == 0)
                 {
 
-                    lam(t,d,j) = pi(j)*bs(t,j)*ds(d,j);
+                    lam(t,d,j) = pi(j)*bs(t,j)*((tvdtpi) ? ds(d,j,t): ds(d,j));
 
                     // Now compute deriv of pi(j)*bs(t,j)*ds(d,j) with respect to individual coef.
                     // **NOTE**: Generally deriv will be single product, not sum over three products
@@ -953,7 +986,7 @@ py::array_t<
                             
                             // Remaining sums cancels, since pi in this implementation does not
                             // depend on beta and because ds(d,j) does not depend on coef(ci)
-                            psi(t1,d,j,tci) = pi(j)*b_grad_c*ds(d,j);
+                            psi(t1,d,j,tci) = pi(j)*b_grad_c*((tvdtpi) ? ds(d,j,t): ds(d,j));
                         } else
                         {
                             psi(t1,d,j,tci) = 0;
@@ -967,7 +1000,8 @@ py::array_t<
                         // of log-scale
                         if (j_idx_grad(tci) == j)
                         {
-                            psi(t1,d,j,tci) = pi(j)*bs(t,j)*d_grad(d,ci);
+                            psi(t1,d,j,tci) = pi(j)*bs(t,j)*((tvdtpi) ? d_grad(d,ci,t):
+                                                                        d_grad(d,ci));
                         } else
                         {
                             psi(t1,d,j,tci) = 0;
@@ -989,7 +1023,8 @@ py::array_t<
                     {
                         // Derivative of pi[j] with respect to individual coef. Similar to duration
                         // case.
-                        psi(t1,d,j,tci) = (pi(j) * pi_grad(j,ci))*bs(t,j)*ds(d,j);
+                        psi(t1,d,j,tci) = (pi(j) * pi_grad(j,ci))*bs(t,j)*
+                                          ((tvdtpi) ? ds(d,j,t): ds(d,j));
                         
                         tci += 1;
                     }
@@ -1011,11 +1046,12 @@ py::array_t<
                         {
                             continue;
                         }
-                        tp += lam(t-1,0,i)*T(i,j);
+                        tp += lam(t-1,0,i)*((tvdtpi) ? T(i,j,t-1): T(i,j));
                         
                     }
                     
-                    tp *= bs(t,j)*ds(d,(starts_with_first) ? j : j + n_S);
+                    tp *= bs(t,j)*((tvdtpi) ? ds(d,(starts_with_first) ? j : j + n_S,t):
+                                              ds(d,(starts_with_first) ? j : j + n_S));
 
                     lam(t,d,j) += tp;
 
@@ -1066,20 +1102,24 @@ py::array_t<
                                     continue;
                                 }
                                 
-                                tp += lam(t-1,0,i)*T(i,j);
-                                tpg += psi(t2,0,i,tci)*T(i,j);
+                                tp += lam(t-1,0,i)*((tvdtpi) ? T(i,j,t-1): T(i,j));
+                                tpg += psi(t2,0,i,tci)*((tvdtpi) ? T(i,j,t-1): T(i,j));
                             }
 
                             // Now derivative. Technically sum of three products - but final one
                             // cancels because ds(d,j) does not depend on coef.
                             // First is deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*
                             // ds(d,j):
-                            psi(t1,d,j,tci) += tpg*bs(t,j)*ds(d,(starts_with_first) ? j : j + n_S);
+                            psi(t1,d,j,tci) += tpg*bs(t,j)*((tvdtpi) ?
+                                               ds(d,(starts_with_first) ? j : j + n_S,t):
+                                               ds(d,(starts_with_first) ? j : j + n_S));
 
                             // Next is (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * deriv of bs(t,j) *
                             // ds(d,j):
                             psi(t1,d,j,tci) += tp*b_grad(t,ci) * bs(t,j)*
-                                               ds(d,(starts_with_first) ? j : j + n_S);
+                                               ((tvdtpi) ?
+                                               ds(d,(starts_with_first) ? j : j + n_S,t):
+                                               ds(d,(starts_with_first) ? j : j + n_S));
                         
                         }
                         // Coef ci is **NOT** in model of state j
@@ -1107,12 +1147,14 @@ py::array_t<
                                     continue;
                                 }
 
-                                tpg += psi(t2,0,i,tci)*T(i,j);
+                                tpg += psi(t2,0,i,tci)*((tvdtpi) ? T(i,j,t-1): T(i,j));
                             }
 
                             // Only need derivative of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)), since
                             // neither bs(t,j) nor ds(d,j)) depend on coef not in model of state j
-                            psi(t1,d,j,tci) += tpg*bs(t,j)*ds(d,(starts_with_first) ? j : j + n_S);
+                            psi(t1,d,j,tci) += tpg*bs(t,j)*((tvdtpi) ?
+                                               ds(d,(starts_with_first) ? j : j + n_S,t):
+                                               ds(d,(starts_with_first) ? j : j + n_S));
                         }
 
                         tci += 1;
@@ -1153,17 +1195,19 @@ py::array_t<
                                     continue;
                                 }
                                 
-                                tp += lam(t-1,0,i)*T(i,j);
-                                tpg += psi(t2,0,i,tci)*T(i,j);
+                                tp += lam(t-1,0,i)*((tvdtpi) ? T(i,j,t-1): T(i,j));
+                                tpg += psi(t2,0,i,tci)*((tvdtpi) ? T(i,j,t-1): T(i,j));
                             }
                             
                             // First is deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*
                             // ds(d,j) - same as before:
-                            psi(t1,d,j,tci) += tpg*bs(t,j)*ds(d,(starts_with_first) ? j : j + n_S);
+                            psi(t1,d,j,tci) += tpg*bs(t,j)*((tvdtpi) ?
+                                               ds(d,(starts_with_first) ? j : j + n_S,t):
+                                               ds(d,(starts_with_first) ? j : j + n_S));
 
                             // Second is the third product missing before: (\sum_{i \in S/j}
                             // lam(t-1,1,i)*T(i,j)) * bs(t,j) * deriv of ds(d,j)
-                            psi(t1,d,j,tci) += tp*bs(t,j)*d_grad(d,ci);
+                            psi(t1,d,j,tci) += tp*bs(t,j)*((tvdtpi) ? d_grad(d,ci,t): d_grad(d,ci));
                         
                         }
                         // Coef ci is **NOT** in model of state j
@@ -1192,12 +1236,14 @@ py::array_t<
                                     continue;
                                 }
 
-                                tpg += psi(t2,0,i,tci)*T(i,j);
+                                tpg += psi(t2,0,i,tci)*((tvdtpi) ? T(i,j,t-1): T(i,j));
                             }
                             
                             // Only need deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*
                             // ds(d,j) - same as before:
-                            psi(t1,d,j,tci) += tpg*bs(t,j)*ds(d,(starts_with_first) ? j : j + n_S);
+                            psi(t1,d,j,tci) += tpg*bs(t,j)*((tvdtpi) ?
+                                               ds(d,(starts_with_first) ? j : j + n_S,t):
+                                               ds(d,(starts_with_first) ? j : j + n_S));
                         }
 
                         tci += 1;
@@ -1235,12 +1281,14 @@ py::array_t<
                                         continue;
                                     }
 
-                                    tpg += psi(t2,0,i,tci)*T(i,j);
+                                    tpg += psi(t2,0,i,tci)*((tvdtpi) ? T(i,j,t-1): T(i,j));
                                 }
 
                                 // Hence, deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) *
                                 // bs(t,j)*ds(d,j):
-                                psi(t1,d,j,tci) += tpg*bs(t,j)*ds(d,(starts_with_first) ? j : j + n_S);
+                                psi(t1,d,j,tci) += tpg*bs(t,j)*((tvdtpi) ?
+                                                   ds(d,(starts_with_first) ? j : j + n_S,t):
+                                                   ds(d,(starts_with_first) ? j : j + n_S));
                             
                             }
                             // Coef ci is **NOT** in model of transitions away from j
@@ -1272,7 +1320,7 @@ py::array_t<
                                         continue;
                                     }
 
-                                    tpg += psi(t2,0,i,tci)*T(i,j);
+                                    tpg += psi(t2,0,i,tci)*((tvdtpi) ? T(i,j,t-1): T(i,j));
 
                                     if (j_idx_grad(tci) == i)
                                     {
@@ -1295,12 +1343,15 @@ py::array_t<
                                             tidx += 1;
                                         }
                                         
-                                        tpg += lam(t-1,0,i) * T(i,j) * T_grad(tidx,ci);
+                                        tpg += lam(t-1,0,i) * ((tvdtpi) ? T(i,j,t-1): T(i,j)) *
+                                               ((tvdtpi) ? T_grad(tidx,ci,t-1): T_grad(tidx,ci));
                                     }
                                 }
 
                                 // Done:
-                                psi(t1,d,j,tci) += tpg*bs(t,j)*ds(d,(starts_with_first) ? j : j + n_S);
+                                psi(t1,d,j,tci) += tpg*bs(t,j)*((tvdtpi) ?
+                                                   ds(d,(starts_with_first) ? j : j + n_S,t):
+                                                   ds(d,(starts_with_first) ? j : j + n_S));
                             }
 
                             tci += 1;
@@ -1336,7 +1387,7 @@ py::array_t<
                                 continue;
                             }
 
-                            tpg += psi(t2,0,i,tci)*T(i,j);
+                            tpg += psi(t2,0,i,tci)*((tvdtpi) ? T(i,j,t-1): T(i,j));
                         }
                         
                         // Only need deriv of (\sum_{i \in S/j} lam(t-1,1,i)*T(i,j)) * bs(t,j)*
