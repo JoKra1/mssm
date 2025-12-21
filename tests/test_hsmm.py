@@ -411,42 +411,6 @@ class Test_MultivariateHSMM_hard:
     hsmm2 = GSMM([*obs_formulas, *d_formulas], family=fam2)
     hsmm2.fit(**test_kwargs)
 
-    def test_grad1(self):
-        # Test grad function of hsmm
-        grad = self.fam.gradient(self.init_coef, self.coef_split_idx, self.ys, self.Xs)
-        pos_llk_warp = lambda x: self.fam.llk(
-            x.reshape(-1, 1), self.coef_split_idx, self.ys, self.Xs
-        )
-        grad2 = scp.optimize.approx_fprime(self.init_coef.flatten(), pos_llk_warp)
-
-        grad_diff = np.abs(np.round(grad - grad2.reshape(-1, 1), decimals=3)).max()
-
-        np.testing.assert_allclose(
-            grad_diff,
-            0.0,
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.1),
-        )
-
-    def test_grad2(self):
-        # Test grad function of fixed hsmm
-        grad = self.fam2.gradient(
-            self.od_init_coef, self.od_coef_split_idx, self.od_ys, self.od_Xs
-        )
-        pos_llk_warp = lambda x: self.fam2.llk(
-            x.reshape(-1, 1), self.od_coef_split_idx, self.od_ys, self.od_Xs
-        )
-        grad2 = scp.optimize.approx_fprime(self.od_init_coef.flatten(), pos_llk_warp)
-
-        grad_diff = np.abs(np.round(grad - grad2.reshape(-1, 1), decimals=3)).max()
-
-        np.testing.assert_allclose(
-            grad_diff,
-            0.0,
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.1),
-        )
-
     # Standard tests
     def test_GAMedf(self):
         np.testing.assert_allclose(

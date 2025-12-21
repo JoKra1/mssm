@@ -18,6 +18,7 @@ from .defaults import (
 )
 
 from mssm.src.python.mcmc import sample_mssm
+from mssm.src.python.formula import build_model_matrix
 
 mssm.src.python.exp_fam.GAUMLSS.init_coef = init_coef_gaumlss_tests
 mssm.src.python.exp_fam.GAMMALS.init_coef = init_coef_gammals_tests
@@ -1507,4 +1508,364 @@ class Test_NUTS:
             rho_samples is None
             and coef_samples.shape == (1, 100, len(self.model.coef))
             and llks.shape == (1, 100, 1)
+        )
+
+
+class Test_MultivariateHSMM_grad:
+
+    # Start by simulating some data
+    np_gen = np.random.default_rng(0)
+    n_series = 3
+    n_obs = 250
+    starts_with_first = False
+
+    # Define True model
+    pi = np.array([0.6, 0.2, 0.2])
+
+    T = np.array([[0.0, 0.6, 0.4], [0.3, 0.0, 0.7], [0.6, 0.4, 0.0]])
+
+    mus = [np.array([0.0, 2.5, 5.0]), np.array([-2, 0, -5]), np.array([0, 0, 0])]
+
+    sigmas = [
+        np.array([[1, -0.3, 0.5], [-0.3, 1, 0.0], [0.5, 0.0, 1]]),
+        np.array([[1, 0.3, -0.5], [0.3, 1, 0.3], [-0.5, 0.3, 1]]),
+        np.array([[1, 0.0, 0.2], [0.0, 1, -0.6], [0.2, -0.6, 1]]),
+    ]
+
+    # Duration distribution parameters
+    mus2 = [17, 12, 7]
+    scales = [0.05, 0.05, 0.05]
+    mus2_init = [2, 4, 6]
+    scales_init = scales
+
+    y_all = [[], [], []]
+    states_all = []
+    time_all = []
+    series_all = []
+    durs_all = []
+    seed = 0
+    for s in range(n_series):
+
+        state = np_gen.choice(np.arange(3), p=pi)
+
+        if starts_with_first:
+            alpha = 1 / scales[state]
+            beta = alpha / mus2[state]
+        else:
+            alpha = 1 / scales_init[state]
+            beta = alpha / mus2_init[state]
+
+        # duration samples
+        dur = int(
+            scp.stats.gamma.rvs(a=alpha, scale=(1 / beta), size=1, random_state=seed)[0]
+        )
+        seed += 1
+
+        y = [[], [], []]
+        states = []
+        durs = []
+        t = 0
+
+        while len(y[0]) < n_obs:
+            Y = scp.stats.multivariate_normal.rvs(
+                size=dur, mean=mus[state], cov=sigmas[state], random_state=seed
+            )
+            Y = Y.reshape(dur, 3)
+            for m in range(3):
+                y[m].extend(Y[:, m])
+
+            for _ in range(dur):
+                states.append(state)
+            durs.append([state, dur])
+
+            prev_state = state
+            state = np_gen.choice(np.arange(3), p=T[state, :])
+
+            alpha = 1 / scales[state]
+            beta = alpha / mus2[state]
+
+            # duration samples
+            dur = int(
+                scp.stats.gamma.rvs(
+                    a=alpha, scale=(1 / beta), size=1, random_state=seed
+                )[0]
+            )
+            t += 1
+            seed += 1
+
+        for m in range(3):
+            y[m] = y[m][:n_obs]
+        states = states[:n_obs]
+        time = np.arange(n_obs)
+        for m in range(3):
+            y_all[m].extend(y[m])
+        time_all.extend(time)
+
+        for _ in range(n_obs):
+            series_all.append(s)
+
+        states_all.append(states)
+        durs_all.append(durs)
+
+    dat = pd.DataFrame(
+        {
+            "y0": y_all[0],
+            "y1": y_all[1],
+            "y2": y_all[2],
+            "time": time_all,
+            "series": series_all,
+        }
+    )
+
+    # Prep dat for hsmm model
+    uval, id = np.unique(np.array(dat["series"]), return_index=True)
+    sid = np.sort(id)
+    tid = np.arange(len(id))
+
+    # Now define models
+    o_family = MultiGauss(3, [Identity() for _ in range(3)])
+    d_family = GAMMALS(links=[LOG(), LOGb(-0.0001)])
+    n_S = 3
+    M = 3
+    D = 100
+    starts_with_first = True
+
+    # Initial parameters
+    Y = np.concatenate(
+        [
+            dat["y0"].values.reshape(-1, 1),
+            dat["y1"].values.reshape(-1, 1),
+            dat["y2"].values.reshape(-1, 1),
+        ],
+        axis=1,
+    )
+    init_size = 50
+    init_choice = np_gen.choice(len(dat), size=init_size * n_S, replace=False)
+    int_samples = []
+    init_mus = []
+    init_Rs = []
+
+    for j in range(n_S):
+        int_samples.append(Y[init_choice[j * init_size : (j + 1) * init_size]])
+        init_mus.append(int_samples[j].mean(axis=0))
+
+        cov = np.cov(int_samples[j].T)
+        prec = np.linalg.inv(cov)
+        R = np.linalg.cholesky(prec).T
+        for m in range(M):
+            R[m, m] = np.log(R[m, m])
+
+        init_Rs.extend(R[np.triu_indices(M)])
+
+    # Set up formulas
+    ys = []
+    Xs = []
+    form_n_coef = []
+    init_coef = []
+    build_mat_idx = []
+    build_matrix = []
+
+    obs_families = []
+    obs_formulas = []
+    links = []
+    pars = 0
+    extra_coef = 0
+    for j in range(n_S):
+        obs_families.append([])
+
+        obs_families[-1].append(o_family)
+        extra_coef += o_family.extra_coef
+
+        for m in range(3):
+            # Model of mean of obs model in state j and of signal m
+            obs_formulas.append(Formula(lhs(f"y{m}"), [i()], data=dat))
+
+            init_coef.append(init_mus[j][m])
+            form_n_coef.append(obs_formulas[-1].n_coef)
+            _ = build_penalties(obs_formulas[-1])
+
+            if j == 0 and m == 0:
+                build_matrix.append(True)
+                Xs.append(build_model_matrix(obs_formulas[-1]))
+            else:
+                build_matrix.append(False)
+                Xs.append(None)
+
+            build_mat_idx.append(0)
+            ys.append(dat[f"y{m}"].values.reshape(-1, 1))
+
+        links.extend(o_family.links)
+        pars += 3
+
+    d_dat = pd.DataFrame(
+        {"x": [1 for _ in range(len(tid))], "y": [1 for _ in range(len(tid))]}
+    )
+
+    d_families = []
+    d_formulas = []
+
+    for j in range(n_S * (1 if starts_with_first else 2)):
+        d_families.append(d_family)
+
+        # Model of mean of dur model in state j
+        d_formulas.append(Formula(lhs("y"), [i()], data=d_dat))
+
+        init_coef.append(2.5)
+        form_n_coef.append(d_formulas[-1].n_coef)
+        _ = build_penalties(d_formulas[-1])
+        Xs.append(build_model_matrix(d_formulas[-1]))
+        ys.append(d_dat["y"].values.reshape(-1, 1))
+        build_matrix.append(True)
+        build_mat_idx.append(len(build_mat_idx))
+
+        # Model of scale parameter of dur model in state j
+        d_formulas.append(Formula(lhs("y"), [i()], data=d_dat))
+
+        init_coef.append(-2)
+        form_n_coef.append(d_formulas[-1].n_coef)
+        _ = build_penalties(d_formulas[-1])
+        Xs.append(build_model_matrix(d_formulas[-1]))
+        ys.append(d_dat["y"].values.reshape(-1, 1))
+        build_matrix.append(True)
+        build_mat_idx.append(len(build_mat_idx))
+
+        links.extend(d_family.links)
+        pars += 2
+
+    # For hsmm with fixed state transitions and pi we have everything now,
+    # so collect copies:
+    od_init_coef = copy.deepcopy(init_coef)
+    od_form_n_coef = copy.deepcopy(form_n_coef)
+    od_build_matrix = copy.deepcopy(build_matrix)
+    od_build_mat_idx = copy.deepcopy(build_mat_idx)
+    od_pars = pars
+    od_links = copy.deepcopy(links)
+    od_ys = copy.deepcopy(ys)
+    od_Xs = copy.deepcopy(Xs)
+
+    t_formulas = []
+    for j in range(n_S):
+        for par in range(n_S - 2):
+
+            # Model of state transition away from state j
+            t_formulas.append(Formula(lhs("y"), [i()], data=d_dat))
+
+            init_coef.append(np.log(1))
+            form_n_coef.append(t_formulas[-1].n_coef)
+            _ = build_penalties(t_formulas[-1])
+            Xs.append(build_model_matrix(t_formulas[-1]))
+            ys.append(d_dat["y"].values.reshape(-1, 1))
+            build_matrix.append(True)
+            build_mat_idx.append(len(build_mat_idx))
+            pars += 1
+
+    pi_formulas = []
+
+    for par in range(n_S - 1):
+        # Model of initial state probability
+        pi_formulas.append(Formula(lhs("y"), [i()], data=d_dat))
+
+        init_coef.append(np.log(1))
+        form_n_coef.append(pi_formulas[-1].n_coef)
+        _ = build_penalties(pi_formulas[-1])
+        Xs.append(build_model_matrix(pi_formulas[-1]))
+        ys.append(d_dat["y"].values.reshape(-1, 1))
+        build_matrix.append(True)
+        build_mat_idx.append(len(build_mat_idx))
+        pars += 1
+
+    # Initialize Families
+    fam = HSMMFamily(
+        pars,
+        links,
+        n_S,
+        obs_fams=obs_families,
+        d_fams=d_families,
+        sid=sid,
+        tid=tid,
+        D=D,
+        M=M,
+        starts_with_first=starts_with_first,
+        ends_with_last=False,
+        ends_in_last=False,
+        n_cores=1,
+        build_mat_idx=build_mat_idx,
+    )
+
+    fam2 = HSMMFamily(
+        od_pars,
+        od_links,
+        n_S,
+        obs_fams=obs_families,
+        d_fams=d_families,
+        sid=sid,
+        tid=tid,
+        D=D,
+        M=M,
+        starts_with_first=starts_with_first,
+        ends_with_last=False,
+        ends_in_last=False,
+        T=T,
+        pi=pi,
+        n_cores=1,
+        build_mat_idx=od_build_mat_idx,
+    )
+
+    # Initialize penalties and coef
+
+    # Extra coef for covariances
+    od_form_n_coef.append(extra_coef)
+    form_n_coef.append(extra_coef)
+    od_init_coef.extend(init_Rs)
+    init_coef.extend(init_Rs)
+
+    coef_split_idx = form_n_coef[:-1]
+
+    for coef_i in range(1, len(coef_split_idx)):
+        coef_split_idx[coef_i] += coef_split_idx[coef_i - 1]
+
+    od_coef_split_idx = od_form_n_coef[:-1]
+
+    for coef_i in range(1, len(od_coef_split_idx)):
+        od_coef_split_idx[coef_i] += od_coef_split_idx[coef_i - 1]
+
+    total_coef = np.sum(form_n_coef)
+    od_total_coef = np.sum(od_form_n_coef)
+    init_coef = np.array(init_coef).reshape(-1, 1)
+    od_init_coef = np.array(od_init_coef).reshape(-1, 1)
+
+    def test_grad1(self):
+        # Test grad function of hsmm
+        grad = self.fam.gradient(self.init_coef, self.coef_split_idx, self.ys, self.Xs)
+        pos_llk_warp = lambda x: self.fam.llk(
+            x.reshape(-1, 1), self.coef_split_idx, self.ys, self.Xs
+        )
+        grad2 = scp.optimize.approx_fprime(self.init_coef.flatten(), pos_llk_warp)
+
+        grad_diff = np.abs(np.round(grad - grad2.reshape(-1, 1), decimals=3)).max()
+
+        np.testing.assert_allclose(
+            grad_diff,
+            0.0,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_grad2(self):
+        # Test grad function of fixed hsmm
+        grad = self.fam2.gradient(
+            self.od_init_coef, self.od_coef_split_idx, self.od_ys, self.od_Xs
+        )
+        pos_llk_warp = lambda x: self.fam2.llk(
+            x.reshape(-1, 1), self.od_coef_split_idx, self.od_ys, self.od_Xs
+        )
+        grad2 = scp.optimize.approx_fprime(self.od_init_coef.flatten(), pos_llk_warp)
+
+        grad_diff = np.abs(np.round(grad - grad2.reshape(-1, 1), decimals=3)).max()
+
+        np.testing.assert_allclose(
+            grad_diff,
+            0.0,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
         )
