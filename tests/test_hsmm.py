@@ -1473,7 +1473,7 @@ class Test_UnivariateHMP:
         # Test grad function
         grad_diffs = []
         for fam, init_coef, coef_split_idx, ys, Xs in zip(
-            self.init_coefs, self.coef_split_idxs, self.yss, self.Xss, self.families
+            self.families, self.init_coefs, self.coef_split_idxs, self.yss, self.Xss
         ):
             grad = fam.gradient(init_coef, coef_split_idx, ys, Xs)
 
@@ -1499,7 +1499,7 @@ class Test_UnivariateHMP:
     def test_total_coef(self):
         total_coefs = []
         for fam, init_coef, coef_split_idx, ys, Xs in zip(
-            self.init_coefs, self.coef_split_idxs, self.yss, self.Xss, self.families
+            self.families, self.init_coefs, self.coef_split_idxs, self.yss, self.Xss
         ):
             total_coefs.append(len(init_coef))
 

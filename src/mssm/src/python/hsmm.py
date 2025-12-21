@@ -47,37 +47,41 @@ def _split_matrices(
         If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys``
         contains ``None`` at their indices to save memory.
     :type ys: [np.ndarray or None]
-    :param Xs: A list of sparse model matrices per likelihood parameter.
-    :type Xs: [scp.sparse.csc_array]
+    :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
+        indices for which model matrix should not be formed explicitly.
+    :type Xs: [scp.sparse.csc_array | None]
     :param shared_pars: A list containing indices of emission distribution parameters for which
         at least one (in case ``shared_m is False`` one for each of the ``M`` signals) formula
         has been provided containing terms to be shared between the ``n_S`` states.
     :type shared_pars: list[int]
-    :param shared_m: Bool indicating whether any shared terms are not just shared between states but
+    :param shared_m: Bool indicating whether the shared terms are not just shared between states but
         also between the ``M`` signals.
     :type shared_m: bool
-    :param obs_fams: Distribution of emissions - one per state
-    :type obs_fams: list[list[GAMLSSFamily]] | None
-    :param d_fams: Distribution of state durations - one per state
-    :type d_fams: list[GAMLSSFamily] | None
-    :param sid: Array holding the first sample of each series in the data. Can be used to split the
-        observation vectors and model matrices into time-series specific versions
+    :param obs_fams: Distribution of emissions - one list per state containing the specific families
+        (can be multiple if ``M>1`` or a single class:`MultiGauss`). The state-specific list can
+        also include multiple Nones, in case of a HMP-like model.
+    :type obs_fams: list[list[GAMLSSFamily | GSMMFamily | None]]
+    :param d_fams: Distribution of state durations - one per state. Can also contain None for the
+        'bump states' of a HMP-like model, which have a fixed duration.
+    :type d_fams: list[GAMLSSFamily | None]
+    :param sid: Array holding the index corresponding to the first sample of each series in the
+        data. Needed to split the observation vectors and model matrices into time-series
+        specific versions
     :type sid: np.ndarray
-    :param tid: Often, the model matrices for the models of the duration distribution parameters
-        will have fewer rows than those of the observation models (because covariates only
-        vary with trials). The optional array ``tid`` can then hold indices corresponding to the
-        onset of a row-block of a new trial in the model matrices of the duration models. Can then
-        be used to split the duration model matrices into trial specific versions. If this is set
-        to ``None``, it will be set to ``sid``.
-    :type tid: np.ndarray | None
+    :param tid: Often, the model matrices for the models of the duration distribution, state
+        transition, and initial state distribution parameters will have fewer rows than those of the
+        observation models (because covariates only vary with trials). The optional array ``tid``
+        can then hold indices corresponding to the onset of a row-block of a new trial in the model
+        matrices of the duration models. Then used to split the duration model matrices into trial
+        specific versions.
+    :type tid: np.ndarray
     :param n_S: Number of latent states.
     :type n_S: int
-    :param M: Number of signals recorded if the HSMM is multivariate. All signals are assumed to be
-        independent from one another given covariates and coefficients.
+    :param M: Number of signals recorded if the HSMM is multivariate.
     :type M: int
     :param model_T: Whether to model the transition matrix or not
     :type model_T: bool
-    :param model_pi: Whether to model the initial distribution of states vector or not
+    :param model_pi: Whether to model the initial distribution of states or not.
     :type model_pi: bool
     :param starts_with_first: Whether the first state starts with the first observation or might
         have been going on for a max duration of ``D``.
@@ -85,7 +89,9 @@ def _split_matrices(
     :param Lrhoi: Inverse of transpose of Cholesky of banded covariance matrix of an ar model of the
         residuals for a HMP-like HSMM. Defaults to None - indicating no ar model.
     :type Lrhoi: scp.sparse.csc_array | None, optional
-    :return: A list of series-specific splits of ``ys`` and ``Xs``.
+    :return: A tuple holding lists of series-specific splits of ``ys`` and ``Xs``. Lists might
+        contain Nones, in case a specific model matrix has been requested not to be accumulated
+        explicitly.
     :rtype: tuple[list[np.ndarray|None],list[scp.sparse.csc_array|None]]
     """
 
@@ -251,7 +257,7 @@ def _compute_series_probs(
 ) -> tuple[
     np.ndarray,
     np.ndarray,
-    np.ndarray,
+    list[np.ndarray],
     np.ndarray,
     np.ndarray,
     np.ndarray,
@@ -274,7 +280,7 @@ def _compute_series_probs(
         at least one (in case ``shared_m is False`` one for each of the ``M`` signals) formula
         has been provided containing terms to be shared between the ``n_S`` states.
     :type shared_pars: list[int]
-    :param shared_m: Bool indicating whether any shared terms are not just shared between states but
+    :param shared_m: Bool indicating whether the shared terms are not just shared between states but
         also between the ``M`` signals.
     :type shared_m: bool
     :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
@@ -283,22 +289,28 @@ def _compute_series_probs(
         multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys``
         contains ``None`` at their indices to save memory.
     :type ys: [np.ndarray or None]
-    :param Xs: A list of sparse model matrices per likelihood parameter.
-    :type Xs: [scp.sparse.csc_array]
+    :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
+        indices for which model matrix should not be formed explicitly.
+    :type Xs: [scp.sparse.csc_array | None]
     :param n_S: Number of latent states.
     :type n_S: int
-    :param obs_fams: Distribution of emissions - one per state
-    :type obs_fams: list[list[GAMLSSFamily]] | None
-    :param d_fams: Distribution of state durations - one per state
-    :type d_fams: list[GAMLSSFamily]
-    :param D: Max duration a state can take on (**in samples**)
+    ::param obs_fams: Distribution of emissions - one list per state containing the specific
+        families (can be multiple if ``M>1`` or a single class:`MultiGauss`). The state-specific
+        list can also include multiple Nones, in case of a HMP-like model.
+    :type obs_fams: list[list[GAMLSSFamily | GSMMFamily | None]]
+    :param d_fams: Distribution of state durations - one per state. Can also contain None for the
+        'bump states' of a HMP-like model, which have a fixed duration.
+    :type d_fams: list[GAMLSSFamily | None]
+    :param D: Max duration a state can take on (**in samples**).
     :type D: int
-    :param M: Number of signals recorded if the HSMM is multivariate. All signals are assumed to be
-        independent from one another given covariates and coefficients.
+    :param M: Number of signals recorded if the HSMM is multivariate.
     :type M: int
     :param event_width: Width of the HMP event pattern in samples (or ``None`` if a standard hsmm
         is to be estimated).
     :type event_width: int | None
+    :param event_template: Array holding HMP event pattern (or ``None`` if a standard hsmm
+        is to be estimated).
+    :type event_template: np.ndarray | None
     :param scale: Scale parameter to use for the the observation probabilities under a hmp model
         (can be set to None for regular hsmms).
     :type scale: float | None
@@ -317,12 +329,28 @@ def _compute_series_probs(
     :type build_mat_idx: list[int] | None
     :param is_hmp: If the model is a hmp or not.
     :type is_hmp: bool, optional
+    :param hmp_fam: Distribution to assume for HMP residuals, must be 'Gaussian' or 'Exponential'.
+    :type hmp_fam: str, optional
     :param rho: Weight of an ar model of the residuals for a HMP-like HSMM. Defaults to
         None - indicating no ar model.
     :type rho: float | None, optional
+    :param tvdtpi: Whether the hsmm has time-varying models for the state duration,
+        state transition, and initial state distributions. Defaults to False
+    :type tvdtpi: bool, optional
     :raises ValueError: _description_
-    :return: _description_
-    :rtype: tuple[np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray]
+    :return: Returns ``y_mat`` (a (n_T,M) array holding the observations from all signals),
+        ``mus`` (a (n_T,M,n_S) array holding the state-specific expected value of each observation
+        for each signal and time-point), ``mus_d`` (a list holding the expected values of the state
+        durations (per time-point if ``tvdtpi is True``)), ``jbs`` (array holding probabilities of
+        observations per state and signal), ``cbs`` (array holding cumulative probabilities of
+        observations per state and signal), ``bs`` (array holding probabilities of
+        observations per state), ``ds`` (array holding probabilities of
+        durations per state (and time-point if ``tvdtpi is True``)), ``T`` (array holding
+        state transition matrix (per time-point if ``tvdtpi is True``). Only formed if
+        ``model_T is True``), ``pi`` (array holding initial state probability matrix. Only formed if
+        ``model_pi is True``).
+    :rtype: tuple[np.ndarray,np.ndarray,list[np.ndarray],np.ndarray,np.ndarray,
+        np.ndarray,np.ndarray,np.ndarray,np.ndarray]
     """
     # Compute (log) probs for an individual series
 
@@ -768,9 +796,9 @@ def _sample_series_emissions(
     coef_split_idx: list[int],
     shared_pars: list[int],
     shared_m: bool,
-    Xs: list[scp.sparse.csc_array],
+    Xs: list[scp.sparse.csc_array | None],
     n_S: int,
-    obs_fams: list[list[GAMLSSFamily]] | None,
+    obs_fams: list[list[GAMLSSFamily | GSMMFamily | None]],
     M: int,
     scale: float | None,
     build_mat_idx: list[int] | None,
@@ -778,7 +806,60 @@ def _sample_series_emissions(
     n_samples: int = 1,
     seed: int | None = 0,
     hmp_fam: str = "Exponential",
-):
+) -> np.ndarray:
+    """Samples observation values from a HSMM.
+
+    Internal function.
+
+    :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not be
+        flattened!).
+    :type coef: np.ndarray
+    :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+        sub-sets associated with each paramter of the llk.
+    :type coef_split_idx: list[int]
+    :param shared_pars: A list containing indices of emission distribution parameters for which
+        at least one (in case ``shared_m is False`` one for each of the ``M`` signals) formula
+        has been provided containing terms to be shared between the ``n_S`` states.
+    :type shared_pars: list[int]
+    :param shared_m: Bool indicating whether the shared terms are not just shared between states but
+        also between the ``M`` signals.
+    :type shared_m: bool
+    :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
+        ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the actual
+        observed data is passed along via the first formula (so it is stored in ``ys[0]``). If
+        multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys``
+        contains ``None`` at their indices to save memory.
+    :type ys: [np.ndarray or None]
+    :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
+        indices for which model matrix should not be formed explicitly.
+    :type Xs: [scp.sparse.csc_array]
+    :param n_S: Number of latent states.
+    :type n_S: int
+    ::param obs_fams: Distribution of emissions - one list per state containing the specific
+        families (can be multiple if ``M>1`` or a single class:`MultiGauss`). The state-specific
+        list can also include multiple Nones, in case of a HMP-like model.
+    :type obs_fams: list[list[GAMLSSFamily | GSMMFamily | None]]
+    :param M: Number of signals recorded if the HSMM is multivariate.
+    :type M: int
+    :param scale: Scale parameter to use for the the observation probabilities under a hmp model
+        (can be set to None for regular hsmms).
+    :type scale: float | None
+    :param build_mat_idx: If not all matrices are built explicitly, this has to be a list of indices
+        per parameter modeled, pointing at the index of ``Xs`` holding the matrix that should be
+        used by that parameter.
+    :type build_mat_idx: list[int] | None
+    :param is_hmp: If the model is a hmp or not.
+    :type is_hmp: bool, optional
+    :param n_samples: Number of predicted time-series for which to generate observations, defaults
+        to 1
+    :type n_samples: int, optional
+    :param seed: Seed to use for random observation generation, defaults to 0
+    :type seed: int | None, optional
+    :param hmp_fam: Distribution to assume for HMP residuals, must be 'Gaussian' or 'Exponential'.
+    :type hmp_fam: bool, optional
+    :return: A numpy array of dimension (n_T, n_S, M, n_samples), holding sampled observations.
+    :rtype: np.ndarray
+    """
     # First fix Xs for Nones
     Xfix = [X if X is not None else Xs[build_mat_idx[xi]] for xi, X in enumerate(Xs)]
     Xs = Xfix
@@ -933,17 +1014,22 @@ def _compute_dur_res_series(
 ) -> list[list[float] | float]:
     """Computes residual of a state duration agains the model for the stage duration.
 
+    Internal function.
+
     :param states: Array holding an estimate of the state sequence
     :type states: np.ndarray
     :param n_S: Number of states
     :type n_S: int
     :param mus_d: List holding predcitions for all parameters of each distribution included in
         ``d_fams``.
-    :type mus_d: list[list[np.ndarray]  |  None]
+    :type mus_d: list[list[np.ndarray] | None]
     :param d_fams: List of distributions assumed for the durations of each state
-    :type d_fams: list[GAMLSSFamily  |  None]
+    :type d_fams: list[GAMLSSFamily | None]
     :param starts_with_first: Whether first state is assumed to begin at first time-point.
     :type starts_with_first: bool
+    :param tvdtpi: Whether the hsmm has time-varying models for the state duration,
+        state transition, and initial state distributions. Defaults to False
+    :type tvdtpi: bool, optional
     :return: A list with the residuals of the durations per state. If a state has no duration model,
         then a ``np.nan`` is included at that index.
     :rtype: list[list[float]|np.nan]
@@ -992,56 +1078,100 @@ def _compute_dur_res_series(
 
 
 class HSMMFamily(GSMMFamily):
-    """_summary_
+    """Family to estimate (Hidden semi-Markov Models) HsMM models via the `mssm` toolbox.
 
-    :param pars: Number of parameters of the log-likelihood
+    Instead of treating HsMM parameters as constant, in this implementation parameters can be
+    represented as additive mixed models including smooth functions of experimental covariates and
+    i.i.d random effects.
+
+    Supports models for which the state transition matrix and initial state distribution
+    should be kept fixed. Also supports 'HMP-like' HsMMs as defined by Weindel et al. (2024).
+
+    References:
+     - Yu, S.-Z., & Kobayashi, H. (2006). Practical implementation of an efficient forward-backward\
+        algorithm for an explicit-duration hidden Markov model. IEEE Transactions on Signal\
+        Processing, 54(5), 1947–1951. https://doi.org/10.1109/TSP.2006.872540
+     - Lystig, T. C., & Hughes, J. P. (2002). Exact Computation of the Observed Information Matrix\
+        for Hidden Markov Models. Journal of Computational and Graphical Statistics, 11(3), 678–689.
+     - Weindel, G., van Maanen, L., & Borst, J. P. (2024). Trial-by-trial detection of cognitive\
+        events in neural time-series. Imaging Neuroscience, 2, 1–28.\
+        https://doi.org/10.1162/imag_a_00400
+     - Michelot, T. (2025). hmmTMB: Hidden Markov Models with Flexible Covariate Effects in R.\
+        Journal of Statistical Software, 114, 1–45. https://doi.org/10.18637/jss.v114.i05
+
+    :param pars: Number of parameters of the log-likelihood of the HSMM
     :type pars: int
     :param links: List of link functions to use in the models of different parameters
     :type links: list[Link]
     :param n_S: Number of latent states.
     :type n_S: int
-    :param obs_fams: Distribution of emissions - one per state
-    :type obs_fams: list[list[GAMLSSFamily]]
-    :param d_fams: Distribution of state durations - one per state
-    :type d_fams: list[GAMLSSFamily]
-    :param sid: Array holding the first sample of each series in the data. Can be used to split the
-        observation vectors and model matrices into time-series specific versions
+    :param obs_fams: Distribution of emissions - one list per state containing the specific families
+        (can be multiple if ``M>1`` or a single class:`MultiGauss`). The state-specific list can
+        also include multiple Nones, in case of a HMP-like model.
+    :type obs_fams: list[list[GAMLSSFamily | GSMMFamily | None]]
+    :param d_fams: Distribution of state durations - one per state. Can also contain None for the
+        'bump states' of a HMP-like model, which have a fixed duration.
+    :type d_fams: list[GAMLSSFamily | None]
+    :param sid: Array holding the index corresponding to the first sample of each series in the
+        data. Needed to split the observation vectors and model matrices into time-series
+        specific versions
     :type sid: np.ndarray
-    :param tid: Often, the model matrices for the models of the duration distribution parameters,
-        initial state distribution parameters, and state transition parameters will have fewer rows
-        than those of the observation models (e.g., because covariates only vary with trials). The
-        optional array ``tid`` can then hold indices corresponding to the onset of a row-block of a
-        new trial in the model matrices of these models. Can then be used to split their model
-        matrices into trial specific versions. If this is set to ``None``, it will be set to
+    :param tid: Often, the model matrices for the models of the duration distribution, state
+        transition, and initial state distribution parameters will have fewer rows than those of the
+        observation models (because covariates only vary with trials). The optional array ``tid``
+        can then hold indices corresponding to the onset of a row-block of a new trial in the model
+        matrices of the duration models. Then used to split the duration model matrices into trial
+        specific versions. If this is set to ``None``, it will be set to ``sid`` automatically.
         ``sid``.
     :type tid: np.ndarray | None
     :param D: Max duration a state can take on (**in samples**)
     :type D: int
-    :param M: Number of signals recorded if the HSMM is multivariate. All signals are assumed to be
-        independent from one another given covariates and coefficients.
+    :param M: Number of signals recorded if the HSMM is multivariate.
     :type M: int
     :param starts_with_first: Whether the first state starts with the first observation or might
         have been going on for a max duration of ``D``.
     :type starts_with_first: bool
     :param ends_with_last: Whether the last state ends with the last observation or can continue.
     :type ends_with_last: bool
-    :param ends_in_last: Whether the Markov chain ends in the last state. Not really useful for
-        this class..
+    :param ends_in_last: Whether the Markov chain ends in the last state. Useful to enforce
+        strict left-to-right HsMMs.
     :type ends_in_last: bool
-    :param n_cores: Number of cores to use in the computations, defaults to 1.
-    :type n_cores: int
+    :param n_cores: Number of cores to use to parallelize functions, defaults to 1
+    :type n_cores: int, optional
     :param build_mat_idx: If not all matrices are built explicitly, this has to be a list of indices
         per parameter modeled, pointing at the index of ``Xs`` holding the matrix that should be
         used by that parameter.
     :type build_mat_idx: list[int] | None
     :param shared_pars: A list containing indices of emission distribution parameters for which
         at least one (in case ``shared_m is False`` one for each of the ``M`` signals) formula
-        has been provided containing terms to be shared between the ``n_S`` states. Defaults to
-        ``[]`` meaning no terms are shared.
-    :type shared_pars: list[int], optional
-    :param shared_m: Bool indicating whether any shared terms are not just shared between states but
-        also between the ``M`` signals. Defaults to ``False``
-    :type shared_m: bool, optional
+        has been provided containing terms to be shared between the ``n_S`` states.
+    :type shared_pars: list[int]
+    :param shared_m: Bool indicating whether the shared terms are not just shared between states but
+        also between the ``M`` signals.
+    :type shared_m: bool
+    :param T: Optionally a fixed state transition matrix as a np.array or a list of series-specific
+        fixed state transition matrices, defaults to None indicating that the state transition
+        matrix should be estimated.
+    :type T: list[np.ndarray] | np.ndarray | None, optional
+    :param pi: Optionally a fixed initial state distribution matrix as a np.array or a list of
+        series-specific fixed initial state distribution matrices, defaults to None indicating that
+        the initial state distribution matrix should be estimated.
+    :type pi: list[np.ndarray] | np.ndarray | None, optional
+    :param Lrhoi: Optional Inverse of the transpose of the cholesky of the co-variance (before
+        scaling) matrix of an ar1 model of the residuals of a HMP-like HSMM, defaults to None
+    :type Lrhoi: scp.sparse.csc_array | None, optional
+    :param scale: Scale parameter to use for the the observation probabilities under a hmp model
+        (can be set to None for regular hsmms). Defaults to None
+    :type scale: float | None, optional
+    :param event_template: Array holding HMP event pattern (or ``None`` if a standard hsmm
+        is to be estimated). Defaults to None
+    :type event_template: np.ndarray | None
+    :param hmp_fam: Distribution to assume for HMP residuals, must be 'Gaussian' or 'Exponential'.
+        Defaults to 'Exponential'.
+    :type hmp_fam: str, optional
+    :raises ValueError: if either ``T`` or ``pi`` have a value other than None but not both.
+    :raises ValueError: if ``starts_with_first is False`` and the model is HMP-like (i.e.,
+        ``event_template is not None``).
     """
 
     def __init__(
@@ -1063,7 +1193,7 @@ class HSMMFamily(GSMMFamily):
         shared_pars: list[int] = [],
         shared_m: bool = False,
         T: list[np.ndarray] | np.ndarray | None = None,
-        pi: np.ndarray | None = None,
+        pi: list[np.ndarray] | np.ndarray | None = None,
         Lrhoi: scp.sparse.csc_array | None = None,
         scale: float | None = None,
         event_template: np.ndarray | None = None,
@@ -1127,8 +1257,8 @@ class HSMMFamily(GSMMFamily):
         self,
         coef: np.ndarray,
         coef_split_idx: list[int],
-        ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array],
+        ys: list[np.ndarray | None],
+        Xs: list[scp.sparse.csc_array | None],
         log: bool = True,
         sid: None | np.ndarray = None,
         tid: None | np.ndarray = None,
@@ -1140,15 +1270,16 @@ class HSMMFamily(GSMMFamily):
         :type coef: np.ndarray
         :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
             sub-sets associated with each paramter of the llk.
-        :type coef_split_idx: [int]
+        :type coef_split_idx: list[int]
         :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
             ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the
             actual observed data is passed along via the first formula (so it is stored in
             ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula,
             then ``ys`` contains ``None`` at their indices to save memory.
         :type ys: [np.ndarray or None]
-        :param Xs: A list of sparse model matrices per likelihood parameter.
-        :type Xs: [scp.sparse.csc_array]
+        :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
+            indices for which model matrix should not be formed explicitly.
+        :type Xs: [scp.sparse.csc_array | None]
         :param log: Boolena indicating whether to compute probabilities or log-probabilities.
             Defaults to ``True`` - meaning log-probabilities are computed.
         :type log: bool, optional
@@ -1156,12 +1287,15 @@ class HSMMFamily(GSMMFamily):
             to split the observation vectors and model matrices into time-series specific versions.
             Defaults to None, in which case the array passed to the constructor of ``self`` is used.
         :type sid: np.ndarray | None, optional
-        :param tid: Often, the model matrices for the models of the duration distribution parameters
-            will have fewer rows than those of the observation models (because covariates only
-            vary with trials). The optional array ``tid`` can then hold indices corresponding to the
-            onset of a row-block of a new trial in the model matrices of the duration models.
-            Is then used to split the duration model matrices into trial specific versions.
-            Defaults to None, in which case the array passed to the constructor of ``self`` is used.
+        :param tid: Often, the model matrices for the models of the duration distribution, state
+            transition, and initial state distribution parameters will have fewer rows than those of
+            the observation models (because covariates only vary with trials). The optional array
+            ``tid`` can then hold indices corresponding to the onset of a row-block of a new trial
+            in the model matrices of the duration models. Then used to split the duration model
+            matrices into trial specific versions.
+            Defaults to None, in which case the array passed to the constructor of ``self`` is used
+            (which will again be the value of ``sid`` passed to the constructor if ``tid`` passed to
+            the constructor of ``self`` was None).
         :type tid: np.ndarray | None, optional
         :return: List of tuples - one tuple per time-series. Each tuple holds two arrays, first
             dimension of both is of size ``n_S``, corresponding to the number of latent states.
@@ -1308,12 +1442,12 @@ class HSMMFamily(GSMMFamily):
         self,
         coef: np.ndarray,
         coef_split_idx: list[int],
-        ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array],
+        ys: list[np.ndarray | None],
+        Xs: list[scp.sparse.csc_array | None],
         sid: None | np.ndarray = None,
         tid: None | np.ndarray = None,
     ) -> list[tuple[np.ndarray, np.ndarray]]:
-        """Computes the initial state distribution and state. transition matrix for ``coef`` and
+        """Computes the initial state distribution and state transition matrix for ``coef`` and
         ``Xs``.
 
         :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
@@ -1321,29 +1455,36 @@ class HSMMFamily(GSMMFamily):
         :type coef: np.ndarray
         :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
             sub-sets associated with each paramter of the llk.
-        :type coef_split_idx: [int]
+        :type coef_split_idx: list[int]
         :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
             ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the
             actual observed data is passed along via the first formula (so it is stored in
             ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula,
             then ``ys`` contains ``None`` at their indices to save memory.
         :type ys: [np.ndarray or None]
-        :param Xs: A list of sparse model matrices per likelihood parameter.
-        :type Xs: [scp.sparse.csc_array]
+        :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
+            indices for which model matrix should not be formed explicitly.
+        :type Xs: [scp.sparse.csc_array | None]
         :param sid: Optional Array holding the first sample of each series in the data. Is used
             to split the observation vectors and model matrices into time-series specific versions.
             Defaults to None, in which case the array passed to the constructor of ``self`` is used.
         :type sid: np.ndarray | None, optional
-        :param tid: Often, the model matrices for the models of the duration distribution parameters
-            will have fewer rows than those of the observation models (because covariates only
-            vary with trials). The optional array ``tid`` can then hold indices corresponding to the
-            onset of a row-block of a new trial in the model matrices of the duration models.
-            Is then used to split the duration model matrices into trial specific versions.
-            Defaults to None, in which case the array passed to the constructor of ``self`` is used.
+        :param tid: Often, the model matrices for the models of the duration distribution, state
+            transition, and initial state distribution parameters will have fewer rows than those of
+            the observation models (because covariates only vary with trials). The optional array
+            ``tid`` can then hold indices corresponding to the onset of a row-block of a new trial
+            in the model matrices of the duration models. Then used to split the duration model
+            matrices into trial specific versions.
+            Defaults to None, in which case the array passed to the constructor of ``self`` is used
+            (which will again be the value of ``sid`` passed to the constructor if ``tid`` passed to
+            the constructor of ``self`` was None).
         :type tid: np.ndarray | None, optional
         :return: List of tuples - one tuple per time-series. Each tuple holds two arrays. First
             array is of dimension ``n_S * n_S`` and corresponds to the state transition matrix.
             Second array is of dimension ``n_S`` and corresponds to initial state distribution.
+            Arrays will have an extra dimension corresponding to the number of time-points per
+            series, if ``self.tvdtpi is True`` i.e., if the model has time-varying models of
+            state duration, state transition, and initial state distribution parameters.
         :rtype: list[tuple[np.ndarray,np.ndarray]]
         """
 
@@ -1485,8 +1626,8 @@ class HSMMFamily(GSMMFamily):
         self,
         coef: np.ndarray,
         coef_split_idx: list[int],
-        ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array],
+        ys: list[np.ndarray | None],
+        Xs: list[scp.sparse.csc_array | None],
         sid: None | np.ndarray = None,
         tid: None | np.ndarray = None,
         seed: int | None = 0,
@@ -1500,19 +1641,29 @@ class HSMMFamily(GSMMFamily):
         :type coef: np.ndarray
         :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
             sub-sets associated with each paramter of the llk.
-        :type coef_split_idx: [int]
-        :param Xs: A list of sparse model matrices per likelihood parameter.
-        :type Xs: [scp.sparse.csc_array]
+        :type coef_split_idx: list[int]
+        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
+            ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the
+            actual observed data is passed along via the first formula (so it is stored in
+            ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula,
+            then ``ys`` contains ``None`` at their indices to save memory.
+        :type ys: [np.ndarray or None]
+        :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
+            indices for which model matrix should not be formed explicitly.
+        :type Xs: [scp.sparse.csc_array | None]
         :param sid: Optional Array holding the first sample of each series in the data. Is used
             to split the observation vectors and model matrices into time-series specific versions.
             Defaults to None, in which case the array passed to the constructor of ``self`` is used.
         :type sid: np.ndarray | None, optional
-        :param tid: Often, the model matrices for the models of the duration distribution parameters
-            will have fewer rows than those of the observation models (because covariates only
-            vary with trials). The optional array ``tid`` can then hold indices corresponding to the
-            onset of a row-block of a new trial in the model matrices of the duration models.
-            Is then used to split the duration model matrices into trial specific versions.
-            Defaults to None, in which case the array passed to the constructor of ``self`` is used.
+        :param tid: Often, the model matrices for the models of the duration distribution, state
+            transition, and initial state distribution parameters will have fewer rows than those of
+            the observation models (because covariates only vary with trials). The optional array
+            ``tid`` can then hold indices corresponding to the onset of a row-block of a new trial
+            in the model matrices of the duration models. Then used to split the duration model
+            matrices into trial specific versions.
+            Defaults to None, in which case the array passed to the constructor of ``self`` is used
+            (which will again be the value of ``sid`` passed to the constructor if ``tid`` passed to
+            the constructor of ``self`` was None).
         :type tid: np.ndarray | None, optional
         :param seed: An optional seed to initialize the sampler. If this is set to None, then random
             initialization is performed.
@@ -1823,32 +1974,42 @@ class HSMMFamily(GSMMFamily):
         self,
         coef: np.ndarray,
         coef_split_idx: list[int],
-        ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array],
+        ys: list[np.ndarray | None],
+        Xs: list[scp.sparse.csc_array | None],
         sid: None | np.ndarray = None,
         tid: None | np.ndarray = None,
         n_cores: None | int = None,
     ) -> list[tuple[int, np.ndarray]]:
         """Perform viterbi decoding of state sequence for a :class:`HSMMFamily` model.
 
-        :param coef: _description_
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
         :type coef: np.ndarray
-        :param coef_split_idx: _description_
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each paramter of the llk.
         :type coef_split_idx: list[int]
-        :param ys: _description_
-        :type ys: list[np.ndarray]
-        :param Xs: _description_
-        :type Xs: list[scp.sparse.csc_array]
+        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
+            ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the
+            actual observed data is passed along via the first formula (so it is stored in
+            ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula,
+            then ``ys`` contains ``None`` at their indices to save memory.
+        :type ys: [np.ndarray or None]
+        :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
+            indices for which model matrix should not be formed explicitly.
+        :type Xs: [scp.sparse.csc_array | None]
         :param sid: Optional Array holding the first sample of each series in the data. Is used
             to split the observation vectors and model matrices into time-series specific versions.
             Defaults to None, in which case the array passed to the constructor of ``self`` is used.
         :type sid: np.ndarray | None, optional
-        :param tid: Often, the model matrices for the models of the duration distribution parameters
-            will have fewer rows than those of the observation models (because covariates only
-            vary with trials). The optional array ``tid`` can then hold indices corresponding to the
-            onset of a row-block of a new trial in the model matrices of the duration models.
-            Is then used to split the duration model matrices into trial specific versions.
-            Defaults to None, in which case the array passed to the constructor of ``self`` is used.
+        :param tid: Often, the model matrices for the models of the duration distribution, state
+            transition, and initial state distribution parameters will have fewer rows than those of
+            the observation models (because covariates only vary with trials). The optional array
+            ``tid`` can then hold indices corresponding to the onset of a row-block of a new trial
+            in the model matrices of the duration models. Then used to split the duration model
+            matrices into trial specific versions.
+            Defaults to None, in which case the array passed to the constructor of ``self`` is used
+            (which will again be the value of ``sid`` passed to the constructor if ``tid`` passed to
+            the constructor of ``self`` was None).
         :type tid: np.ndarray | None, optional
         :param n_cores: Optionally, the number of cores to use during decoding. Allows to over-write
             the value passed to the constructor of ``self``. If set to None, the value passed to
@@ -2053,14 +2214,14 @@ class HSMMFamily(GSMMFamily):
         self,
         coef: np.ndarray,
         coef_split_idx: list[int],
-        ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array],
+        ys: list[np.ndarray | None],
+        Xs: list[scp.sparse.csc_array | None],
         n_samples: int,
         seed: int = 0,
         sid: None | np.ndarray = None,
         tid: None | np.ndarray = None,
         n_cores: None | int = None,
-    ) -> float:
+    ) -> list[tuple[int, np.ndarray]]:
         """Samples the posterior of state sequences given parameter estimates and data.
 
         :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
@@ -2068,37 +2229,44 @@ class HSMMFamily(GSMMFamily):
         :type coef: np.ndarray
         :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
             sub-sets associated with each paramter of the llk.
-        :type coef_split_idx: [int]
+        :type coef_split_idx: list[int]
         :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
             ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the
             actual observed data is passed along via the first formula (so it is stored in
             ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula,
             then ``ys`` contains ``None`` at their indices to save memory.
         :type ys: [np.ndarray or None]
-        :param Xs: A list of sparse model matrices per likelihood parameter.
-        :type Xs: [scp.sparse.csc_array]
-        :param n_samples: Number of state sequences to sample.
+        :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
+            indices for which model matrix should not be formed explicitly.
+        :type Xs: [scp.sparse.csc_array | None]
+        :param n_samples: Number of state and observation sequences to generate (per series).
         :type n_samples: int
-        :param seed: An optional seed to initialize the sampler. **Note**: A value < 0 means random
-            initialization is used. Thus set to >= 0 for reproducable results. Defaults to 0
+        :param seed: An optional seed to initialize the sampler. If this is set to None, then random
+            initialization is performed.
         :type seed: int, optional
         :param sid: Optional Array holding the first sample of each series in the data. Is used
             to split the observation vectors and model matrices into time-series specific versions.
             Defaults to None, in which case the array passed to the constructor of ``self`` is used.
         :type sid: np.ndarray | None, optional
-        :param tid: Often, the model matrices for the models of the duration distribution parameters
-            will have fewer rows than those of the observation models (because covariates only
-            vary with trials). The optional array ``tid`` can then hold indices corresponding to the
-            onset of a row-block of a new trial in the model matrices of the duration models.
-            Is then used to split the duration model matrices into trial specific versions.
-            Defaults to None, in which case the array passed to the constructor of ``self`` is used.
+        :param tid: Often, the model matrices for the models of the duration distribution, state
+            transition, and initial state distribution parameters will have fewer rows than those of
+            the observation models (because covariates only vary with trials). The optional array
+            ``tid`` can then hold indices corresponding to the onset of a row-block of a new trial
+            in the model matrices of the duration models. Then used to split the duration model
+            matrices into trial specific versions.
+            Defaults to None, in which case the array passed to the constructor of ``self`` is used
+            (which will again be the value of ``sid`` passed to the constructor if ``tid`` passed to
+            the constructor of ``self`` was None).
         :type tid: np.ndarray | None, optional
         :param n_cores: Optionally, the number of cores to use during sampling. Allows to over-write
             the value passed to the constructor of ``self``. If set to None, the value passed to
             the constructor is used. Defaults to None
         :type n_cores: int| None, optional
-        :return: The log-likelihood evaluated at ``coef``.
-        :rtype: float
+        :return: A list with a tuple per time-series. First element of tuple is excess duration of
+            final state (a np.array holding ``n_samples`` excess durations), second is a np.array
+            with the sampled state sequences. First dimension matches length of the time-series.
+            Second corresponds to ``n_samples``.
+        :rtype: list[tuple[int,np.ndarray]]
         """
 
         def sample_posterior_series(
@@ -2290,10 +2458,10 @@ class HSMMFamily(GSMMFamily):
 
     def get_resid(
         self,
-        coef,
-        coef_split_idx,
-        ys,
-        Xs,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray | None],
+        Xs: list[scp.sparse.csc_array | None],
         resid_type: str = "forward",
         transform_to_normal: bool = True,
         n_samples: int = 1000,
@@ -2319,15 +2487,16 @@ class HSMMFamily(GSMMFamily):
         :type coef: np.ndarray
         :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
             sub-sets associated with each paramter of the llk.
-        :type coef_split_idx: [int]
+        :type coef_split_idx: list[int]
         :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
             ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the
             actual observed data is passed along via the first formula (so it is stored in
             ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula,
             then ``ys`` contains ``None`` at their indices to save memory.
         :type ys: [np.ndarray or None]
-        :param Xs: A list of sparse model matrices per likelihood parameter.
-        :type Xs: [scp.sparse.csc_array]
+        :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
+            indices for which model matrix should not be formed explicitly.
+        :type Xs: [scp.sparse.csc_array | None]
         :param resid_type: The type of residual to compute, supported are "forward".
         :type resid_type: str, optional
         :param transform_to_normal: The pseudo-residuals are uniformly distributed and can thus be
@@ -2344,14 +2513,22 @@ class HSMMFamily(GSMMFamily):
             to split the observation vectors and model matrices into time-series specific versions.
             Defaults to None, in which case the array passed to the constructor of ``self`` is used.
         :type sid: np.ndarray | None, optional
-        :param tid: Often, the model matrices for the models of the duration distribution parameters
-            will have fewer rows than those of the observation models (because covariates only
-            vary with trials). The optional array ``tid`` can then hold indices corresponding to the
-            onset of a row-block of a new trial in the model matrices of the duration models.
-            Is then used to split the duration model matrices into trial specific versions.
-            Defaults to None, in which case the array passed to the constructor of ``self`` is used.
+        :param tid: Often, the model matrices for the models of the duration distribution, state
+            transition, and initial state distribution parameters will have fewer rows than those of
+            the observation models (because covariates only vary with trials). The optional array
+            ``tid`` can then hold indices corresponding to the onset of a row-block of a new trial
+            in the model matrices of the duration models. Then used to split the duration model
+            matrices into trial specific versions.
+            Defaults to None, in which case the array passed to the constructor of ``self`` is used
+            (which will again be the value of ``sid`` passed to the constructor if ``tid`` passed to
+            the constructor of ``self`` was None).
         :type tid: np.ndarray | None, optional
-        :return: The residual vector of shape (-1,1)
+        :return: The residual vector as a np.array. For ``resid_type in ["forward", "predictive"]``
+            the shape of the vector will be ``(N,M)`` where ``N`` is the total number of
+            observations (from all series) and ``M`` is the number of signals. For
+            ``resid_type == "viterbi_dur"`` the shape of the vector will be ``(N_s,1)`` where
+            ``N_s`` is the number of time-series. Finally for "posterior_dur" the shape of the
+            vector will be ``(N_s,n_samples)``.
         :rtype: np.ndarray
         """
 
@@ -2645,37 +2822,41 @@ class HSMMFamily(GSMMFamily):
         self,
         coef: np.ndarray,
         coef_split_idx: list[int],
-        ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array],
+        ys: list[np.ndarray | None],
+        Xs: list[scp.sparse.csc_array | None],
         sid: None | np.ndarray = None,
         tid: None | np.ndarray = None,
     ) -> float:
-        """Log-likelihood of model.
+        """Computes Log-likelihood of model.
 
         :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
             be flattened!).
         :type coef: np.ndarray
         :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
             sub-sets associated with each paramter of the llk.
-        :type coef_split_idx: [int]
+        :type coef_split_idx: list[int]
         :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
             ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the
             actual observed data is passed along via the first formula (so it is stored in
             ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula,
             then ``ys`` contains ``None`` at their indices to save memory.
         :type ys: [np.ndarray or None]
-        :param Xs: A list of sparse model matrices per likelihood parameter.
-        :type Xs: [scp.sparse.csc_array]
+        :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
+            indices for which model matrix should not be formed explicitly.
+        :type Xs: [scp.sparse.csc_array | None]
         :param sid: Optional Array holding the first sample of each series in the data. Is used
             to split the observation vectors and model matrices into time-series specific versions.
             Defaults to None, in which case the array passed to the constructor of ``self`` is used.
         :type sid: np.ndarray | None, optional
-        :param tid: Often, the model matrices for the models of the duration distribution parameters
-            will have fewer rows than those of the observation models (because covariates only
-            vary with trials). The optional array ``tid`` can then hold indices corresponding to the
-            onset of a row-block of a new trial in the model matrices of the duration models.
-            Is then used to split the duration model matrices into trial specific versions.
-            Defaults to None, in which case the array passed to the constructor of ``self`` is used.
+        :param tid: Often, the model matrices for the models of the duration distribution, state
+            transition, and initial state distribution parameters will have fewer rows than those of
+            the observation models (because covariates only vary with trials). The optional array
+            ``tid`` can then hold indices corresponding to the onset of a row-block of a new trial
+            in the model matrices of the duration models. Then used to split the duration model
+            matrices into trial specific versions.
+            Defaults to None, in which case the array passed to the constructor of ``self`` is used
+            (which will again be the value of ``sid`` passed to the constructor if ``tid`` passed to
+            the constructor of ``self`` was None).
         :type tid: np.ndarray | None, optional
         :return: The log-likelihood evaluated at ``coef``.
         :rtype: float
@@ -2896,25 +3077,29 @@ class HSMMFamily(GSMMFamily):
         :type coef: np.ndarray
         :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
             sub-sets associated with each paramter of the llk.
-        :type coef_split_idx: [int]
+        :type coef_split_idx: list[int]
         :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
             ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the
             actual observed data is passed along via the first formula (so it is stored in
             ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula,
             then ``ys`` contains ``None`` at their indices to save memory.
         :type ys: [np.ndarray or None]
-        :param Xs: A list of sparse model matrices per likelihood parameter.
-        :type Xs: [scp.sparse.csc_array]
+        :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
+            indices for which model matrix should not be formed explicitly.
+        :type Xs: [scp.sparse.csc_array | None]
         :param sid: Optional Array holding the first sample of each series in the data. Is used
             to split the observation vectors and model matrices into time-series specific versions.
             Defaults to None, in which case the array passed to the constructor of ``self`` is used.
         :type sid: np.ndarray | None, optional
-        :param tid: Often, the model matrices for the models of the duration distribution parameters
-            will have fewer rows than those of the observation models (because covariates only
-            vary with trials). The optional array ``tid`` can then hold indices corresponding to the
-            onset of a row-block of a new trial in the model matrices of the duration models.
-            Is then used to split the duration model matrices into trial specific versions.
-            Defaults to None, in which case the array passed to the constructor of ``self`` is used.
+        :param tid: Often, the model matrices for the models of the duration distribution, state
+            transition, and initial state distribution parameters will have fewer rows than those of
+            the observation models (because covariates only vary with trials). The optional array
+            ``tid`` can then hold indices corresponding to the onset of a row-block of a new trial
+            in the model matrices of the duration models. Then used to split the duration model
+            matrices into trial specific versions.
+            Defaults to None, in which case the array passed to the constructor of ``self`` is used
+            (which will again be the value of ``sid`` passed to the constructor if ``tid`` passed to
+            the constructor of ``self`` was None).
         :type tid: np.ndarray | None, optional
         :return: Gradient as array of shape (-1,1)
         :rtype: np.ndarray
