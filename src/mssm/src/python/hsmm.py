@@ -1632,6 +1632,7 @@ class HSMMFamily(GSMMFamily):
         tid: None | np.ndarray = None,
         seed: int | None = 0,
         n_samples: int = 1,
+        scale: float | None = None,
     ) -> list[np.ndarray, np.ndarray]:
         """Predicts ``n_samples`` state and observation sequences given model matrices ``Xs`` and
         coefficients ``coef``.
@@ -1671,6 +1672,10 @@ class HSMMFamily(GSMMFamily):
         :param n_samples: Number of state and observation sequences to generate (per series).
             Defaults to 1.
         :type n_samples: int, optional
+        :param scale: Scale parameter to use for the the observation probabilities under a hmp model
+            (can be set to None for regular hsmms). Defaults to None in which case the value passed
+            to the constructor of ``self`` is used.
+        :type scale: float | None, optional
         :return: A list holding two numpy arrays per series implied by ``sid``. First numpy array is
             of dimension ``(nT, M, n_samples)``, where ``nT`` is the number of time-points implied
             by the number of rows of the ``Xs`` corresponding to that series. ``M`` is the number of
@@ -1882,7 +1887,8 @@ class HSMMFamily(GSMMFamily):
         T = self.llkargs[14]
         pi = self.llkargs[15]
         Lrhoi = self.llkargs[16]
-        scale = self.llkargs[17]
+        if scale is None:
+            scale = self.llkargs[17]
         event_template = self.llkargs[18]
         hmp_fam = self.llkargs[19]
         n_series = len(sid)
