@@ -8616,12 +8616,41 @@ def solve_generalSmooth_sparse(
 
     LV_linop = None
     if method == "qEFS":
+
+        sample_hessian = LV.sample_hessian
+
+        # For CIs it's best if final hessian approximation is taken at final
+        # coefficient estimate. So sample below for checks 1 & 3
+        if control_lambda in [1, 3] and outer > 0:
+
+            yks, sks, rhos, _, updates = sample_ys_qefs(
+                family,
+                ys,
+                Xs,
+                coef,
+                coef_split_idx,
+                S_emb,
+                qEFSH,
+                LV.bfgs_options["maxcor"],
+                sample_hessian_method,
+                outer,
+                compute_omega(
+                    LV.yk, LV.sk, method="mean" if sample_hessian else "NoWr"
+                ),
+                sample_hessian_kwargs,
+            )
+
+            if updates > 0:
+                LV.sk = sks
+                LV.yk = yks
+                LV.rho = rhos
+                sample_hessian = True
+
         LV_linop = LV
+
         # Optionally form last V + Chol explicitly during last iteration
         # when working with qEFS update
         if form_VH:
-
-            sample_hessian = LV.sample_hessian
 
             if len(LV.yk) > 0:
                 omega = compute_omega(
