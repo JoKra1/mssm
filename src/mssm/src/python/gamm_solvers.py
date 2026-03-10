@@ -7193,22 +7193,6 @@ def update_coef_gen_smooth(
         # evaluated
         yks, sks = opt.hess_inv.yk, opt.hess_inv.sk
 
-        # Pad with previous update vectors - if available.
-        if sks.shape[0] < maxcor and opt_raw.init:
-
-            sks = copy.deepcopy(opt_raw.sk)
-            yks = copy.deepcopy(opt_raw.yk)
-
-            for k in range(opt.hess_inv.yk.shape[0]):
-
-                sks = np.append(sks, opt.hess_inv.sk[[k]], axis=0)
-                yks = np.append(yks, opt.hess_inv.yk[[k]], axis=0)
-
-                # Discard oldest update vector
-                if sks.shape[0] > maxcor:
-                    sks = np.delete(sks, 0, axis=0)
-                    yks = np.delete(yks, 0, axis=0)
-
         # Dual quasi-Newton approach described in current version of preprint is not needed. We
         # can use a single direct (structured) quasi update, as shown below:
 
@@ -7245,6 +7229,24 @@ def update_coef_gen_smooth(
 
         # Correct for dual secant equation.
         yks -= (S_emb @ sks.T).T
+
+        # Pad with previous update vectors - if available.
+        if sks.shape[0] < maxcor and opt_raw.init and sample_hessian is False:
+
+            yks2 = yks
+            sks2 = sks
+            sks = copy.deepcopy(opt_raw.sk)
+            yks = copy.deepcopy(opt_raw.yk)
+
+            for k in range(yks2.shape[0]):
+
+                sks = np.append(sks, sks2[[k]], axis=0)
+                yks = np.append(yks, yks2[[k]], axis=0)
+
+                # Discard oldest update vector
+                if sks.shape[0] > maxcor:
+                    sks = np.delete(sks, 0, axis=0)
+                    yks = np.delete(yks, 0, axis=0)
 
         # Alternatively sample the Hessian approximation
         if sample_hessian:
