@@ -7959,6 +7959,7 @@ def correct_lambda_step_gen_smooth(
                 n_c=n_c,
             )
 
+            __old_opt_rp = None
             if method == "qEFS" and outer > 0 and len(__old_opt.sk) > 0:
                 # sk and yk of previous optimizer are in state before re-param and will
                 # have to be transformed here

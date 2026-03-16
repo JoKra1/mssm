@@ -89,10 +89,18 @@ default_gsmm_test_kwargs = {
     "build_mat": None,
     "should_keep_drop": True,
     "gamma": 1,
+    "bfgs_options": None,
     "qEFSH": "SR1",
     "max_restarts": 0,
     "prefit_grad": False,
     "repara": False,
+    "global_opt_qefs": False,
+    "sample_hessian": False,
+    "sample_hessian_method": 0,
+    "sample_hessian_options": {},
+    "structured_qefs": True,
+    "structured_qefs_budget": 100,
+    "sqEFS_options": {"dampen_HBB": 0.1, "dampen_HBb": 1},
 }
 
 

@@ -1,6 +1,5 @@
 import numpy as np
 import scipy as scp
-import copy
 from collections.abc import Callable
 from .src.python.formula import (  # noqa: F401
     Formula,
@@ -625,7 +624,7 @@ class GSMM:
         callback: Callable | None = None,
         bfgs_options: dict | None = None,
         global_opt_qefs: bool = False,
-        sample_hessian: bool = False,
+        sample_hessian: bool = True,
         sample_hessian_method: int = 0,
         sample_hessian_options: dict = {},
         structured_qefs: bool = True,
@@ -783,7 +782,7 @@ class GSMM:
             parameters. Defaults to False, which means standard quasi-Newton is used.
         :type global_opt_qefs: bool, optional
         :param sample_hessian: Whether or not to sample the quasi-Newton approximation of the
-            negative Hessians of the penalized log-likelihood and log-likelihood. Defaults to False
+            negative Hessians of the penalized log-likelihood and log-likelihood. Defaults to True
         :type sample_hessian: bool, optional
         :param sample_hessian_method: Method to use for hessian sampling step. See
             :func:`mssm.src.python.gamm_solvers.sample_ys_qefs` docstring for details. Defaults to 0
@@ -823,14 +822,6 @@ class GSMM:
         """
 
         # Initialize remaining arguments to defaults
-        if bfgs_options is None:
-            bfgs_options = {
-                "gtol": 0,
-                "ftol": conv_tol,
-                "maxcor": 30,
-                "maxls": 20,
-                "maxfun": 500,
-            }
 
         if control_lambda is None:
             control_lambda = 2 if method != "qEFS" else 1
@@ -973,7 +964,7 @@ class GSMM:
                 coef_split_idx[coef_i] += coef_split_idx[coef_i - 1]
 
         fcols = None
-        if structured_qefs:
+        if method == "qEFS" and structured_qefs:
 
             if isinstance(structured_qefs_budget, list):
                 # User provided columns of hessian to be approximated via fd
@@ -998,14 +989,26 @@ class GSMM:
                     start_idx += form.n_coef
 
                 np_gen = np.random.default_rng(seed)
-                if len(fcols) >= len(coef) and len(fcols) < structured_qefs_budget:
+                if len(fcols) == len(coef) and len(fcols) <= structured_qefs_budget:
                     fcols = np_gen.choice(fcols, size=len(coef) - 1, replace=False)
 
-                if len(fcols) >= structured_qefs_budget:
-                    fcols = np.sort(fcols, size=structured_qefs_budget, replace=False)
+                elif len(fcols) > structured_qefs_budget:
+                    fcols = np_gen.choice(
+                        fcols, size=structured_qefs_budget, replace=False
+                    )
 
             # Make sure fcols are in order and unique
             fcols = np.unique(fcols)
+
+        # Init BFGS options last since we need some idea of problem dimension.
+        if bfgs_options is None:
+            bfgs_options = {
+                "gtol": 0,
+                "ftol": conv_tol,
+                "maxcor": max(int(0.25 * len(coef)), 30),
+                "maxls": 100,
+                "maxfun": 5000,
+            }
 
         # Now fit model
         coef, H, LV, LV_linop, total_edf, term_edfs, penalty, smooth_pen, fit_info = (

@@ -679,7 +679,7 @@ def print_smooth_terms(
             term_edf = None
         else:
             term_edf = []
-            prev_start_idx = 0
+            prev_start_idx = -1
             prev_edf_idx = 0
             # edf are best computed on term-pecific penalties
             penalties = split_shared_penalties(model.overall_penalties)
@@ -873,7 +873,7 @@ def compute_bias_corrected_edf(model, overwrite: bool = False) -> None:
 
         F_diag = F.diagonal()
 
-        prev_start_idx = 0
+        prev_start_idx = -1
 
         # edf are best computed on term-pecific penalties
         penalties = split_shared_penalties(model.overall_penalties)
@@ -1013,7 +1013,7 @@ def approx_smooth_p_values(
         term_edf = []
         rs_df = None
 
-        prev_start_idx = 0
+        prev_start_idx = -1
         prev_edf_idx = 0
 
         # edf are best computed on term-pecific penalties

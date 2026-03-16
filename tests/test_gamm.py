@@ -3,6 +3,7 @@ from mssm.models import *
 from mssm.src.python.compare import compare_CDL
 import numpy as np
 import os
+import copy
 from mssmViz.sim import *
 from mssm.src.python.repara import reparam
 from mssm.src.python.gamm_solvers import (

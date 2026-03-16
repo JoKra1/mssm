@@ -600,7 +600,7 @@ def computeSH(
         \\mathbf{H}_{\\bolsymbol{\\beta}\\mathbf{b}}
 
     Third, note that (for quadratic negative log-likelihood or Taylor approximation to -llk) we can
-    define a structured secant equation for :math:`\mathbf{H}_{\\mathbf{b}\\mathbf{b}}` using the
+    define a structured secant equation for :math:`\\mathbf{H}_{\\mathbf{b}\\mathbf{b}}` using the
     Schur complement:
 
     .. math::

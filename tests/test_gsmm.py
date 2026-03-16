@@ -4,6 +4,7 @@ from mssm.models import *
 from mssm.src.python.utils import correct_VB, estimateVp
 import numpy as np
 import os
+import copy
 import io
 from contextlib import redirect_stdout
 from mssmViz.sim import *
@@ -48,8 +49,8 @@ class Test_GAUMLSSGEN_hard:
     gsmm_fam = GAMLSSGSMMFamily(2, GAUMLSS(links))
     model = GSMM(formulas=formulas, family=gsmm_fam)
 
-    # First fit with SR1
-    bfgs_opt = {"gtol": 1e-9, "ftol": 1e-9, "maxcor": 30, "maxls": 200, "maxfun": 1e7}
+    # fit with BFGS
+    bfgs_opt = {"gtol": 1e-7, "ftol": 1e-7, "maxcor": 30, "maxls": 200, "maxfun": 1e7}
 
     test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
     test_kwargs["method"] = "qEFS"
@@ -60,27 +61,18 @@ class Test_GAUMLSSGEN_hard:
     test_kwargs["min_inner"] = 500
     test_kwargs["seed"] = 0
     test_kwargs["max_restarts"] = 5
-    test_kwargs["overwrite_coef"] = False
-    test_kwargs["qEFS_init_converge"] = False
     test_kwargs["prefit_grad"] = True
+    test_kwargs["sample_hessian"] = False
+    test_kwargs["structured_qefs"] = False
+    test_kwargs["qEFSH"] = "BFGS"
     test_kwargs["bfgs_options"] = bfgs_opt
 
     model.fit(**test_kwargs)
 
-    model2 = copy.deepcopy(model)
-    test_kwargs["qEFSH"] = "BFGS"
-    test_kwargs["max_restarts"] = 0
-    test_kwargs["overwrite_coef"] = True
-    test_kwargs["qEFS_init_converge"] = True
-    test_kwargs["prefit_grad"] = False
-
-    # Now fit with BFGS
-    model2.fit(**test_kwargs)
-
     def test_GAMedf(self):
         np.testing.assert_allclose(
             self.model.edf,
-            18.896252964963804,
+            18.377187361889852,
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.1),
         )
@@ -91,44 +83,44 @@ class Test_GAUMLSSGEN_hard:
             coef,
             np.array(
                 [
-                    [7.64836306],
-                    [-0.87209361],
-                    [-0.86088579],
-                    [0.05454013],
-                    [1.19457071],
-                    [1.66342418],
-                    [0.44674527],
-                    [-0.55598831],
-                    [-0.7649007],
-                    [-0.76914727],
-                    [-1.80788343],
-                    [-1.07244107],
-                    [-0.43843626],
-                    [0.33210141],
-                    [1.0093136],
-                    [1.97457848],
-                    [3.16087618],
-                    [4.11534827],
-                    [5.25931413],
-                    [-9.1565896],
-                    [4.37593999],
-                    [5.2413477],
-                    [-2.44462775],
-                    [-0.38313486],
-                    [-1.62869706],
-                    [-4.09748975],
-                    [-4.28338386],
-                    [-1.28464908],
-                    [-0.0503405],
-                    [-0.01083477],
-                    [0.01315417],
-                    [0.03060123],
-                    [0.0485314],
-                    [0.068179],
-                    [0.08987266],
-                    [0.09976148],
-                    [0.10480657],
-                    [0.66646453],
+                    [7.64905069],
+                    [-0.86673491],
+                    [-0.90094528],
+                    [0.03276751],
+                    [1.15914006],
+                    [1.65315849],
+                    [0.38976786],
+                    [-0.62349091],
+                    [-0.7531447],
+                    [-0.62543635],
+                    [-1.77827109],
+                    [-1.16369955],
+                    [-0.53206949],
+                    [0.30195526],
+                    [0.94751062],
+                    [1.86610313],
+                    [3.08262143],
+                    [4.13731307],
+                    [5.35515618],
+                    [-7.9746717],
+                    [5.31754213],
+                    [6.43841665],
+                    [-1.39549816],
+                    [0.72747751],
+                    [-0.56335123],
+                    [-2.93264959],
+                    [-3.69271431],
+                    [-1.03991244],
+                    [-0.04562291],
+                    [-0.01165826],
+                    [0.00888674],
+                    [0.02409037],
+                    [0.04134725],
+                    [0.06172081],
+                    [0.08447056],
+                    [0.09714901],
+                    [0.10562989],
+                    [0.66701223],
                 ]
             ),
             atol=min(max_atol, 0.3),
@@ -141,10 +133,10 @@ class Test_GAUMLSSGEN_hard:
             lam,
             np.array(
                 [
-                    0.6868184823454146,
-                    5.8569502212090185,
-                    0.007337957307603747,
-                    10000000.0,
+                    0.5660081066190392,
+                    3.6344843285366273,
+                    0.009036189964515981,
+                    2111.2780420530066,
                 ]
             ),
             atol=min(max_atol, 0),
@@ -154,13 +146,13 @@ class Test_GAUMLSSGEN_hard:
     def test_GAMreml(self):
         reml = self.model.get_reml()
         np.testing.assert_allclose(
-            reml, -1079.4366138363412, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            reml, -1073.8484425587437, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
         np.testing.assert_allclose(
-            llk, -1042.6973687832408, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            llk, -1043.0223032680815, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_edf1(self):
@@ -170,10 +162,10 @@ class Test_GAUMLSSGEN_hard:
             edf1,
             np.array(
                 [
-                    5.399026540772489,
-                    3.659017054669631,
-                    8.802505233620405,
-                    1.0000216069830907,
+                    5.31951572924431,
+                    3.6329012604530178,
+                    8.634074326598565,
+                    1.0297773848735796,
                 ]
             ),
             atol=min(max_atol, 0),
@@ -187,7 +179,7 @@ class Test_GAUMLSSGEN_hard:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.5994116247228459]),
+            np.array([0.0047744792490702626, 0.0, 0.0, 0.8676565723545753]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.5),
         )
@@ -201,148 +193,14 @@ class Test_GAUMLSSGEN_hard:
             Trs,
             np.array(
                 [
-                    86.49349942965613,
-                    366.79732394274174,
-                    1048.202128860003,
-                    0.27589981936080243,
+                    17.544251844815605,
+                    97.98996254745872,
+                    346.09962445913857,
+                    0.04502732327983149,
                 ]
             ),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 1.5),
-        )
-
-    def test_GAMedf2(self):
-        np.testing.assert_allclose(
-            self.model2.edf,
-            19.536929473030735,
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.1),
-        )
-
-    def test_GAMcoef2(self):
-        coef = self.model2.coef
-        np.testing.assert_allclose(
-            coef,
-            np.array(
-                [
-                    [7.64893921],
-                    [-0.87004847],
-                    [-0.80850119],
-                    [0.08906567],
-                    [1.22717019],
-                    [1.68020421],
-                    [0.49202176],
-                    [-0.50409773],
-                    [-0.75139568],
-                    [-0.81235929],
-                    [-1.80938496],
-                    [-1.08058638],
-                    [-0.44515082],
-                    [0.33514329],
-                    [1.01127659],
-                    [1.97119341],
-                    [3.15687874],
-                    [4.11579657],
-                    [5.26571976],
-                    [-8.63573204],
-                    [4.75235684],
-                    [5.74307212],
-                    [-1.99926978],
-                    [0.06228897],
-                    [-1.1684552],
-                    [-3.64201969],
-                    [-3.9436969],
-                    [-2.00239889],
-                    [-0.0489203],
-                    [-0.0105291],
-                    [0.01278307],
-                    [0.02973791],
-                    [0.04716222],
-                    [0.06625554],
-                    [0.08733718],
-                    [0.096947],
-                    [0.10184976],
-                    [0.66740193],
-                ]
-            ),
-            atol=min(max_atol, 0.3),
-            rtol=min(max_rtol, 0.5),
-        )
-
-    def test_GAMlam2(self):
-        lam = np.array([p.lam for p in self.model2.overall_penalties])
-        np.testing.assert_allclose(
-            lam,
-            np.array(
-                [
-                    0.7708839655498707,
-                    5.61588387121297,
-                    0.008613240587454466,
-                    9767309.593280358,
-                ]
-            ),
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 2.5),
-        )
-
-    def test_GAMreml2(self):
-        reml = self.model2.get_reml()
-        np.testing.assert_allclose(
-            reml, -1078.741276351816, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
-        )
-
-    def test_GAMllk2(self):
-        llk = self.model2.get_llk(False)
-        np.testing.assert_allclose(
-            llk, -1043.167776719815, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
-        )
-
-    def test_edf12(self):
-        compute_bias_corrected_edf(self.model2, overwrite=False)
-        edf1 = np.array([edf1 for edf1 in self.model2.term_edf1])
-        np.testing.assert_allclose(
-            edf1,
-            np.array(
-                [
-                    5.9084114066461435,
-                    3.728337825835271,
-                    8.972683968100183,
-                    1.0000090307406617,
-                ]
-            ),
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 1.5),
-        )
-
-    def test_ps2(self):
-        ps = []
-        for par in range(len(self.model2.formulas)):
-            pps, _ = approx_smooth_p_values(self.model2, par=par)
-            ps.extend(pps)
-        np.testing.assert_allclose(
-            ps,
-            np.array([0.0, 0.0, 0.0, 0.7613761096972267]),
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.5),
-        )
-
-    def test_TRs2(self):
-        Trs = []
-        for par in range(len(self.model2.formulas)):
-            _, pTrs = approx_smooth_p_values(self.model2, par=par)
-            Trs.extend(pTrs)
-        np.testing.assert_allclose(
-            Trs,
-            np.array(
-                [
-                    48.91430356211087,
-                    202.21013971097582,
-                    456.2810380956973,
-                    0.09222366330151158,
-                ]
-            ),
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 2),
         )
 
 
@@ -367,7 +225,7 @@ class Test_PropHaz_hard:
 
     # Fit with Newton
     gsmm_newton_fam = PropHaz(ut, r)
-    gsmm_newton = GSMM([copy.deepcopy(sim_formula_m)], gsmm_newton_fam)
+    model = GSMM([copy.deepcopy(sim_formula_m)], gsmm_newton_fam)
 
     test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
     test_kwargs["method"] = "QR/Chol"
@@ -377,125 +235,147 @@ class Test_PropHaz_hard:
     test_kwargs["max_inner"] = 500
     test_kwargs["min_inner"] = 500
     test_kwargs["seed"] = 0
+    test_kwargs["repara"] = False
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        gsmm_newton.fit(**test_kwargs)
+        model.fit(**test_kwargs)
 
-    resid = gsmm_newton.get_resid(resid_type="Martingale")
-
-    gsmm_qefs_fam = PropHaz(ut, r)
-    gsmm_qefs = GSMM([copy.deepcopy(sim_formula_m)], gsmm_qefs_fam)
-
-    # Fit with qEFS update without initialization
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        bfgs_opt = {
-            "gtol": 1e-7,
-            "ftol": 1e-7,
-            "maxcor": 30,
-            "maxls": 20,
-            "maxfun": 100,
-        }
-
-        test_kwargs["method"] = "qEFS"
-        test_kwargs["extend_lambda"] = False
-        test_kwargs["control_lambda"] = 1
-        test_kwargs["max_outer"] = 200
-        test_kwargs["max_inner"] = 500
-        test_kwargs["min_inner"] = 500
-        test_kwargs["seed"] = 0
-        test_kwargs["max_restarts"] = 0
-        test_kwargs["overwrite_coef"] = False
-        test_kwargs["qEFS_init_converge"] = False
-        test_kwargs["prefit_grad"] = True
-        test_kwargs["bfgs_options"] = bfgs_opt
-
-        gsmm_qefs.fit(**test_kwargs)
+    resid = model.get_resid(resid_type="Martingale")
 
     def resid_test(self):
         assert self.resid.shape == (500, 1)
 
-    def test_GAMcoef(self):
-
+    def test_GAMedf(self):
         np.testing.assert_allclose(
-            (self.gsmm_newton.coef - self.gsmm_qefs.coef).flatten(),
+            self.model.edf,
+            17.70139744543187,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_GAMcoef(self):
+        coef = self.model.coef
+        np.testing.assert_allclose(
+            coef,
             np.array(
                 [
-                    -5.44700213e-04,
-                    -5.57025326e-04,
-                    1.64013870e-04,
-                    8.67670135e-04,
-                    4.92493649e-04,
-                    7.65198038e-04,
-                    5.14628775e-04,
-                    -9.50230485e-04,
-                    -2.48488958e-03,
-                    -6.72884363e-04,
-                    -1.17596358e-03,
-                    -6.75266364e-04,
-                    6.72783782e-05,
-                    1.07678488e-04,
-                    -2.63805422e-07,
-                    1.65661496e-03,
-                    -1.61770568e-03,
-                    -6.64843399e-03,
-                    -4.78166505e-02,
-                    -3.54112498e-02,
-                    -4.53015190e-02,
-                    -3.99937127e-02,
-                    -4.29717381e-02,
-                    -4.15610992e-02,
-                    -4.73157234e-02,
-                    -1.93293685e-02,
-                    -2.61343991e-02,
-                    5.38161813e-05,
-                    -3.18588497e-04,
-                    -3.70497505e-04,
-                    7.79857596e-05,
-                    5.19593795e-04,
-                    5.72184426e-04,
-                    -2.22179748e-04,
-                    -1.67729712e-03,
-                    -3.14518797e-03,
+                    [-0.71387545],
+                    [0.06955704],
+                    [0.62401006],
+                    [1.06531137],
+                    [1.19839925],
+                    [1.03063443],
+                    [0.50277917],
+                    [-0.5497074],
+                    [-1.66865464],
+                    [-1.45494926],
+                    [-0.69155732],
+                    [-0.2809881],
+                    [0.11233951],
+                    [0.70202522],
+                    [1.68674218],
+                    [2.79443246],
+                    [3.88466532],
+                    [5.20452557],
+                    [-10.86368411],
+                    [-0.12353043],
+                    [0.69872199],
+                    [-6.03417634],
+                    [-4.54182276],
+                    [-4.57937448],
+                    [-8.17466594],
+                    [-5.02892314],
+                    [-4.86821306],
+                    [0.11913661],
+                    [0.02177487],
+                    [-0.05112351],
+                    [-0.12708209],
+                    [-0.18859235],
+                    [-0.20433111],
+                    [-0.15688625],
+                    [-0.03459626],
+                    [0.10412985],
                 ]
             ),
-            atol=0.025,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
         )
 
     def test_GAMlam(self):
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         np.testing.assert_allclose(
-            np.round(
-                np.array(
-                    [
-                        p1.lam - p2.lam
-                        for p1, p2 in zip(
-                            self.gsmm_newton.overall_penalties,
-                            self.gsmm_qefs.overall_penalties,
-                        )
-                    ]
-                ),
-                decimals=3,
+            lam,
+            np.array(
+                [
+                    6.955990167024357,
+                    6.718132388893934,
+                    0.00536660757744937,
+                    101.52004507997195,
+                ]
             ),
-            np.array([-0.098, 0.149, -0.0, 2.152]),
-            atol=min(max_atol, 2),
-            rtol=min(max_rtol, 0.35),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 2.5),
         )
 
     def test_GAMreml(self):
+        reml = self.model.get_reml()
         np.testing.assert_allclose(
-            self.gsmm_newton.get_reml() - self.gsmm_qefs.get_reml(),
-            0.0907684010567209,
-            atol=min(max_atol, 0.2),
-            rtol=min(max_rtol, 4e-4),
+            reml, -1809.885338980533, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_GAMllk(self):
+        llk = self.model.get_llk(False)
         np.testing.assert_allclose(
-            self.gsmm_newton.get_llk(True) - self.gsmm_qefs.get_llk(True),
-            0.07796569660399655,
-            atol=min(max_atol, 0.1),
-            rtol=min(max_rtol, 9e-4),
+            llk, -1772.5517665619386, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+        )
+
+    def test_edf1(self):
+        compute_bias_corrected_edf(self.model, overwrite=False)
+        edf1 = np.array([edf1 for edf1 in self.model.term_edf1])
+        np.testing.assert_allclose(
+            edf1,
+            np.array(
+                [
+                    4.314129203718049,
+                    4.330180049072045,
+                    8.872759352525616,
+                    2.4734068397134137,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
+        )
+
+    def test_ps(self):
+        ps = []
+        for par in range(len(self.model.formulas)):
+            pps, _ = approx_smooth_p_values(self.model, par=par)
+            ps.extend(pps)
+        np.testing.assert_allclose(
+            ps,
+            np.array([0.0, 0.0, 0.0, 0.21062684440882912]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
+        )
+
+    def test_TRs(self):
+        Trs = []
+        for par in range(len(self.model.formulas)):
+            _, pTrs = approx_smooth_p_values(self.model, par=par)
+            Trs.extend(pTrs)
+        np.testing.assert_allclose(
+            Trs,
+            np.array(
+                [
+                    72.63212701087522,
+                    328.5041277852474,
+                    463.90284670844085,
+                    4.721875845689623,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
         )
 
 
@@ -520,7 +400,7 @@ class Test_PropHaz_repara_hard:
 
     # Fit with Newton
     gsmm_newton_fam = PropHaz(ut, r)
-    gsmm_newton = GSMM([copy.deepcopy(sim_formula_m)], gsmm_newton_fam)
+    model = GSMM([copy.deepcopy(sim_formula_m)], gsmm_newton_fam)
 
     test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
     test_kwargs["method"] = "QR/Chol"
@@ -534,118 +414,138 @@ class Test_PropHaz_repara_hard:
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        gsmm_newton.fit(**test_kwargs)
+        model.fit(**test_kwargs)
 
-    gsmm_qefs_fam = PropHaz(ut, r)
-    gsmm_qefs = GSMM([copy.deepcopy(sim_formula_m)], gsmm_qefs_fam)
-
-    # Fit with qEFS update without initialization
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        bfgs_opt = {
-            "gtol": 1e-7,
-            "ftol": 1e-7,
-            "maxcor": 30,
-            "maxls": 20,
-            "maxfun": 100,
-        }
-
-        test_kwargs["method"] = "qEFS"
-        test_kwargs["extend_lambda"] = False
-        test_kwargs["control_lambda"] = 1
-        test_kwargs["max_outer"] = 200
-        test_kwargs["max_inner"] = 500
-        test_kwargs["min_inner"] = 500
-        test_kwargs["seed"] = 0
-        test_kwargs["max_restarts"] = 0
-        test_kwargs["overwrite_coef"] = False
-        test_kwargs["qEFS_init_converge"] = False
-        test_kwargs["prefit_grad"] = True
-        test_kwargs["repara"] = True
-        test_kwargs["bfgs_options"] = bfgs_opt
-
-        gsmm_qefs.fit(**test_kwargs)
+    def test_GAMedf(self):
+        np.testing.assert_allclose(
+            self.model.edf,
+            17.701397445431944,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
 
     def test_GAMcoef(self):
-
+        coef = self.model.coef
         np.testing.assert_allclose(
-            (self.gsmm_newton.coef - self.gsmm_qefs.coef).flatten(),
+            coef,
             np.array(
                 [
-                    -6.00505655e-04,
-                    -9.64003472e-04,
-                    -3.83549187e-04,
-                    1.17537678e-03,
-                    1.59927985e-03,
-                    7.38051198e-04,
-                    -4.44997108e-04,
-                    -1.80074704e-03,
-                    -3.11562028e-03,
-                    -1.82326872e-03,
-                    3.14446254e-03,
-                    3.46507392e-03,
-                    2.31289573e-03,
-                    2.99595003e-03,
-                    3.18175605e-03,
-                    1.01399062e-03,
-                    1.37963294e-02,
-                    3.14823158e-02,
-                    -1.02728366e-01,
-                    -7.73625299e-02,
-                    -9.77585419e-02,
-                    -8.96668581e-02,
-                    -9.31593570e-02,
-                    -9.24209095e-02,
-                    -1.01698088e-01,
-                    -4.87830255e-02,
-                    -1.39815381e-02,
-                    -9.37696374e-05,
-                    -2.59179471e-03,
-                    -3.05352437e-03,
-                    -2.36146501e-04,
-                    3.03758717e-03,
-                    3.90425367e-03,
-                    -7.14453093e-05,
-                    -7.63733239e-03,
-                    -1.53736159e-02,
+                    [-0.71387545],
+                    [0.06955704],
+                    [0.62401006],
+                    [1.06531137],
+                    [1.19839925],
+                    [1.03063443],
+                    [0.50277917],
+                    [-0.5497074],
+                    [-1.66865464],
+                    [-1.45494926],
+                    [-0.69155732],
+                    [-0.2809881],
+                    [0.11233951],
+                    [0.70202522],
+                    [1.68674218],
+                    [2.79443246],
+                    [3.88466532],
+                    [5.20452557],
+                    [-10.86368411],
+                    [-0.12353043],
+                    [0.69872199],
+                    [-6.03417634],
+                    [-4.54182276],
+                    [-4.57937448],
+                    [-8.17466594],
+                    [-5.02892314],
+                    [-4.86821306],
+                    [0.11913661],
+                    [0.02177487],
+                    [-0.05112351],
+                    [-0.12708209],
+                    [-0.18859235],
+                    [-0.20433111],
+                    [-0.15688625],
+                    [-0.03459626],
+                    [0.10412985],
                 ]
             ),
-            atol=min(max_atol, 0.05),
-            rtol=min(max_rtol, 5e-6),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
         )
 
     def test_GAMlam(self):
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         np.testing.assert_allclose(
+            lam,
             np.array(
                 [
-                    p1.lam - p2.lam
-                    for p1, p2 in zip(
-                        self.gsmm_newton.overall_penalties,
-                        self.gsmm_qefs.overall_penalties,
-                    )
+                    6.955990167024334,
+                    6.7181323888940545,
+                    0.005366607577449276,
+                    101.52004507996567,
                 ]
             ),
-            np.array(
-                [-9.87297096e-03, -5.29255787e-01, -2.50321169e-04, 1.10708062e01]
-            ),
-            atol=min(max_atol, 5),
-            rtol=min(max_rtol, 1.1),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 2.5),
         )
 
     def test_GAMreml(self):
+        reml = self.model.get_reml()
         np.testing.assert_allclose(
-            self.gsmm_newton.get_reml() - self.gsmm_qefs.get_reml(),
-            2.9739911355409276,
-            atol=min(max_atol, 0.5),
-            rtol=min(max_rtol, 1),
+            reml, -1809.8853389805336, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_GAMllk(self):
+        llk = self.model.get_llk(False)
         np.testing.assert_allclose(
-            self.gsmm_newton.get_llk(True) - self.gsmm_qefs.get_llk(True),
-            0.21546192785831408,
-            atol=min(max_atol, 0.2),
-            rtol=min(max_rtol, 2e-4),
+            llk, -1772.5517665619386, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+        )
+
+    def test_edf1(self):
+        compute_bias_corrected_edf(self.model, overwrite=False)
+        edf1 = np.array([edf1 for edf1 in self.model.term_edf1])
+        np.testing.assert_allclose(
+            edf1,
+            np.array(
+                [
+                    4.314129203718056,
+                    4.330180049072032,
+                    8.87275935252572,
+                    2.473406839713454,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
+        )
+
+    def test_ps(self):
+        ps = []
+        for par in range(len(self.model.formulas)):
+            pps, _ = approx_smooth_p_values(self.model, par=par)
+            ps.extend(pps)
+        np.testing.assert_allclose(
+            ps,
+            np.array([0.0, 0.0, 0.0, 0.21062684440883006]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
+        )
+
+    def test_TRs(self):
+        Trs = []
+        for par in range(len(self.model.formulas)):
+            _, pTrs = approx_smooth_p_values(self.model, par=par)
+            Trs.extend(pTrs)
+        np.testing.assert_allclose(
+            Trs,
+            np.array(
+                [
+                    72.63212701087531,
+                    328.5041277852453,
+                    463.902846708443,
+                    4.721875845689723,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
         )
 
 
@@ -1402,27 +1302,39 @@ class Test_shared_qefs:
     test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
     test_kwargs["control_lambda"] = 1
     test_kwargs["extend_lambda"] = False
-    test_kwargs["max_outer"] = 200
+    test_kwargs["max_outer"] = 20
     test_kwargs["max_inner"] = 500
+    test_kwargs["method"] = "qEFS"
     test_kwargs["repara"] = True
     test_kwargs["prefit_grad"] = True
-    test_kwargs["method"] = "qEFS"
+    test_kwargs["max_restarts"] = -1
+    test_kwargs["sample_hessian"] = True
+    test_kwargs["structured_qefs"] = True
 
-    bfgs_opt = {"gtol": 1e-7, "ftol": 1e-7, "maxcor": 30, "maxls": 20, "maxfun": 100}
+    bfgs_options = {
+        "gtol": 1e-7,
+        "ftol": 1e-7,
+        "maxcor": 30,
+        "maxls": 100,
+        "maxfun": 5000,
+    }
 
-    test_kwargs["bfgs_options"] = bfgs_opt
+    test_kwargs["bfgs_options"] = bfgs_options
+
+    def callback(outer, pen_llk, coef, lam):
+        print(outer, pen_llk, lam)
 
     # Now define the model and fit!
     gsmm_fam = GAMLSSGSMMFamily(2, family)
     model = GSMM([sim_formula_m, sim_formula_sd], gsmm_fam)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        model.fit(**test_kwargs)
+        model.fit(**test_kwargs, callback=callback)
 
     def test_GAMedf(self):
         np.testing.assert_allclose(
             self.model.edf,
-            109.10136272485252,
+            104.11043984332206,
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.2),
         )
@@ -1433,234 +1345,234 @@ class Test_shared_qefs:
             coef,
             np.array(
                 [
-                    [2.170153e00],
-                    [-3.072690e-01],
-                    [7.961000e-03],
-                    [4.160930e-01],
-                    [6.189710e-01],
-                    [5.004700e-01],
-                    [4.536810e-01],
-                    [-8.018700e-02],
-                    [-4.239070e-01],
-                    [-6.868470e-01],
-                    [-9.124020e-01],
-                    [-4.208170e-01],
-                    [-1.343610e-01],
-                    [1.408380e-01],
-                    [5.034230e-01],
-                    [1.036148e00],
-                    [1.678854e00],
-                    [2.306555e00],
-                    [2.973905e00],
-                    [9.238000e-03],
-                    [2.625000e-03],
-                    [-3.788900e-02],
-                    [1.114370e-01],
-                    [3.274200e-02],
-                    [2.393300e-02],
-                    [1.391330e-01],
-                    [5.181400e-02],
-                    [-5.201600e-02],
-                    [-3.916940e-01],
-                    [1.690000e-03],
-                    [-2.703000e-03],
-                    [-7.353700e-02],
-                    [-8.821600e-02],
-                    [8.418800e-02],
-                    [-1.243430e-01],
-                    [2.712870e-01],
-                    [-1.078140e-01],
-                    [2.612000e-03],
-                    [1.587680e-01],
-                    [4.511000e-03],
-                    [-5.380000e-03],
-                    [3.975000e-03],
-                    [-7.800000e-05],
-                    [3.098000e-02],
-                    [4.684500e-02],
-                    [-3.126200e-02],
-                    [-1.005300e-02],
-                    [-4.715500e-02],
-                    [1.135630e-01],
-                    [7.909000e-03],
-                    [3.117000e-03],
-                    [-4.141900e-02],
-                    [-9.987400e-02],
-                    [4.515100e-02],
-                    [8.599500e-02],
-                    [1.400500e-02],
-                    [7.240500e-02],
-                    [4.150300e-02],
-                    [4.800040e-01],
-                    [-5.132000e-03],
-                    [2.340000e-04],
-                    [2.163200e-02],
-                    [-3.300200e-02],
-                    [4.805700e-02],
-                    [-1.338210e-01],
+                    [2.160864e00],
+                    [-3.020230e-01],
+                    [1.475600e-02],
+                    [4.271040e-01],
+                    [6.370190e-01],
+                    [5.062180e-01],
+                    [4.786030e-01],
+                    [-7.319300e-02],
+                    [-4.103900e-01],
+                    [-6.698690e-01],
+                    [-9.106850e-01],
+                    [-4.200400e-01],
+                    [-1.360100e-01],
+                    [1.399220e-01],
+                    [5.040610e-01],
+                    [1.035494e00],
+                    [1.680491e00],
+                    [2.302906e00],
+                    [2.962853e00],
+                    [1.131700e-02],
+                    [3.337000e-03],
+                    [-4.359900e-02],
+                    [1.324210e-01],
+                    [3.860000e-02],
+                    [2.723300e-02],
+                    [1.485870e-01],
+                    [5.281100e-02],
+                    [-5.110800e-02],
+                    [-3.998320e-01],
+                    [2.081000e-03],
+                    [-3.328000e-03],
+                    [-8.567200e-02],
+                    [-1.027450e-01],
+                    [9.641600e-02],
+                    [-1.354240e-01],
+                    [2.858060e-01],
+                    [-1.111280e-01],
+                    [3.539000e-03],
+                    [1.508050e-01],
+                    [5.622000e-03],
+                    [-6.572000e-03],
+                    [5.469000e-03],
+                    [7.700000e-04],
+                    [3.619100e-02],
+                    [5.319900e-02],
+                    [-3.356200e-02],
+                    [-1.032700e-02],
+                    [-4.653500e-02],
+                    [1.049990e-01],
+                    [9.419000e-03],
+                    [3.639000e-03],
+                    [-4.792300e-02],
+                    [-1.157870e-01],
+                    [5.044500e-02],
+                    [9.349900e-02],
+                    [1.688100e-02],
+                    [7.425200e-02],
+                    [4.286500e-02],
+                    [4.715890e-01],
+                    [-6.137000e-03],
+                    [2.630000e-04],
+                    [2.698500e-02],
+                    [-3.787900e-02],
+                    [5.588700e-02],
+                    [-1.470120e-01],
+                    [1.162000e-03],
+                    [-4.895500e-02],
+                    [-1.692650e-01],
+                    [-1.530730e00],
+                    [1.116300e-02],
+                    [-1.182200e-02],
+                    [9.298000e-03],
+                    [6.169800e-02],
+                    [5.492900e-02],
+                    [6.412700e-02],
+                    [-1.829000e-03],
+                    [1.877160e-01],
+                    [2.403430e-01],
+                    [3.545390e-01],
+                    [-1.266100e-02],
+                    [-7.032000e-03],
+                    [-2.263800e-02],
+                    [-1.586800e-02],
+                    [-8.139000e-03],
+                    [5.381900e-02],
+                    [-2.739030e-01],
+                    [2.681900e-02],
+                    [-1.186510e-01],
+                    [-7.192470e-01],
+                    [3.767000e-03],
+                    [3.100000e-05],
+                    [1.203080e-01],
+                    [4.963000e-03],
+                    [4.134500e-02],
+                    [-2.764830e-01],
+                    [-9.887000e-02],
+                    [-2.067350e-01],
+                    [-6.383800e-02],
+                    [1.353810e-01],
+                    [-1.301800e-02],
+                    [-3.210000e-04],
+                    [-3.885100e-02],
+                    [-7.652900e-02],
+                    [-2.270700e-02],
+                    [1.380100e-01],
+                    [5.128900e-02],
+                    [6.727500e-02],
+                    [-1.487810e-01],
+                    [2.881400e-02],
+                    [-5.763000e-03],
+                    [-1.654000e-03],
                     [9.770000e-04],
-                    [-4.679900e-02],
-                    [-1.691310e-01],
-                    [-1.521200e00],
-                    [9.174000e-03],
-                    [-9.604000e-03],
-                    [7.557000e-03],
-                    [5.210600e-02],
-                    [4.748400e-02],
-                    [5.750000e-02],
-                    [-1.458000e-03],
-                    [1.827830e-01],
-                    [2.375490e-01],
-                    [3.630830e-01],
-                    [-1.050100e-02],
-                    [-5.869000e-03],
-                    [-1.979100e-02],
-                    [-1.474200e-02],
-                    [-7.843000e-03],
-                    [4.949600e-02],
-                    [-2.570580e-01],
-                    [2.699800e-02],
-                    [-1.187500e-01],
-                    [-7.117230e-01],
-                    [3.110000e-03],
-                    [-8.000000e-06],
-                    [1.015910e-01],
-                    [2.126000e-03],
-                    [3.565900e-02],
-                    [-2.523580e-01],
-                    [-9.411700e-02],
-                    [-2.003360e-01],
-                    [-6.419600e-02],
-                    [1.430470e-01],
-                    [-1.085000e-02],
-                    [-1.570000e-04],
-                    [-3.358500e-02],
-                    [-6.636300e-02],
-                    [-1.982200e-02],
-                    [1.248110e-01],
-                    [4.793300e-02],
-                    [6.546000e-02],
-                    [-1.492160e-01],
-                    [3.732600e-02],
-                    [-4.986000e-03],
-                    [-1.486000e-03],
-                    [-4.800000e-05],
-                    [2.829000e-02],
-                    [3.344400e-02],
-                    [1.592300e-01],
-                    [-8.477500e-02],
-                    [9.850800e-02],
-                    [8.455000e-03],
-                    [1.896940e-01],
-                    [-3.212000e-03],
-                    [1.711000e-03],
-                    [2.429900e-02],
-                    [7.629000e-03],
-                    [1.148310e-01],
-                    [8.940000e-02],
-                    [1.771410e-01],
-                    [5.955600e-02],
-                    [-6.268400e-02],
-                    [2.623300e-01],
-                    [-9.015000e-03],
-                    [1.670100e-02],
-                    [-4.178900e-02],
-                    [4.610400e-02],
-                    [-7.531500e-02],
-                    [-1.227230e-01],
-                    [6.412400e-02],
-                    [-1.327860e-01],
-                    [-1.390130e-01],
-                    [3.961720e-01],
-                    [-1.141000e-03],
-                    [2.303000e-03],
-                    [-2.834800e-02],
-                    [-9.342900e-02],
-                    [-7.001300e-02],
-                    [-7.178600e-02],
-                    [-1.498650e-01],
-                    [-6.090000e-03],
-                    [2.995000e-03],
-                    [1.950940e-01],
-                    [3.494000e-03],
-                    [-3.002000e-03],
-                    [3.171400e-02],
-                    [8.127300e-02],
-                    [-2.755500e-02],
-                    [-1.564320e-01],
-                    [-4.370200e-02],
-                    [8.605600e-02],
-                    [1.420600e-02],
-                    [5.319140e-01],
-                    [8.900000e-03],
-                    [-8.529000e-03],
-                    [7.366400e-02],
-                    [-1.498800e-02],
-                    [-5.741800e-02],
-                    [1.489120e-01],
-                    [-7.456600e-02],
-                    [2.300500e-02],
-                    [6.725400e-02],
-                    [1.403350e-01],
-                    [-4.057000e-03],
-                    [1.069700e-02],
-                    [-2.553100e-02],
-                    [-3.763100e-02],
-                    [-1.006340e-01],
-                    [1.244340e-01],
-                    [1.085240e-01],
-                    [-1.962020e-01],
-                    [2.490190e-01],
-                    [3.183080e-01],
-                    [-3.423000e-03],
-                    [-4.895000e-03],
-                    [-1.924600e-02],
-                    [-2.835800e-02],
-                    [-7.904000e-02],
-                    [-1.323910e-01],
-                    [-2.462200e-02],
-                    [-2.309060e-01],
-                    [1.431090e-01],
-                    [-2.876040e-01],
-                    [7.670000e-03],
-                    [-3.007000e-03],
-                    [-7.394400e-02],
-                    [3.639900e-02],
-                    [-1.291660e-01],
-                    [4.374600e-02],
-                    [1.802480e-01],
-                    [3.449670e-01],
-                    [7.014100e-02],
-                    [-5.120680e-01],
-                    [-1.087600e-02],
-                    [7.000000e-04],
-                    [2.733700e-02],
-                    [-3.696400e-02],
-                    [4.761700e-02],
-                    [-2.701000e-03],
-                    [-2.366120e-01],
-                    [-2.156600e-02],
-                    [-5.858600e-02],
-                    [2.495960e-01],
-                    [3.309450e-01],
-                    [-3.734340e-01],
-                    [8.124460e-01],
-                    [1.110654e00],
-                    [2.970100e-01],
-                    [5.490500e-01],
-                    [4.768740e-01],
-                    [2.773230e-01],
-                    [-2.601960e-01],
-                    [-7.549180e-01],
-                    [7.536700e-02],
-                    [-2.293800e-02],
-                    [-7.020500e-02],
-                    [-8.776100e-02],
-                    [-8.787000e-02],
-                    [-8.887000e-02],
-                    [-9.201900e-02],
-                    [-8.220600e-02],
-                    [-7.868500e-02],
+                    [3.371500e-02],
+                    [3.880500e-02],
+                    [1.773270e-01],
+                    [-9.026600e-02],
+                    [9.954800e-02],
+                    [9.599000e-03],
+                    [1.800480e-01],
+                    [-3.968000e-03],
+                    [2.174000e-03],
+                    [3.037200e-02],
+                    [1.042100e-02],
+                    [1.307160e-01],
+                    [9.985200e-02],
+                    [1.888690e-01],
+                    [5.911400e-02],
+                    [-6.201100e-02],
+                    [2.547910e-01],
+                    [-1.103600e-02],
+                    [2.010000e-02],
+                    [-4.847000e-02],
+                    [5.510700e-02],
+                    [-8.618700e-02],
+                    [-1.330080e-01],
+                    [6.802800e-02],
+                    [-1.361800e-01],
+                    [-1.388490e-01],
+                    [3.876210e-01],
+                    [-1.199000e-03],
+                    [2.810000e-03],
+                    [-3.197000e-02],
+                    [-1.100520e-01],
+                    [-8.063100e-02],
+                    [-7.920600e-02],
+                    [-1.574580e-01],
+                    [-7.393000e-03],
+                    [3.366000e-03],
+                    [1.870890e-01],
+                    [4.445000e-03],
+                    [-3.828000e-03],
+                    [3.854800e-02],
+                    [9.810900e-02],
+                    [-3.109800e-02],
+                    [-1.742910e-01],
+                    [-4.549000e-02],
+                    [8.935200e-02],
+                    [1.533500e-02],
+                    [5.229710e-01],
+                    [1.082000e-02],
+                    [-1.026600e-02],
+                    [8.831800e-02],
+                    [-1.628200e-02],
+                    [-6.538200e-02],
+                    [1.648420e-01],
+                    [-7.902200e-02],
+                    [2.281800e-02],
+                    [6.818900e-02],
+                    [1.320460e-01],
+                    [-4.664000e-03],
+                    [1.262500e-02],
+                    [-3.137700e-02],
+                    [-4.189900e-02],
+                    [-1.134760e-01],
+                    [1.364500e-01],
+                    [1.139600e-01],
+                    [-2.003000e-01],
+                    [2.505810e-01],
+                    [3.099090e-01],
+                    [-4.283000e-03],
+                    [-6.093000e-03],
+                    [-2.365800e-02],
+                    [-3.309900e-02],
+                    [-9.191000e-02],
+                    [-1.465900e-01],
+                    [-2.720500e-02],
+                    [-2.389790e-01],
+                    [1.447770e-01],
+                    [-2.942130e-01],
+                    [9.428000e-03],
+                    [-3.632000e-03],
+                    [-8.634900e-02],
+                    [4.379200e-02],
+                    [-1.462510e-01],
+                    [4.933000e-02],
+                    [1.927510e-01],
+                    [3.538430e-01],
+                    [7.132400e-02],
+                    [-5.196620e-01],
+                    [-1.334200e-02],
+                    [8.980000e-04],
+                    [3.292800e-02],
+                    [-4.144700e-02],
+                    [5.409400e-02],
+                    [-3.142000e-03],
+                    [-2.496430e-01],
+                    [-2.127800e-02],
+                    [-5.843700e-02],
+                    [2.419310e-01],
+                    [3.294980e-01],
+                    [-4.380640e-01],
+                    [7.383870e-01],
+                    [1.054881e00],
+                    [1.885450e-01],
+                    [4.861200e-01],
+                    [3.867230e-01],
+                    [2.035280e-01],
+                    [-3.079280e-01],
+                    [-7.092030e-01],
+                    [6.573400e-02],
+                    [-4.560000e-03],
+                    [-4.274800e-02],
+                    [-6.485200e-02],
+                    [-7.393400e-02],
+                    [-8.000000e-02],
+                    [-8.352000e-02],
+                    [-6.961400e-02],
+                    [-5.919800e-02],
                 ]
             ),
             atol=min(max_atol, 0.5),
@@ -1673,27 +1585,27 @@ class Test_shared_qefs:
             lam,
             np.array(
                 [
-                    28.38457277018316,
-                    5.216366556684993,
-                    3.768020778885435,
-                    442.3964163923521,
-                    2.9232096432322905,
+                    30.911273098167747,
+                    4.352183603224263,
+                    3.736828437514571,
+                    1439.016790152987,
+                    2.228446582494426,
                 ]
             ),
             atol=min(max_atol, 0),
-            rtol=min(max_rtol, 8),
+            rtol=min(max_rtol, 5),
         )
 
     def test_GAMreml(self):
         reml = self.model.get_reml()
         np.testing.assert_allclose(
-            reml, -15503.456234336054, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            reml, -15507.167669639082, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
         np.testing.assert_allclose(
-            llk, -15336.894208943644, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            llk, -15332.22497719553, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_edf1(self):
@@ -1703,11 +1615,11 @@ class Test_shared_qefs:
             edf1,
             np.array(
                 [
-                    7.799257965120611,
-                    4.827895654252848,
-                    125.87856352860402,
-                    7.824028288588011,
-                    2.376980077932044,
+                    6.7878354819141205,
+                    4.84504964938634,
+                    119.25437367377154,
+                    6.906178817062174,
+                    2.1930889513762137,
                 ]
             ),
             atol=min(max_atol, 0),
@@ -1721,7 +1633,7 @@ class Test_shared_qefs:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.47842238597380427]),
+            np.array([0.0, 0.0, 0.0, 0.11794760560276107]),
             atol=min(max_atol, 0.15),
             rtol=min(max_rtol, 0.5),
         )
@@ -1735,10 +1647,10 @@ class Test_shared_qefs:
             Trs,
             np.array(
                 [
-                    86.46921348610464,
-                    892.7085833398858,
-                    107.60524011438733,
-                    1.8321397585213353,
+                    53.793417631513805,
+                    2636.023014251915,
+                    242.62344340496455,
+                    4.5733272875356015,
                 ]
             ),
             atol=min(max_atol, 0),
@@ -1768,13 +1680,16 @@ class Test_mvn:
     test_kwargs["prefit_grad"] = True
     test_kwargs["progress_bar"] = True
     test_kwargs["max_restarts"] = 0
+    test_kwargs["sample_hessian"] = False
+    test_kwargs["structured_qefs"] = True
+    test_kwargs["structured_qefs_budget"] = 10
 
     bfgs_options = {
-        "gtol": 1.1 * 1e-7,
-        "ftol": 1.1 * 1e-7,
+        "gtol": 1e-7,
+        "ftol": 1e-7,
         "maxcor": 30,
-        "maxls": 20,
-        "maxfun": 500,
+        "maxls": 100,
+        "maxfun": 5000,
     }
 
     test_kwargs["bfgs_options"] = bfgs_options
@@ -1802,7 +1717,7 @@ class Test_mvn:
     def test_GAMedf(self):
         np.testing.assert_allclose(
             self.model.edf,
-            25.929186157952294,
+            27.796893748448205,
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.1),
         )
@@ -1813,55 +1728,55 @@ class Test_mvn:
             coef,
             np.array(
                 [
-                    [1.31100674],
-                    [-0.83738069],
-                    [0.7705682],
-                    [1.38606651],
-                    [1.61699946],
-                    [1.53862935],
-                    [1.17451904],
-                    [0.62615314],
-                    [-0.20056576],
-                    [-1.03767926],
-                    [6.61647469],
-                    [-1.70800004],
-                    [-0.75079968],
-                    [-0.16049466],
-                    [0.26644801],
-                    [0.92758383],
-                    [2.05359931],
-                    [3.42459067],
-                    [4.37025789],
-                    [5.32204501],
-                    [-8.27055525],
-                    [3.2238208],
-                    [5.26090444],
-                    [-2.74897601],
-                    [-1.18454989],
-                    [-1.84240195],
-                    [-4.63842503],
-                    [-4.01289649],
-                    [-0.33158288],
-                    [-0.00739544],
-                    [0.066147],
-                    [0.01728653],
-                    [-0.00708373],
-                    [-0.03497352],
-                    [-0.06585108],
-                    [-0.09505201],
-                    [-0.11950452],
-                    [-0.13134599],
-                    [-0.14064401],
-                    [-0.26872477],
-                    [-0.09578739],
-                    [0.16897191],
-                    [-0.31231677],
-                    [-0.02495584],
-                    [-0.35676218],
+                    [1.31085255],
+                    [-0.82700069],
+                    [0.75118389],
+                    [1.36193952],
+                    [1.59491321],
+                    [1.51905222],
+                    [1.16122622],
+                    [0.62005065],
+                    [-0.19978613],
+                    [-1.03364961],
+                    [6.61798229],
+                    [-1.70427927],
+                    [-0.74244628],
+                    [-0.16966458],
+                    [0.27248373],
+                    [0.94795],
+                    [2.0577718],
+                    [3.42681311],
+                    [4.3719117],
+                    [5.32095398],
+                    [-8.14344531],
+                    [3.32884735],
+                    [5.422029],
+                    [-2.63199994],
+                    [-1.05668876],
+                    [-1.70706796],
+                    [-4.50295594],
+                    [-3.93600855],
+                    [-0.52875122],
+                    [-0.00624929],
+                    [0.04723265],
+                    [0.02715231],
+                    [0.02120844],
+                    [0.01035369],
+                    [-0.01613267],
+                    [-0.06088083],
+                    [-0.11776788],
+                    [-0.17539974],
+                    [-0.23243716],
+                    [-0.2681111],
+                    [-0.09533345],
+                    [0.16817583],
+                    [-0.31366122],
+                    [-0.02427125],
+                    [-0.35612782],
                 ]
             ),
             atol=min(max_atol, 0),
-            rtol=min(max_rtol, 7),
+            rtol=min(max_rtol, 5),
         )
 
     def test_GAMlam(self):
@@ -1870,10 +1785,10 @@ class Test_mvn:
             lam,
             np.array(
                 [
-                    5.553258114488488,
-                    7.263234290389299,
-                    0.009362701710530105,
-                    14968.068062274535,
+                    6.739596590851739,
+                    8.800300445107826,
+                    0.009777669982560133,
+                    428.9017964308726,
                 ]
             ),
             atol=min(max_atol, 0),
@@ -1883,13 +1798,13 @@ class Test_mvn:
     def test_GAMreml(self):
         reml = self.model.get_reml()
         np.testing.assert_allclose(
-            reml, -1279.4570498052565, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            reml, -1293.1940638337865, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
         np.testing.assert_allclose(
-            llk, -1219.04362017304, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            llk, -1218.9501219830845, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_edf1(self):
@@ -1899,10 +1814,10 @@ class Test_mvn:
             edf1,
             np.array(
                 [
-                    4.774870611852471,
-                    4.027671698920858,
-                    8.959539797836339,
-                    1.0268182195218576,
+                    5.626312975210457,
+                    4.599043687932572,
+                    8.999153674233385,
+                    1.6795180442015647,
                 ]
             ),
             atol=min(max_atol, 0),
@@ -1916,7 +1831,7 @@ class Test_mvn:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.51696487941226]),
+            np.array([0.0, 0.0, 0.0, 0.4337909849702717]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.5),
         )
@@ -1930,10 +1845,10 @@ class Test_mvn:
             Trs,
             np.array(
                 [
-                    81.76949766849303,
-                    247.7785334307594,
-                    1386.1680141024585,
-                    0.4394215876908074,
+                    146.05994394593205,
+                    859.4280473472886,
+                    3757.85867360191,
+                    1.3228567960493294,
                 ]
             ),
             atol=min(max_atol, 0),
@@ -2001,11 +1916,7 @@ class Test_Nuts:
     test_kwargs["repara"] = False
     test_kwargs["prefit_grad"] = True
     test_kwargs["sample_hessian"] = True
-    test_kwargs["sample_hessian_method"] = 0
-    test_kwargs["sample_hessian_kwargs"] = {
-        "omega_func": lambda x: np.quantile(x, 0.5),
-        "omega_func_calls": 1,
-    }
+    test_kwargs["structured_qefs"] = False
 
     # Now define the model and fit!
     gsmm_fam = GAMLSSGSMMFamily(2, family)

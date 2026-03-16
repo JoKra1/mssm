@@ -4,6 +4,7 @@ from mssm.models import *
 from mssm.src.python.compare import compare_CDL
 import numpy as np
 import os
+import copy
 from mssmViz.sim import *
 from .defaults import (
     default_compare_test_kwargs,
