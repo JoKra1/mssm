@@ -357,6 +357,9 @@ class Formula:
         self.coef_per_term: list[int] | None = (
             None  # Number of coefficients associated with each term
         )
+        self.coef_idx_per_term: list[np.ndarray] | None = (
+            None  # indices in coef vector per term
+        )
         self.built_penalties = False
         self.find_nested = find_nested
         cvi = 0  # Number of variables included in some way as predictors
@@ -781,6 +784,7 @@ class Formula:
         self.n_coef = 0
         self.coef_names = []
         self.coef_per_term = np.zeros(len(terms), dtype=int)
+        self.coef_idx_per_term = [[] for _ in range(len(terms))]
 
         # Need to enforce dummy coding for linear terms not just when there is an intercept, but
         # also when we have multiple factor variables
@@ -809,6 +813,9 @@ class Formula:
 
             self.coef_names.extend(t_coef_names)
             self.coef_per_term[lti] = t_total_coef
+            self.coef_idx_per_term[lti] = np.arange(
+                self.n_coef, self.n_coef + t_total_coef
+            )
             self.n_coef += t_total_coef
             self.unpenalized_coef += t_unpenalized_coef
 
@@ -822,6 +829,9 @@ class Formula:
 
             self.coef_names.extend(t_coef_names)
             self.coef_per_term[irsti] = t_total_coef
+            self.coef_idx_per_term[irsti] = np.arange(
+                self.n_coef, self.n_coef + t_total_coef
+            )
             self.n_coef += t_total_coef
             self.unpenalized_coef += t_unpenalized_coef
 
@@ -835,6 +845,9 @@ class Formula:
 
             self.coef_names.extend(t_coef_names)
             self.coef_per_term[sti] = t_total_coef
+            self.coef_idx_per_term[sti] = np.arange(
+                self.n_coef, self.n_coef + t_total_coef
+            )
             self.n_coef += t_total_coef
             self.unpenalized_coef += t_unpenalized_coef
 
@@ -854,6 +867,9 @@ class Formula:
 
             self.coef_names.extend(t_coef_names)
             self.coef_per_term[rti] = t_total_coef
+            self.coef_idx_per_term[rti] = np.arange(
+                self.n_coef, self.n_coef + t_total_coef
+            )
             self.n_coef += t_total_coef
             self.unpenalized_coef += t_unpenalized_coef
 

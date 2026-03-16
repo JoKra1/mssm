@@ -21,7 +21,14 @@ from .formula import (
     copy,
 )
 from .file_loading import setup_cache, clear_cache
-from .compact_rep import computeH, computeHSR1, computeV, computeVSR1
+from .compact_rep import (
+    computeH,
+    computeHSR1,
+    computeVSR1,
+    compute_omega,
+    computeSH,
+    computeSVPS,
+)
 from .repara import reparam_model
 from functools import reduce
 from .custom_types import Fit_info, LambdaTerm
@@ -610,67 +617,58 @@ def update_PIRLS(
     return yb, Xb, z, Wr
 
 
-def compute_eigen_perm(Pr: list[int] | np.ndarray) -> scp.sparse.csc_array:
-    """Internal function. Computes column permutation matrix obtained from Eigen.
-
-    :param Pr: List of column indices
-    :type Pr: list[int] | np.ndarray
-    :return: Permutation matrix as sparse array
-    :rtype: scp.sparse.csc_array
-    """
-
-    nP = len(Pr)
-    P = [1 for _ in range(nP)]
-    Pc = [c for c in range(nP)]
-    Perm = scp.sparse.csc_array((P, (Pr, Pc)), shape=(nP, nP))
-    return Perm
-
-
-def apply_eigen_perm(
-    Pr: list[int], InvCholXXSP: scp.sparse.csc_array
-) -> scp.sparse.csc_array:
-    """Internal function. Unpivots columns of ``InvCholXXSP`` (usually the inverse of a
-    Cholesky factor) and returns the unpivoted version.
-
-    :param Pr: List of column indices
-    :type Pr: list[int]
-    :param InvCholXXSP: Pivoted matrix
-    :type InvCholXXSP: scp.sparse.csc_array
-    :return: Unpivoted matrix
-    :rtype: scp.sparse.csc_array
-    """
-    Perm = compute_eigen_perm(Pr)
-    InvCholXXS = InvCholXXSP @ Perm
-    return InvCholXXS
-
-
 def computetrVS3(
     t1: np.ndarray | None,
     t2: np.ndarray | None,
     t3: np.ndarray | None,
+    t4: np.ndarray | None,
+    t5: np.ndarray | None,
+    t6: np.ndarray | None,
+    t7: np.ndarray | None,
+    t8: np.ndarray | None,
+    t9: np.ndarray | None,
     lTerm: LambdaTerm,
     V0: scp.sparse.csc_array,
 ) -> float:
     """Internal function. Compute ``tr(V@lTerm.S_j)`` from linear operator of ``V`` obtained
-    from L-BFGS-B optimizer.
+    from L-BFGS-B optimizer. Exact computation depends on whether a structured update is used
+    or not.
 
-    Relies on equation 3.13 in Byrd, Nocdeal & Schnabel (1992). Adapted to ensure positive
+    The idea is that ``V``, the Bayesian covariance matrix of the coefficients, is represented
+    implicitly as ``V0 - U1`` (in the unstructured case) or ``V0 - U1 - U2 - U3`` (in the
+    structured case). Each matrix update ``UX`` is of the form ``A@B@C``, where the dimensions of
+    the inner matrix ``B`` are much smaller than the outer dimensions of the outer matrices.
+
+    For the unstructured update, only ``t1``, ``t2``, and ``t3`` are used and defined as in equation
+    3.13 in Byrd, Nocdeal & Schnabel (1992). However, ``t2`` has been adapted to ensure positive
     semi-definitiness required by EFS update.
+
+    See :func:`computeSH` and :func:`computeSVPS` for details on the structured case, requiring
+    all nine terms to compute the update matrices.
 
     References:
      - Byrd, R. H., Nocedal, J., & Schnabel, R. B. (1994). Representations of quasi-Newton \
         matrices and their use in limited memory methods. Mathematical Programming, 63(1), \
         129–156. https://doi.org/10.1007/BF01582063
 
-    :param t1: ``nCoef*2m``  matrix from Byrd, Nocdeal & Schnabel (1992). If ``t2 is None``,
-        then ``V`` is treated like an identity matrix.
+    :param t1: Inverse update matrix 1
     :type t1: np.ndarray or None
-    :param t2: ``2m*2m``  matrix from Byrd, Nocdeal & Schnabel (1992). If ``t2 is None``,
-        then ``V`` is treated like an identity matrix.
+    :param t2: Inverse update matrix 2
     :type t2: np.ndarray or None
-    :param t3: ``2m*nCoef``  matrix from Byrd, Nocdeal & Schnabel (1992). If ``t2 is None``,
-        then ``t1`` is treated like an identity matrix.
+    :param t3: Inverse update matrix 3
     :type t3: np.ndarray or None
+    :param 4: Inverse update matrix 4
+    :type t4: np.ndarray or None
+    :param t5: Inverse update matrix 5
+    :type t5: np.ndarray or None
+    :param t6: Inverse update matrix 6
+    :type t6: np.ndarray or None
+    :param t7: Inverse update matrix 7
+    :type t7: np.ndarray or None
+    :param t8: Inverse update matrix 8
+    :type t8: np.ndarray or None
+    :param t9: Inverse update matrix 9
+    :type t9: np.ndarray or None
     :param lTerm: Current lambda term for which to compute the trace.
     :type lTerm: LambdaTerm
     :param V0: Initial estimate for the inverse of the hessian fo the negative penalized likelihood.
@@ -696,40 +694,16 @@ def computetrVS3(
         else:
             VS_c = np.array((V0 @ S_c)[[cidx], [0]][0])
 
+        # For structured update we have more additive corrections to V
+        if t4 is not None:
+            VS_c -= t4[[cidx], :] @ t5 @ t6 @ S_c
+
+        if t7 is not None:
+            VS_c -= t7[[cidx], :] @ t8 @ t9 @ S_c
+
         tr += VS_c[0, 0]
 
     return tr
-
-
-def compute_omega(yks: np.ndarray, sks: np.ndarray, method: str = "NoWr") -> float:
-    """Computes scaling factor for quasi-Newton Hessian approximation as described by
-    Nocedal & Wright (2004).
-
-    :param yks: Array of update vectors yk
-    :type yks: np.ndarray
-    :param sks: Array of update vectors sk
-    :type sks: np.ndarray
-    :param method: Which method to use to compute scaling factor. Default is version by Nocedal &
-        Wright (2004).
-    :type method: str, optional
-    :return: Scaling factor for initial approximation to hessian.
-    :rtype: float
-    """
-    if method == "NoWr":
-        omega = np.dot(yks[-1], yks[-1]) / np.dot(yks[-1], sks[-1])
-
-    elif method == "mean":
-        omega = 0
-
-        for ui in range(yks.shape[0]):
-            omega += np.dot(yks[ui], yks[ui]) / np.dot(yks[ui], sks[ui])
-
-        omega /= yks.shape[0]
-
-    if omega < 0:
-        omega = 1
-
-    return omega
 
 
 def calculate_edf(
@@ -800,102 +774,163 @@ def calculate_edf(
         InvCholXXS, scp.sparse.linalg.LinearOperator
     ):
         # Following prepares trace computation via equation 3.13 in Byrd, Nocdeal & Schnabel (1992).
-        # First form initial matrices H0/V0.
-        # And then get m (number of implicit hessian updates), yk, sk, and rho from V
+        # First get m (number of implicit hessian updates), yk, sk, and rho from V
 
-        # see Nocedal & Wright, 2004 for sacling factor computed below.
         sample_hessian = InvCholXXS.sample_hessian
-        if len(InvCholXXS.yk) > 0:
-            omega = compute_omega(
-                InvCholXXS.yk,
-                InvCholXXS.sk,
-                method="mean" if sample_hessian else "NoWr",
-            )
-        else:
-            omega = 1
-
-        # Form S_emb
-        # S_emb,_,_,_ = compute_S_emb_pinv_det(colsX,penalties,"svd")
-
-        # And initial approximation for the hessian...
         form = InvCholXXS.form
+        fcols = InvCholXXS.fcols
 
-        H0 = (scp.sparse.identity(colsX, format="csc") * omega) + S_emb
-        Lp, Pr, _ = cpp_cholP(H0)  # noqa: F405
-        # P = compute_eigen_perm(Pr)
-
-        # ... and the corresponding inverse.
-        LVp0 = compute_Linv(Lp, n_c)  # noqa: F405
-        LV0 = apply_eigen_perm(Pr, LVp0)
-        V0 = LV0.T @ LV0
-
-        # Reset H0 to just scaled identity
-        H0 = scp.sparse.identity(colsX, format="csc") * omega
-
-        # Now get all the update vectors
+        # Get all the update vectors
         s, y, rho, m = InvCholXXS.sk, InvCholXXS.yk, InvCholXXS.rho, InvCholXXS.n_corrs
 
-        if m == 0:  # L-BFGS routine converged after first step
+        if fcols is None or m == 0:
 
-            t1 = None
-            t2 = None
-            t3 = None
-
-        else:
-
-            # Now compute compact representation of V.
-            # Below we get int2, with the shifted Eigenvalues so that
-            # H = H0 + nt1 @ int2 @ nt3 - where H0 = I*omega + S_emb and I*omega + nt1 @ int2 @ nt3
-            # is PSD.
-            # Now, using the Woodbury identity:
-            # V = (H)^-1 = V0 - V0@nt1@ (int2^-1 + nt3@V0@nt1)^-1 @ nt3@V0
-            #
-            # since nt3=nt1.T, and int2^-1 = nt2 we have:
-            #
-            # V = V0 - V0@nt1@ (nt2 + nt1.T@V0@nt1)^-1 @ nt1.t@V0
-            #
-
-            # Compute inverse:
-            if form != "SR1":
-                nt1, nt2, int2, nt3 = computeH(s, y, rho, H0, explicit=False)
-
-                invt2 = nt2 + nt3 @ V0 @ nt1
-
-                U, sv_invt2, VT = scp.linalg.svd(invt2, lapack_driver="gesvd")
-
-                # Nowe we can compute all parts for the Woodbury identy to obtain V
-                t2 = VT.T @ np.diag(1 / sv_invt2) @ U.T
-
-                t1 = V0 @ nt1
-                t3 = nt3 @ V0
-            else:
-                nt1, int2, nt3 = computeHSR1(
-                    s, y, rho, H0, omega, make_psd=True, explicit=False
+            # Then form initial matrices H0/V0. See Nocedal & Wright, 2004 for sacling factor
+            # computed below.
+            if len(y) > 0:
+                omega = compute_omega(
+                    y,
+                    s,
+                    method="mean" if sample_hessian else "NoWr",
                 )
+            else:
+                omega = 1
 
-                # When using SR1 int2 is potentially singular, so we need a modified Woodbury that
-                # accounts for that. This is given by eq. 23 in Henderson & Searle (1981):
-                invt2 = np.identity(int2.shape[1]) + int2 @ nt3 @ V0 @ nt1
+            # And initial approximation for the hessian...
+            H0 = (scp.sparse.identity(colsX, format="csc") * omega) + S_emb
+            Lp, Pr, _ = cpp_cholP(H0)  # noqa: F405
 
-                U, sv_invt2, VT = scp.linalg.svd(invt2, lapack_driver="gesvd")
+            # ... and the corresponding inverse.
+            LVp0 = compute_Linv(Lp, n_c)  # noqa: F405
+            LV0 = apply_eigen_perm(Pr, LVp0)  # noqa: F405
+            V0 = LV0.T @ LV0
 
-                # Nowe we can again compute all parts for the modified Woodbury identy to obtain V
-                t2 = VT.T @ np.diag(1 / sv_invt2) @ U.T
+            # Reset H0 to just scaled identity
+            H0 = scp.sparse.identity(colsX, format="csc") * omega
 
-                t1 = V0 @ nt1
-                t3 = int2 @ nt3 @ V0
+            if m == 0:  # L-BFGS routine converged after first step
 
-            # We now have: V = V0 - V0@nt1@t2@nt3@V0, but don't have to form that explcitly!
-            # V3 = V0 - V0@nt1@t2@nt3@V0
-            # LVPT, P, code = cpp_cholP(scp.sparse.csc_array(V3))
-            # LVT = apply_eigen_perm(P,LVPT)
-            # LV = LVT.T
+                t1 = None
+                t2 = None
+                t3 = None
+
+            else:
+
+                # Now compute compact representation of V.
+                # Below we get int2, with the shifted Eigenvalues so that
+                # H = H0 + nt1 @ int2 @ nt3 - where H0 = I*omega + S_emb and
+                # I*omega + nt1 @ int2 @ nt3 is PSD.
+                # Now, using the Woodbury identity:
+                # V = (H)^-1 = V0 - V0@nt1@ (int2^-1 + nt3@V0@nt1)^-1 @ nt3@V0
+                #
+                # since nt3=nt1.T, and int2^-1 = nt2 we have:
+                #
+                # V = V0 - V0@nt1@ (nt2 + nt1.T@V0@nt1)^-1 @ nt1.t@V0
+                #
+
+                # Compute inverse:
+                if form != "SR1":
+                    nt1, nt2, int2, nt3 = computeH(s, y, rho, H0, explicit=False)
+
+                    invt2 = nt2 + nt3 @ V0 @ nt1
+
+                    U, sv_invt2, VT = scp.linalg.svd(invt2, lapack_driver="gesvd")
+
+                    # Nowe we can compute all parts for the Woodbury identy to obtain V
+                    t2 = VT.T @ np.diag(1 / sv_invt2) @ U.T
+
+                    t1 = V0 @ nt1
+                    t3 = nt3 @ V0
+                else:
+                    nt1, int2, nt3 = computeHSR1(
+                        s, y, rho, H0, omega, make_psd=True, explicit=False
+                    )
+
+                    # When using SR1 int2 is potentially singular, so we need a modified Woodbury
+                    # that accounts for that. This is given by eq. 23 in Henderson & Searle (1981):
+                    invt2 = np.identity(int2.shape[1]) + int2 @ nt3 @ V0 @ nt1
+
+                    U, sv_invt2, VT = scp.linalg.svd(invt2, lapack_driver="gesvd")
+
+                    # Nowe we can again compute all parts for the modified Woodbury identy to
+                    # obtain V
+                    t2 = VT.T @ np.diag(1 / sv_invt2) @ U.T
+
+                    t1 = V0 @ nt1
+                    t3 = int2 @ nt3 @ V0
+
+                # We now have: V = V0 - V0@nt1@t2@nt3@V0, but don't have to form that explcitly!
+                # V3 = V0 - V0@nt1@t2@nt3@V0
+                # LVPT, P, code = cpp_cholP(scp.sparse.csc_array(V3))
+                # LVT = apply_eigen_perm(P,LVPT)
+                # LV = LVT.T
+            t4 = None
+            t5 = None
+            t6 = None
+            t7 = None
+            t8 = None
+            t9 = None
+        else:
+            # Structured qEFS update. Bit more work necessary.
+            acols = InvCholXXS.acols
+            nHfd = InvCholXXS.nHfd
+            IonHBB = InvCholXXS.IonHBB
+            dampen_HBb = (
+                InvCholXXS.sqEFS_options["dampen_HBb"]
+                if "dampen_HBb" in InvCholXXS.sqEFS_options
+                else 1
+            )
+            dampen_HBB = (
+                InvCholXXS.sqEFS_options["dampen_HBB"]
+                if "dampen_HBB" in InvCholXXS.sqEFS_options
+                else 1
+            )
+
+            nH1, nH2t1, nH2t2, nH2t3, nH3t1, nH3t3, nH4t1, nH4t2, nH4t3 = computeSH(
+                y,
+                s,
+                nHfd,
+                IonHBB,
+                fcols,
+                acols,
+                sample_hessian,
+                dampen_HBb <= 0,
+                dampen_HBB,
+                explicit=False,
+                form=form,
+            )
+
+            (
+                V0,
+                t1,
+                t2,
+                t3,
+                t4,
+                t5,
+                t6,
+                t7,
+                t8,
+                t9,
+            ) = computeSVPS(
+                nH1,
+                nH2t1,
+                nH2t2,
+                nH2t3,
+                nH3t1,
+                nH3t3,
+                nH4t1,
+                nH4t2,
+                nH4t3,
+                S_emb,
+                dampen_HBb <= 0,
+                explicit=False,
+            )
 
     for lti, lTerm in enumerate(penalties):
         if InvCholXXS is not None:
             # Compute B, needed for Fellner Schall update (Wood & Fasiolo, 2017)
             if isinstance(InvCholXXS, scp.sparse.linalg.LinearOperator):
-                Bps = computetrVS3(t1, t2, t3, lTerm, V0)
+                Bps = computetrVS3(t1, t2, t3, t4, t5, t6, t7, t8, t9, lTerm, V0)
             else:
                 B = InvCholXXS @ lTerm.D_J_emb
                 Bps = B.power(2).sum()
@@ -1118,7 +1153,7 @@ def update_scale_edf(
     # Calculate total and term wise edf
     InvCholXXS = None
     if InvCholXXSP is not None:
-        InvCholXXS = apply_eigen_perm(Pr, InvCholXXSP)
+        InvCholXXS = apply_eigen_perm(Pr, InvCholXXSP)  # noqa: F405
 
         # Dropped some terms, need to insert zero columns and rows for dropped coefficients
         if InvCholXXS.shape[1] < colsX:
@@ -1220,7 +1255,7 @@ def update_coef(
     if formula is None:
         if S_root is None:
             LP, Pr, coef, code = cpp_solve_coef(yb, Xb, S_emb)  # noqa: F405
-            P = compute_eigen_perm(Pr)
+            P = compute_eigen_perm(Pr)  # noqa: F405
 
         else:  # Qr-based
             RP, Pr1, Pr2, coef, rank, code = cpp_solve_coef_pqr(  # noqa: F405
@@ -1228,8 +1263,8 @@ def update_coef(
             )
 
             # Need to get overall pivot...
-            P1 = compute_eigen_perm(Pr1)
-            P2 = compute_eigen_perm(Pr2)
+            P1 = compute_eigen_perm(Pr1)  # noqa: F405
+            P2 = compute_eigen_perm(Pr2)  # noqa: F405
             P = P2.T @ P1.T
 
             # Need to insert zeroes in case of rank deficiency - first insert nans to that we
@@ -1260,12 +1295,12 @@ def update_coef(
             # `compute_B` when called with only LP and not Linv).
             P = P[:, keep]
             _, Pr, _ = translate_sparse(P.tocsc())  # noqa: F405
-            P = compute_eigen_perm(Pr)
+            P = compute_eigen_perm(Pr)  # noqa: F405
 
     else:
         # yb is X.T@y and Xb is X.T@X
         LP, Pr, coef, code = cpp_solve_coefXX(yb, Xb + S_emb)  # noqa: F405
-        P = compute_eigen_perm(Pr)
+        P = compute_eigen_perm(Pr)  # noqa: F405
 
     # Update mu & eta
     if formula is None:
@@ -3077,7 +3112,7 @@ def solve_gamm_sparse(
             )
         Lp, Pr, _ = cpp_cholP((Xb.T @ Xb + S_emb).tocsc())  # noqa: F405
         InvCholXXSP = compute_Linv(Lp, n_c)  # noqa: F405
-        InvCholXXS = apply_eigen_perm(Pr, InvCholXXSP)
+        InvCholXXS = apply_eigen_perm(Pr, InvCholXXSP)  # noqa: F405
 
     # Check condition number of current system but only after convergence - and warn only.
     if check_cond == 1:
@@ -4431,7 +4466,7 @@ def newton_coef_smooth(
         Lp, Pr, code = cpp_cholP(  # noqa: F405
             nH2 + eps * scp.sparse.identity(nH2.shape[1], format="csc")
         )
-        P = compute_eigen_perm(Pr)
+        P = compute_eigen_perm(Pr)  # noqa: F405
 
         if code != 0:
             # Adjust identity added to nH
@@ -4442,7 +4477,7 @@ def newton_coef_smooth(
             continue
 
         LVp = compute_Linv(Lp, 10)  # noqa: F405
-        LV = apply_eigen_perm(Pr, LVp)
+        LV = apply_eigen_perm(Pr, LVp)  # noqa: F405
         V = LV.T @ LV
 
     # Undo conditioning.
@@ -4697,9 +4732,9 @@ def identify_drop(
 
     if code == 0:
         # Check condition number
-        P = compute_eigen_perm(Pr)
+        P = compute_eigen_perm(Pr)  # noqa: F405
         LVp = compute_Linv(Lp, 10)  # noqa: F405
-        LV = apply_eigen_perm(Pr, LVp)
+        LV = apply_eigen_perm(Pr, LVp)  # noqa: F405
 
         # Undo conditioning.
         LV = LV
@@ -4790,9 +4825,9 @@ def identify_drop(
         Lp, Pr2, code = cpp_cholP(nH_drop)  # noqa: F405
         if code == 0:
             # Check condition number
-            P2 = compute_eigen_perm(Pr2)
+            P2 = compute_eigen_perm(Pr2)  # noqa: F405
             LVp = compute_Linv(Lp, 10)  # noqa: F405
-            LV = apply_eigen_perm(Pr2, LVp)
+            LV = apply_eigen_perm(Pr2, LVp)  # noqa: F405
 
             # Undo conditioning.
             LV = LV
@@ -6769,7 +6804,7 @@ def sample_ys_qefs(
     maxcor: int,
     method: int,
     seed: int,
-    omega0: float,
+    H0: scp.sparse.csc_array,
     sample_kwargs: dict,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, int]:
     """Function to sample the limited-memory quasi-Newton approximation at estimate ``coef``,
@@ -6818,21 +6853,21 @@ def sample_ys_qefs(
     :type method: int
     :param seed: Seed to use to generate random permutations
     :type seed: int
-    :param omega0: A provided value for omega that is used to scale the identity of the hessian
-        approximation used to sample curvature vectors.
-    :type omega0: float
+    :param H0: A provided approximation to the negative hessian of the llk, used to sample curvature
+        vectors. Typically, a identity matrix scaled by some scalar.
+    :type H0: scp.sparse.csc_array
     :param sample_kwargs: A dictionary with optional alternative values for hyper-parameters used by
         the two sampling methods. If ``method==0``, this can contain values for ``T`` (the
         temperature as a float used when computing the acceptance probability of a permutation,
         defaults to 1), ``init_r`` (the initial
         multiplication factor applied to a random gaussian permutation with mean zero and covariance
-        matrix equal to :math:`(\\mathbf{I}*\\omega_{0} + \\mathbf{S}_{\\lambda})^{-1}` used as an
+        matrix equal to :math:`(\\mathbf{H}_{0} + \\mathbf{S}_{\\lambda})^{-1}` used as an
         approximation to the negative hessian approximation from which deviations from the final
         coefficient estimate are sampled to compute the update vectors, defaults to 10),
         update vectors), ``Madapt`` (the number of dual averaging steps to use to adapt ``init_r``,
         defaults to 100), and ``delta`` (the targeted metropolis average acceptance ratio for the
         the deviations from the final coefficient estimate sampled from
-        :math:`N(\\mathbf{0},r*(\\mathbf{I}*\\omega_{0} + \\mathbf{S}_{\\lambda})^{-1}`, defaults to
+        :math:`N(\\mathbf{0},r*(\\mathbf{H}_{0} + \\mathbf{S}_{\\lambda})^{-1}`, defaults to
         0.8). If ``method==1``, this dictionary is passed to
         ``scp.differentiate.jacobian``, which is used to approximate the Hessian vector product.
         You can check the scipy documentation to see which keyword arguments are supported.
@@ -6865,13 +6900,11 @@ def sample_ys_qefs(
         c_pen_llk = c_llk - 0.5 * coef.T @ S_emb @ coef
 
         # Build diagonal approximation to penalized hessian used for sampling
-        Lp, Pr, code = cpp_cholP(  # noqa: F405
-            omega0 * scp.sparse.identity(S_emb.shape[1], format="csc") + S_emb
-        )
+        Lp, Pr, code = cpp_cholP(H0 + S_emb)  # noqa: F405
 
         if code == 0:
             LVp = compute_Linv(Lp, 10)  # noqa: F405
-            LV = apply_eigen_perm(Pr, LVp)
+            LV = apply_eigen_perm(Pr, LVp)  # noqa: F405
         else:
             LV = scp.sparse.identity(S_emb.shape[1], format="csc")
 
@@ -7012,6 +7045,81 @@ def sample_ys_qefs(
     return yks, sks, rhos, omega, updates
 
 
+def makepdd_fd2llk(
+    nHfd: scp.sparse.csc_array, fcols: np.ndarray, acols: np.ndarray, dampen_HBb: float
+) -> tuple[scp.sparse.csc_array, np.ndarray, np.ndarray, np.ndarray]:
+    """Transforms ``nHfd``, which is symmetric sparse matrix with ``fcols`` rows and columns set
+    to finite difference approximation of columns of negative Hessian of llk, so that column
+    (and row) order is ``[fcols, acols]``. Then sets top left block (mixed partial derivatives of
+    ``coef[fcols]``) to positive definite and scales the top right and lower left rectangular
+    blocks (mixed partial derivatives of ``coef[fcols]`` with respect to ``coef[acols]``) by
+    ``dampen_HBb``. Returns the updated matrix and the inverse of the top right block.
+
+    :param nHfd: Finite difference approximation matrix which is symmetric sparse matrix with
+        ``fcols`` rows and columns set to finite difference approximation of columns of negative
+        Hessian of llk
+    :type nHfd: scp.sparse.csc_array
+    :param fcols: Array holding indices of columns of negative Hessian approximated via finite
+        differencing.
+    :type fcols: np.ndarray
+    :param acols: Array holding indices of columns of negative Hessian not approximated via FD (
+        to be approximated via quasi Newton)
+    :type acols: np.ndarray
+    :param dampen_HBb: Float that is used to scale the top right and lower left rectangular blocks
+        of ``nHfd`` (should be between [0,1]).
+    :type dampen_HBb: float
+    :return: The updated finite difference approximation matrix, the updated ordered top left block,
+        the inverse of the updated ordered top left block, and the scaled ordered top right
+        (lower left is transpose) block
+    :rtype: tuple[scp.sparse.csc_array,np.ndarray,np.ndarray,np.ndarray]
+    """
+
+    # First order negative Hessian to make extractions easier
+
+    # Combined indices in order so that quasi Newton block is bottom right
+    tcols = [*fcols, *acols]
+
+    nF, nT = len(fcols), len(tcols)
+
+    # To compute ordered version of finite diff approx we need first permutation matrix P1:
+    # len(tcols) * len(tcols) permutation matrix transforming entire nH into order (onH) so that
+    # fd approximated block is top left and quasi Newton block is bottom right via
+    # onH = P1.T @ nH @ P1
+    P1 = scp.sparse.csc_array(
+        (
+            np.tile(1, nT),
+            (tcols, np.arange(nT)),
+        ),
+        shape=(nT, nT),
+    )
+
+    # Can now compute ordered version of finite difference approximated part of nH
+    onHfd = P1.T @ nHfd @ P1
+
+    # Can now extract the block on the diagonal and the off-diagonals holding the mixed derivs
+    onHBB = onHfd[np.ix_(np.arange(nF), np.arange(nF))]
+    onHBb = dampen_HBb * onHfd[np.ix_(np.arange(nF), np.arange(nF, nT))]
+
+    # Need an ev decomp of onHBB to check for pd and subsequently invert
+    eigonHBB, U = scp.linalg.eigh(onHBB.toarray())
+
+    # Enforce PD
+    eps = np.power(np.finfo(float).eps, 0.5)
+    thresh = eps * np.max(eigonHBB)
+    eigonHBB[eigonHBB <= thresh] = thresh
+
+    # Re-compute onHBB as PD and invert
+    onHBB = U @ np.diag(eigonHBB) @ U.T
+    IonHBB = U @ np.diag(1 / eigonHBB) @ U.T
+
+    # Replace blocks in noHfd with PD and dampened versions
+    onHfd[np.ix_(np.arange(nF), np.arange(nF))] = onHBB
+    onHfd[np.ix_(np.arange(nF), np.arange(nF, nT))] = onHBb
+    onHfd[np.ix_(np.arange(nF, nT), np.arange(nF))] = onHBb.T
+
+    return P1 @ onHfd @ P1.T, onHBB, IonHBB, onHBb
+
+
 def update_coef_gen_smooth(
     family: GSMMFamily,
     ys: list[np.ndarray | None],
@@ -7146,7 +7254,18 @@ def update_coef_gen_smooth(
         # Sampling options
         sample_hessian = opt_raw.sample_hessian
         sample_hessian_method = opt_raw.sample_hessian_method
-        sample_hessian_kwargs = opt_raw.sample_hessian_kwargs
+        sample_hessian_options = opt_raw.sample_hessian_options
+
+        # Structured options
+        fcols = opt_raw.fcols
+        acols = opt_raw.acols
+        P1 = opt_raw.P1
+        P2 = opt_raw.P2
+        dampen_HBb = (
+            opt_raw.sqEFS_options["dampen_HBb"]
+            if "dampen_HBb" in opt_raw.sqEFS_options
+            else 1
+        )
 
         H = None
         L = None
@@ -7230,6 +7349,49 @@ def update_coef_gen_smooth(
         # Correct for dual secant equation.
         yks -= (S_emb @ sks.T).T
 
+        nHfd = None
+        IonHBB = None
+        if fcols is not None and sample_hessian is False:
+            # IFF structured update also includes fd hessian approximation info, we must
+            # correct all k update vectors for hessian after step taken. Thus need to figure
+            # out the coefficient vector values before each step. Can do this via the sks array.
+            coef2 = copy.deepcopy(coef)
+            for k in range(sks.shape[0] - 1, -1, -1):
+
+                precoef = coef2 - sks[[k]].T
+
+                # Can use yks to verify this is the correct coef value before step k..
+                # grad1 = -1 * family.gradient(precoef, coef_split_idx, ys, Xs)
+                # grad2 = -1 * family.gradient(coef2, coef_split_idx, ys, Xs)
+                # print(yks[[k]].T - (grad2 - grad1))
+
+                # Can now approximate hessian at post step coef.
+                nHfdk = -1 * family.jhessian(fcols, coef2, coef_split_idx, ys, Xs)
+
+                # Make PD and dampen
+                nHfdk, _, IonHBBk, onHBb = makepdd_fd2llk(
+                    nHfdk, fcols, acols, dampen_HBb
+                )
+
+                # And correct for fd hessian approximation
+                # And Schur complement requirement to be PSD
+                yks[[k]] -= (nHfdk @ sks[[k]].T).T
+                yks[[k]] -= (P2 @ onHBb.T @ (IonHBBk @ (onHBb @ (P2.T @ sks[[k]].T)))).T
+
+                if k == (sks.shape[0] - 1):
+                    nHfd = nHfdk
+                    IonHBB = IonHBBk
+
+                # Now precoef becomes post step coef for next k
+                coef2 = copy.deepcopy(precoef)
+
+            # Still need hessian at current coef if there were no updates
+            if nHfd is None:
+                nHfd = -1 * family.jhessian(fcols, coef, coef_split_idx, ys, Xs)
+
+                # Make PD again
+                nHfd, _, IonHBB, _ = makepdd_fd2llk(nHfd, fcols, acols, dampen_HBb)
+
         # Pad with previous update vectors - if available.
         if sks.shape[0] < maxcor and opt_raw.init and sample_hessian is False:
 
@@ -7251,6 +7413,48 @@ def update_coef_gen_smooth(
         # Alternatively sample the Hessian approximation
         if sample_hessian:
 
+            if fcols is not None:
+                nHfd = -1 * family.jhessian(fcols, coef, coef_split_idx, ys, Xs)
+
+                nHfd, onHBB, IonHBB, onHBb = makepdd_fd2llk(
+                    nHfd, fcols, acols, dampen_HBb
+                )
+
+                if outer > 0 and len(opt_raw.yk) > 0:
+                    # Prefer previously sampled vectors
+                    omega0 = compute_omega(
+                        opt_raw.yk[:, acols], opt_raw.sk[:, acols], method="mean"
+                    )
+                elif len(yks) > 0:
+                    omega0 = compute_omega(yks[:, acols], sks[:, acols])
+                else:
+                    omega0 = 1
+
+                H0 = (
+                    P1
+                    @ scp.sparse.block_array(
+                        [
+                            [scp.sparse.csc_array(onHBB), None],
+                            [
+                                None,
+                                omega0 * scp.sparse.identity(len(acols), format="csc"),
+                            ],
+                        ],
+                        format="csc",
+                    )
+                    @ P1.T
+                )
+
+            else:
+                if len(yks) > 0:
+                    omega0 = compute_omega(yks, sks)
+                elif len(opt_raw.yk) > 0:
+                    omega0 = compute_omega(opt_raw.yk, opt_raw.sk)
+                else:
+                    omega0 = 1
+
+                H0 = omega0 * scp.sparse.identity(S_emb.shape[1], format="csc")
+
             # Now sample update vectors
             yks, sks, rhos, omega, updates = sample_ys_qefs(
                 family,
@@ -7263,12 +7467,18 @@ def update_coef_gen_smooth(
                 maxcor,
                 sample_hessian_method,
                 outer,
-                compute_omega(yks, sks),
-                sample_hessian_kwargs,
+                H0,
+                sample_hessian_options,
             )
 
             if updates == 0:
                 warnings.warn("Failed to sample any update vectors for the Hessian!")
+
+            elif fcols is not None:
+                # Again correct for any kind of structured information available
+                # beyond S_emb
+                yks -= (nHfd @ sks.T).T
+                yks -= (P2 @ onHBb.T @ (IonHBB @ (onHBb @ (P2.T @ sks.T)))).T
 
     # Update coefficients:
     full_coef = None
@@ -7405,7 +7615,14 @@ def update_coef_gen_smooth(
         LV.form = form
         LV.sample_hessian = sample_hessian
         LV.sample_hessian_method = sample_hessian_method
-        LV.sample_hessian_kwargs = sample_hessian_kwargs
+        LV.sample_hessian_options = sample_hessian_options
+        LV.fcols = fcols
+        LV.acols = acols
+        LV.P1 = P1
+        LV.P2 = P2
+        LV.nHfd = nHfd
+        LV.IonHBB = IonHBB
+        LV.sqEFS_options = opt_raw.sqEFS_options
         LV.init = True
         LV.bfgs_options = opt_raw.bfgs_options
 
@@ -7531,13 +7748,8 @@ def correct_lambda_step_gen_smooth(
     gamma: float,
     method: str,
     qEFSH: str,
-    overwrite_coef: bool,
-    qEFS_init_converge: bool,
     optimizer: str,
     __old_opt: scp.sparse.linalg.LinearOperator | None,
-    use_grad: bool,
-    __neg_pen_llk: Callable,
-    __neg_pen_grad: Callable,
     piv_tol: float,
     keep_drop: tuple[np.typing.NDArray[np.int_], np.typing.NDArray[np.int_]] | None,
     extend_lambda: bool,
@@ -7545,12 +7757,13 @@ def correct_lambda_step_gen_smooth(
     control_lambda: int,
     repara: bool,
     n_c: int,
-    init_bfgs_options: dict,
     bfgs_options: dict,
     global_opt_qefs: bool,
     sample_hessian: bool,
     sample_hessian_method: int,
-    sample_hessian_kwargs: dict,
+    sample_hessian_options: dict,
+    fcols: np.ndarray | None,
+    sqEFS_options: dict,
 ) -> tuple[
     np.ndarray,
     scp.sparse.csc_array | None,
@@ -7629,28 +7842,12 @@ def correct_lambda_step_gen_smooth(
         that is forced to result in positive semi-definiteness of the approximation or the standard
         bfgs update (``qEFSH='BFGS'``)
     :type qEFSH: str
-    :param overwrite_coef: Whether the initial coefficients passed to the optimization routine
-        should be over-written by the solution obtained for the un-penalized version of the problem
-        when ``method='qEFS'``. Setting this to False will be useful when passing coefficients from
-        a simpler model to initialize a more complex one. Only has an effect
-        when ``qEFS_init_converge=True``.
-    :type overwrite_coef: bool
-    :param qEFS_init_converge: Whether to optimize the un-penalzied version of the model and to use
-        the hessian (and optionally coefficients, if ``overwrite_coef=True``) to initialize the
-        q-EFS solver. Ignored if ``method!='qEFS'``.
-    :type qEFS_init_converge: bool
     :param optimizer: Deprecated
     :type optimizer: str
     :param __old_opt: If the L-qEFS update is used to estimate coefficients/lambda parameters, then
         this is the previous state of the quasi-Newton approximations to the (inverse) of the
         hessian of the log-likelihood
     :type __old_opt: scp.sparse.linalg.LinearOperator | None
-    :param use_grad: Deprecated
-    :type use_grad: bool
-    :param __neg_pen_llk: Function to evaluate negative penalized log-likelihood
-    :type __neg_pen_llk: Callable
-    :param __neg_pen_grad: Function to evaluate gradient of negative penalized log-likelihood
-    :type __neg_pen_grad: Callable
     :param piv_tol: Deprecated
     :type piv_tol: float
     :param keep_drop: Set of previously kept and dropped coeeficients or None
@@ -7678,10 +7875,6 @@ def correct_lambda_step_gen_smooth(
     :type repara: bool
     :param n_c: Number of cores to use
     :type n_c: int
-    :param init_bfgs_options: An optional dictionary holding the same key:value pairs that can be
-        passed to ``bfgs_options`` but pased to the optimizer of the un-penalized problem. Only has
-        an effect when ``qEFS_init_converge=True``.
-    :type init_bfgs_options: dict
     :param bfgs_options: An optional dictionary holding arguments that should be passed on to the
         call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``.
     :type bfgs_options: dict
@@ -7695,9 +7888,21 @@ def correct_lambda_step_gen_smooth(
     :param sample_hessian_method: Method to use for hessian sampling step. See
         :func:`sample_ys_qefs` docstring for details.
     :type sample_hessian_method: int
-    :param sample_hessian_kwargs: Optional key-word arguments determining behavior of hessian
+    :param sample_hessian_options: Optional key-word arguments determining behavior of hessian
         sampling step. See :func:`sample_ys_qefs` docstring for details.
-    :type sample_hessian_kwargs: dict
+    :type sample_hessian_options: dict
+    :param fcols: For structured qEFS update this will be an array holding indices of columns of
+        negative Hessian to be approximated via finite differencing. Otherwise this will be None
+    :type fcols: np.ndarray
+    :param sqEFS_options: Optional key-word arguments determining behavior of the structured qEFS
+        method. Currently only ``"dampen_HBB"`` and ``"dampen_HBb"`` are supported. ``"dampen_HBB"``
+        takes float values > 0, with values < 1 leading to more wiggly estimates of smooths
+        approximated via quasi Newton approximation. Values > 1 are possible but not really a good
+        idea. ``"dampen_HBb"`` takes float values >= 0 and <= 1 and is used to scale the
+        off-diagonal blocks of the approximation of the negative Hessian, holding mixed derivatives
+        of terms approximated via finite differencing with respect to those approximated via quasi
+        Newton.
+    :type sqEFS_options: dict
     :return: coef estimate under corrected lambda, the negative hessian of the log-likelihood,
         cholesky of negative hessian of the penalized log-likelihood, inverse of the former
         (or another instance of :class:`scp.sparse.linalg.LinearOperator` representing the new
@@ -7754,10 +7959,34 @@ def correct_lambda_step_gen_smooth(
                 n_c=n_c,
             )
 
+            if method == "qEFS" and outer > 0 and len(__old_opt.sk) > 0:
+                # sk and yk of previous optimizer are in state before re-param and will
+                # have to be transformed here
+                __old_opt_rp = copy.deepcopy(__old_opt)
+
+                __old_opt_rp.yk = __old_opt_rp.yk @ Q_emb
+                __old_opt_rp.sk = __old_opt_rp.sk @ Q_emb
+
+                # Must re-compute rho as well
+                __old_opt_rp.rho = 1 / np.einsum(
+                    "ij,ij->i", __old_opt_rp.sk, __old_opt_rp.yk
+                )
+
+                if fcols is not None:
+                    # Must also reparam nfH and IonHBB
+                    __old_opt_rp.nHfd = Q_emb.T @ __old_opt_rp.nHfd @ Q_emb
+
+                    __old_opt_rp.IonHBB = (
+                        Q_emb.T[np.ix_(fcols, fcols)]
+                        @ __old_opt_rp.IonHBB
+                        @ Q_emb[np.ix_(fcols, fcols)]
+                    )
+
         else:
             coef_rp = coef
             Xs_rp = Xs
             smooth_pen_rp = smooth_pen
+            __old_opt_rp = __old_opt
 
         # Then re-compute coef
         if optimizer == "Newton":
@@ -7766,31 +7995,60 @@ def correct_lambda_step_gen_smooth(
 
                 if outer == 0:
                     # Initialize storage for qEFS update.
-                    __old_opt = scp.optimize.LbfgsInvHessProduct(
+                    __old_opt_rp = scp.optimize.LbfgsInvHessProduct(
                         np.array([1]).reshape(1, 1), np.array([1]).reshape(1, 1)
                     )
 
                     # Storage but not approximation has been set up.
-                    __old_opt.init = False
+                    __old_opt_rp.init = False
 
-                    __old_opt.method = "qEFS"
-                    __old_opt.form = qEFSH
-                    __old_opt.bfgs_options = bfgs_options
-                    __old_opt.sample_hessian = sample_hessian
-                    __old_opt.sample_hessian_method = sample_hessian_method
-                    __old_opt.sample_hessian_kwargs = sample_hessian_kwargs
+                    __old_opt_rp.method = "qEFS"
+                    __old_opt_rp.form = qEFSH
+                    __old_opt_rp.bfgs_options = bfgs_options
+                    __old_opt_rp.sample_hessian = sample_hessian
+                    __old_opt_rp.sample_hessian_method = sample_hessian_method
+                    __old_opt_rp.sample_hessian_options = sample_hessian_options
+                    __old_opt_rp.fcols = fcols
+                    __old_opt_rp.acols = None
+                    __old_opt_rp.P1 = None
+                    __old_opt_rp.P2 = None
+                    __old_opt_rp.nHfd = None
+                    __old_opt_rp.IonHBB = None
+                    __old_opt_rp.sqEFS_options = sqEFS_options
+                    __old_opt_rp
 
-                if repara and __old_opt.init and len(__old_opt.sk) > 0:
-                    # sk and yk of previous optimizer are in state before re-param and will
-                    # have to be transformed here
+                    if fcols is not None:
+                        __old_opt_rp.acols = [
+                            c for c in range(len(coef)) if c not in fcols
+                        ]
 
-                    __old_opt.yk = __old_opt.yk @ Q_emb
-                    __old_opt.sk = __old_opt.sk @ Q_emb
+                        # Combined indices in order so that quasi Newton block is bottom right
+                        tcols = [*fcols, *__old_opt_rp.acols]
 
-                    # Must re-compute rho as well
-                    __old_opt.rho = 1 / np.einsum(
-                        "ij,ij->i", __old_opt.sk, __old_opt.yk
-                    )
+                        nA, nT = len(__old_opt_rp.acols), len(tcols)
+
+                        # Permutation matrix P1:
+                        # len(tcols) * len(tcols) permutation matrix transforming entire nH into
+                        # order (onH) so that fd approximated block is top left and quasi Newton
+                        # block is bottom right via onH = P1.T @ nH @ P1
+                        __old_opt_rp.P1 = scp.sparse.csc_array(
+                            (
+                                np.tile(1, nT),
+                                (tcols, np.arange(nT)),
+                            ),
+                            shape=(nT, nT),
+                        )
+
+                        # Need another permutation matrix, P2:
+                        # len(tcols) * len(acols) permutation matrix transforming quasi Newton
+                        # approximated block (nHqa) to fit into nH via P2 @ nHqa @ P2.T
+                        __old_opt_rp.P2 = scp.sparse.csc_array(
+                            (
+                                np.tile(1, nA),
+                                (__old_opt_rp.acols, np.arange(nA)),
+                            ),
+                            shape=(nT, nA),
+                        )
 
             next_coef, H, L, LV, next_llk, next_pen_llk, eps, keep, drop = (
                 update_coef_gen_smooth(
@@ -7812,7 +8070,7 @@ def correct_lambda_step_gen_smooth(
                     method,
                     piv_tol,
                     keep_drop,
-                    __old_opt,
+                    __old_opt_rp,
                     global_opt_qefs,
                 )
             )
@@ -7904,22 +8162,6 @@ def correct_lambda_step_gen_smooth(
         else:
             lam_accepted = True
 
-        if (
-            lam_accepted is False
-            and method == "qEFS"
-            and repara
-            and __old_opt.init
-            and len(__old_opt.sk) > 0
-        ):
-            # sk and yk of previous optimizer is in state after re-param and
-            # will have to be untransformed here before re-entering while loop at top.
-
-            __old_opt.yk = __old_opt.yk @ Q_emb.T
-            __old_opt.sk = __old_opt.sk @ Q_emb.T
-
-            # Must re-compute rho as well
-            __old_opt.rho = 1 / np.einsum("ij,ij->i", __old_opt.sk, __old_opt.yk)
-
     # At this point we have accepted the lambda step and can propose a new one!
     if drop is not None:
         fit_info.dropped = drop
@@ -7935,7 +8177,15 @@ def correct_lambda_step_gen_smooth(
     if method == "qEFS":
         if control_lambda in [1, 3] and outer > 0:
             total_edf2, term_edfs2, ldetHSs2 = calculate_edf(
-                None, None, __old_opt, smooth_pen_rp, lgdetDs, n_coef, n_c, None, S_emb
+                None,
+                None,
+                __old_opt_rp,
+                smooth_pen_rp,
+                lgdetDs,
+                n_coef,
+                n_c,
+                None,
+                S_emb,
             )
             diff1 = [
                 np.abs((lgdetDs[lti] - ldetHSs[lti]) - bsbs[lti])
@@ -7946,19 +8196,17 @@ def correct_lambda_step_gen_smooth(
                 for lti in range(len(smooth_pen_rp))
             ]
 
-            # print(np.mean(diff2),np.mean(diff1))
-
             if np.mean(diff2) < np.mean(diff1):
                 # Reset approximation to previous one
                 nit = LV.nit
-                LV = __old_opt
+                LV = __old_opt_rp
                 LV.nit = nit
                 ldetHSs = ldetHSs2
                 total_edf = total_edf2
                 term_edfs = term_edfs2
 
         # Last accepted LV
-        __old_opt = copy.deepcopy(LV)
+        __old_opt_rp = copy.deepcopy(LV)
 
     step_norm = np.linalg.norm(lam_delta)
     lam_delta = []
@@ -7972,7 +8220,7 @@ def correct_lambda_step_gen_smooth(
             dLam = 0
         else:
             dLam = step_fellner_schall_sparse(lgdetD, ldetHS, bsb[0, 0], lTerm.lam, 1)
-        # print("Theorem 1:",lgdetD-ldetHS,bsb)
+        # print("Theorem 1:", lgdetD - ldetHS, bsb)
 
         # For poorly scaled/ill-identifiable problems we cannot rely on the theorems by Wood
         # & Fasiolo (2017) - so the condition below will ocasionally be met, in which case we just
@@ -8041,12 +8289,12 @@ def correct_lambda_step_gen_smooth(
             L = Q_emb @ L
             LV = LV @ Q_emb.T
 
-        elif __old_opt.init and len(__old_opt.sk) > 0:
+        elif __old_opt_rp.init and len(__old_opt_rp.sk) > 0:
             # sk and yk of previous and current optimizer are in state after re-param and
             # will have to be transformed here
 
-            sk1 = __old_opt.sk
-            yk1 = __old_opt.yk
+            sk1 = __old_opt_rp.sk
+            yk1 = __old_opt_rp.yk
             sk2 = LV.sk
             yk2 = LV.yk
 
@@ -8055,14 +8303,33 @@ def correct_lambda_step_gen_smooth(
             sk2 = sk2 @ Q_emb.T
             yk2 = yk2 @ Q_emb.T
 
-            __old_opt.yk = yk1
-            __old_opt.sk = sk1
+            __old_opt_rp.yk = yk1
+            __old_opt_rp.sk = sk1
             LV.yk = yk2
             LV.sk = sk2
 
             # Must re-compute rho as well
-            __old_opt.rho = 1 / np.einsum("ij,ij->i", __old_opt.sk, __old_opt.yk)
+            __old_opt_rp.rho = 1 / np.einsum(
+                "ij,ij->i", __old_opt_rp.sk, __old_opt_rp.yk
+            )
             LV.rho = 1 / np.einsum("ij,ij->i", LV.sk, LV.yk)
+
+            if fcols is not None:
+                # Must also reparam nfH and IonHBB
+                __old_opt_rp.nHfd = Q_emb @ __old_opt_rp.nHfd @ Q_emb.T
+                LV.nHfd = Q_emb @ LV.nHfd @ Q_emb.T
+
+                __old_opt_rp.IonHBB = (
+                    Q_emb[np.ix_(fcols, fcols)]
+                    @ __old_opt_rp.IonHBB
+                    @ Q_emb.T[np.ix_(fcols, fcols)]
+                )
+
+                LV.IonHBB = (
+                    Q_emb[np.ix_(fcols, fcols)]
+                    @ LV.IonHBB
+                    @ Q_emb.T[np.ix_(fcols, fcols)]
+                )
 
     return (
         next_coef,
@@ -8071,7 +8338,7 @@ def correct_lambda_step_gen_smooth(
         LV,
         next_llk,
         next_pen_llk,
-        __old_opt,
+        __old_opt_rp,
         keep,
         drop,
         S_emb,
@@ -8105,25 +8372,15 @@ def solve_generalSmooth_sparse(
     repara: bool = True,
     should_keep_drop: bool = True,
     form_VH: bool = True,
-    use_grad: bool = False,
     gamma: float = 1,
     qEFSH: str = "SR1",
-    overwrite_coef: bool = True,
     max_restarts: int = 0,
-    qEFS_init_converge: bool = True,
     prefit_grad: bool = False,
     progress_bar: bool = True,
     n_c: int = 10,
     callback: Callable | None = None,
-    init_bfgs_options: dict = {
-        "gtol": 1e-9,
-        "ftol": 1e-9,
-        "maxcor": 30,
-        "maxls": 100,
-        "maxfun": 1e7,
-    },
     bfgs_options: dict = {
-        "gtol": 1e-9,
+        "gtol": 0,
         "ftol": 1e-9,
         "maxcor": 30,
         "maxls": 100,
@@ -8132,7 +8389,9 @@ def solve_generalSmooth_sparse(
     global_opt_qefs: bool = False,
     sample_hessian: bool = False,
     sample_hessian_method: int = 0,
-    sample_hessian_kwargs: dict = {},
+    sample_hessian_options: dict = {},
+    fcols: np.ndarray | None = None,
+    sqEFS_options: dict = {},
 ) -> tuple[
     np.ndarray,
     scp.sparse.csc_array | None,
@@ -8240,20 +8499,12 @@ def solve_generalSmooth_sparse(
         that is forced to result in positive semi-definiteness of the approximation or the standard
         bfgs update (``qEFSH='BFGS'``), defaults to 'SR1'
     :type qEFSH: str, optional
-    :param overwrite_coef: Whether the initial coefficients passed to the optimization routine
-        should be over-written by the solution obtained for the un-penalized version of the problem
-        when ``method='qEFS'``, defaults to True
-    :type overwrite_coef: bool, optional
     :param max_restarts: How often to shrink the coefficient estimate back to a random vector when
         convergence is reached and when ``method='qEFS'``. The optimizer might get stuck in local
         minima so it can be helpful to set this to 1-3. What happens is that if we converge, we
         shrink the coefficients back to a random vector and then continue optimizing once more,
         defaults to 0
     :type max_restarts: int, optional
-    :param qEFS_init_converge: Whether to optimize the un-penalzied version of the model and to use
-        the hessian (and optionally coefficients, if ``overwrite_coef=True``) to initialize the
-        q-EFS solver. Ignored if ``method!='qEFS'``, defaults to True
-    :type qEFS_init_converge: bool, optional
     :param prefit_grad: Whether to rely on Gradient Descent to improve the initial starting
         estimate for coefficients, defaults to False
     :type prefit_grad: bool, optional
@@ -8269,10 +8520,6 @@ def solve_generalSmooth_sparse(
         estimate, and ``lam`` holds a list with the current :math:`\\lambda` parameters.
         Defaults to None.
     :type callback: Callable | None ,optional
-    :param init_bfgs_options: An optional dictionary holding the same key:value pairs that can be
-        passed to ``bfgs_options`` but pased to the optimizer of the un-penalized problem, defaults
-        to {"gtol":1e-9,"ftol":1e-9,"maxcor":30,"maxls":100,"maxfun":1e7}
-    :type init_bfgs_options: dict, optional
     :param bfgs_options: An optional dictionary holding arguments that should be passed on to the
         call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``, defaults to
         {"gtol":1e-9,"ftol":1e-9,"maxcor":30,"maxls":100,"maxfun":1e7}
@@ -8287,9 +8534,21 @@ def solve_generalSmooth_sparse(
     :param sample_hessian_method: Method to use for hessian sampling step. See
         :func:`sample_ys_qefs` docstring for details. Defaults to 0
     :type sample_hessian_method: int, optional
-    :param sample_hessian_kwargs: Optional key-word arguments determining behavior of hessian
+    :param sample_hessian_options: Optional key-word arguments determining behavior of hessian
         sampling step. See :func:`sample_ys_qefs` docstring for details. Defaults to ``{}``
-    :type sample_hessian_kwargs: dict, optional
+    :type sample_hessian_options: dict, optional
+    :param fcols: For structured qEFS update this will be an array holding indices of columns of
+        negative Hessian to be approximated via finite differencing. Otherwise this will be None
+    :type fcols: np.ndarray, optional
+    :param sqEFS_options: Optional key-word arguments determining behavior of the structured qEFS
+        method. Currently only ``"dampen_HBB"`` and ``"dampen_HBb"`` are supported. ``"dampen_HBB"``
+        takes float values > 0, with values < 1 leading to more wiggly estimates of smooths
+        approximated via quasi Newton update vectors. Values > 1 are possible but usually not a good
+        idea. ``"dampen_HBb"`` takes float values >= 0 and <= 1 and is used to scale the
+        off-diagonal blocks of the approximation of the negative Hessian, holding mixed derivatives
+        of terms approximated via finite differencing with respect to those approximated via quasi
+        Newton. Defaults to ``{}``
+    :type sqEFS_options: dict, optional
     :return: coef estimate, the negative hessian of the log-likelihood, inverse of cholesky of
         negative hessian of the penalized log-likelihood, if ``method=='qEFS'`` an instance of
         :class:`scp.sparse.linalg.LinearOperator` representing the new quasi-newton approximation,
@@ -8326,25 +8585,6 @@ def solve_generalSmooth_sparse(
     # Compute penalized likelihood for current estimate
     c_llk = family.llk(coef, coef_split_idx, ys, Xs)
     c_pen_llk = c_llk - 0.5 * coef.T @ S_emb @ coef
-
-    __neg_pen_llk = None
-    __neg_pen_grad = None
-    if method == "qEFS":
-        # Define negative penalized likelihood function to be minimized via BFGS
-        # plus function to evaluate negative gradient of penalized likelihood.
-        def __neg_pen_llk(coef, coef_split_idx, ys, Xs, family, S_emb):  # noqa: F811
-            coef = coef.reshape(-1, 1)
-            neg_llk = -1 * family.llk(coef, coef_split_idx, ys, Xs)
-            return neg_llk + 0.5 * coef.T @ S_emb @ coef
-
-        def __neg_pen_grad(coef, coef_split_idx, ys, Xs, family, S_emb):  # noqa: F811
-            # see Wood, Pya & Saefken (2016)
-            coef = coef.reshape(-1, 1)
-            grad = family.gradient(coef, coef_split_idx, ys, Xs)
-            pgrad = np.array(
-                [grad[i] - (S_emb[[i], :] @ coef)[0] for i in range(len(grad))]
-            )
-            return -1 * pgrad.flatten()
 
     # Try improving start estimate via Gradient only
     if prefit_grad:
@@ -8453,13 +8693,8 @@ def solve_generalSmooth_sparse(
             gamma,
             method,
             qEFSH,
-            overwrite_coef,
-            qEFS_init_converge,
             optimizer,
             __old_opt,
-            use_grad,
-            __neg_pen_llk,
-            __neg_pen_grad,
             piv_tol,
             keep_drop,
             extend_lambda,
@@ -8467,12 +8702,13 @@ def solve_generalSmooth_sparse(
             control_lambda,
             repara,
             n_c,
-            init_bfgs_options,
             bfgs_options,
             global_opt_qefs,
             sample_hessian,
             sample_hessian_method,
-            sample_hessian_kwargs,
+            sample_hessian_options,
+            fcols,
+            sqEFS_options,
         )
 
         # Monitor whether we keep changing lambda but not actually updating coefficients..
@@ -8625,6 +8861,49 @@ def solve_generalSmooth_sparse(
         # coefficient estimate. So sample below for checks 1 & 3
         if control_lambda in [1, 3] and outer > 0:
 
+            if fcols is not None:
+                nHfd = -1 * family.jhessian(fcols, coef, coef_split_idx, ys, Xs)
+
+                dampen_HBb = (
+                    LV.sqEFS_options["dampen_HBb"]
+                    if "dampen_HBb" in LV.sqEFS_options
+                    else 1
+                )
+
+                nHfd, onHBB, IonHBB, onHBb = makepdd_fd2llk(
+                    nHfd, LV.fcols, LV.acols, dampen_HBb
+                )
+
+                if len(LV.yk) > 0:
+                    omega0 = compute_omega(
+                        LV.yk[:, LV.acols],
+                        LV.sk[:, LV.acols],
+                        method="mean" if sample_hessian else "NoWr",
+                    )
+                else:
+                    omega0 = 1
+
+                H0 = (
+                    LV.P1
+                    @ scp.sparse.block_array(
+                        [
+                            [scp.sparse.csc_array(onHBB), None],
+                            [
+                                None,
+                                omega0
+                                * scp.sparse.identity(len(LV.acols), format="csc"),
+                            ],
+                        ],
+                        format="csc",
+                    )
+                    @ LV.P1.T
+                )
+
+            else:
+                H0 = compute_omega(
+                    LV.yk, LV.sk, method="mean" if sample_hessian else "NoWr"
+                ) * scp.sparse.identity(S_emb.shape[1], format="csc")
+
             yks, sks, rhos, _, updates = sample_ys_qefs(
                 family,
                 ys,
@@ -8636,13 +8915,23 @@ def solve_generalSmooth_sparse(
                 LV.bfgs_options["maxcor"],
                 sample_hessian_method,
                 outer,
-                compute_omega(
-                    LV.yk, LV.sk, method="mean" if sample_hessian else "NoWr"
-                ),
-                sample_hessian_kwargs,
+                H0,
+                sample_hessian_options,
             )
 
             if updates > 0:
+                if fcols is not None:
+                    # Again correct for structured information available
+                    # beyond S_emb
+                    yks -= (nHfd @ sks.T).T
+                    yks -= (LV.P2 @ onHBb.T @ (IonHBB @ (onHBb @ (LV.P2.T @ sks.T)))).T
+
+                    # and re-compute rhos
+                    rhos = 1 / np.einsum("ij,ij->i", sks, yks)
+
+                    LV.nHfd = nHfd
+                    LV.IonHBB = IonHBB
+
                 LV.sk = sks
                 LV.yk = yks
                 LV.rho = rhos
@@ -8654,40 +8943,67 @@ def solve_generalSmooth_sparse(
         # when working with qEFS update
         if form_VH:
 
-            if len(LV.yk) > 0:
-                omega = compute_omega(
-                    LV.yk, LV.sk, method="mean" if sample_hessian else "NoWr"
-                )
-            else:
-                omega = 1
+            if fcols is None:
+                if len(LV.yk) > 0:
+                    omega = compute_omega(
+                        LV.yk, LV.sk, method="mean" if sample_hessian else "NoWr"
+                    )
+                else:
+                    omega = 1
 
-            # Get an approximation of the Hessian of the likelihood
-            if LV.form == "SR1":
-                H = -1 * computeHSR1(
-                    LV.sk,
+                # Get an approximation of the Hessian of the likelihood
+                if LV.form == "SR1":
+                    nH = computeHSR1(
+                        LV.sk,
+                        LV.yk,
+                        LV.rho,
+                        scp.sparse.identity(len(coef), format="csc") * omega,
+                        omega=omega,
+                        make_psd=True,
+                        make_pd=True,
+                    )
+                else:
+                    nH = computeH(
+                        LV.sk,
+                        LV.yk,
+                        LV.rho,
+                        scp.sparse.identity(len(coef), format="csc") * omega,
+                    )
+            else:
+                dampen_HBb = (
+                    LV.sqEFS_options["dampen_HBb"]
+                    if "dampen_HBb" in LV.sqEFS_options
+                    else 1
+                )
+
+                dampen_HBB = (
+                    LV.sqEFS_options["dampen_HBB"]
+                    if "dampen_HBB" in LV.sqEFS_options
+                    else 1
+                )
+
+                nH = computeSH(
                     LV.yk,
-                    LV.rho,
-                    scp.sparse.identity(len(coef), format="csc") * omega,
-                    omega=omega,
-                    make_psd=True,
+                    LV.sk,
+                    LV.nHfd,
+                    LV.IonHBB,
+                    LV.fcols,
+                    LV.acols,
+                    sample_hessian,
+                    dampen_HBb <= 0,
+                    dampen_HBB,
                     make_pd=True,
-                )
-            else:
-                H = -1 * computeH(
-                    LV.sk,
-                    LV.yk,
-                    LV.rho,
-                    scp.sparse.identity(len(coef), format="csc") * omega,
+                    form=LV.form,
                 )
 
-            H = scp.sparse.csc_array(H)
+            H = -1 * scp.sparse.csc_array(nH)
 
             # Get Cholesky factor of inverse of penalized hessian (needed for CIs)
             pH = scp.sparse.csc_array((-1 * H) + S_emb)
             Lp, Pr, _ = cpp_cholP(pH)  # noqa: F405
-            P = compute_eigen_perm(Pr)
+            P = compute_eigen_perm(Pr)  # noqa: F405
             LVp0 = compute_Linv(Lp, 10)  # noqa: F405
-            LV = apply_eigen_perm(Pr, LVp0)
+            LV = apply_eigen_perm(Pr, LVp0)  # noqa: F405
             L = P.T @ Lp
 
         else:

@@ -86,17 +86,13 @@ default_gsmm_test_kwargs = {
     "drop_NA": True,
     "init_lambda": None,
     "form_VH": True,
-    "use_grad": False,
     "build_mat": None,
     "should_keep_drop": True,
     "gamma": 1,
     "qEFSH": "SR1",
-    "overwrite_coef": True,
     "max_restarts": 0,
-    "qEFS_init_converge": True,
     "prefit_grad": False,
     "repara": False,
-    "init_bfgs_options": None,
 }
 
 
