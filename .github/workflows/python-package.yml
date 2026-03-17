@@ -115,7 +115,7 @@ jobs:
           pip install pytest pytest-cov mssmViz==0.1.5 numdifftools arviz>=0.23.0
           pytest ./tests/test_fast.py ./tests/test_gamm.py ./tests/test_gammlss.py ./tests/test_gsmm.py ./tests/test_compare.py --cov=mssm --cov-report=xml --cov-report=html
       - name: Upload coverage reports to Codecov with GitHub Action
-        uses: codecov/codecov-action@v4.2.0
+        uses: codecov/codecov-action@v5
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         
@@ -148,7 +148,7 @@ jobs:
         run: echo "${{ github.ref_name }} ${{ github.base_ref }}"
       
       - name: Download Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: cibw-*
           path: ./wheelhouse/
@@ -191,7 +191,7 @@ jobs:
 
     steps:
       - name: Download Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: cibw-*
           path: ./wheelhouse/
@@ -220,7 +220,7 @@ jobs:
 
     steps:
       - name: Download Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: cibw-*
           path: ./wheelhouse/
