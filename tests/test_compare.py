@@ -5,6 +5,7 @@ from mssm.src.python.compare import compare_CDL
 from mssm.src.python.utils import estimateVp, correct_VB, DummyRhoPrior
 import numpy as np
 import os
+import copy
 from mssmViz.sim import *
 from .defaults import (
     default_compare_test_kwargs,

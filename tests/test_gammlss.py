@@ -3,6 +3,7 @@ import mssm
 from mssm.models import *
 import numpy as np
 import os
+import copy
 from mssmViz.sim import *
 import io
 from contextlib import redirect_stdout

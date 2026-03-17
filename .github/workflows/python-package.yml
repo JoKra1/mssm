@@ -16,9 +16,9 @@ jobs:
     runs-on: ubuntu-latest
     name: Lint
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Python for Linting
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.13'
       - name: Install package + dependencies
@@ -40,9 +40,9 @@ jobs:
         os: [macos-latest,ubuntu-latest,windows-latest]
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: "3.x"
 
@@ -58,12 +58,12 @@ jobs:
     #    path: ./dist/*.whl
 
     - name: Install cibuildwheel
-      run: python -m pip install cibuildwheel==2.21.1
+      run: python -m pip install cibuildwheel==3.4.0
 
     - name: Build wheels
       run: python -m cibuildwheel --output-dir wheelhouse
       
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@v6
       with:
         name: cibw-wheels-${{ matrix.os }}-${{ strategy.job-index }}
         path: ./wheelhouse/*.whl
@@ -74,9 +74,9 @@ jobs:
     name: Build source distribution
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.x"
 
@@ -88,7 +88,7 @@ jobs:
         run: |
           python -m build --sdist
       
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: cibw-sdist
           path: dist/*.tar.gz
@@ -100,9 +100,9 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Python for Coverage
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.13.2'
       - name: Install dependencies
@@ -115,12 +115,12 @@ jobs:
           pip install pytest pytest-cov mssmViz==0.1.5 numdifftools arviz>=0.23.0
           pytest ./tests/test_fast.py ./tests/test_gamm.py ./tests/test_gammlss.py ./tests/test_gsmm.py ./tests/test_compare.py --cov=mssm --cov-report=xml --cov-report=html
       - name: Upload coverage reports to Codecov with GitHub Action
-        uses: codecov/codecov-action@v4.2.0
+        uses: codecov/codecov-action@v5
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         
       # Also store coverage as artifact
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: coverage
           path: |
@@ -148,7 +148,7 @@ jobs:
         run: echo "${{ github.ref_name }} ${{ github.base_ref }}"
       
       - name: Download Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: cibw-*
           path: ./wheelhouse/
@@ -191,7 +191,7 @@ jobs:
 
     steps:
       - name: Download Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: cibw-*
           path: ./wheelhouse/
@@ -220,7 +220,7 @@ jobs:
 
     steps:
       - name: Download Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: cibw-*
           path: ./wheelhouse/

@@ -3222,17 +3222,107 @@ class GSMMFamily:
         grad = scp.optimize.approx_fprime(coef.flatten(), llk_warp)
         return grad.reshape(-1, 1)
 
+    def jhessian(
+        self,
+        jcols: np.ndarray,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray | None],
+        Xs: list[scp.sparse.csc_array | None],
+    ) -> scp.sparse.csc_array:
+        """(Optional) method to compute a sparse approximation to the Hessian of the llk, containing
+        only the ``j`` columns and rows of the Hessian indexed by ``jcols``.
+
+        By default the method relies on a finite difference approximation to evaluate the ``j``
+        columns of the Hessian of the llk. Result is returned as symmetric sparse matrix.
+
+        :param jcols: Array holding indices of columns to approximate.
+        :type jcols: np.ndarray
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
+        :type coef: np.ndarray
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each paramter of the llk.
+        :type coef_split_idx: [int]
+        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
+            ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the
+            actual observed data is passed along via the first formula (so it is stored in
+            ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula,
+            then ``ys`` contains ``None`` at their indices to save memory.
+        :type ys: list[np.ndarray | None]
+        :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None``
+            at indices for matrices which were flagged as "do not build" via the ``build_mat``
+            argument of the :func:`mssm.models.GSMM.fit` method.
+        :type Xs: list[scp.sparse.csc_array | None]
+        :return: Finite difference approximation matrix which is symmetric sparse matrix with
+            ``jcols`` rows and columns set to finite difference approximation of columns of
+            Hessian of llk
+        :rtype: scp.sparse.csc_array
+        """
+
+        ccols = []
+
+        Hdat = []
+        Hrows = []
+        Hcols = []
+
+        Hdim = len(coef)
+
+        for j in jcols:
+
+            def __d2llkj(r):
+                # Function to evaluate Hessian column via finite difference approximation
+                n_coef = copy.deepcopy(coef)
+                n_coef[j] = r
+
+                n_grad = self.gradient(n_coef, coef_split_idx, ys, Xs)
+
+                return n_grad.flatten()
+
+            def vectorized_d2(r):
+                return np.apply_along_axis(__d2llkj, axis=0, arr=r)
+
+            Hsk = scp.differentiate.jacobian(vectorized_d2, coef[j], order=2)
+
+            # Entire column j of negative hessian
+            Hj = Hsk.df.flatten()
+
+            # Take out elements previously computed
+            Hjrows = np.arange(Hdim)
+            Hjc = np.delete(Hj, ccols)
+            Hjrows = np.delete(Hjrows, ccols)
+
+            Hdat.extend(Hjc)
+            Hrows.extend(Hjrows)
+            Hcols.extend(np.tile(j, len(Hjrows)))
+
+            # Keep symmetric - remove element on diagonal
+            ccols.append(j)
+
+            Hjcols = np.arange(Hdim)
+            Hjr = np.delete(Hj, ccols)
+            Hjcols = np.delete(Hjcols, ccols)
+
+            Hdat.extend(Hjr)
+            Hcols.extend(Hjcols)
+            Hrows.extend(np.tile(j, len(Hjcols)))
+
+        # Build sparse hessian approximation
+        Ha = scp.sparse.csc_array((Hdat, (Hrows, Hcols)), shape=(Hdim, Hdim))
+
+        return Ha
+
     def hessian(
         self,
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
         Xs: list[scp.sparse.csc_array | None],
-    ) -> scp.sparse.csc_array | None:
+    ) -> scp.sparse.csc_array:
         """Function to evaluate the hessian of the llk at current coefficient estimate ``coef``.
 
         Only has to be implemented if full Newton is to be used to estimate coefficients. If the
-        L-qEFS update by Krause et al. (in preparation) is to be used insetad, this method does not
+        L-qEFS update by Krause et al. (in preparation) is to be used instead, this method does not
         have to be implemented.
 
         References:
@@ -3263,7 +3353,7 @@ class GSMMFamily:
         :return: The Hessian of the log-likelihood evaluated at ``coef``.
         :rtype: scp.sparse.csc_array
         """
-        return None
+        return self.jhessian(np.arange(len(coef)), coef, coef_split_idx, ys, Xs)
 
     def get_resid(
         self,
