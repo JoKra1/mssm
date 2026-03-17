@@ -1,6 +1,5 @@
 import numpy as np
 import scipy as scp
-import copy
 from collections.abc import Callable
 from .src.python.formula import (  # noqa: F401
     Formula,
@@ -617,24 +616,23 @@ class GSMM:
         drop_NA: bool = True,
         init_lambda: list[float] | None = None,
         form_VH: bool = True,
-        use_grad: bool = False,
         build_mat: list[bool] | None = None,
         should_keep_drop: bool = True,
         gamma: float = 1,
         qEFSH: str = "SR1",
-        overwrite_coef: bool = True,
         max_restarts: int = 0,
-        qEFS_init_converge: bool = False,
         prefit_grad: bool = True,
         repara: bool = None,
         extra_penalties: list[LambdaTerm] | None = None,
         callback: Callable | None = None,
-        init_bfgs_options: dict | None = None,
         bfgs_options: dict | None = None,
         global_opt_qefs: bool = False,
-        sample_hessian: bool = False,
+        sample_hessian: bool = True,
         sample_hessian_method: int = 0,
-        sample_hessian_kwargs: dict = {},
+        sample_hessian_options: dict = {},
+        structured_qefs: bool = True,
+        structured_qefs_budget: int | list[int] = 100,
+        sqEFS_options: dict = {"dampen_HBB": 0.1, "dampen_HBb": 1},
     ):
         """
         Fit the specified model.
@@ -726,8 +724,6 @@ class GSMM:
             that this will break default prediction/confidence interval methods - so do not call
             them. Defaults to True
         :type form_VH: bool,optional
-        :param use_grad: Deprecated.
-        :type use_grad: bool,optional
         :param build_mat: An (optional) list, containing one bool per
             :class:`mssm.src.python.formula.Formula` in ``self.formulas`` - indicating whether the
             corresponding model matrix should be built. Useful if multiple formulas specify the
@@ -747,24 +743,14 @@ class GSMM:
         :type gamma: float,optional
         :param qEFSH: Should the hessian approximation use a symmetric rank 1 update
             (``qEFSH='SR1'``) that is forced to result in positive semi-definiteness of the
-            approximation or the standard bfgs update (``qEFSH='BFGS'``) . Defaults to 'SR1'.
+            approximation or the standard bfgs update (``qEFSH='BFGS'``). Defaults to 'SR1'.
         :type qEFSH: str,optional
-        :param overwrite_coef: Whether the initial coefficients passed to the optimization routine
-            should be over-written by the solution obtained for the un-penalized version of the
-            problem when ``method='qEFS'``. Setting this to False will be useful when passing
-            coefficients from a simpler model to initialize a more complex one. Only has an effect
-            when ``qEFS_init_converge=True``. Defaults to True.
-        :type overwrite_coef: bool,optional
         :param max_restarts: How often to shrink the coefficient estimate back to a random vector
             when convergence is reached and when ``method='qEFS'``. The optimizer might get stuck
             in local minima so it can be helpful to set this to 1-3. What happens is that if we
             converge, we shrink the coefficients back to a random vector and then continue
             optimizing once more. Defaults to 0.
         :type max_restarts: int,optional
-        :param qEFS_init_converge: Whether to optimize the un-penalzied version of the model and to
-            use the hessian (and optionally coefficients, if ``overwrite_coef=True``) to initialize
-            the q-EFS solver. Ignored if ``method!='qEFS'``. Defaults to False.
-        :type qEFS_init_converge: bool,optional
         :param prefit_grad: Whether to rely on Gradient Descent to improve the initial starting
             estimate for coefficients. Defaults to True.
         :type prefit_grad: bool,optional
@@ -789,11 +775,6 @@ class GSMM:
             ``coef`` is the current coefficient estimate, and ``lam`` holds a list with the
             current :math:`lambda` parameters. Defaults to None.
         :type callback: Callable | None, optional
-        :param init_bfgs_options: An optional dictionary holding the same key:value pairs that can
-            be passed to ``bfgs_options`` but pased to the optimizer of the un-penalized problem.
-            If this is None, it will be set to a copy of ``bfgs_options``. Only has an effect
-            when ``qEFS_init_converge=True``. Defaults to None.
-        :type init_bfgs_options: dict, optional
         :param bfgs_options: An optional dictionary holding arguments that should be passed on to
             the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If none are provided,
             the ``gtol`` argument will be initialized to ``conv_tol``. Note also, that in any case
@@ -804,27 +785,46 @@ class GSMM:
             parameters. Defaults to False, which means standard quasi-Newton is used.
         :type global_opt_qefs: bool, optional
         :param sample_hessian: Whether or not to sample the quasi-Newton approximation of the
-            negative Hessians of the penalized log-likelihood and log-likelihood. Defaults to False
+            negative Hessians of the penalized log-likelihood and log-likelihood. Defaults to True
         :type sample_hessian: bool, optional
         :param sample_hessian_method: Method to use for hessian sampling step. See
             :func:`mssm.src.python.gamm_solvers.sample_ys_qefs` docstring for details. Defaults to 0
         :type sample_hessian_method: int, optional
-        :param sample_hessian_kwargs: Optional key-word arguments determining behavior of hessian
+        :param sample_hessian_options: Optional key-word arguments determining behavior of hessian
             sampling step. See :func:`mssm.src.python.gamm_solvers.sample_ys_qefs` docstring for
             details. Defaults to ``{}``
-        :type sample_hessian_kwargs: dict, optional
+        :type sample_hessian_options: dict, optional
+        :param structured_qefs: Whether or not to perform a structured qEFS update in which a subset
+            of columns/rows of the Hessian of the log-likelihood is computed analytically (or
+            approximated via finite differencing) with only the remaining subset of columns/rows
+            being estimated from quasi Newton update vectors. See the
+            :func:`mssm.src.python.compact_rep.computeSH` function for details. Defaults to True.
+        :type structured_qefs: bool, optional
+        :param structured_qefs_budget: An integer, determining how many columns/rows of the Hessian
+            are to be computed analytically (or via finite differences) when
+            ``structured_qefs is True``. Columns are chosen from the set of columns associated with
+            fixed effects or smooth terms with a non-trivial null-space ("fixed smooth effects").
+            If the model has more of such "fixed" coefficients/columns than what is specified as
+            budget, at random subset of these "fixed" columns is chosen instead.
+            Alternatively, a list of the columns/rows to approximate can be provided - which could
+            also hold indices pointing to "random" columns.
+            Defaults to 100.
+        :type structured_qefs_budget: int | list[int], optional
+        :param sqEFS_options: Optional key-word arguments determining behavior of the structured
+            qEFS method (``structured_qefs is True``). Currently only ``"dampen_HBB"`` and
+            ``"dampen_HBb"`` are supported. ``"dampen_HBB"`` takes float values > 0, with values < 1
+            leading to more wiggly estimates of smooths approximated via quasi Newton update
+            vectors. Values > 1 are possible but usually a good idea. Defaults to 0.1 since 1 seems
+            to produce smooths more in line with ML rather than REML estimates. ``"dampen_HBb"``
+            takes float values >= 0 and <= 1 and is used to scale the off-diagonal blocks of the
+            approximation of the negative Hessian, holding mixed derivatives of terms approximated
+            via finite differencing with respect to those approximated via quasi Newton. Defaults
+            to 1.
+        :type sqEFS_options: dict, optional
         :raises ValueError: Will throw an error when ``optimizer`` is not 'Newton'.
         """
 
         # Initialize remaining arguments to defaults
-        if bfgs_options is None:
-            bfgs_options = {
-                "gtol": 1.1 * conv_tol,
-                "ftol": 1.1 * conv_tol,
-                "maxcor": 30,
-                "maxls": 20,
-                "maxfun": 500,
-            }
 
         if control_lambda is None:
             control_lambda = 2 if method != "qEFS" else 1
@@ -843,9 +843,6 @@ class GSMM:
 
         if repara is None:
             repara = True if method != "qEFS" else False
-
-        if init_bfgs_options is None:
-            init_bfgs_options = copy.deepcopy(bfgs_options)
 
         # Some checks
         if optimizer not in ["Newton"]:
@@ -969,6 +966,53 @@ class GSMM:
             for coef_i in range(1, len(coef_split_idx)):
                 coef_split_idx[coef_i] += coef_split_idx[coef_i - 1]
 
+        fcols = None
+        if method == "qEFS" and structured_qefs:
+
+            if isinstance(structured_qefs_budget, list):
+                # User provided columns of hessian to be approximated via fd
+                fcols = structured_qefs_budget
+
+            else:
+                # Collect columns of hessian associated with "fixed" effects
+                fcols = []
+                start_idx = 0
+                for form in self.formulas:
+                    lti = form.get_linear_term_idx()
+                    irsti = form.get_ir_smooth_term_idx()
+                    sti = form.get_smooth_term_idx()
+
+                    for tidx in [*lti, *irsti, *sti]:
+
+                        if isinstance(form.terms[tidx], fs):
+                            continue
+
+                        fcols.extend(form.coef_idx_per_term[tidx] + start_idx)
+
+                    start_idx += form.n_coef
+
+                np_gen = np.random.default_rng(seed)
+                if len(fcols) == len(coef) and len(fcols) <= structured_qefs_budget:
+                    fcols = np_gen.choice(fcols, size=len(coef) - 1, replace=False)
+
+                elif len(fcols) > structured_qefs_budget:
+                    fcols = np_gen.choice(
+                        fcols, size=structured_qefs_budget, replace=False
+                    )
+
+            # Make sure fcols are in order and unique
+            fcols = np.unique(fcols)
+
+        # Init BFGS options last since we need some idea of problem dimension.
+        if bfgs_options is None:
+            bfgs_options = {
+                "gtol": 0,
+                "ftol": conv_tol,
+                "maxcor": max(int(0.25 * len(coef)), 30),
+                "maxls": 100,
+                "maxfun": 5000,
+            }
+
         # Now fit model
         coef, H, LV, LV_linop, total_edf, term_edfs, penalty, smooth_pen, fit_info = (
             solve_generalSmooth_sparse(
@@ -994,22 +1038,20 @@ class GSMM:
                 repara,
                 should_keep_drop,
                 form_VH,
-                use_grad,
                 gamma,
                 qEFSH,
-                overwrite_coef,
                 max_restarts,
-                qEFS_init_converge,
                 prefit_grad,
                 progress_bar,
                 n_cores,
                 callback,
-                init_bfgs_options,
                 bfgs_options,
                 global_opt_qefs,
                 sample_hessian,
                 sample_hessian_method,
-                sample_hessian_kwargs,
+                sample_hessian_options,
+                fcols,
+                sqEFS_options,
             )
         )
 

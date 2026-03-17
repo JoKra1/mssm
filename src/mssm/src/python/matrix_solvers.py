@@ -132,6 +132,40 @@ def translate_sparse(
     return data, rows, cols
 
 
+def compute_eigen_perm(Pr: list[int] | np.ndarray) -> scp.sparse.csc_array:
+    """Internal function. Computes column permutation matrix obtained from Eigen.
+
+    :param Pr: List of column indices
+    :type Pr: list[int] | np.ndarray
+    :return: Permutation matrix as sparse array
+    :rtype: scp.sparse.csc_array
+    """
+
+    nP = len(Pr)
+    P = [1 for _ in range(nP)]
+    Pc = [c for c in range(nP)]
+    Perm = scp.sparse.csc_array((P, (Pr, Pc)), shape=(nP, nP))
+    return Perm
+
+
+def apply_eigen_perm(
+    Pr: list[int], InvCholXXSP: scp.sparse.csc_array
+) -> scp.sparse.csc_array:
+    """Internal function. Unpivots columns of ``InvCholXXSP`` (usually the inverse of a
+    Cholesky factor) and returns the unpivoted version.
+
+    :param Pr: List of column indices
+    :type Pr: list[int]
+    :param InvCholXXSP: Pivoted matrix
+    :type InvCholXXSP: scp.sparse.csc_array
+    :return: Unpivoted matrix
+    :rtype: scp.sparse.csc_array
+    """
+    Perm = compute_eigen_perm(Pr)
+    InvCholXXS = InvCholXXSP @ Perm
+    return InvCholXXS
+
+
 def cpp_chol(A: scp.sparse.csc_array) -> tuple[scp.sparse.csc_array, int]:
     """Computes Cholesky of ``A``.
 
