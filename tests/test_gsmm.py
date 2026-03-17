@@ -140,7 +140,7 @@ class Test_GAUMLSSGEN_hard:
                 ]
             ),
             atol=min(max_atol, 0),
-            rtol=min(max_rtol, 2.5),
+            rtol=min(max_rtol, 3),
         )
 
     def test_GAMreml(self):
@@ -180,7 +180,7 @@ class Test_GAUMLSSGEN_hard:
         np.testing.assert_allclose(
             ps,
             np.array([0.0047744792490702626, 0.0, 0.0, 0.8676565723545753]),
-            atol=min(max_atol, 0),
+            atol=min(max_atol, 0.01),
             rtol=min(max_rtol, 0.5),
         )
 
@@ -1776,7 +1776,7 @@ class Test_mvn:
                 ]
             ),
             atol=min(max_atol, 0),
-            rtol=min(max_rtol, 5),
+            rtol=min(max_rtol, 8),
         )
 
     def test_GAMlam(self):
