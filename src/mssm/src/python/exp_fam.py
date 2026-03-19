@@ -623,6 +623,89 @@ class Family:
         """
         pass
 
+    def dllkdcoef(
+        self, coef: np.ndarray, y: np.ndarray, X: scp.sparse.csc_array, scale: float = 1
+    ) -> np.ndarray:
+        """Returns vector of partial derivatives of the log-likelihood with respect to ``coef``
+        evaluated at the (optional) ``scale`` parameter.
+
+        Applies to all families, so does not have to be re-implemented by families implementing
+        the base class. Derivation follows from IRLS routine and is given for example in Wood
+        (2017).
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
+        :type coef: np.ndarray
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param X: Model matrix used by a model
+        :type X: scp.sparse.csc_array
+        :param scale: Optional scale parameter if ``self.twopar is True``, defaults to 1
+        :type scale: float, optional
+        :return: The Gradient of the log-likelihood evaluated at ``coef`` as numpy array of
+            shape (-1,1).
+        :rtype: np.ndarray
+        """
+
+        # Compute mean
+        mu = self.link.fi(X @ coef)
+
+        # Get derivative of link and variance function at ``mu``
+        dy1 = self.link.dy1(mu)
+        V = self.V(mu)
+
+        # Compute gradient
+        G = (y - mu) / (dy1 * V)
+        G[np.isnan(G) | np.isinf(G)] = 0
+        grad = np.sum(G * X, axis=0).reshape(-1, 1) / scale
+
+        return grad
+
+    def dllkdlscale(
+        self, coef: np.ndarray, y: np.ndarray, X: scp.sparse.csc_array, scale: float = 1
+    ) -> float:
+        """Returns partial derivative of the log-likelihood with respect to ``log(scale)`` if this
+        family has a scale parameter (i.e., if ``self.twopar is True``). Otherwise this function
+        returns zero.
+
+        Base-class implementation relies on finite differencing to compute the required partial
+        derivative. For efficiency reasons, families inheriting from the base class should
+        implement an analytic solution. Note however, that this function is only used by the
+        mcmc samplers and thus this is only necessary if you want to perform fully Bayesian
+        inference.
+
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
+        :type coef: np.ndarray
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param X: Model matrix used by a model
+        :type X: scp.sparse.csc_array
+        :param scale: Optional scale parameter if ``self.twopar is True``, defaults to 1
+        :type scale: float, optional
+        :return: The partial derivative of the log-likelihood with respect to ``log(scale)`` if
+            this family has a scale parameter, otherwise zero.
+        :rtype: None | float
+        """
+
+        if self.twopar is True:
+            # Compute mean and log-scale
+            mu = self.link.fi(X @ coef)
+            lscale = np.log(scale)
+
+            def llk_warp(x: float) -> float:
+
+                return self.llk(y, mu, scale=np.exp(x))
+
+            deriv = scp.optimize.approx_fprime(np.array([lscale]), llk_warp)
+            return deriv[0]
+
+        return 0.0
+
 
 class Binomial(Family):
     """

@@ -47,9 +47,11 @@ except ImportError:
 
 def check_convergence(
     coef_samples: np.ndarray,
+    scale_samples: np.ndarray | None,
+    theta_samples: np.ndarray | None,
     llk_samples: np.ndarray | None,
     rho_samples: np.ndarray | None,
-    model: GAMMLSS | GSMM,
+    model: GAMMLSS | GSMM | GAMM,
     type: int = 1,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Determines MCMC convergence statistics for the set of coefficients,
@@ -65,6 +67,12 @@ def check_convergence(
     :param coef_samples: Sample of coefficients as np.array of dimension
         ``(n_chains,n_samples,n_coef)``.
     :type coef_samples: np.ndarray
+    :param scale_samples: Optional sample of log scale parameters for GAMM families as np.array of
+        dimension ``(n_chains,n_samples,1)`` or None.
+    :type scale_samples: np.ndarray | None
+    :param theta_samples: Optional sample of theta parameters for extended families as np.array of
+        dimension ``(n_chains,n_samples,1)`` or None.
+    :type theta_samples: np.ndarray | None
     :param llk_samples: Optional sample of log joint probability scores as np.array of dimension
         ``(n_chains,n_samples,1)`` or None.
     :type llk_samples: np.ndarray | None
@@ -72,11 +80,11 @@ def check_convergence(
         ``(n_chains,n_samples,n_rho)`` or None.
     :type rho_samples: np.ndarray | None
     :param model: The model from which we are sampling.
-    :type model: GAMMLSS | GSMM
+    :type model: GAMMLSS | GSMM | GAMM
     :param type: For which parameters to collect convergence statistics. Type 1 collects statistics
         only for fixed coefficients and those involved in smooth functions with an improper prior
-        as well as all rho parameters and the log joint. Type 0 collects statistics for all
-        parameters, defaults to 1
+        as well as all scale, theta, and rho parameters and the log joint.
+        Type 0 collects statistics for all parameters, defaults to 1
     :type type: int, optional
     :return: Three arrays, holding the ESS, Rhat, and MCSE scores of collected parameters. Order
         is: first (selected) coefficients, then log rho scores, last element will be the log joint
@@ -87,7 +95,13 @@ def check_convergence(
     ess_all = []
     rhat_all = []
     mcse_all = []
-    for samples in [coef_samples, rho_samples, llk_samples]:
+    for samples in [
+        coef_samples,
+        scale_samples,
+        theta_samples,
+        rho_samples,
+        llk_samples,
+    ]:
 
         if samples is None:
             ess_all.append([])
@@ -135,9 +149,12 @@ def check_convergence(
 
     else:
         # Only group-level coef + lams
-        split_ess = np.split(ess_all[0], model.coef_split_idx)
-        split_rhat = np.split(rhat_all[0], model.coef_split_idx)
-        split_mcse = np.split(mcse_all[0], model.coef_split_idx)
+        split_idx = model.coef_split_idx
+        if split_idx is None:
+            split_idx = []
+        split_ess = np.split(ess_all[0], split_idx)
+        split_rhat = np.split(rhat_all[0], split_idx)
+        split_mcse = np.split(mcse_all[0], split_idx)
 
         for fidx, form in enumerate(model.formulas):
 
@@ -156,44 +173,60 @@ def check_convergence(
             rhat_sel.extend(split_rhat[fidx][fcidx])
             mcse_sel.extend(split_mcse[fidx][fcidx])
 
-    # Lambda parameters
-    if rho_samples is not None:
+    # Scale parameters
+    if scale_samples is not None:
         ess_sel.extend(ess_all[1])
         rhat_sel.extend(rhat_all[1])
         mcse_sel.extend(mcse_all[1])
 
-    # log joint
-    if llk_samples is not None:
+    # Theta parameters
+    if theta_samples is not None:
         ess_sel.extend(ess_all[2])
         rhat_sel.extend(rhat_all[2])
         mcse_sel.extend(mcse_all[2])
+
+    # Lambda parameters
+    if rho_samples is not None:
+        ess_sel.extend(ess_all[3])
+        rhat_sel.extend(rhat_all[3])
+        mcse_sel.extend(mcse_all[3])
+
+    # log joint
+    if llk_samples is not None:
+        ess_sel.extend(ess_all[4])
+        rhat_sel.extend(rhat_all[4])
+        mcse_sel.extend(mcse_all[4])
 
     return np.array(ess_sel), np.array(rhat_sel), np.array(mcse_sel)
 
 
 def advance_chain_mssm(
     chain_id: int,
+    steps: int,
     return_dict: dict,
-    chain,
+    chain: Callable,
 ) -> None:
     """Wrapper function to advancethe state of a NUTS ``chain`` (implemented in c++ class).
 
     :param chain_id: Id of chain, just an integer >= 0.
     :type chain_id: int
+    :param steps: For how many steps to run the chain, just another integer >= 0.
+    :type steps: int
     :param return_dict: The shared dictionary in which all states dump the outcome of the next step.
     :type return_dict: dict
     :param chain: Python wrapper around the c++ NUTS class.
     :type chain: Callable
     """
 
-    cllk, gamma = chain.advance_chain()
+    cllk, gamma = chain.advance_chain(steps)
 
     return_dict[chain_id] = [cllk, gamma]
 
 
 def sample_mssm(
     model: GAMM | GAMMLSS | GSMM,
-    n_iter: int = 500,
+    n_iter: int = 10000,
+    n_steps: int = 100,
     min_iter: int = 100,
     max_rhat: float = 1.02,
     min_ess: int = 10,
@@ -209,8 +242,7 @@ def sample_mssm(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     """Samples the posterior of any model using a No-U-Turn (NUTS) sampler (Hoffman & Gelman, 2014).
 
-    **Currently only supports ``GAMMLSS`` and ``GSMM`` models. I am still thinking about how to best
-    adapt the ``GAMM`` api to support this function.**
+    Supports ``GAMM`` (including those with extended families), ``GAMMLSS``, and ``GSMM`` models.
 
     Examples::
 
@@ -245,11 +277,18 @@ def sample_mssm(
      - Betancourt, M. (2018). A Conceptual Introduction to Hamiltonian Monte Carlo\
         (No. arXiv:1701.02434). arXiv. https://doi.org/10.48550/arXiv.1701.02434
 
-    :param model: The model from which to sample, currently only ``GAMMLSS`` and ``GSMM`` are
-        supported.
+    :param model: The model from which to sample, any ``mssm`` model is supported.
     :type model: GAMM | GAMMLSS | GSMM
-    :param n_iter: Number of iterations to sample (after adaptation), defaults to 500
+    :param n_iter: Number of iterations to sample (after adaptation), defaults to 10000
     :type n_iter: int, optional
+    :param n_steps: For how many steps the chains should be advanced before evaluating convergence
+        statistics. Since there is some overhead associated with starting up the multi-processing
+        pool and copying back and forth from cpp to python, it is generally desirable to set this to
+        a reasonably large integer. However, as the cost to compute a single gradient/likelihood
+        starts to dominate, it will often be more desirabel to check convergence more frequently.
+        Note, that a minimum value of 2 is enforced for this parameter.
+        Defaults to 100
+    :type n_steps: int, optional
     :param min_iter: Minimum number of iterations (after adaptation) before auto-convergence can
         stop sampling, defaults to 100
     :type min_iter: int, optional
@@ -307,8 +346,12 @@ def sample_mssm(
             "Model must have been estimated before calling ``sample_mssm``!"
         )
 
+    # Enforce minimum of 2 for n_steps
+    n_steps = max(n_steps, 2)
+
     # Extract info
     formulas = model.formulas  # noqa
+    deriv_fam = None
     family = model.family
     n_coef = len(model.coef)
     n_scale = 0
@@ -328,9 +371,9 @@ def sample_mssm(
         ys = [y]
         Xs = [model.get_mmat()]
 
-        orig_scale = family.scale
         if family.twopar:
-            _, orig_scale = model.get_pars()
+            # Sample scale parameter as well
+            orig_scale = model.scale
             n_scale = 1
 
         if isinstance(family, ExtendedFamily):
@@ -350,6 +393,8 @@ def sample_mssm(
             for _ in range(1, family.n_par):
                 ys.append(None)
             Xs = model.get_mmat()
+
+            deriv_fam = GAMLSSGSMMFamily(family.n_par, family)
 
         else:  # Need all y vectors in y, i.e., y is actually ys
             ys = []
@@ -378,6 +423,7 @@ def sample_mssm(
                 ys.append(y)
 
             Xs = model.get_mmat(drop_NA=drop_NA)
+            deriv_fam = family
 
         # ToDo: Do we want to do anything with dropped terms?
         keep_drop = None
@@ -392,27 +438,54 @@ def sample_mssm(
             keep_drop = (keep, model.info.dropped)  # noqa
 
     # Get initial penalty matrix
-    S_emb, S_pinv, _, FS_use_rank = compute_S_emb_pinv_det(
+    S_emb, _, _, _ = compute_S_emb_pinv_det(
         len(model.coef), model.overall_penalties, "svd"
     )
 
     # Can now start building Minv and MLT so that MLT.T@MLT = inv(Minv)
-    Minv = (model.lvi.T @ model.lvi).tocsc()
+    Minv = (model.lvi.T @ model.lvi).tocsc() * orig_scale
     Lp, Pr, _ = cpp_cholP(Minv)
     Lpinv = compute_Linv(Lp)
 
     # M = MLT.T@MLT
     MLT = apply_eigen_perm(Pr, Lpinv)
 
+    if n_scale > 0:
+        MLT = scp.sparse.block_array(
+            [[MLT, None], [None, np.identity(n_scale)]], format="csc"
+        )
+        Minv = scp.sparse.block_array(
+            [[Minv, None], [None, np.identity(n_scale)]], format="csc"
+        )
+
+    if n_theta > 0:
+        MLT = scp.sparse.block_array(
+            [[MLT, None], [None, np.identity(n_theta)]], format="csc"
+        )
+        Minv = scp.sparse.block_array(
+            [[Minv, None], [None, np.identity(n_theta)]], format="csc"
+        )
+
     # Approximate covariance matrix for log lambda parameters
     if sample_rho:
         Vp, Vpreg, Vpr, Vpregr, ep, _ = estimateVp(model)
+
+        # Correct for scaling for GAMMs
+        if isinstance(family, Family) and family.twopar is True:
+            ep = np.log(np.exp(ep) / orig_scale)
+
+            uspen = copy.deepcopy(model.overall_penalties)
+            for pidx in range(len(model.overall_penalties)):
+                uspen[pidx].lam = np.exp(ep[pidx])
+
+            S_emb, _, _, _ = compute_S_emb_pinv_det(len(model.coef), uspen, "svd")
 
         eig, U = scp.linalg.eigh(Vpreg)
 
         # fmt: off
         # Make sure metric is pd..
-        eig[eig < 0] = np.power(np.finfo(float).eps, 0.5) * np.max(eig)
+        thresh = np.power(np.finfo(float).eps, 0.5) * np.max(eig)
+        eig[eig < thresh] = thresh
         ire = 1 / np.sqrt(eig)
         re = np.sqrt(eig)
         # fmt: on
@@ -424,29 +497,9 @@ def sample_mssm(
         # Now stack onto Minv and MLT
 
         # MLT.T@MLT = inv(Minv) defined below
-        MLT = scp.sparse.vstack(
-            (
-                scp.sparse.hstack(
-                    (MLT, scp.sparse.csc_matrix((MLT.shape[0], Vp.shape[1])))
-                ),
-                scp.sparse.hstack(
-                    (scp.sparse.csc_matrix((Vp.shape[1], MLT.shape[1])), Ri)
-                ),
-            ),
-            format="csc",
-        )
+        MLT = scp.sparse.block_array([[MLT, None], [None, Ri]], format="csc")
 
-        Minv = scp.sparse.vstack(
-            (
-                scp.sparse.hstack(
-                    (Minv, scp.sparse.csc_matrix((Minv.shape[0], Vp.shape[1])))
-                ),
-                scp.sparse.hstack(
-                    (scp.sparse.csc_matrix((Vp.shape[1], Minv.shape[1])), Vpreg)
-                ),
-            ),
-            format="csc",
-        )
+        Minv = scp.sparse.block_array([[Minv, None], [None, Vpreg]], format="csc")
 
     # Can combine dimension of total parameter vector
     n_gamma = n_coef + n_scale + n_theta
@@ -454,13 +507,12 @@ def sample_mssm(
     r_pen = None
     if sample_rho:
         n_gamma += n_lam
-        r_pen = copy.deepcopy(model.overall_penalties)
+        if isinstance(family, Family) and family.twopar is True:
+            r_pen = uspen
+        else:
+            r_pen = copy.deepcopy(model.overall_penalties)
 
     # print(n_coef, n_scale, n_theta, n_gamma)
-
-    proxy_fam = None
-    if isinstance(family, GAMLSSFamily):
-        proxy_fam = GAMLSSGSMMFamily(family.n_par, family)
 
     # Can now define wrappers for the joint log-likelihood and gradient + a function to sample
     # momentum variables.
@@ -468,20 +520,29 @@ def sample_mssm(
 
         # Split up theta correctly
         coef = c[:n_coef]
-        scale = None
+        scale = 1
         theta = None
         rho = None
         if n_scale > 0:
-            scale = c[n_coef : n_coef + n_scale]  # noqa: E203
+            scale = np.exp(c[n_coef : n_coef + n_scale])[0, 0]  # noqa: E203
 
         elif n_theta > 0:
             # Cannot have scale and theta - scale will be part of theta
             theta = c[n_coef : n_coef + n_theta]  # noqa: E203,F841
 
-        if proxy_fam is not None:
-            c_llk = proxy_fam.llk(coef, model.coef_split_idx, ys, Xs)
+        if isinstance(family, Family):
+            mu = family.link.fi(Xs[0] @ coef)
+
+            if isinstance(family, ExtendedFamily):
+                c_llk = family.llk(ys[0], mu, theta=theta)
+            else:
+                if family.twopar is True:
+                    c_llk = family.llk(ys[0], mu, scale=scale)
+                else:
+                    c_llk = family.llk(ys[0], mu)
         else:
-            c_llk = family.llk(coef, model.coef_split_idx, ys, Xs)
+            c_llk = deriv_fam.llk(coef, model.coef_split_idx, ys, Xs)
+
         if sample_rho:
             rho = c[n_coef + n_scale + n_theta :]  # noqa: E203
         else:
@@ -507,21 +568,12 @@ def sample_mssm(
         # all terms i. Below we compute from the diagonal of the cholesky of the term specific
         # S_reps[i], applying conditioning as shown in Appendix B of Wood (2011).
         lgdetS = 0
-        scale = model.scale
         for Si, S_rep in enumerate(S_reps):
-            # We need to evaluate log(|S_\\lambda/\\phi|+) after re-parameterization of S_\\lambda
-            # (so this will be a regular determinant).
-            # We have that (https://en.wikipedia.org/wiki/Determinant):
-            #   det(S_\\lambda * 1/\\phi) = (1/\\phi)^p * det(S_\\lambda)
-            # taking logs:
-            #    log(det(S_\\lambda * 1/\\phi)) = log((1/\\phi)^p) + log(det(S_\\lambda))
-            # We know that log(det(S_\\lambda)) is insensitive to whether or not we re-parameterize,
-            # so we can simply take S_rep/scale and compute log(det()) for that.
-            Sdiag = np.power(np.abs((S_rep / scale).diagonal()), 0.5)
+            Sdiag = np.power(np.abs((S_rep).diagonal()), 0.5)
             PI = scp.sparse.diags(1 / Sdiag, format="csc")
             P = scp.sparse.diags(Sdiag, format="csc")
 
-            L, code = cpp_chol(PI @ (S_rep / scale) @ PI)
+            L, code = cpp_chol(PI @ (S_rep) @ PI)
 
             if code == 0:
                 # fmt: off
@@ -541,7 +593,7 @@ def sample_mssm(
 
         # Now adjust c_llk for prior on rho - here uniform
         for rhov in rho:
-            lprior = scp.stats.uniform.logpdf(rhov, loc=-10, scale=20)
+            lprior = scp.stats.uniform.logpdf(rhov, loc=-20, scale=40)
             c_llk += lprior
 
         return (c_llk - 0.5 * coef.T @ S_embr @ coef + 0.5 * lgdetS)[0, 0]
@@ -549,42 +601,68 @@ def sample_mssm(
     def grad_wrapper(c: np.ndarray):
         # Split up theta correctly
         coef = c[:n_coef]
-        scale = None
+        scale = 1
         theta = None
         rho = None
 
         if n_scale > 0:
-            scale = c[n_coef : n_coef + n_scale]  # noqa: E203,F841
+            scale = np.exp(c[n_coef : n_coef + n_scale])[0, 0]  # noqa: E203,F841
 
         elif n_theta > 0:
             # Cannot have scale and theta - scale will be part of theta
             theta = c[n_coef : n_coef + n_theta]  # noqa: E203,F841
 
-        if proxy_fam is not None:
-            grad = proxy_fam.gradient(coef, model.coef_split_idx, ys, Xs)
+        if isinstance(family, Family):
+            mu = family.link.fi(Xs[0] @ coef)
+
+            if isinstance(family, ExtendedFamily):
+                d1 = family.dDdmu(ys[0], mu, theta=theta)
+                ld1 = family.link.dy1(d1)
+                grad = -0.5 * ((d1 / ld1).T @ Xs[0]).T
+                grad_theta = family.gradientLTheta(ys[0], mu, theta)
+            else:
+                if family.twopar is True:
+                    grad = family.dllkdcoef(coef, ys[0], Xs[0], scale=scale)
+                    grad_scale = np.array(
+                        [family.dllkdlscale(coef, ys[0], Xs[0], scale=scale)]
+                    ).reshape(-1, 1)
+                else:
+                    grad = family.dllkdcoef(coef, ys[0], Xs[0])
         else:
-            grad = family.gradient(coef, model.coef_split_idx, ys, Xs)
+            grad = deriv_fam.gradient(coef, model.coef_split_idx, ys, Xs)
 
         if sample_rho:
             rho = c[n_coef + n_scale + n_theta :]  # noqa: E203
+
+            # At this point we know we're sampling rho as well
+            # Need: pseudo-determinant of penalty on coef and prior on lam/rho
+            for lami, lrho in enumerate(rho):
+                r_pen[lami].lam = np.exp(lrho[0])
+
+            S_embr, SJ_pinv, _, FS_use_rank = compute_S_emb_pinv_det(
+                len(model.coef), r_pen, "svd"
+            )
+
+            pgrad = np.array(
+                [grad[i] - (S_embr[[i], :] @ coef)[0] for i in range(len(grad))]
+            ).reshape(-1, 1)
+
         else:
+            # Can compute pgrad directly from S_emb
             pgrad = np.array(
                 [grad[i] - (S_emb[[i], :] @ coef)[0] for i in range(len(grad))]
-            )
-            return pgrad.reshape(-1, 1)
+            ).reshape(-1, 1)
 
-        # At this point we know we're sampling rho as well
-        # Need: pseudo-determinant of penalty on coef and prior on lam/rho
-        for lami, lrho in enumerate(rho):
-            r_pen[lami].lam = np.exp(lrho[0])
+        # Handle extra un-penalized parameters
+        if isinstance(family, Family):
+            if isinstance(family, ExtendedFamily):
+                pgrad = np.concatenate((pgrad, grad_theta), axis=0)
+            elif family.twopar is True:
+                pgrad = np.concatenate((pgrad, grad_scale), axis=0)
 
-        S_embr, SJ_pinv, _, FS_use_rank = compute_S_emb_pinv_det(
-            len(model.coef), r_pen, "svd"
-        )
-
-        pgrad = np.array(
-            [grad[i] - (S_embr[[i], :] @ coef)[0] for i in range(len(grad))]
-        )
+        # Can return here if not sampling rho
+        if sample_rho is False:
+            return pgrad
 
         # Now grad with respect to rhos
         pen_grads = []
@@ -600,7 +678,7 @@ def sample_mssm(
             pen_grads.extend(pen_grad + det_grad)
 
         pen_grads = np.array(pen_grads)
-        pgrad = np.append(pgrad.reshape(-1, 1), pen_grads, axis=0)
+        pgrad = np.append(pgrad, pen_grads, axis=0)
         return pgrad
 
     def r_sampler():
@@ -621,6 +699,10 @@ def sample_mssm(
             size=n_chains,
         )
 
+        # Make sure initial value for rho is valid under prior...
+        init_rho[init_rho <= -20] = -19
+        init_rho[init_rho >= 20] = 19
+
         if n_chains == 1:
             init_rho = init_rho.reshape(1, -1)
 
@@ -630,6 +712,11 @@ def sample_mssm(
 
         # Build combined parameter vector
         gamma = init_coef[:, chain]
+
+        if n_scale > 0:
+            gamma = np.concatenate((gamma, np.array([np.log(orig_scale)])))
+        elif n_theta > 0:
+            gamma = np.concatenate((gamma, orig_theta.flatten()))
 
         if sample_rho:
             gamma = np.concatenate((gamma, init_rho[chain, :]))
@@ -645,11 +732,23 @@ def sample_mssm(
             *map_csc_to_eigen(Minv),
         )
 
+        # Initialize chain
+        sampler.init_chain()
+
         samplers.append(sampler)
 
     coef_samples = np.zeros((n_chains, n_iter, n_coef))
     llk_samples = np.zeros((n_chains, n_iter, 1))
     lam_samples = None
+    scale_samples = None
+    theta_samples = None
+
+    if n_scale > 0:
+        scale_samples = np.zeros((n_chains, n_iter, n_scale))
+
+    if n_theta > 0:
+        theta_samples = np.zeros((n_chains, n_iter, n_theta))
+
     if sample_rho:
         lam_samples = np.zeros((n_chains, n_iter, n_lam))
 
@@ -657,8 +756,23 @@ def sample_mssm(
     if parallelize_chains and n_chains > 1:
         manager = mp.Manager()
 
-    iterator = tqdm(range(n_iter + M_adapt), desc="Warming up...", leave=True)
-    for iter in iterator:
+    pbar = tqdm(total=n_iter + M_adapt, desc="Warming up...", leave=True)
+    iter = 0
+    while iter < (n_iter + M_adapt):
+
+        # Calculate steps to take
+        if iter < M_adapt:
+            if iter + n_steps <= M_adapt:
+                steps = n_steps
+            else:
+                steps = M_adapt - iter
+        else:
+            if iter + n_steps <= (n_iter + M_adapt):
+                steps = n_steps
+            else:
+                steps = (n_iter + M_adapt) - iter
+
+        # print(iter, steps, M_adapt, n_iter)
 
         return_dict = manager.dict() if parallelize_chains and n_chains > 1 else dict()
 
@@ -666,7 +780,7 @@ def sample_mssm(
 
         for chain in range(n_chains):
 
-            args = (chain, return_dict, samplers[chain])
+            args = (chain, steps, return_dict, samplers[chain])
 
             if parallelize_chains and n_chains > 1:
                 chains.append(mp.Process(target=advance_chain_mssm, args=args))
@@ -684,74 +798,97 @@ def sample_mssm(
             gammaprime = return_dict[chain][1]
 
             if iter >= M_adapt:
-                coefprime = gammaprime[:n_coef]
+                sidx = iter - M_adapt
+                eidx = sidx + steps
+                coefprime = gammaprime[:n_coef, :]
                 scaleprime = None
                 thetaprime = None
                 rhoprime = None
                 if n_scale > 0:
                     # fmt:off
-                    scaleprime = gammaprime[n_coef : n_coef + n_scale]  # noqa: E203,F841
+                    scaleprime = gammaprime[n_coef : n_coef + n_scale, :]  # noqa: E203,F841
+                    scale_samples[chain, sidx:eidx, :] = scaleprime.T
                     # fmt:on
 
                 elif n_theta > 0:
                     # Cannot have scale and theta - scale will be part of theta
                     # fmt:off
-                    thetaprime = gammaprime[n_coef : n_coef + n_theta]  # noqa: E203,F841
+                    thetaprime = gammaprime[n_coef : n_coef + n_theta, :]  # noqa: E203,F841
+                    theta_samples[chain, sidx:eidx, :] = thetaprime.T
                     # fmt:on
 
                 if sample_rho:
-                    rhoprime = gammaprime[n_coef + n_scale + n_theta :]  # noqa: E203
-                    lam_samples[chain, iter - M_adapt, :] = rhoprime[:, 0]
+                    rhoprime = gammaprime[n_coef + n_scale + n_theta :, :]  # noqa: E203
+                    lam_samples[chain, sidx:eidx, :] = rhoprime.T
 
-                coef_samples[chain, iter - M_adapt, :] = coefprime[:, 0]
-                llk_samples[chain, iter - M_adapt, 0] = llkprime
+                coef_samples[chain, sidx:eidx, :] = coefprime.T
+                llk_samples[chain, sidx:eidx, 0] = llkprime
+
+        iter += steps
+        pbar.update(steps)
+
+        if (iter - M_adapt) == 0:
+            pbar.set_description_str(desc="Sampling...", refresh=True)
 
         # Convergence:
-        if iter >= M_adapt:
+        if iter > M_adapt:
 
-            if (iter - M_adapt) == 0:
-                iterator.set_description_str(desc="Sampling...", refresh=True)
+            if ((iter - M_adapt) // 4) > (2 * n_chains) and HAS_ARVIZ:
 
-            if (
-                (iter - M_adapt)
-                >= (
-                    max(16, 2 * 4 * n_chains) if auto_converge else max(8, 4 * n_chains)
-                )
-                and (iter - M_adapt) % 2 == 0
-                and HAS_ARVIZ
-            ):
+                conv_coef_samples = coef_samples[:, : (iter - M_adapt), :]
+                conv_llk_samples = llk_samples[:, : (iter - M_adapt), :]
+                conv_scale_samples = None
+                conv_theta_samples = None
+                conv_lam_samples = None
 
-                conv_samples_coef = coef_samples[:, : (iter - M_adapt) + 1, :]
-                conv_samples_lam = None
+                if n_scale > 0:
+                    conv_scale_samples = scale_samples[:, : (iter - M_adapt), :]
+
+                if n_theta > 0:
+                    conv_theta_samples = theta_samples[:, : (iter - M_adapt), :]
+
                 if sample_rho:
-                    conv_samples_lam = lam_samples[:, : (iter - M_adapt) + 1, :]
+                    conv_lam_samples = lam_samples[:, : (iter - M_adapt), :]
 
                 if auto_converge:
                     # Base auto convergence check only on samples after discarding half of obs.
-                    conv_samples_coef = conv_samples_coef[
+                    conv_coef_samples = conv_coef_samples[
                         :, (iter - M_adapt) // 2 :, :  # noqa: E203
                     ]
 
+                    if n_scale > 0:
+                        conv_scale_samples = conv_scale_samples[
+                            :, (iter - M_adapt) // 2 :, :  # noqa: E203
+                        ]
+
+                    if n_theta > 0:
+                        conv_theta_samples = conv_theta_samples[
+                            :, (iter - M_adapt) // 2 :, :  # noqa: E203
+                        ]
+
                     if sample_rho:
-                        conv_samples_lam = conv_samples_lam[
+                        conv_lam_samples = conv_lam_samples[
                             :, (iter - M_adapt) // 2 :, :  # noqa: E203
                         ]
 
                 ess, rhat, mcse = check_convergence(
-                    conv_samples_coef,
-                    llk_samples,
-                    conv_samples_lam,
+                    conv_coef_samples,
+                    conv_scale_samples,
+                    conv_theta_samples,
+                    conv_llk_samples,
+                    conv_lam_samples,
                     model,
                     type=convergence_type,
                 )
 
                 desc = (
-                    f"Sampling... Iter: {iter}, Min. ESS: {np.round(np.min(ess), decimals=2)}, "
+                    f"Sampling... Iter: {iter-M_adapt}, "
+                    f"Min. ESS: {np.round(np.min(ess), decimals=2)}, "
                     f"Max. Rhat: {np.round(np.max(rhat), decimals=2)}, "
                     f"Max. MCSE: {np.round(np.max(mcse), decimals=2)}"
                 )
 
-                iterator.set_description_str(desc=desc, refresh=True)
+                pbar.set_description_str(desc=desc, refresh=True)
 
                 # Auto convergence
                 if (
@@ -762,41 +899,57 @@ def sample_mssm(
                 ):
                     coef_samples = coef_samples[
                         :,
-                        ((iter - M_adapt) // 2) : (iter - M_adapt) + 1,  # noqa: E203
+                        ((iter - M_adapt) // 2) : (iter - M_adapt),  # noqa: E203
                         :,
                     ]
 
                     llk_samples = llk_samples[
                         :,
-                        ((iter - M_adapt) // 2) : (iter - M_adapt) + 1,  # noqa: E203
+                        ((iter - M_adapt) // 2) : (iter - M_adapt),  # noqa: E203
                         :,
                     ]
+
+                    if n_scale > 0:
+                        scale_samples = scale_samples[
+                            :,
+                            ((iter - M_adapt) // 2) : (iter - M_adapt),  # noqa: E203
+                            :,
+                        ]
+
+                    if n_theta > 0:
+                        theta_samples = theta_samples[
+                            :,
+                            ((iter - M_adapt) // 2) : (iter - M_adapt),  # noqa: E203
+                            :,
+                        ]
 
                     if sample_rho:
                         lam_samples = lam_samples[
                             :,
-                            ((iter - M_adapt) // 2) : (iter - M_adapt)  # noqa: E203
-                            + 1,
+                            ((iter - M_adapt) // 2) : (iter - M_adapt),  # noqa: E203
                             :,
                         ]
 
                     desc = (
-                        f"Converged! Iter: {iter}, Min. ESS: {np.round(np.min(ess), decimals=2)}, "
+                        f"Converged! Iter: {iter-M_adapt}, "
+                        f"Min. ESS: {np.round(np.min(ess), decimals=2)}, "
                         f"Max. Rhat: {np.round(np.max(rhat), decimals=2)}, "
                         f"Max. MCSE: {np.round(np.max(mcse), decimals=2)}"
                     )
 
-                    iterator.set_description_str(desc=desc, refresh=True)
-                    iterator.close()
+                    pbar.set_description_str(desc=desc, refresh=True)
+                    pbar.close()
                     break
 
             # Callback (optional)
             if callback is not None:
                 callback(
                     iter - M_adapt,
-                    coef_samples[:, : (iter - M_adapt) + 1, :],
-                    llk_samples[:, : (iter - M_adapt) + 1, :],
-                    lam_samples[:, : (iter - M_adapt) + 1, :] if sample_rho else None,
+                    coef_samples[:, : (iter - M_adapt), :],
+                    scale_samples[:, : (iter - M_adapt), :] if n_scale > 0 else None,
+                    theta_samples[:, : (iter - M_adapt), :] if n_theta > 0 else None,
+                    llk_samples[:, : (iter - M_adapt), :],
+                    lam_samples[:, : (iter - M_adapt), :] if sample_rho else None,
                 )
 
-    return llk_samples, coef_samples, lam_samples
+    return llk_samples, coef_samples, scale_samples, theta_samples, lam_samples

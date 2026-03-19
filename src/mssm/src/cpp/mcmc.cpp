@@ -321,7 +321,7 @@ public:
     );
     // Advance chain
     void init_chain();
-    std::tuple<double,Eigen::MatrixXd> advance_chain();
+    std::tuple<Eigen::VectorXd,Eigen::MatrixXd> advance_chain(size_t);
 private:
     /*
     Need external functions for log-likelihood and gradient.
@@ -401,9 +401,9 @@ void NUTS::init_chain()
     //py::print(epsilon);
 }
 
-std::tuple<double,
+std::tuple<Eigen::VectorXd,
            Eigen::MatrixXd
->NUTS::advance_chain()
+>NUTS::advance_chain(size_t steps)
 /*
 Complete one step of algorithm 6 as defined by Hoffman & Gelman (2014) to sample next state.
 */
@@ -413,111 +413,125 @@ Complete one step of algorithm 6 as defined by Hoffman & Gelman (2014) to sample
     std::uniform_real_distribution<> U(0.0, 1.0);
     std::exponential_distribution<> ed(1);
 
-    // Sample r0
-    Eigen::MatrixXd r0 = r_sampler();
+    // Create storage for llks and states
+    Eigen::VectorXd llks;
+    Eigen::MatrixXd states;
+    llks.setZero(steps);
+    states.setZero(n_coef,steps);
+    // py::print(cstate(0,0));
 
-    // Compute H0
-    double H0 = cL - compute_energy(r0,M);
-
-    // Sample log(u) where u is U[0,exp(H0)]
-    // If u1 is U[0,1]
-    // Then: u would be 0 + (exp(H0) - 0)*u1 (see Wikipedia...)
-    // Taking log(exp(H0)*u1) gives
-    // H0 + log(u1). Finally, -log(u1) ~ exp(1)
-    double logu = H0 - ed(gen);
-    int v;
-
-    // No prime variables
-    Eigen::MatrixXd statem = cstate;
-    Eigen::MatrixXd statep = cstate;
-    Eigen::MatrixXd rm = r0;
-    Eigen::MatrixXd rp = r0;
-    Eigen::MatrixXd rsum;
-    rsum.setZero(n_coef,1);
-    size_t n = 1;
-    int s = 1;
-    double a;
-    size_t na;
-    size_t j = 0;
-
-    // Single prime variables and throwaways for p and m
-    Eigen::MatrixXd statemp;
-    Eigen::MatrixXd statepm;
-    Eigen::MatrixXd stateprime;
-    Eigen::MatrixXd rmp;
-    Eigen::MatrixXd rpm;
-    Eigen::MatrixXd rprime;
-    Eigen::MatrixXd rsumprime;
-    size_t nprime;
-    int sprime;
-    double Lprime;
-
-    while (s == 1 && j < max_j)
+    for (size_t step = 0; step < steps; step++)
     {
-        v = int(2 * (U(gen) >= 0.5)) - 1;
 
-        if (v == -1)
+        // Sample r0
+        Eigen::MatrixXd r0 = r_sampler();
+
+        // Compute H0
+        double H0 = cL - compute_energy(r0,M);
+
+        // Sample log(u) where u is U[0,exp(H0)]
+        // If u1 is U[0,1]
+        // Then: u would be 0 + (exp(H0) - 0)*u1 (see Wikipedia...)
+        // Taking log(exp(H0)*u1) gives
+        // H0 + log(u1). Finally, -log(u1) ~ exp(1)
+        double logu = H0 - ed(gen);
+        int v;
+
+        // No prime variables
+        Eigen::MatrixXd statem = cstate;
+        Eigen::MatrixXd statep = cstate;
+        Eigen::MatrixXd rm = r0;
+        Eigen::MatrixXd rp = r0;
+        Eigen::MatrixXd rsum;
+        rsum.setZero(n_coef,1);
+        size_t n = 1;
+        int s = 1;
+        double a;
+        size_t na;
+        size_t j = 0;
+
+        // Single prime variables and throwaways for p and m
+        Eigen::MatrixXd statemp;
+        Eigen::MatrixXd statepm;
+        Eigen::MatrixXd stateprime;
+        Eigen::MatrixXd rmp;
+        Eigen::MatrixXd rpm;
+        Eigen::MatrixXd rprime;
+        Eigen::MatrixXd rsumprime;
+        size_t nprime;
+        int sprime;
+        double Lprime;
+
+        while (s == 1 && j < max_j)
         {
-            // Backward integration
-            std::tie(statem,statepm,stateprime,rm,rpm,
-                     rprime,rsumprime,nprime,sprime,
-                     a,na,Lprime) = build_tree(statem,rm,M,logu,v,j,epsilon,H0,
-                                               DeltaMax,llk,grad);
+            v = int(2 * (U(gen) >= 0.5)) - 1;
+
+            if (v == -1)
+            {
+                // Backward integration
+                std::tie(statem,statepm,stateprime,rm,rpm,
+                        rprime,rsumprime,nprime,sprime,
+                        a,na,Lprime) = build_tree(statem,rm,M,logu,v,j,epsilon,H0,
+                                                DeltaMax,llk,grad);
+            }
+            else
+            {
+                // Forward integration
+                std::tie(statemp,statep,stateprime,rmp,rp,
+                        rprime,rsumprime,nprime,sprime,
+                        a,na,Lprime) = build_tree(statep,rp,M,logu,v,j,epsilon,H0,
+                                                DeltaMax,llk,grad);
+            }
+
+            // integrate over r (Betancourt, 2013,2018)
+            rsum += rsumprime;
+            //py::print(j,s,sprime,logu,v,nprime,n);
+
+            if (sprime == 1)
+            {
+                // Accept state' with probability
+                if (((1.0 * nprime) / n) > U(gen))
+                {
+                    cstate = stateprime;
+                    cL = Lprime;
+                }
+            }
+
+            // Update variables
+            n += nprime;
+
+            // New divergence check by Betancourt (2013,2018)
+            Eigen::MatrixXd rpsharp = M * rp;
+            Eigen::MatrixXd rmsharp = M * rm;
+            Eigen::MatrixXd Dp = rpsharp.transpose() * rsum;
+            Eigen::MatrixXd Dm = rmsharp.transpose() * rsum;
+
+            s = sprime * (int(Dp(0,0) > 0) * int(Dm(0,0) > 0));
+            j += 1;
+        }
+
+        m += 1;
+
+        // Complete dual averaging to tune epsilon, final part of algorithm 6 by Hoffman & Gelman (2014)
+        if (m <= Madapt)
+        {
+            double oomt = 1.0 / (m + t0);
+            Hbar = ((1.0 - oomt) * Hbar) + oomt * (delta - (a/na));
+            epsilon = exp(mu - (sqrt(m) / gamma) * Hbar);
+            oomt = pow(m,-kappa);
+            epsilonbar = exp(oomt * log(epsilon) + (1.0 - oomt) * log(epsilonbar));
         }
         else
         {
-            // Forward integration
-            std::tie(statemp,statep,stateprime,rmp,rp,
-                     rprime,rsumprime,nprime,sprime,
-                     a,na,Lprime) = build_tree(statep,rp,M,logu,v,j,epsilon,H0,
-                                               DeltaMax,llk,grad);
+            epsilon = epsilonbar;
         }
 
-        // integrate over r (Betancourt, 2013,2018)
-        rsum += rsumprime;
-        //py::print(j,s,sprime,logu,v,nprime,n);
-
-        if (sprime == 1)
-        {
-            // Accept state' with probability
-            if (((1.0 * nprime) / n) > U(gen))
-            {
-                cstate = stateprime;
-                cL = Lprime;
-            }
-        }
-
-        // Update variables
-        n += nprime;
-
-        // New divergence check by Betancourt (2013,2018)
-        Eigen::MatrixXd rpsharp = M * rp;
-        Eigen::MatrixXd rmsharp = M * rm;
-        Eigen::MatrixXd Dp = rpsharp.transpose() * rsum;
-        Eigen::MatrixXd Dm = rmsharp.transpose() * rsum;
-
-        s = sprime * (int(Dp(0,0) > 0) * int(Dm(0,0) > 0));
-        j += 1;
+        llks(step) = cL;
+        states(Eigen::all,step) = cstate(Eigen::all,0);
     }
-
-    m += 1;
-
-    // Complete dual averaging to tune epsilon, final part of algorithm 6 by Hoffman & Gelman (2014)
-    if (m <= Madapt)
-    {
-        double oomt = 1.0 / (m + t0);
-        Hbar = ((1.0 - oomt) * Hbar) + oomt * (delta - (a/na));
-        epsilon = exp(mu - (sqrt(m) / gamma) * Hbar);
-        oomt = pow(m,-kappa);
-        epsilonbar = exp(oomt * log(epsilon) + (1.0 - oomt) * log(epsilonbar));
-    }
-    else
-    {
-        epsilon = epsilonbar;
-    }
-    //py::print(epsilon);
+    // py::print(cstate(0,0));
     
-    return std::make_tuple(Lprime,cstate);
+    return std::make_tuple(llks,states);
 }
 
 
