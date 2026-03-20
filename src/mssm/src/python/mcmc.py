@@ -428,7 +428,7 @@ def sample_mssm(
         mem_manager = mp.managers.SharedMemoryManager()
 
     # Extract info
-    formulas = model.formulas  # noqa
+    formulas = model.formulas
     deriv_fam = None
     family = model.family
     n_coef = len(model.coef)
@@ -440,11 +440,11 @@ def sample_mssm(
 
     # Now get ys and Xs
     if isinstance(family, Family):
-        y = model.formulas[0].y_flat[model.formulas[0].NOT_NA_flat]
+        y = formulas[0].y_flat[formulas[0].NOT_NA_flat]
 
-        if not model.formulas[0].get_lhs().f is None:
+        if not formulas[0].get_lhs().f is None:
             # Optionally apply function to dep. var. before fitting.
-            y = model.formulas[0].get_lhs().f(y)
+            y = formulas[0].get_lhs().f(y)
 
         ys = [y]
         Xs = [model.get_mmat()]
@@ -460,12 +460,12 @@ def sample_mssm(
 
     else:
         if isinstance(family, GAMLSSFamily):
-            y = model.formulas[0].y_flat[model.formulas[0].NOT_NA_flat]
+            y = formulas[0].y_flat[formulas[0].NOT_NA_flat]
 
-            if not model.formulas[0].get_lhs().f is None:
+            if not formulas[0].get_lhs().f is None:
                 # Optionally apply function to dep. var. before fitting. Not sure why that would be
                 # desirable for this model class...
-                y = model.formulas[0].get_lhs().f(y)
+                y = formulas[0].get_lhs().f(y)
 
             ys = [y]
             for _ in range(1, family.n_par):
@@ -476,13 +476,10 @@ def sample_mssm(
 
         else:  # Need all y vectors in y, i.e., y is actually ys
             ys = []
-            for fi, form in enumerate(model.formulas):
+            for fi, form in enumerate(formulas):
 
                 # Repeated y-variable - don't have to pass all of them
-                if (
-                    fi > 0
-                    and form.get_lhs().variable == model.formulas[0].get_lhs().variable
-                ):
+                if fi > 0 and form.get_lhs().variable == formulas[0].get_lhs().variable:
                     ys.append(None)
                     continue
 
@@ -514,11 +511,6 @@ def sample_mssm(
                 ]
             )
             keep_drop = (keep, model.info.dropped)  # noqa
-
-    # Get initial penalty matrix
-    S_emb, _, _, _ = compute_S_emb_pinv_det(
-        len(model.coef), model.overall_penalties, "svd"
-    )
 
     # Can now start building Minv and MLT so that MLT.T@MLT = inv(Minv)
     Minv = (model.lvi.T @ model.lvi).tocsc() * orig_scale
@@ -588,8 +580,6 @@ def sample_mssm(
             for pidx in range(len(model.overall_penalties)):
                 uspen[pidx].lam = np.exp(ep[pidx])
 
-            S_emb, _, _, _ = compute_S_emb_pinv_det(len(model.coef), uspen, "svd")
-
         eig, U = scp.linalg.eigh(Vpreg)
 
         # fmt: off
@@ -643,6 +633,9 @@ def sample_mssm(
         else:
             r_pen = copy.deepcopy(model.overall_penalties)
 
+    # Get initial penalty matrix
+    S_emb, _, _, _ = compute_S_emb_pinv_det(n_coef, r_pen, "svd")
+
     # print(n_coef, n_scale, n_theta, n_omega)
     # print(n_omega, MLT.shape, Minv.shape)
 
@@ -650,6 +643,27 @@ def sample_mssm(
     #    "M",
     #    np.abs((MLT.T @ MLT @ Minv) - np.identity(n_omega)).max(),
     # )
+
+    # Sample initial coefs for chains (n_coef,n_chains)
+    init_coef = sample_MVN(
+        n_chains, model.coef.flatten(), 1, L=None, P=None, LI=model.lvi
+    )
+
+    init_rho = None
+    if sample_rho:
+        # Sample initial rhos for chains (n_chains,n_lam)
+        init_rho = scp.stats.multivariate_normal.rvs(
+            mean=ep.flatten(),
+            cov=Vpreg,
+            size=n_chains,
+        )
+
+        # Make sure initial value for rho is valid under prior...
+        init_rho[init_rho <= -20] = -19
+        init_rho[init_rho >= 20] = 19
+
+        if n_chains == 1:
+            init_rho = init_rho.reshape(1, -1)
 
     # Can now define wrappers for the joint log-likelihood and gradient + a function to sample
     # momentum variables.
@@ -693,7 +707,7 @@ def sample_mssm(
         for lami, lrho in enumerate(rho):
             r_pen[lami].lam = np.exp(lrho[0])
 
-        S_embr, _, _, _ = compute_S_emb_pinv_det(len(model.coef), r_pen, "svd")
+        S_embr, _, _, _ = compute_S_emb_pinv_det(n_coef, r_pen, "svd")
 
         # Re-parameterize as shown in Wood (2011) to enable stable computation of log(|S_\\lambda|+)
         Sj_reps, _, _, _, S_reps, SJ_term_idx, S_idx, S_coefs, Q_reps, Mp = reparam(
@@ -821,27 +835,6 @@ def sample_mssm(
     def r_sampler():
         # Function to sample momentum variables
         return sample_MVN(1, 0, scale=1, P=None, L=None, LI=MLT)
-
-    # Sample initial coefs for chains (n_coef,n_chains)
-    init_coef = sample_MVN(
-        n_chains, model.coef.flatten(), 1, L=None, P=None, LI=model.lvi
-    )
-
-    init_rho = None
-    if sample_rho:
-        # Sample initial rhos for chains (n_chains,n_lam)
-        init_rho = scp.stats.multivariate_normal.rvs(
-            mean=ep.flatten(),
-            cov=Vpreg,
-            size=n_chains,
-        )
-
-        # Make sure initial value for rho is valid under prior...
-        init_rho[init_rho <= -20] = -19
-        init_rho[init_rho >= 20] = 19
-
-        if n_chains == 1:
-            init_rho = init_rho.reshape(1, -1)
 
     # Initialize samplers
     omegas = []
