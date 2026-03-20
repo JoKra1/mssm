@@ -659,7 +659,9 @@ class Family:
         V = self.V(mu)
 
         # Compute gradient
-        G = (y - mu) / (dy1 * V)
+        with warnings.catch_warnings():  # Divide by zero or invalid value in multiply
+            warnings.simplefilter("ignore")
+            G = (y - mu) / (dy1 * V)
         G[np.isnan(G) | np.isinf(G)] = 0
         grad = np.sum(G * X, axis=0).reshape(-1, 1) / scale
 

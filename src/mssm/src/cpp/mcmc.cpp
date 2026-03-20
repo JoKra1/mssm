@@ -27,6 +27,7 @@ by Betancourt (2013,2018).
     return energy(0,0);
 }
 
+
 std::tuple<Eigen::MatrixXd, // stateprime
            Eigen::MatrixXd, // gradprime
            Eigen::MatrixXd, // rprime
@@ -66,64 +67,6 @@ with Riemannian metric ``M``, as described in their discussion.
     return std::make_tuple(std::move(stateprime),std::move(gradprime),std::move(rprime),llkprime);
 }
 
-double find_reasonable_epsilon(
-    const Eigen::Ref<Eigen::MatrixXd> &state,
-    const Eigen::Ref<Eigen::MatrixXd> &grad,
-    const Eigen::SparseMatrix<double,0,long long int> &M,
-    double L,
-    const std::function<double(const Eigen::Ref<Eigen::MatrixXd>&)> &llk_fun,
-    const std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)> &grad_fun,
-    const std::function<Eigen::MatrixXd()> &r_sampler_fun
-)
-/*
-Heuristic algorithm to determine an initial value for epsilon as described in Algorithm 4 of
-Hoffman & Gelman (2014).
-*/
-{
-    // Init epsilon
-    double epsilon = 0.1;
-
-    // Get initial r
-    Eigen::MatrixXd r = r_sampler_fun();
-
-    // Define storeage for state', grad', and r'
-    Eigen::MatrixXd stateprime;
-    Eigen::MatrixXd gradprime;
-    Eigen::MatrixXd rprime;
-    double Lprime;
-
-    double H = L - compute_energy(r,M);
-
-    std::tie(stateprime,gradprime,rprime,Lprime) = leap_frog(state,grad,r,M,
-                                                             epsilon,llk_fun,
-                                                             grad_fun);
-    
-    double Hprime = Lprime - compute_energy(rprime,M);
-
-    // log of prob ratios
-    double lp = Hprime - H;
-
-    // Compute alpha parameter
-    int idx = lp > log(0.5);
-    int alpha = 2 * idx - 1;
-
-    // Decrease or increase epsilon
-    while (lp * alpha > log(2) * -1 * alpha)
-    {
-        epsilon *= pow(2,alpha);
-
-        // Update Hamiltonian and log of prob ratio
-        std::tie(stateprime,gradprime,rprime,Lprime) = leap_frog(state,grad,r,M,
-                                                                 epsilon,llk_fun,
-                                                                 grad_fun);
-        
-        Hprime = Lprime - compute_energy(rprime,M);
-
-        lp = Hprime - H;
-    }
-
-    return epsilon;
-}
 
 std::tuple<Eigen::MatrixXd, // statem
            Eigen::MatrixXd, // statep
@@ -287,9 +230,113 @@ M. J. Betancourt (2013,2018) - requiring book-keeping for the additional rsum va
     }
 }
 
-class NUTS
+
+double find_reasonable_epsilon(
+    const Eigen::Ref<Eigen::MatrixXd> &state,
+    const Eigen::Ref<Eigen::MatrixXd> &grad,
+    long long int Mrows,
+    long long int Mcols,
+    long long int Mnnz,
+    py::array_t<double, py::array::f_style | py::array::forcecast> Mdata,
+    py::array_t<long long int, py::array::f_style | py::array::forcecast> Midptr,
+    py::array_t<long long int, py::array::f_style | py::array::forcecast> Mindices,
+    double L,
+    std::function<double(const Eigen::Ref<Eigen::MatrixXd>&)> llk_fun,
+    std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)> grad_fun,
+    std::function<Eigen::MatrixXd()> r_sampler_fun
+)
 /*
-Class to hold current states of a No-U-Turn Sampler defined by Hoffman & Gelman (2014).
+Heuristic algorithm to determine an initial value for epsilon as described in Algorithm 4 of
+Hoffman & Gelman (2014).
+*/
+{
+    // Build M
+    Eigen::Map<Eigen::SparseMatrix<double,0,long long int>> M (  
+        Mrows,Mcols,Mnnz,
+        (Eigen::SparseMatrix<double,0,long long int>::StorageIndex*) Midptr.data(),
+        (Eigen::SparseMatrix<double,0,long long int>::StorageIndex*) Mindices.data(),
+        (Eigen::SparseMatrix<double,0,long long int>::Scalar*) Mdata.data()
+    );
+    
+    // Init epsilon
+    double epsilon = 0.1;
+
+    // Get initial r
+    Eigen::MatrixXd r = r_sampler_fun();
+
+    // Define storeage for state', grad', and r'
+    Eigen::MatrixXd stateprime;
+    Eigen::MatrixXd gradprime;
+    Eigen::MatrixXd rprime;
+    double Lprime;
+
+    double H = L - compute_energy(r,M);
+
+    std::tie(stateprime,gradprime,rprime,Lprime) = leap_frog(state,grad,r,M,
+                                                             epsilon,llk_fun,
+                                                             grad_fun);
+    
+    double Hprime = Lprime - compute_energy(rprime,M);
+
+    // log of prob ratios
+    double lp = Hprime - H;
+
+    // Compute alpha parameter
+    int idx = lp > log(0.5);
+    int alpha = 2 * idx - 1;
+
+    // Decrease or increase epsilon
+    while (lp * alpha > log(2) * -1 * alpha)
+    {
+        epsilon *= pow(2,alpha);
+
+        // Update Hamiltonian and log of prob ratio
+        std::tie(stateprime,gradprime,rprime,Lprime) = leap_frog(state,grad,r,M,
+                                                                 epsilon,llk_fun,
+                                                                 grad_fun);
+        
+        Hprime = Lprime - compute_energy(rprime,M);
+
+        lp = Hprime - H;
+    }
+
+    return epsilon;
+}
+
+
+std::tuple<Eigen::VectorXd,
+           Eigen::MatrixXd,
+           double,
+           double,
+           double
+>advance_chain(
+            size_t m,
+            size_t Madapt,
+            size_t steps,
+            double cL,
+            Eigen::MatrixXd cstate,
+            long long int Mrows,
+            long long int Mcols,
+            long long int Mnnz,
+            py::array_t<double, py::array::f_style | py::array::forcecast> Mdata,
+            py::array_t<long long int, py::array::f_style | py::array::forcecast> Midptr,
+            py::array_t<long long int, py::array::f_style | py::array::forcecast> Mindices,
+            double epsilon,
+            double epsilonbar,
+            double Hbar,
+            double mu,
+            double delta,
+            double kappa,
+            double gamma,
+            int t0,
+            size_t max_j,
+            std::function<double(const Eigen::Ref<Eigen::MatrixXd>&)> llk,
+            std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)> grad,
+            std::function<Eigen::MatrixXd()> r_sampler
+)
+/*
+Complete steps of algorithm 6 as defined by Hoffman & Gelman (2014) to sample next states and llks
+of a log-joint via No-U-Turn Sampler defined by Hoffman & Gelman (2014).
 Adapted to work with any Riemannian metric, based on M. J. Betancourt (2013,2018).
 
 References:
@@ -301,124 +348,27 @@ References:
     (No. arXiv:1701.02434). arXiv. https://doi.org/10.48550/arXiv.1701.02434
 */
 {
-public:
-    // Constructor
-    NUTS
-    (
-        long long int, // n_coef
-        size_t, // Madapt
-        double delta, // Expected Metropolis acceptance prob. Used to tune epsilon
-        Eigen::MatrixXd, // init_coef
-        std::function<double(const Eigen::Ref<Eigen::MatrixXd>&)>, // llk
-        std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)>, // grad
-        std::function<Eigen::MatrixXd()>, // r sampler
-        long long int, // Mrows
-        long long int, // Mcols
-        long long int, // Mnnz
-        py::array_t<double, py::array::f_style | py::array::forcecast>, // Mdata
-        py::array_t<long long int, py::array::f_style | py::array::forcecast>, // Midptr
-        py::array_t<long long int, py::array::f_style | py::array::forcecast> // Mindices
-    );
-    // Advance chain
-    void init_chain();
-    std::tuple<Eigen::VectorXd,Eigen::MatrixXd> advance_chain(size_t);
-private:
-    /*
-    Need external functions for log-likelihood and gradient.
-    Also an initial Riemannian metric. These will be passed to
-    constructor.
-    */
-    std::function<double(const Eigen::Ref<Eigen::MatrixXd>&)> llk;
-    std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)> grad;
-    std::function<Eigen::MatrixXd()> r_sampler;
-    Eigen::SparseMatrix<double,0,long long int> M;
-    // Need current state
-    long long int n_coef;
-    Eigen::MatrixXd cstate;
-    double cL; // current log joint prob
-    size_t max_j = 10;
-    // And a bunch of hyper parameters, some of which we expose
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<> U(0.0, 1.0);
+    std::exponential_distribution<> ed(1);
     double DeltaMax = 10000;
-    double epsilon;
-    double mu;
-    double epsilonbar = 1.0;
-    size_t Madapt;
-    size_t m = 0;
-    int t0 = 10;
-    double gamma = 0.05;
-    double Hbar = 0.0;
-    double kappa = 0.75;
-    double delta = 0.6;
+    long long int n_coef = Mrows;
 
-};
-
-NUTS::NUTS(
-    long long int n_coef_external,
-    size_t Madapt,
-    double delta,
-    Eigen::MatrixXd init_coef,
-    std::function<double(const Eigen::Ref<Eigen::MatrixXd>&)> llk_external,
-    std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)> grad_external,
-    std::function<Eigen::MatrixXd()> r_sampler_external,
-    long long int Mrows,
-    long long int Mcols,
-    long long int Mnnz,
-    py::array_t<double, py::array::f_style | py::array::forcecast> Mdata,
-    py::array_t<long long int, py::array::f_style | py::array::forcecast> Midptr,
-    py::array_t<long long int, py::array::f_style | py::array::forcecast> Mindices
-)
-// Constructor for the NUTS sampler.
-{
-    n_coef = n_coef_external;
-    llk = llk_external;
-    grad = grad_external;
-    r_sampler = r_sampler_external;
-
-    M = Eigen::Map<Eigen::SparseMatrix<double,0,long long int>> (  
+    // Construct M from buffers
+    Eigen::Map<Eigen::SparseMatrix<double,0,long long int>> M (  
         Mrows,Mcols,Mnnz,
         (Eigen::SparseMatrix<double,0,long long int>::StorageIndex*) Midptr.data(),
         (Eigen::SparseMatrix<double,0,long long int>::StorageIndex*) Mindices.data(),
         (Eigen::SparseMatrix<double,0,long long int>::Scalar*) Mdata.data()
     );
 
-    // Init state (coef and llk)
-    cstate = init_coef;
-    cL = llk(cstate);
-
-    // Set chosen hyper-parameters
-    this->Madapt = Madapt;
-    this->delta = delta;
-}
-
-void NUTS::init_chain()
-{
-    // Find suitable epsilon
-    Eigen::MatrixXd cgrad = grad(cstate);
-    
-    epsilon = find_reasonable_epsilon(cstate,cgrad,M,cL,llk,grad,r_sampler);
-    mu = log(10 * epsilon);
-    m = 0;
-    //py::print(epsilon);
-}
-
-std::tuple<Eigen::VectorXd,
-           Eigen::MatrixXd
->NUTS::advance_chain(size_t steps)
-/*
-Complete one step of algorithm 6 as defined by Hoffman & Gelman (2014) to sample next state.
-*/
-{
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_real_distribution<> U(0.0, 1.0);
-    std::exponential_distribution<> ed(1);
-
     // Create storage for llks and states
     Eigen::VectorXd llks;
     Eigen::MatrixXd states;
     llks.setZero(steps);
     states.setZero(n_coef,steps);
-    // py::print(cstate(0,0));
+    // py::print(m,cstate(0,0));
 
     for (size_t step = 0; step < steps; step++)
     {
@@ -512,8 +462,9 @@ Complete one step of algorithm 6 as defined by Hoffman & Gelman (2014) to sample
 
         m += 1;
 
-        // Complete dual averaging to tune epsilon, final part of algorithm 6 by Hoffman & Gelman (2014)
-        if (m <= Madapt)
+        // Complete dual averaging to tune epsilon, final part of algorithm
+        // 6 by Hoffman & Gelman (2014)
+        if (m < Madapt)
         {
             double oomt = 1.0 / (m + t0);
             Hbar = ((1.0 - oomt) * Hbar) + oomt * (delta - (a/na));
@@ -529,27 +480,13 @@ Complete one step of algorithm 6 as defined by Hoffman & Gelman (2014) to sample
         llks(step) = cL;
         states(Eigen::all,step) = cstate(Eigen::all,0);
     }
-    // py::print(cstate(0,0));
+    // py::print(m,cstate(0,0));
     
-    return std::make_tuple(llks,states);
+    return std::make_tuple(std::move(llks),std::move(states), epsilon, epsilonbar, Hbar);
 }
 
 
 PYBIND11_MODULE(mcmc, m) {
-    py::class_<NUTS>(m,"NUTS")
-        .def(py::init<long long int,
-             size_t,
-             double,
-             Eigen::MatrixXd,
-             std::function<double(const Eigen::Ref<Eigen::MatrixXd>&)>,
-             std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)>,
-             std::function<Eigen::MatrixXd()>,
-             long long int,
-             long long int,
-             long long int,
-             py::array_t<double, py::array::f_style | py::array::forcecast>,
-             py::array_t<long long int, py::array::f_style | py::array::forcecast>,
-             py::array_t<long long int, py::array::f_style | py::array::forcecast>>())
-        .def("init_chain", &NUTS::init_chain)
-        .def("advance_chain", &NUTS::advance_chain);
+    m.def("find_reasonable_epsilon", &find_reasonable_epsilon);
+    m.def("advance_chain", &advance_chain);
 }

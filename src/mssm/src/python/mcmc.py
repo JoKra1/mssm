@@ -202,9 +202,31 @@ def check_convergence(
 
 def advance_chain_mssm(
     chain_id: int,
-    steps: int,
     return_dict: dict,
-    chain: Callable,
+    iter: int,
+    M_adapt: int,
+    steps: int,
+    cllk: float,
+    omega: np.ndarray,
+    epsilon: float,
+    epsilonbar: float,
+    Hbar: float,
+    mu: float,
+    Minv: scp.sparse.csc_array | None,
+    Mrows: int | None,
+    address_Mdat: str | None,
+    address_Mptr: str | None,
+    address_Midx: str | None,
+    shape_Mdat: tuple[int, int] | None,
+    shape_Mptr: tuple[int, int] | None,
+    delta: float,
+    kappa: float,
+    gamma: float,
+    t0: float,
+    max_j: int,
+    llk_fun: Callable,
+    grad_fun: Callable,
+    r_sampler: Callable,
 ) -> None:
     """Wrapper function to advancethe state of a NUTS ``chain`` (implemented in c++ class).
 
@@ -218,9 +240,43 @@ def advance_chain_mssm(
     :type chain: Callable
     """
 
-    cllk, gamma = chain.advance_chain(steps)
+    if Minv is None:
+        Mdat_shared = mp.shared_memory.SharedMemory(name=address_Mdat, create=False)
+        Mptr_shared = mp.shared_memory.SharedMemory(name=address_Mptr, create=False)
+        Midx_shared = mp.shared_memory.SharedMemory(name=address_Midx, create=False)
 
-    return_dict[chain_id] = [cllk, gamma]
+        Mdata = np.ndarray(shape_Mdat, dtype=np.double, buffer=Mdat_shared.buf)
+        Mindptr = np.ndarray(shape_Mptr, dtype=np.int64, buffer=Mptr_shared.buf)
+        Mindices = np.ndarray(shape_Mdat, dtype=np.int64, buffer=Midx_shared.buf)
+
+        Minv = scp.sparse.csc_array(
+            (Mdata, Mindices, Mindptr), shape=(Mrows, Mrows), copy=False
+        )
+
+    llks, omegas, epsilon, epsilonbar, Hbar = mcmc.advance_chain(
+        iter,
+        M_adapt,
+        steps,
+        cllk,
+        omega,
+        *map_csc_to_eigen(Minv),
+        epsilon,
+        epsilonbar,
+        Hbar,
+        mu,
+        delta,
+        kappa,
+        gamma,
+        t0,
+        max_j,
+        llk_fun,
+        grad_fun,
+        r_sampler,
+    )
+
+    # print(chain_id, max_j, epsilon, omegas[-6:-4, -1])
+
+    return_dict[chain_id] = [llks, omegas, epsilon, epsilonbar, Hbar]
 
 
 def sample_mssm(
@@ -232,6 +288,11 @@ def sample_mssm(
     min_ess: int = 10,
     M_adapt: int = 500,
     delta: float = 0.6,
+    kappa: float = 1.0,
+    gamma: float = 0.05,
+    t0: int = 10,
+    max_j: int = 10,
+    max_j_adapt: int = 6,
     callback: Callable | None = None,
     n_chains: int = 2,
     parallelize_chains: bool = True,
@@ -304,6 +365,12 @@ def sample_mssm(
     :param delta: Expected rate of accepted states. Lower values might mean that the sampler
         get's stuck with particular values for more iterations, defaults to 0.6
     :type delta: float, optional
+    :param kappa: , defaults to 1.0
+    :type kappa: float, optional
+    :param gamma: , defaults to 0.05
+    :type gamma: float, optional
+    :param t0: ,defaults to 10
+    :type t0: int, optional
     :param callback: An optional callback of the form ``callback(iter:int, coef_samples:np.ndarray,\
         llk_samples:np.ndarray,rho_samples:np.ndarray|None)`` called every time the chain was
         advanced, defaults to None
@@ -348,6 +415,17 @@ def sample_mssm(
 
     # Enforce minimum of 2 for n_steps
     n_steps = max(n_steps, 2)
+
+    # Makes no sense to parallelize
+    if parallelize_chains and n_chains == 1:
+        parallelize_chains = False
+
+    # Create managers for parallelization
+    manager = None
+    mem_manager = None
+    if parallelize_chains:
+        manager = mp.Manager()
+        mem_manager = mp.managers.SharedMemoryManager()
 
     # Extract info
     formulas = model.formulas  # noqa
@@ -501,18 +579,39 @@ def sample_mssm(
 
         Minv = scp.sparse.block_array([[Minv, None], [None, Vpreg]], format="csc")
 
+    # Optionally create shared memory object for parallelization of Minv
+    if parallelize_chains:
+        Mrows, _, _, Mdata, Mindptr, Mindices = map_csc_to_eigen(Minv)
+        shape_Mdat = Mdata.shape
+        shape_Mptr = Mindptr.shape
+
+        # Start memory manager
+        mem_manager.start()
+
+        dat_mem = mem_manager.SharedMemory(Mdata.nbytes)
+        dat_shared = np.ndarray(Mdata.shape, dtype=np.double, buffer=dat_mem.buf)
+        dat_shared[:] = Mdata[:]
+
+        ptr_mem = mem_manager.SharedMemory(Mindptr.nbytes)
+        ptr_shared = np.ndarray(Mindptr.shape, dtype=np.int64, buffer=ptr_mem.buf)
+        ptr_shared[:] = Mindptr[:]
+
+        idx_mem = mem_manager.SharedMemory(Mindices.nbytes)
+        idx_shared = np.ndarray(Mindices.shape, dtype=np.int64, buffer=idx_mem.buf)
+        idx_shared[:] = Mindices[:]
+
     # Can combine dimension of total parameter vector
-    n_gamma = n_coef + n_scale + n_theta
+    n_omega = n_coef + n_scale + n_theta
 
     r_pen = None
     if sample_rho:
-        n_gamma += n_lam
+        n_omega += n_lam
         if isinstance(family, Family) and family.twopar is True:
             r_pen = uspen
         else:
             r_pen = copy.deepcopy(model.overall_penalties)
 
-    # print(n_coef, n_scale, n_theta, n_gamma)
+    # print(n_coef, n_scale, n_theta, n_omega)
 
     # Can now define wrappers for the joint log-likelihood and gradient + a function to sample
     # momentum variables.
@@ -619,7 +718,7 @@ def sample_mssm(
                 d1 = family.dDdmu(ys[0], mu, theta=theta)
                 ld1 = family.link.dy1(d1)
                 grad = -0.5 * ((d1 / ld1).T @ Xs[0]).T
-                grad_theta = family.gradientLTheta(ys[0], mu, theta)
+                grad_theta = family.gradientLTheta(ys[0], mu, theta=theta)
             else:
                 if family.twopar is True:
                     grad = family.dllkdcoef(coef, ys[0], Xs[0], scale=scale)
@@ -707,35 +806,49 @@ def sample_mssm(
             init_rho = init_rho.reshape(1, -1)
 
     # Initialize samplers
-    samplers = []
+    omegas = []
+    cLs = []
+    epsilons = []
+    epsilonbars = []
+    Hbars = []
+    mus = []
+
     for chain in range(n_chains):
 
         # Build combined parameter vector
-        gamma = init_coef[:, chain]
+        omega = np.asfortranarray(init_coef[:, chain])
 
         if n_scale > 0:
-            gamma = np.concatenate((gamma, np.array([np.log(orig_scale)])))
+            omega = np.concatenate((omega, np.array([np.log(orig_scale)])))
         elif n_theta > 0:
-            gamma = np.concatenate((gamma, orig_theta.flatten()))
+            omega = np.concatenate((omega, orig_theta.flatten()))
 
         if sample_rho:
-            gamma = np.concatenate((gamma, init_rho[chain, :]))
+            omega = np.concatenate((omega, init_rho[chain, :]))
 
-        sampler = mcmc.NUTS(
-            n_gamma,
-            M_adapt,
-            delta,
-            gamma.reshape(-1, 1),
-            llk_wrapper,
-            grad_wrapper,
-            r_sampler,
-            *map_csc_to_eigen(Minv),
+        # Keep track of current vector of parameters
+        omega = omega.reshape(-1, 1)
+        omegas.append(omega)
+
+        # And log-likelihood
+        cLs.append(llk_wrapper(omega))
+
+        # Initialize epsilon and mu per chain
+        epsilons.append(
+            mcmc.find_reasonable_epsilon(
+                omega,
+                grad_wrapper(omega),
+                *map_csc_to_eigen(Minv),
+                cLs[chain],
+                llk_wrapper,
+                grad_wrapper,
+                r_sampler,
+            )
         )
+        epsilonbars.append(1)
+        Hbars.append(0)
 
-        # Initialize chain
-        sampler.init_chain()
-
-        samplers.append(sampler)
+        mus.append(np.log(10 * epsilons[chain]))
 
     coef_samples = np.zeros((n_chains, n_iter, n_coef))
     llk_samples = np.zeros((n_chains, n_iter, 1))
@@ -751,10 +864,6 @@ def sample_mssm(
 
     if sample_rho:
         lam_samples = np.zeros((n_chains, n_iter, n_lam))
-
-    manager = None
-    if parallelize_chains and n_chains > 1:
-        manager = mp.Manager()
 
     pbar = tqdm(total=n_iter + M_adapt, desc="Warming up...", leave=True)
     iter = 0
@@ -774,15 +883,42 @@ def sample_mssm(
 
         # print(iter, steps, M_adapt, n_iter)
 
-        return_dict = manager.dict() if parallelize_chains and n_chains > 1 else dict()
+        return_dict = manager.dict() if parallelize_chains else dict()
 
         chains = []
 
         for chain in range(n_chains):
 
-            args = (chain, steps, return_dict, samplers[chain])
+            args = (
+                chain,
+                return_dict,
+                iter,
+                M_adapt,
+                steps,
+                cLs[chain],
+                omegas[chain],
+                epsilons[chain],
+                epsilonbars[chain],
+                Hbars[chain],
+                mus[chain],
+                None if parallelize_chains else Minv,
+                Mrows if parallelize_chains else None,
+                dat_mem.name if parallelize_chains else None,
+                ptr_mem.name if parallelize_chains else None,
+                idx_mem.name if parallelize_chains else None,
+                shape_Mdat if parallelize_chains else None,
+                shape_Mptr if parallelize_chains else None,
+                delta,
+                kappa,
+                gamma,
+                t0,
+                max_j_adapt if iter < M_adapt else max_j,
+                llk_wrapper,
+                grad_wrapper,
+                r_sampler,
+            )
 
-            if parallelize_chains and n_chains > 1:
+            if parallelize_chains:
                 chains.append(mp.Process(target=advance_chain_mssm, args=args))
                 chains[chain].start()
             else:
@@ -791,34 +927,42 @@ def sample_mssm(
         # Collect from chains
         for chain in range(n_chains):
 
-            if parallelize_chains and n_chains > 1:
+            if parallelize_chains:
                 chains[chain].join()
 
             llkprime = return_dict[chain][0]
-            gammaprime = return_dict[chain][1]
+            omegaprime = return_dict[chain][1]
 
+            # Update latest parameter vector, llks, etc.
+            omegas[chain] = omegaprime[:, [-1]]
+            cLs[chain] = llkprime[-1]
+            epsilons[chain] = return_dict[chain][2]
+            epsilonbars[chain] = return_dict[chain][3]
+            Hbars[chain] = return_dict[chain][4]
+
+            # Store only after adaptation phase
             if iter >= M_adapt:
                 sidx = iter - M_adapt
                 eidx = sidx + steps
-                coefprime = gammaprime[:n_coef, :]
+                coefprime = omegaprime[:n_coef, :]
                 scaleprime = None
                 thetaprime = None
                 rhoprime = None
                 if n_scale > 0:
                     # fmt:off
-                    scaleprime = gammaprime[n_coef : n_coef + n_scale, :]  # noqa: E203,F841
+                    scaleprime = omegaprime[n_coef : n_coef + n_scale, :]  # noqa: E203,F841
                     scale_samples[chain, sidx:eidx, :] = scaleprime.T
                     # fmt:on
 
                 elif n_theta > 0:
                     # Cannot have scale and theta - scale will be part of theta
                     # fmt:off
-                    thetaprime = gammaprime[n_coef : n_coef + n_theta, :]  # noqa: E203,F841
+                    thetaprime = omegaprime[n_coef : n_coef + n_theta, :]  # noqa: E203,F841
                     theta_samples[chain, sidx:eidx, :] = thetaprime.T
                     # fmt:on
 
                 if sample_rho:
-                    rhoprime = gammaprime[n_coef + n_scale + n_theta :, :]  # noqa: E203
+                    rhoprime = omegaprime[n_coef + n_scale + n_theta :, :]  # noqa: E203
                     lam_samples[chain, sidx:eidx, :] = rhoprime.T
 
                 coef_samples[chain, sidx:eidx, :] = coefprime.T
@@ -828,6 +972,11 @@ def sample_mssm(
         pbar.update(steps)
 
         if (iter - M_adapt) == 0:
+            # Average epsilons across chains, since we are done adapting.
+            m_epsilon = np.mean(epsilonbars)
+            epsilons = [m_epsilon for _ in range(n_chains)]
+            epsilonbars = epsilons
+
             pbar.set_description_str(desc="Sampling...", refresh=True)
 
         # Convergence:
@@ -939,6 +1088,8 @@ def sample_mssm(
 
                     pbar.set_description_str(desc=desc, refresh=True)
                     pbar.close()
+                    if parallelize_chains:
+                        mem_manager.shutdown()
                     break
 
             # Callback (optional)
@@ -951,5 +1102,8 @@ def sample_mssm(
                     llk_samples[:, : (iter - M_adapt), :],
                     lam_samples[:, : (iter - M_adapt), :] if sample_rho else None,
                 )
+
+    if parallelize_chains:
+        mem_manager.shutdown()
 
     return llk_samples, coef_samples, scale_samples, theta_samples, lam_samples
