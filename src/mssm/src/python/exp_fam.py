@@ -699,12 +699,56 @@ class Family:
             mu = self.link.fi(X @ coef)
             lscale = np.log(scale)
 
-            def llk_warp(x: float) -> float:
+            def llk_wrap(x: float) -> float:
 
-                return self.llk(y, mu, scale=np.exp(x))
+                return self.llk(y, mu, scale=np.exp(x[0]))
 
-            deriv = scp.optimize.approx_fprime(np.array([lscale]), llk_warp)
+            deriv = scp.optimize.approx_fprime(np.array([lscale]), llk_wrap)
             return deriv[0]
+
+        return 0.0
+
+    def d2llkd2lscale(
+        self, coef: np.ndarray, y: np.ndarray, X: scp.sparse.csc_array, scale: float = 1
+    ) -> float:
+        """Returns second partial derivative of the log-likelihood with respect to ``log(scale)``
+        if this family has a scale parameter (i.e., if ``self.twopar is True``). Otherwise this
+        function returns zero.
+
+        Base-class implementation relies on finite differencing to compute the required partial
+        derivative. For efficiency reasons, families inheriting from the base class should
+        implement an analytic solution. Note however, that this function is only used by the
+        mcmc samplers (and only once) and thus this is only necessary if you want to perform fully
+        Bayesian inference.
+
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
+        :type coef: np.ndarray
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param X: Model matrix used by a model
+        :type X: scp.sparse.csc_array
+        :param scale: Optional scale parameter if ``self.twopar is True``, defaults to 1
+        :type scale: float, optional
+        :return: The second partial derivative of the log-likelihood with respect to ``log(scale)``
+            if this family has a scale parameter, otherwise zero.
+        :rtype: None | float
+        """
+
+        if self.twopar is True:
+            mu = self.link.fi(X @ coef)
+            lscale = np.log(scale)
+
+            def llk_wrap(x: float) -> float:
+
+                return self.llk(y, mu, scale=np.exp(x[0]))
+
+            H = scp.differentiate.hessian(
+                lambda r: np.apply_along_axis(llk_wrap, axis=0, arr=r),
+                np.array([lscale]),
+            )
+
+            return H.ddf[0, 0]
 
         return 0.0
 

@@ -52,7 +52,7 @@ def check_convergence(
     llk_samples: np.ndarray | None,
     rho_samples: np.ndarray | None,
     model: GAMMLSS | GSMM | GAMM,
-    type: int = 1,
+    type: int = 0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Determines MCMC convergence statistics for the set of coefficients,
     the log joint probability, and optionally the rho parameters.
@@ -84,7 +84,7 @@ def check_convergence(
     :param type: For which parameters to collect convergence statistics. Type 1 collects statistics
         only for fixed coefficients and those involved in smooth functions with an improper prior
         as well as all scale, theta, and rho parameters and the log joint.
-        Type 0 collects statistics for all parameters, defaults to 1
+        Type 0 collects statistics for all parameters, defaults to 0
     :type type: int, optional
     :return: Three arrays, holding the ESS, Rhat, and MCSE scores of collected parameters. Order
         is: first (selected) coefficients, then log rho scores, last element will be the log joint
@@ -299,7 +299,7 @@ def sample_mssm(
     auto_converge: bool = True,
     drop_NA: bool = True,
     sample_rho: bool = False,
-    convergence_type: int = 1,
+    convergence_type: int = 0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     """Samples the posterior of any model using a No-U-Turn (NUTS) sampler (Hoffman & Gelman, 2014).
 
@@ -395,7 +395,7 @@ def sample_mssm(
     :type sample_rho: bool, optional
     :param convergence_type: For which parameters to monitor convergence (**also determines which
         parameteters are considered for the ``auto-convergence`` feature). See the
-        :func:`check_convergence` function for details, defaults to 1
+        :func:`check_convergence` function for details, defaults to 0
     :type convergence_type: int, optional
     :raises ValueError: If the function is called for a model that has not previously been
         estimated for at least a single iteration.
@@ -529,20 +529,52 @@ def sample_mssm(
     MLT = apply_eigen_perm(Pr, Lpinv)
 
     if n_scale > 0:
+
+        # Get negative 2nd partial of scale
+        nH_scale = -1 * family.d2llkd2lscale(model.coef, ys[0], Xs[0], scale=orig_scale)
+
+        # Enforce PD
+        if nH_scale <= 0:
+            nH_scale = 1e-4
+
+        # Regularize
+        nH_scale += 0.1
+
+        V_scale = 1 / nH_scale
+
         MLT = scp.sparse.block_array(
-            [[MLT, None], [None, np.identity(n_scale)]], format="csc"
+            [[MLT, None], [None, np.identity(n_scale) * np.sqrt(nH_scale)]],
+            format="csc",
         )
+
         Minv = scp.sparse.block_array(
-            [[Minv, None], [None, np.identity(n_scale)]], format="csc"
+            [[Minv, None], [None, np.identity(n_scale) * V_scale]], format="csc"
         )
 
     if n_theta > 0:
-        MLT = scp.sparse.block_array(
-            [[MLT, None], [None, np.identity(n_theta)]], format="csc"
-        )
-        Minv = scp.sparse.block_array(
-            [[Minv, None], [None, np.identity(n_theta)]], format="csc"
-        )
+
+        # Get negative hessian block with respect to theta
+        mu = family.link.fi(Xs[0] @ model.coef)
+        nH_theta = -1 * family.hessianLTheta(ys[0], mu, theta=orig_theta)
+
+        # Get inverse of nH_theta
+        eig, U = scp.linalg.eigh(nH_theta)
+
+        # If hessian is not PD find nearest pd
+        thresh = np.power(np.finfo(float).eps, 0.5) * np.max(np.abs(eig))
+        eig[eig < thresh] = thresh
+
+        # Regularize
+        eig += 0.1
+
+        # ... invert ...
+        inH_theta = U @ np.diag([1 / e for e in eig]) @ U.T
+
+        # ... and build root Re_theta so that Re_theta.T@Re_theta = inv(inH_theta) = nH_theta
+        Re_theta = np.diag([np.sqrt(e) for e in eig]) @ U.T
+
+        MLT = scp.sparse.block_array([[MLT, None], [None, Re_theta]], format="csc")
+        Minv = scp.sparse.block_array([[Minv, None], [None, inH_theta]], format="csc")
 
     # Approximate covariance matrix for log lambda parameters
     if sample_rho:
@@ -612,6 +644,12 @@ def sample_mssm(
             r_pen = copy.deepcopy(model.overall_penalties)
 
     # print(n_coef, n_scale, n_theta, n_omega)
+    # print(n_omega, MLT.shape, Minv.shape)
+
+    # print(
+    #    "M",
+    #    np.abs((MLT.T @ MLT @ Minv) - np.identity(n_omega)).max(),
+    # )
 
     # Can now define wrappers for the joint log-likelihood and gradient + a function to sample
     # momentum variables.
