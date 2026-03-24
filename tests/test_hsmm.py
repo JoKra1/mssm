@@ -4,6 +4,7 @@ from mssm.models import *
 from mssm.src.python.utils import correct_VB, estimateVp
 import numpy as np
 import os
+import copy
 import io
 from contextlib import redirect_stdout
 from mssmViz.sim import *
