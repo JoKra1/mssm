@@ -587,7 +587,8 @@ def sample_mssm(
         eig[eig < thresh] = thresh
 
         # ... invert ...
-        inH_theta = U @ np.diag([1 / e for e in eig]) @ U.T
+        Ri_theta = np.diag([np.sqrt(1 / e) for e in eig]) @ U.T
+        inH_theta = Ri_theta.T @ Ri_theta
 
         # ... and build root Re_theta so that Re_theta.T@Re_theta = inv(inH_theta) = nH_theta
         Re_theta = np.diag([np.sqrt(e) for e in eig]) @ U.T
@@ -652,6 +653,20 @@ def sample_mssm(
     init_coef = sample_MVN(
         n_chains, model.coef.flatten(), 1, L=None, P=None, LI=model.lvi
     )
+
+    # Sample initial scales
+    init_scales = None
+    if n_scale > 0:
+        init_scales = scp.stats.norm.rvs(
+            size=n_chains, loc=np.log(orig_scale), scale=np.sqrt(V_scale)
+        )
+
+    # Sample initial thetas
+    init_theta = None
+    if n_theta > 0:
+        init_theta = sample_MVN(
+            n_chains, orig_theta.flatten(), 1, L=None, P=None, LI=Ri_theta
+        )
 
     # Can combine dimension of total parameter vector
     n_omega = n_coef + n_scale + n_theta
@@ -924,9 +939,9 @@ def sample_mssm(
         omega = np.asfortranarray(init_coef[:, chain])
 
         if n_scale > 0:
-            omega = np.concatenate((omega, np.array([np.log(orig_scale)])))
+            omega = np.concatenate((omega, np.array([init_scales[chain]])))
         elif n_theta > 0:
-            omega = np.concatenate((omega, orig_theta.flatten()))
+            omega = np.concatenate((omega, init_theta[:, chain]))
 
         if sample_rho:
             omega = np.concatenate((omega, init_rho[chain, :]))
