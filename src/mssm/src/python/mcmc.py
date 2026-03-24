@@ -29,6 +29,12 @@ from ...models import (
     ExtendedFamily,
     GAMLSSFamily,
     fs,
+    embed_shared_penalties,
+    sort_penalties,
+    split_shared_penalties,
+    combine_shared_penalties,
+    build_penalties,
+    PenType,
 )
 
 from ..python.repara import reparam
@@ -293,6 +299,9 @@ def sample_mssm(
     t0: int = 10,
     max_j: int = 10,
     max_j_adapt: int = 6,
+    make_proper: bool = True,
+    lambda_0: float = 1e-4,
+    phi_theta_lambda_0: float | list[float] | None = None,
     callback: Callable | None = None,
     n_chains: int = 2,
     parallelize_chains: bool = True,
@@ -413,6 +422,9 @@ def sample_mssm(
             "Model must have been estimated before calling ``sample_mssm``!"
         )
 
+    if phi_theta_lambda_0 is None:
+        phi_theta_lambda_0 = lambda_0
+
     # Enforce minimum of 2 for n_steps
     n_steps = max(n_steps, 2)
 
@@ -429,6 +441,7 @@ def sample_mssm(
 
     # Extract info
     formulas = model.formulas
+    coef_split_idx = None
     deriv_fam = None
     family = model.family
     n_coef = len(model.coef)
@@ -437,6 +450,7 @@ def sample_mssm(
     orig_scale = 1
     orig_theta = None
     n_lam = len(model.overall_penalties)
+    r_pen = copy.deepcopy(model.overall_penalties)
 
     # Now get ys and Xs
     if isinstance(family, Family):
@@ -457,6 +471,8 @@ def sample_mssm(
         if isinstance(family, ExtendedFamily):
             orig_theta = family.theta  # noqa
             n_theta = len(family.theta)
+
+        deriv_fam = GAMLSSGSMMFamily(n_scale + n_theta + 1, family)
 
     else:
         if isinstance(family, GAMLSSFamily):
@@ -500,6 +516,8 @@ def sample_mssm(
             Xs = model.get_mmat(drop_NA=drop_NA)
             deriv_fam = family
 
+        coef_split_idx = model.coef_split_idx
+
         # ToDo: Do we want to do anything with dropped terms?
         keep_drop = None
         if model.info.dropped is not None:
@@ -532,6 +550,9 @@ def sample_mssm(
         # Regularize
         nH_scale += 0.1
 
+        if make_proper:
+            nH_scale += phi_theta_lambda_0
+
         V_scale = 1 / nH_scale
 
         MLT = scp.sparse.block_array(
@@ -545,9 +566,18 @@ def sample_mssm(
 
     if n_theta > 0:
 
-        # Get negative hessian block with respect to theta
+        # Get (regularized) negative hessian block with respect to theta
         mu = family.link.fi(Xs[0] @ model.coef)
-        nH_theta = -1 * family.hessianLTheta(ys[0], mu, theta=orig_theta)
+        nH_theta = (-1 * family.hessianLTheta(ys[0], mu, theta=orig_theta)) + (
+            np.identity(n_theta) * 0.1
+        )
+
+        if make_proper:
+            nH_theta += np.diag(
+                phi_theta_lambda_0
+                if isinstance(phi_theta_lambda_0, list)
+                else [phi_theta_lambda_0 for _ in range(n_theta)]
+            )
 
         # Get inverse of nH_theta
         eig, U = scp.linalg.eigh(nH_theta)
@@ -555,9 +585,6 @@ def sample_mssm(
         # If hessian is not PD find nearest pd
         thresh = np.power(np.finfo(float).eps, 0.5) * np.max(np.abs(eig))
         eig[eig < thresh] = thresh
-
-        # Regularize
-        eig += 0.1
 
         # ... invert ...
         inH_theta = U @ np.diag([1 / e for e in eig]) @ U.T
@@ -576,9 +603,8 @@ def sample_mssm(
         if isinstance(family, Family) and family.twopar is True:
             ep = np.log(np.exp(ep) / orig_scale)
 
-            uspen = copy.deepcopy(model.overall_penalties)
-            for pidx in range(len(model.overall_penalties)):
-                uspen[pidx].lam = np.exp(ep[pidx])
+            for pidx in range(len(r_pen)):
+                r_pen[pidx].lam = np.exp(ep[pidx])
 
         eig, U = scp.linalg.eigh(Vpreg)
 
@@ -622,19 +648,13 @@ def sample_mssm(
         idx_shared = np.ndarray(Mindices.shape, dtype=np.int64, buffer=idx_mem.buf)
         idx_shared[:] = Mindices[:]
 
+    # Sample initial coefs for chains (n_coef,n_chains)
+    init_coef = sample_MVN(
+        n_chains, model.coef.flatten(), 1, L=None, P=None, LI=model.lvi
+    )
+
     # Can combine dimension of total parameter vector
     n_omega = n_coef + n_scale + n_theta
-
-    r_pen = None
-    if sample_rho:
-        n_omega += n_lam
-        if isinstance(family, Family) and family.twopar is True:
-            r_pen = uspen
-        else:
-            r_pen = copy.deepcopy(model.overall_penalties)
-
-    # Get initial penalty matrix
-    S_emb, _, _, _ = compute_S_emb_pinv_det(n_coef, r_pen, "svd")
 
     # print(n_coef, n_scale, n_theta, n_omega)
     # print(n_omega, MLT.shape, Minv.shape)
@@ -644,13 +664,11 @@ def sample_mssm(
     #    np.abs((MLT.T @ MLT @ Minv) - np.identity(n_omega)).max(),
     # )
 
-    # Sample initial coefs for chains (n_coef,n_chains)
-    init_coef = sample_MVN(
-        n_chains, model.coef.flatten(), 1, L=None, P=None, LI=model.lvi
-    )
-
     init_rho = None
     if sample_rho:
+        # Adjust total dimension
+        n_omega += n_lam
+
         # Sample initial rhos for chains (n_chains,n_lam)
         init_rho = scp.stats.multivariate_normal.rvs(
             mean=ep.flatten(),
@@ -665,34 +683,110 @@ def sample_mssm(
         if n_chains == 1:
             init_rho = init_rho.reshape(1, -1)
 
+    if (n_scale + n_theta) > 0:
+        # Note that scales and thetas are added to coef vector when working with ``deriv_fam``,
+        # so from now on treat ``coef`` as having dimension n_coef + n_scale + n_theta
+
+        r_pen = embed_shared_penalties([r_pen], formulas, deriv_fam.extra_coef)
+        r_pen = [sp for sp in r_pen if len(sp) > 0]
+        r_pen = [pen for pens in r_pen for pen in pens]
+
+    # Get initial penalty matrix
+    S_emb, _, _, _ = compute_S_emb_pinv_det(n_coef + n_scale + n_theta, r_pen, "svd")
+
+    if make_proper:
+        # If the overall prior should be proper, we need vague priors on all un-penalized coef
+        fcols = []
+        start_idx = 0
+        for form in formulas:
+            lti = form.get_linear_term_idx()
+
+            for tidx in lti:
+                fcols.extend(form.coef_idx_per_term[tidx] + start_idx)
+
+            start_idx += form.n_coef
+
+        # Can create extra penalty placed on coef now
+        S_f_emb = scp.sparse.csc_array(
+            ([lambda_0 for _ in fcols], (fcols, fcols)),
+            shape=S_emb.shape,
+        )
+
+        # Also account for extra coef that are un-penalized
+        if deriv_fam.extra_coef is not None:
+            fcols2 = np.arange(deriv_fam.extra_coef) + start_idx
+
+            # Note, these can be scale/theta parameters in which case
+            # they might get extra lam
+            S_f_val2 = (
+                phi_theta_lambda_0
+                if ((n_scale + n_theta) > 0 and isinstance(phi_theta_lambda_0, list))
+                else [
+                    phi_theta_lambda_0 if (n_scale + n_theta) > 0 else lambda_0
+                    for _ in fcols2
+                ]
+            )
+
+            S_f_emb += scp.sparse.csc_array(
+                (
+                    S_f_val2,
+                    (fcols2, fcols2),
+                ),
+                shape=S_emb.shape,
+            )
+
+        # And need extra penalties on smooths with un-penalized null-space
+        # So need to re-build once
+        NP_pen = []
+        NP_fidx = []  # Formula indices of terms updated with null pen
+        NP_tidx = []  # Indices of updated terms
+        for formi, form in enumerate(formulas):
+            sti = form.get_smooth_term_idx()
+            terms = form.terms
+
+            NP_form = copy.deepcopy(form)
+
+            for tidx in sti:
+
+                # Skip random smooth terms or terms with an existing null-space penalty
+                if isinstance(terms[tidx], fs) or terms[tidx].has_null_penalty:
+                    continue
+
+                # Otherwise add a null-space penalty to this term
+                NP_form.terms[tidx].has_null_penalty = True
+                NP_tidx.append(tidx)
+                NP_fidx.append(formi)
+
+            # Build penalties of the (updated) formula
+            NP_pen.append(build_penalties(NP_form))
+
+        # Now re-build shared penalties
+        NP_pen = embed_shared_penalties(NP_pen, formulas, deriv_fam.extra_coef)
+        NP_pen = [sp for sp in NP_pen if len(sp) > 0]
+
+        NP_pen = [pen for pens in NP_pen for pen in pens]
+
+        for pen in NP_pen:
+            if (
+                pen.dist_param in NP_fidx
+                and pen.term in NP_tidx
+                and pen.type == PenType.NULL
+            ):
+
+                S_f_emb += pen.S_J_emb * lambda_0
+
+        # Add extra penalty to overall penalty matrix
+        S_emb += S_f_emb
+
     # Can now define wrappers for the joint log-likelihood and gradient + a function to sample
     # momentum variables.
     def llk_wrapper(c: np.ndarray):
 
         # Split up theta correctly
-        coef = c[:n_coef]
-        scale = 1
-        theta = None
-        rho = None
-        if n_scale > 0:
-            scale = np.exp(c[n_coef : n_coef + n_scale])[0, 0]  # noqa: E203
+        coef = c[: n_coef + n_scale + n_theta]
 
-        elif n_theta > 0:
-            # Cannot have scale and theta - scale will be part of theta
-            theta = c[n_coef : n_coef + n_theta]  # noqa: E203,F841
-
-        if isinstance(family, Family):
-            mu = family.link.fi(Xs[0] @ coef)
-
-            if isinstance(family, ExtendedFamily):
-                c_llk = family.llk(ys[0], mu, theta=theta)
-            else:
-                if family.twopar is True:
-                    c_llk = family.llk(ys[0], mu, scale=scale)
-                else:
-                    c_llk = family.llk(ys[0], mu)
-        else:
-            c_llk = deriv_fam.llk(coef, model.coef_split_idx, ys, Xs)
+        # Compute log-likelihood
+        c_llk = deriv_fam.llk(coef, coef_split_idx, ys, Xs)
 
         if sample_rho:
             rho = c[n_coef + n_scale + n_theta :]  # noqa: E203
@@ -707,7 +801,11 @@ def sample_mssm(
         for lami, lrho in enumerate(rho):
             r_pen[lami].lam = np.exp(lrho[0])
 
-        S_embr, _, _, _ = compute_S_emb_pinv_det(n_coef, r_pen, "svd")
+        S_embr, _, _, _ = compute_S_emb_pinv_det(
+            n_coef + n_scale + n_theta,
+            r_pen,
+            "svd",
+        )
 
         # Re-parameterize as shown in Wood (2011) to enable stable computation of log(|S_\\lambda|+)
         Sj_reps, _, _, _, S_reps, SJ_term_idx, S_idx, S_coefs, Q_reps, Mp = reparam(
@@ -742,6 +840,10 @@ def sample_mssm(
 
             lgdetS += ldetSI
 
+        # Adjust penalty matrix for proper prior
+        if make_proper:
+            S_embr += S_f_emb
+
         # Now adjust c_llk for prior on rho - here uniform
         for rhov in rho:
             lprior = scp.stats.uniform.logpdf(rhov, loc=-20, scale=40)
@@ -751,36 +853,10 @@ def sample_mssm(
 
     def grad_wrapper(c: np.ndarray):
         # Split up theta correctly
-        coef = c[:n_coef]
-        scale = 1
-        theta = None
-        rho = None
+        coef = c[: n_coef + n_scale + n_theta]
 
-        if n_scale > 0:
-            scale = np.exp(c[n_coef : n_coef + n_scale])[0, 0]  # noqa: E203,F841
-
-        elif n_theta > 0:
-            # Cannot have scale and theta - scale will be part of theta
-            theta = c[n_coef : n_coef + n_theta]  # noqa: E203,F841
-
-        if isinstance(family, Family):
-            mu = family.link.fi(Xs[0] @ coef)
-
-            if isinstance(family, ExtendedFamily):
-                d1 = family.dDdmu(ys[0], mu, theta=theta)
-                ld1 = family.link.dy1(d1)
-                grad = -0.5 * ((d1 / ld1).T @ Xs[0]).T
-                grad_theta = family.gradientLTheta(ys[0], mu, theta=theta)
-            else:
-                if family.twopar is True:
-                    grad = family.dllkdcoef(coef, ys[0], Xs[0], scale=scale)
-                    grad_scale = np.array(
-                        [family.dllkdlscale(coef, ys[0], Xs[0], scale=scale)]
-                    ).reshape(-1, 1)
-                else:
-                    grad = family.dllkdcoef(coef, ys[0], Xs[0])
-        else:
-            grad = deriv_fam.gradient(coef, model.coef_split_idx, ys, Xs)
+        # Compute gradient
+        grad = deriv_fam.gradient(coef, coef_split_idx, ys, Xs)
 
         if sample_rho:
             rho = c[n_coef + n_scale + n_theta :]  # noqa: E203
@@ -791,8 +867,14 @@ def sample_mssm(
                 r_pen[lami].lam = np.exp(lrho[0])
 
             S_embr, SJ_pinv, _, FS_use_rank = compute_S_emb_pinv_det(
-                len(model.coef), r_pen, "svd"
+                n_coef + n_scale + n_theta,
+                r_pen,
+                "svd",
             )
+
+            # Adjust penalty matrix for proper prior
+            if make_proper:
+                S_embr += S_f_emb
 
             pgrad = np.array(
                 [grad[i] - (S_embr[[i], :] @ coef)[0] for i in range(len(grad))]
@@ -804,15 +886,7 @@ def sample_mssm(
                 [grad[i] - (S_emb[[i], :] @ coef)[0] for i in range(len(grad))]
             ).reshape(-1, 1)
 
-        # Handle extra un-penalized parameters
-        if isinstance(family, Family):
-            if isinstance(family, ExtendedFamily):
-                pgrad = np.concatenate((pgrad, grad_theta), axis=0)
-            elif family.twopar is True:
-                pgrad = np.concatenate((pgrad, grad_scale), axis=0)
-
-        # Can return here if not sampling rho
-        if sample_rho is False:
+            # Can return here if not sampling rho
             return pgrad
 
         # Now grad with respect to rhos

@@ -101,9 +101,10 @@ def computeAr1Chol(formula: Formula, rho: float) -> tuple[scp.sparse.csc_array, 
 
 class GAMLSSGSMMFamily(GSMMFamily):
     """Implementation of the ``GSMMFamily`` class that uses only information about the likelihood to
-    estimate any implemented GAMMLSS model.
+    estimate any implemented ``GAMMLSS`` or ``GAMM`` model.
 
-    Allows to estimate any GAMMLSS as a GSMM via the L-qEFS & Newton update. Example::
+    Allows to estimate any ``GAMMLSS`` or ``GAMM`` as a GSMM via the L-qEFS & Newton update.
+    Example::
 
         # Simulate 500 data points
         sim_dat = sim3(500,2,c=1,seed=0,family=Gaussian(),binom_offset = 0, correlate=False)
@@ -175,13 +176,26 @@ class GAMLSSGSMMFamily(GSMMFamily):
 
     :param pars: Number of parameters of the likelihood.
     :type pars: int
-    :param gammlss_family: Any implemented member of the :class:`GAMLSSFamily` class. Available
-        in ``self.llkargs[0]``.
-    :type gammlss_family: GAMLSSFamily
+    :param gammlss_family: Any implemented member of the :class:`GAMLSSFamily` or :class:`Family`
+        class. Available in ``self.llkargs[0]``.
+    :type gammlss_family: GAMLSSFamily | Family
     """
 
-    def __init__(self, pars: int, gammlss_family: GAMLSSFamily) -> None:
-        super().__init__(pars, gammlss_family.links, gammlss_family)
+    def __init__(self, pars: int, gammlss_family: GAMLSSFamily | Family) -> None:
+        super().__init__(
+            pars,
+            (
+                [gammlss_family.link]
+                if isinstance(gammlss_family, Family)
+                else gammlss_family.links
+            ),
+            gammlss_family,
+        )
+        if isinstance(gammlss_family, Family):
+            if isinstance(gammlss_family, ExtendedFamily):
+                self.extra_coef = pars - 1  # Theta
+            elif pars > 1:
+                self.extra_coef = 1  # Scale
 
     def llk(
         self,
@@ -212,11 +226,35 @@ class GAMLSSGSMMFamily(GSMMFamily):
         """
         y = ys[0]
         gammlss_family = self.llkargs[0]
-        split_coef = np.split(coef, coef_split_idx)
-        etas = [Xs[ei] @ split_coef[ei] for ei in range(len(Xs))]
-        mus = [self.links[ei].fi(etas[ei]) for ei in range(len(Xs))]
 
-        llk = gammlss_family.llk(y, *mus)
+        if isinstance(gammlss_family, Family):
+            # Handle GAMMs
+
+            if isinstance(gammlss_family, ExtendedFamily):
+                n_theta = self.n_par - 1  # subtract mu
+                mu = gammlss_family.link.fi(Xs[0] @ coef[:-n_theta])
+                theta = coef[-n_theta:]
+                llk = gammlss_family.llk(y, mu, theta=theta)
+
+            else:
+                if self.n_par > 1:
+                    # Two-par case - remember, scale coef is log of scale
+                    mu = gammlss_family.link.fi(Xs[0] @ coef[:-1])
+                    scale = np.exp(coef[-1, 0])
+                    llk = gammlss_family.llk(y, mu, scale=scale)
+
+                else:
+                    # Single parameter case
+                    mu = gammlss_family.link.fi(Xs[0] @ coef)
+                    llk = gammlss_family.llk(y, mu)
+        else:
+            # Handle GAMMLSS
+
+            split_coef = np.split(coef, coef_split_idx)
+            etas = [Xs[ei] @ split_coef[ei] for ei in range(len(Xs))]
+            mus = [self.links[ei].fi(etas[ei]) for ei in range(len(Xs))]
+
+            llk = gammlss_family.llk(y, *mus)
 
         if np.isnan(llk):
             return -np.inf
@@ -252,25 +290,58 @@ class GAMLSSGSMMFamily(GSMMFamily):
         :rtype: np.ndarray
         """
         y = ys[0]
-        split_coef = np.split(coef, coef_split_idx)
-        etas = [Xs[ei] @ split_coef[ei] for ei in range(len(Xs))]
-        mus = [self.links[ei].fi(etas[ei]) for ei in range(len(Xs))]
-
         # Get the Gamlss family
         gammlss_family = self.llkargs[0]
 
-        if gammlss_family.d_eta is False:
+        if isinstance(gammlss_family, Family):
+            # Handle GAMMs
 
-            d1eta, d2eta, d2meta = deriv_transform_mu_eta(y, mus, gammlss_family)
+            if isinstance(gammlss_family, ExtendedFamily):
+                n_theta = self.n_par - 1  # subtract mu
+                mu = gammlss_family.link.fi(Xs[0] @ coef[:-n_theta])
+                theta = coef[-n_theta:]
+                d1 = gammlss_family.dDdmu(y, mu, theta=theta)
+                ld1 = gammlss_family.link.dy1(d1)
+                grad_coef = -0.5 * ((d1 / ld1).T @ Xs[0]).T
+                grad_theta = gammlss_family.gradientLTheta(y, mu, theta=theta)
+                grad = np.concatenate((grad_coef, grad_theta), axis=0)
+
+            else:
+                if self.n_par > 1:
+                    # Two-par case - remember, scale coef is log of scale
+                    scale = np.exp(coef[-1, 0])
+                    grad_coef = gammlss_family.dllkdcoef(
+                        coef[:-1], y, Xs[0], scale=scale
+                    )
+                    grad_scale = np.array(
+                        [gammlss_family.dllkdlscale(coef[:-1], y, Xs[0], scale=scale)]
+                    ).reshape(-1, 1)
+                    grad = np.concatenate((grad_coef, grad_scale), axis=0)
+
+                else:
+                    # Single parameter case
+                    grad = gammlss_family.dllkdcoef(coef, y, Xs[0])
         else:
-            d1eta = [fd1(y, *mus) for fd1 in gammlss_family.d1]
-            d2eta = [fd2(y, *mus) for fd2 in gammlss_family.d2]
-            d2meta = [fd2m(y, *mus) for fd2m in gammlss_family.d2m]
+            # Handle GAMMLSS
 
-        # Get gradient
-        grad, _ = deriv_transform_eta_beta(d1eta, d2eta, d2meta, Xs, only_grad=True)
+            split_coef = np.split(coef, coef_split_idx)
+            etas = [Xs[ei] @ split_coef[ei] for ei in range(len(Xs))]
+            mus = [self.links[ei].fi(etas[ei]) for ei in range(len(Xs))]
 
-        return grad.reshape(-1, 1)
+            if gammlss_family.d_eta is False:
+
+                d1eta, d2eta, d2meta = deriv_transform_mu_eta(y, mus, gammlss_family)
+            else:
+                d1eta = [fd1(y, *mus) for fd1 in gammlss_family.d1]
+                d2eta = [fd2(y, *mus) for fd2 in gammlss_family.d2]
+                d2meta = [fd2m(y, *mus) for fd2m in gammlss_family.d2m]
+
+            # Get gradient
+            grad, _ = deriv_transform_eta_beta(
+                d1eta, d2eta, d2meta, Xs, only_grad=True
+            ).reshape(-1, 1)
+
+        return grad
 
     def hessian(
         self,
@@ -300,12 +371,16 @@ class GAMLSSGSMMFamily(GSMMFamily):
         :rtype: scp.sparse.csc_array
         """
         y = ys[0]
+        # Get the Gamlss family
+        gammlss_family = self.llkargs[0]
+
+        if isinstance(gammlss_family, Family):
+            # Fall back to finite differencing for now...
+            return super().hessian(coef, coef_split_idx, ys, Xs)
+
         split_coef = np.split(coef, coef_split_idx)
         etas = [Xs[ei] @ split_coef[ei] for ei in range(len(Xs))]
         mus = [self.links[ei].fi(etas[ei]) for ei in range(len(Xs))]
-
-        # Get the Gamlss family
-        gammlss_family = self.llkargs[0]
 
         if gammlss_family.d_eta is False:
 
