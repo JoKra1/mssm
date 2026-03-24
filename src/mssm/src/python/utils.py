@@ -337,9 +337,10 @@ class GAMLSSGSMMFamily(GSMMFamily):
                 d2meta = [fd2m(y, *mus) for fd2m in gammlss_family.d2m]
 
             # Get gradient
-            grad, _ = deriv_transform_eta_beta(
-                d1eta, d2eta, d2meta, Xs, only_grad=True
-            ).reshape(-1, 1)
+            grad, _ = deriv_transform_eta_beta(d1eta, d2eta, d2meta, Xs, only_grad=True)
+
+            # Reshape and done.
+            grad = grad.reshape(-1, 1)
 
         return grad
 
