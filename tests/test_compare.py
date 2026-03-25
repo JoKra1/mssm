@@ -2,7 +2,7 @@
 import mssm
 from mssm.models import *
 from mssm.src.python.compare import compare_CDL
-from mssm.src.python.utils import estimateVp, correct_VB, DummyRhoPrior
+from mssm.src.python.utils import estimateVp, correct_VB, MVUniformRhoPrior
 import numpy as np
 import os
 import copy
@@ -66,7 +66,7 @@ class Test_model_comparisons1:
     sim_fit_model2 = GAMM(sim_fit_formula2, Gaussian())
     sim_fit_model2.fit(**test_kwargs_model)
 
-    prior = DummyRhoPrior(b=np.log(1e12))
+    prior = MVUniformRhoPrior(b=np.log(1e12))
 
     # And perform a couple of bias corrected / smoothness uncertainty corrected / or not / comparisons...
     test_kwargs = copy.deepcopy(default_compare_test_kwargs)
@@ -205,7 +205,7 @@ class Test_model_comparisons2:
     sim_fit_model2 = GAMM(sim_fit_formula2, Gamma())
     sim_fit_model2.fit(**test_kwargs_model)
 
-    prior = DummyRhoPrior(b=np.log(1e12))
+    prior = MVUniformRhoPrior(b=np.log(1e12))
     # And perform a couple of bias corrected / smoothness uncertainty corrected / or not / comparisons...
     test_kwargs = copy.deepcopy(default_compare_test_kwargs)
     test_kwargs["correct_V"] = False
@@ -353,7 +353,7 @@ class Test_model_comparison3_hard:
     )
     sim_fit_model2.fit(**test_kwargs_model)
 
-    prior = DummyRhoPrior(b=np.log(1e12))
+    prior = MVUniformRhoPrior(b=np.log(1e12))
     # And perform a couple of bias corrected / smoothness uncertainty corrected / or not / comparisons...
     test_kwargs = copy.deepcopy(default_compare_test_kwargs)
     test_kwargs["correct_V"] = False
@@ -527,7 +527,7 @@ class Test_model_comparisons4:
     sim_fit_model2 = GAMM(sim_fit_formula2, ScaledT(Identity(), theta=None))
     sim_fit_model2.fit(**test_kwargs)
 
-    prior = DummyRhoPrior(b=np.log(1e12))
+    prior = MVUniformRhoPrior(b=np.log(1e12))
     # And perform a couple of bias corrected / smoothness uncertainty corrected / or not / comparisons...
     test_kwargs = copy.deepcopy(default_compare_test_kwargs)
     test_kwargs["correct_V"] = False

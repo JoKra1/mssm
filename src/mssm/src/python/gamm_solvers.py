@@ -7295,6 +7295,9 @@ def update_coef_gen_smooth(
                 seed=outer,
             )
 
+            # Get hessian approximation to the location where it is expected below
+            opt.hess_inv = opt["lowest_optimization_result"].hess_inv
+
         if not opt["success"]:
             warnings.warn(
                 f"Quasi-Newton step did not converge! Message was: {opt['message']}"
