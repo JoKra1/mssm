@@ -2216,7 +2216,7 @@ def estimateVp(
 
 
         # Compute MC estimate for generic model and given prior
-        prior = DummyRhoPrior(b=np.log(1e12)) # Set up uniform prior
+        prior = MVUniformRhoPrior(b=np.log(1e12)) # Set up uniform prior
         Vp_MC, Vpr_MC, Ri_MC, Rir_MC, ep_MC, _ = estimateVp(model,
             strategy="JJJ2",verbose=True,seed=20,use_importance_weights=True,prior=prior)
 
@@ -3354,48 +3354,108 @@ def compute_Vb_corr_WPS(
 
 class RhoPrior:
     """
-    Base class to demonstrate the functionlaity that any prior passed to the correct_VB function
-    has to implement.
+    Base class to demonstrate the functionality that any prior passed to the :func:`correct_VB`
+    and :func:`mssm.src.python.mcmc.sample_mssm` functions has to implement. Note, that only the
+    later requires implementing the ``dlpdrho`` and ``make_valid`` methods. Also note, that this
+    class can be used to implement true multivariate priors, a shared univriate prior, and even
+    separate univariate priors placed on different log smoothing penalties.
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs) -> None:
         self.args = args
         self.kwargs = kwargs
 
-    def logpdf(self, rho: np.ndarray):
+    def logpdf(self, rho: np.ndarray) -> np.ndarray:
         """Compute log density for log smoothing penalty parameters included in rho under this
         prior.
 
-        :param rho: Numpy array of shape (nR,nrho) containing nR proposed candidate vectors for the
-            nrho log-smoothing parameters.
+        :param rho: Numpy array of shape (``nR``,``nrho``) containing ``nR`` proposed candidate
+        vectors for the ``nrho`` log-smoothing parameters.
         :type rho: np.ndarray
+        :return: Log-density (flattened) array of length ``nR``, containing the prior density for
+            each candidate vector
+        :rtype: np.ndarray
         """
         pass
 
+    def make_valid(self, rho: np.ndarray) -> np.ndarray:
+        """Takes log smoothing penalty parameters included in rho and creates a copy in which
+        elements that would be considered invalid under this prior have been replaced with some
+        plausible value.
 
-class DummyRhoPrior(RhoPrior):
+        :param rho: Numpy array of shape (``nR``,``nrho``) containing ``nR`` proposed candidate
+        vectors for the ``nrho`` log-smoothing parameters.
+        :type rho: np.ndarray
+        :return: Copy of ``rho``, with all elements outside of the prior limits being changed to
+            be within the prior limits.
+        :rtype: np.ndarray
+        """
+        pass
+
+    def dlpdrho(self, rho: np.ndarray) -> np.ndarray:
+        """Compute gradient of log density for log smoothing penalty parameters included in rho
+        under this prior.
+
+        :param rho: Numpy array of shape (``nR``,``nrho``) containing ``nR`` proposed candidate
+        vectors for the ``nrho`` log-smoothing parameters.
+        :type rho: np.ndarray
+        :return: Array of shape (``nR``,``nrho``), containing the gradient of the prior
+            density with respect to the ``nrho`` parameters for for each candidate vector
+        :rtype: np.ndarray
+        """
+        return np.zeros(rho.shape)
+
+
+class MVUniformRhoPrior(RhoPrior):
     """
-    Simple uniform prior for rho - the log-smoothing penalty parameters
+    Simple multivariate uniform prior (which is really a shared univariate prior)
+    for rho, the log-smoothing penalty parameters, to be used by :func:`correct_VB` and
+    :func:`mssm.src.python.mcmc.sample_mssm`.
     """
 
     def __init__(self, a=np.log(1e-7), b=np.log(1e7)) -> None:
         super().__init__(a=a, b=b)
+        self.scale = b - a  # Scipy parameterization
+        self.lpdf = -np.log(self.scale)
 
     def logpdf(self, rho: np.ndarray) -> np.ndarray:
-        """Returns an array holding zeroes for all log(lambda) parameters within ``self.a`` and
-        ``self.b``, otherwise ``-np.inf``.
+        """Returns an array holding ``-log(self.b-self.a)`` for all candidate vectors for which all
+        :math:`log(\\lambda)` parameters are within ``self.a`` and ``self.b``, and``-np.inf``
+        otherwise.
 
-        :param rho: Array of log(lambda) parameters
+        :param rho: Numpy array of shape (``nR``,``nrho``) containing ``nR`` proposed candidate
+            vectors for the ``nrho`` log-smoothing parameters :math:`log(\\lambda)`.
         :type rho: np.ndarray
-        :return: Log-density array as described above
+        :return: Log-density array of length ``nR``, containing the prior density for each candidate
+            vector as described above.
         :rtype: np.ndarray
         """
         a = self.kwargs["a"]
         b = self.kwargs["b"]
 
-        ld = np.zeros(rho.shape[0])
+        ld = np.zeros(rho.shape[0]) + self.lpdf
         ld[(np.min(rho, axis=1) < a) | (np.max(rho, axis=1) > b)] = -np.inf
         return ld
+
+    def make_valid(self, rho: np.ndarray) -> np.ndarray:
+        """Sets elements in a copy of ``rho`` smaller than ``self.a`` to ``0.9*self.a`` and
+        enforces the same for the upper limit (``self.b``).
+
+        :param rho: Numpy array of shape (``nR``,``nrho``) containing ``nR`` proposed candidate
+            vectors for the ``nrho`` log-smoothing parameters :math:`log(\\lambda)`.
+        :type rho: np.ndarray
+        :return: Copy of ``rho``, with all elements outside of the prior limits being changed to
+            be within the prior limits.
+        :rtype: np.ndarray
+        """
+
+        a = self.kwargs["a"]
+        b = self.kwargs["b"]
+
+        crho = copy.deepcopy(rho)
+        crho[crho < a] = 0.9 * a
+        crho[crho > b] = 0.9 * b
+        return crho
 
 
 def correct_VB(
@@ -3508,7 +3568,7 @@ def correct_VB(
             grid_type="JJJ1",verbose=True,seed=20)
 
         # Compute MC estimate for generic model and given prior
-        prior = DummyRhoPrior(b=np.log(1e12)) # Set up uniform prior
+        prior = MVUniformRhoPrior(b=np.log(1e12)) # Set up uniform prior
         V_MC,LV_MC,Vp_MC,Vpr_MC,edf_MC,\
         total_edf_MC,edf2_MC,total_edf2_MC,expected_edf_MC,mean_coef_MC = correct_VB(model2,
             grid_type="JJJ3", verbose=True, seed=20, df=10, prior=prior, recompute_H=True)

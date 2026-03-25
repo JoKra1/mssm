@@ -11,7 +11,8 @@ from ..python.gamm_solvers import (
     map_csc_to_eigen,
 )
 
-from .utils import sample_MVN, estimateVp, GAMLSSGSMMFamily
+from .custom_types import SamplerResult
+from .utils import sample_MVN, estimateVp, GAMLSSGSMMFamily, RhoPrior, MVUniformRhoPrior
 
 try:
     import multiprocess as mp
@@ -294,11 +295,12 @@ def sample_mssm(
     kappa: float = 1.0,
     gamma: float = 0.05,
     t0: int = 10,
-    max_j: int = 10,
-    max_j_adapt: int = 6,
+    max_j: int = 8,
+    max_j_adapt: int = 5,
     make_proper: bool = True,
     lambda_0: float = 1e-4,
     phi_theta_lambda_0: float | list[float] | None = None,
+    rho_prior: RhoPrior = MVUniformRhoPrior(-20, 20),
     callback: Callable | None = None,
     n_chains: int = 2,
     parallelize_chains: bool = True,
@@ -306,7 +308,7 @@ def sample_mssm(
     drop_NA: bool = True,
     sample_rho: bool = False,
     convergence_type: int = 0,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+) -> SamplerResult:
     """Samples the posterior of any model using a No-U-Turn (NUTS) sampler (Hoffman & Gelman, 2014).
 
     Supports ``GAMM`` (including those with extended families), ``GAMMLSS``, and ``GSMM`` models.
@@ -333,8 +335,10 @@ def sample_mssm(
             model.fit(method='qEFS')
 
         # Now sample posterior (of coef and \\rho = log(\\lambda)):
-        llks, coef_samples, rho_samples = sample_mssm(model2,auto_converge=False,M_adapt=100,
-            parallelize_chains=False,n_chains=1,sample_rho=True,delta=0.5)
+        samples = sample_mssm(model2,auto_converge=False,n_chains=1,sample_rho=True,n_iter=1000)
+
+        # Extract samples
+        llks, coef_samples, rho_samples = samples.llks, samples.coefs, samples.rhos
 
     References:
      - Hoffman, M. D., & Gelman, A. (2014). The No-U-Turn Sampler: Adaptively Setting Path Lengths\
@@ -343,6 +347,8 @@ def sample_mssm(
         (No. arXiv:1304.1920). arXiv. https://doi.org/10.48550/arXiv.1304.1920
      - Betancourt, M. (2018). A Conceptual Introduction to Hamiltonian Monte Carlo\
         (No. arXiv:1701.02434). arXiv. https://doi.org/10.48550/arXiv.1701.02434
+     - Wood, S. N. (2016). Just Another Gibbs Additive Modeler: Interfacing JAGS and mgcv.\
+        Journal of Statistical Software, 75(7). https://doi.org/10.18637/jss.v075.i07
 
     :param model: The model from which to sample, any ``mssm`` model is supported.
     :type model: GAMM | GAMMLSS | GSMM
@@ -371,15 +377,52 @@ def sample_mssm(
     :param delta: Expected rate of accepted states. Lower values might mean that the sampler
         get's stuck with particular values for more iterations, defaults to 0.6
     :type delta: float, optional
-    :param kappa: , defaults to 1.0
+    :param kappa: Parameter defined by Hoffman & Gelman (2014), affecting the tuning phase of
+        the Nuts sampler, defaults to 1.0
     :type kappa: float, optional
-    :param gamma: , defaults to 0.05
+    :param gamma: Parameter defined by Hoffman & Gelman (2014), affecting the tuning phase of
+        the Nuts sampler, defaults to 0.05
     :type gamma: float, optional
-    :param t0: ,defaults to 10
+    :param t0: Parameter defined by Hoffman & Gelman (2014), affecting the tuning phase of
+        the Nuts sampler, defaults to 10
     :type t0: int, optional
-    :param callback: An optional callback of the form ``callback(iter:int, coef_samples:np.ndarray,\
-        llk_samples:np.ndarray,rho_samples:np.ndarray|None)`` called every time the chain was
-        advanced, defaults to None
+    :param max_j: Maximum number of binary tree doublings. At every iteration the size of the tree
+        is ``2**j``, defaults to 8
+    :type max_j: int, optional
+    :param max_j_adapt: Maximum number of binary tree doublings during the tuning phase of the
+        NUTS sampler, defaults to 5
+    :type max_j_adapt: int, optional
+    :param make_proper: By default, the prior placed on ``mssm`` models is typically improper, with
+        some coefficients not being penalized at all while the priors placed on smooth terms leave
+        simple smooth functions unpenalized. Also extra parameters, like the scale parameter of
+        GAMMs, are leftr unpenalized. Setting this argument to true means that vague normal priors
+        of the form :math:`N(0,1/\\lambda_0)` are placed on unpenalized coefficients and extra
+        parameters. Note, that the value for :math:`\\lambda_0` can be set differently for
+        coefficients and extra parameters (see the ``lambda_0`` and ``phi_theta_lambda_0``
+        arguments). To address the improper priors placed on smooth terms, extra null-space
+        penalties are put on smooth functions, again with a very small value for the smoothing
+        associated penalty (``lambda_0``). This is essentially the approach taken by ``mgcv``
+        when sampling models via the ``jagam`` functionality (Wood, 2016). defaults to True
+    :type make_proper: bool, optional
+    :param lambda_0: If ``make_proper`` is true, the value of ``lambda_0`` is used in the vague
+        priors placed on un-penalized coefficients and by the nulls-space penalties placed on
+        smooth terms, defaults to 1e-4
+    :type lambda_0: float, optional
+    :param phi_theta_lambda_0: If ``make_proper`` is true, the value of ``phi_theta_lambda_0`` is
+        used in the priors placed on extra parameters (e.g., log-scale or theta parameters for GAMMs
+        ). Note, that ``phi_theta_lambda_0`` can also be a list of floats, holding separate values
+        for different extra parameters, defaults to None which means it is set to the value chosen
+        for ``lambda_0``
+    :type phi_theta_lambda_0: float | list[float] | None, optional
+    :param rho_prior: Prior(s) to place on the log smoothing penalties. Can be a single shared prior
+        applied to all parameters (this can be a true multivariate or shared univariate prior)
+        prior or a list of univariate priors placed on each log penalty individually. All of these
+        options need to be implemented as a :class:`RhoPrior`. Defaults to a shared uniform prior
+        with support from -20 to 20
+    :type rho_prior: RhoPrior, optional
+    :param callback: An optional callback of the form ``callback(iter:int, result:SamplerResult)``
+        where ``result`` is a :class:`mssm.src.python.custom_types.SamplerResult`. Called every time
+        the chain was advanced, defaults to None
     :type callback: Callable | None, optional
     :param n_chains: Number of chains to sample, defaults to 2
     :type n_chains: int, optional
@@ -405,12 +448,9 @@ def sample_mssm(
     :type convergence_type: int, optional
     :raises ValueError: If the function is called for a model that has not previously been
         estimated for at least a single iteration.
-    :return: Three np.arrays, holding the samples of the coefficients
-        (dimension: ``(n_chains,n_samples,n_coef)``),
-        log joint probability (dimension: ``(n_chains,n_samples,1)``), and
-        (optionally) the log regularization parameters (dimension: ``(n_chains,n_samples,n_rho)``)
-        or None.
-    :rtype: tuple[np.ndarray, np.ndarray, np.ndarray | None]
+    :return: A :class`mssm.src.python.custom_types.SamplerResult` holding all sampled quantities
+        from all chains.
+    :rtype: SamplerResult
     """
 
     # Make sure model has been estimated
@@ -688,12 +728,14 @@ def sample_mssm(
             size=n_chains,
         )
 
-        # Make sure initial value for rho is valid under prior...
-        init_rho[init_rho <= -20] = -19
-        init_rho[init_rho >= 20] = 19
+        if len(ep) == 1:
+            init_rho = init_rho.reshape(-1, 1)
 
         if n_chains == 1:
             init_rho = init_rho.reshape(1, -1)
+
+        # Make sure initial value for rho is valid under prior...
+        init_rho = rho_prior.make_valid(init_rho)
 
     if (n_scale + n_theta) > 0:
         # Note that scales and thetas are added to coef vector when working with ``deriv_fam``,
@@ -856,10 +898,8 @@ def sample_mssm(
         if make_proper:
             S_embr += S_f_emb
 
-        # Now adjust c_llk for prior on rho - here uniform
-        for rhov in rho:
-            lprior = scp.stats.uniform.logpdf(rhov, loc=-20, scale=40)
-            c_llk += lprior
+        # Now adjust c_llk for prior on rho
+        c_llk += rho_prior.logpdf(rho.T)[0]
 
         return (c_llk - 0.5 * coef.T @ S_embr @ coef + 0.5 * lgdetS)[0, 0]
 
@@ -903,6 +943,7 @@ def sample_mssm(
 
         # Now grad with respect to rhos
         pen_grads = []
+        prior_grad = rho_prior.dlpdrho(rho.T).T
         for lami in range(len(rho)):
             lv = r_pen[lami].lam
             if FS_use_rank[lami]:
@@ -914,7 +955,8 @@ def sample_mssm(
             det_grad = 0.5 * lv * tr
             pen_grads.extend(pen_grad + det_grad)
 
-        pen_grads = np.array(pen_grads)
+        # Adjust for prior gradient
+        pen_grads = np.array(pen_grads) + prior_grad
         pgrad = np.append(pgrad, pen_grads, axis=0)
         return pgrad
 
@@ -1213,14 +1255,36 @@ def sample_mssm(
             if callback is not None:
                 callback(
                     iter - M_adapt,
-                    coef_samples[:, : (iter - M_adapt), :],
-                    scale_samples[:, : (iter - M_adapt), :] if n_scale > 0 else None,
-                    theta_samples[:, : (iter - M_adapt), :] if n_theta > 0 else None,
-                    llk_samples[:, : (iter - M_adapt), :],
-                    lam_samples[:, : (iter - M_adapt), :] if sample_rho else None,
+                    SamplerResult(
+                        lps=llk_samples[:, : (iter - M_adapt), :],
+                        coefs=coef_samples[:, : (iter - M_adapt), :],
+                        lscales=(
+                            scale_samples[:, : (iter - M_adapt), :]
+                            if n_scale > 0
+                            else None
+                        ),
+                        thetas=(
+                            theta_samples[:, : (iter - M_adapt), :]
+                            if n_theta > 0
+                            else None
+                        ),
+                        rhos=(
+                            lam_samples[:, : (iter - M_adapt), :]
+                            if sample_rho
+                            else None
+                        ),
+                    ),
                 )
 
     if parallelize_chains:
         mem_manager.shutdown()
 
-    return llk_samples, coef_samples, scale_samples, theta_samples, lam_samples
+    res = SamplerResult(
+        lps=llk_samples,
+        coefs=coef_samples,
+        lscales=scale_samples,
+        thetas=theta_samples,
+        rhos=lam_samples,
+    )
+
+    return res

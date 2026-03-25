@@ -89,6 +89,7 @@ def compare_CDL(
     Examples::
 
         ### Model comparison and smoothness uncertainty correction for strictly additive model
+        from mssm.src.python.utils import MVUniformRhoPrior
 
         # Simulate some data
         sim_fit_dat = sim3(n=500,scale=2,c=0.1,family=Gaussian(),seed=21)
@@ -175,7 +176,7 @@ def compare_CDL(
         sim_fit_model2.fit()
 
         # Set up a uniform prior from log(1e-7) to log(1e12) for each regularization parameter
-        prior = DummyRhoPrior(b=np.log(1e12))
+        prior = MVUniformRhoPrior(b=np.log(1e12))
 
         # Now correct for uncertainty in regularization parameters using the second MC strategy
         # discussed by Krause et al. (submitted). You can also set prior to ``None`` in which case
