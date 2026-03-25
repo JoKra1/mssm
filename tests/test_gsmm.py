@@ -1926,7 +1926,7 @@ class Test_Nuts:
         model.fit(**test_kwargs)
 
     def test_NUTS(self):
-        llks, coef_samples, rho_samples = sample_mssm(
+        res = sample_mssm(
             self.model,
             auto_converge=True,
             M_adapt=100,
@@ -1936,6 +1936,8 @@ class Test_Nuts:
             delta=0.6,
             n_iter=100,
         )
+
+        llks, coef_samples, rho_samples = res.lps, res.coefs, res.rhos
 
         assert (
             rho_samples.shape == (1, 100, len(self.model.overall_penalties))
