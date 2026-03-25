@@ -301,6 +301,8 @@ def sample_mssm(
     lambda_0: float = 1e-4,
     phi_theta_lambda_0: float | list[float] | None = None,
     rho_prior: RhoPrior = MVUniformRhoPrior(-20, 20),
+    scale_cov_phi_theta: float = 1.0,
+    scale_cov_rho: float = 1.0,
     callback: Callable | None = None,
     n_chains: int = 2,
     parallelize_chains: bool = True,
@@ -420,6 +422,19 @@ def sample_mssm(
         options need to be implemented as a :class:`RhoPrior`. Defaults to a shared uniform prior
         with support from -20 to 20
     :type rho_prior: RhoPrior, optional
+    :param scale_cov_phi_theta: Float value used to scale the block of the approximate covariance
+        matrix of the posterior associated with scale/theta parameters used by the NUTS sampler as
+        inverse of the Metric (see Betancourt; 2013,2018). If samples for the scale parameter
+        show high correlation or if the sampler gets stuck it might be necessary to tune
+        the default value - before doing so you might consider stronger priors on the parameters
+        (i.e., increase ``phi_theta_lambda_0``), defaults to 1.0
+    :type scale_cov_phi_theta: float, optional
+    :param scale_cov_rho: Float value used to scale the block of the approximate covariance
+        matrix of the posterior associated with log smoothness penalties used by the NUTS sampler as
+        inverse of the Metric (see Betancourt; 2013,2018). If samples for the smoothness penalties
+        show high correlation or if the sampler gets stuck it might be necessary to tune
+        the default value, defaults to 1.0
+    :type scale_cov_rho: float, optional
     :param callback: An optional callback of the form ``callback(iter:int, result:SamplerResult)``
         where ``result`` is a :class:`mssm.src.python.custom_types.SamplerResult`. Called every time
         the chain was advanced, defaults to None
@@ -590,6 +605,10 @@ def sample_mssm(
         if make_proper:
             nH_scale += phi_theta_lambda_0
 
+        # Finally, scale
+        nH_scale /= scale_cov_phi_theta
+
+        # And invert
         V_scale = 1 / nH_scale
 
         MLT = scp.sparse.block_array(
@@ -623,6 +642,9 @@ def sample_mssm(
         thresh = np.power(np.finfo(float).eps, 0.5) * np.max(np.abs(eig))
         eig[eig < thresh] = thresh
 
+        # ... scale ...
+        eig /= scale_cov_phi_theta
+
         # ... invert ...
         Ri_theta = np.diag([np.sqrt(1 / e) for e in eig]) @ U.T
         inH_theta = Ri_theta.T @ Ri_theta
@@ -650,6 +672,10 @@ def sample_mssm(
         # Make sure metric is pd..
         thresh = np.power(np.finfo(float).eps, 0.5) * np.max(eig)
         eig[eig < thresh] = thresh
+
+        # ... scale ...
+        eig *= scale_cov_rho
+
         ire = 1 / np.sqrt(eig)
         re = np.sqrt(eig)
         # fmt: on

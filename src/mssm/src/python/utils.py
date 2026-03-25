@@ -3413,7 +3413,7 @@ class MVUniformRhoPrior(RhoPrior):
     :func:`mssm.src.python.mcmc.sample_mssm`.
     """
 
-    def __init__(self, a=np.log(1e-7), b=np.log(1e7)) -> None:
+    def __init__(self, a: float = np.log(1e-7), b: float = np.log(1e7)) -> None:
         super().__init__(a=a, b=b)
         self.scale = b - a  # Scipy parameterization
         self.lpdf = -np.log(self.scale)
@@ -3433,7 +3433,7 @@ class MVUniformRhoPrior(RhoPrior):
         a = self.kwargs["a"]
         b = self.kwargs["b"]
 
-        ld = np.zeros(rho.shape[0]) + self.lpdf
+        ld = np.zeros(rho.shape[0]) + (rho.shape[1] * self.lpdf)
         ld[(np.min(rho, axis=1) < a) | (np.max(rho, axis=1) > b)] = -np.inf
         return ld
 
@@ -3455,6 +3455,85 @@ class MVUniformRhoPrior(RhoPrior):
         crho = copy.deepcopy(rho)
         crho[crho < a] = 0.9 * a
         crho[crho > b] = 0.9 * b
+        return crho
+
+
+class CenteredUniformRhoPriors(RhoPrior):
+    """Combines separate uniform priors for rho, the log-smoothing penalty parameters, to be used
+    by :func:`correct_VB` and :func:`mssm.src.python.mcmc.sample_mssm`.
+
+    This class corresponds to placing a uniform prior on every log-smoothing penalty, centered
+    on the corresponding value ``mrho[j]`` (typically the MAP/estimate) with support ranging
+    from ``max(mrho[j] - c, a)`` to ``min(mrho[j] + c, b)``.
+    """
+
+    def __init__(
+        self,
+        mrho: np.ndarray,
+        a: float = np.log(1e-7),
+        b: float = np.log(1e7),
+        c: float = 2,
+    ):
+        super().__init__()
+
+        self.a = []
+        self.b = []
+        self.lpdf = []
+
+        for rhoi, rho in enumerate(mrho):
+            arho = max(rho - c, a)
+            brho = min(rho + c, b)
+            lpdfrho = -np.log(brho - arho)
+            self.a.append(arho)
+            self.b.append(brho)
+            self.lpdf.append(lpdfrho)
+
+    def logpdf(self, rho: np.ndarray) -> np.ndarray:
+        """Returns an array holding the prior log density for all candidate vectors for which all
+        :math:`log(\\lambda)` parameters are within their prior intervals.
+
+        :param rho: Numpy array of shape (``nR``,``nrho``) containing ``nR`` proposed candidate
+            vectors for the ``nrho`` log-smoothing parameters :math:`log(\\lambda)`.
+        :type rho: np.ndarray
+        :return: Log-density array of length ``nR``, containing the prior density for each candidate
+            vector as described above.
+        :rtype: np.ndarray
+        """
+        a = self.a
+        b = self.b
+        lpdf = self.lpdf
+
+        ld = np.zeros(rho.shape[0])
+        for rhoi in range(rho.shape[1]):
+            ld += lpdf[rhoi]
+            inval = (rho[:, rhoi] < a[rhoi]) | (rho[:, rhoi] > b[rhoi])
+            ld[inval] = -np.inf
+
+        return ld
+
+    def make_valid(self, rho: np.ndarray) -> np.ndarray:
+        """Replaces elements in a copy of ``rho`` to ensure that they fall just within the
+        boundaries of their prior intervals.
+
+        :param rho: Numpy array of shape (``nR``,``nrho``) containing ``nR`` proposed candidate
+            vectors for the ``nrho`` log-smoothing parameters :math:`log(\\lambda)`.
+        :type rho: np.ndarray
+        :return: Copy of ``rho``, with all elements outside of the prior limits being changed to
+            be within the prior limits.
+        :rtype: np.ndarray
+        """
+
+        a = self.a
+        b = self.b
+
+        crho = copy.deepcopy(rho)
+        for rhoi in range(rho.shape[1]):
+            invala = crho[:, rhoi] < a[rhoi]
+            invalb = crho[:, rhoi] > b[rhoi]
+
+            crho[invala, rhoi] = 0.9 * a[rhoi]
+            crho[invalb, rhoi] = 0.9 * b[rhoi]
+
         return crho
 
 
