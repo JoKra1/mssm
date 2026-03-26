@@ -131,6 +131,9 @@ class Test_MultivariateHSMM_hard:
         }
     )
 
+    # Create pseudo-y column for time-varying HsMM
+    dat["pseudo"] = [1 for _ in range(dat.shape[0])]
+
     # Prep dat for hsmm model
     uval, id = np.unique(np.array(dat["series"]), return_index=True)
     sid = np.sort(id)
@@ -212,34 +215,47 @@ class Test_MultivariateHSMM_hard:
         pars += 3
 
     d_dat = pd.DataFrame(
-        {"x": [1 for _ in range(len(tid))], "y": [1 for _ in range(len(tid))]}
+        {"x": [1 for _ in range(len(tid))], "pseudo": [1 for _ in range(len(tid))]}
     )
 
     d_families = []
     d_formulas = []
 
+    # For time-varying model we need to split here
+    d_formulas_tv = []
+    tv_Xs = copy.deepcopy(Xs)
+    tv_ys = copy.deepcopy(ys)
+
     for j in range(n_S * (1 if starts_with_first else 2)):
         d_families.append(d_family)
 
         # Model of mean of dur model in state j
-        d_formulas.append(Formula(lhs("y"), [i()], data=d_dat))
+        d_formulas.append(Formula(lhs("pseudo"), [i()], data=d_dat))
+        d_formulas_tv.append(Formula(lhs("pseudo"), [i()], data=dat))
 
         init_coef.append(2.5)
         form_n_coef.append(d_formulas[-1].n_coef)
         _ = build_penalties(d_formulas[-1])
+        _ = build_penalties(d_formulas_tv[-1])
         Xs.append(build_model_matrix(d_formulas[-1]))
-        ys.append(d_dat["y"].values.reshape(-1, 1))
+        ys.append(d_dat["pseudo"].values.reshape(-1, 1))
+        tv_Xs.append(build_model_matrix(d_formulas_tv[-1]))
+        tv_ys.append(dat["pseudo"].values.reshape(-1, 1))
         build_matrix.append(True)
         build_mat_idx.append(len(build_mat_idx))
 
         # Model of scale parameter of dur model in state j
-        d_formulas.append(Formula(lhs("y"), [i()], data=d_dat))
+        d_formulas.append(Formula(lhs("pseudo"), [i()], data=d_dat))
+        d_formulas_tv.append(Formula(lhs("pseudo"), [i()], data=dat))
 
         init_coef.append(-2)
         form_n_coef.append(d_formulas[-1].n_coef)
         _ = build_penalties(d_formulas[-1])
+        _ = build_penalties(d_formulas_tv[-1])
         Xs.append(build_model_matrix(d_formulas[-1]))
-        ys.append(d_dat["y"].values.reshape(-1, 1))
+        ys.append(d_dat["pseudo"].values.reshape(-1, 1))
+        tv_Xs.append(build_model_matrix(d_formulas_tv[-1]))
+        tv_ys.append(dat["pseudo"].values.reshape(-1, 1))
         build_matrix.append(True)
         build_mat_idx.append(len(build_mat_idx))
 
@@ -258,38 +274,47 @@ class Test_MultivariateHSMM_hard:
     od_Xs = copy.deepcopy(Xs)
 
     t_formulas = []
+    t_formulas_tv = []
     for j in range(n_S):
         for par in range(n_S - 2):
 
             # Model of state transition away from state j
-            t_formulas.append(Formula(lhs("y"), [i()], data=d_dat))
+            t_formulas.append(Formula(lhs("pseudo"), [i()], data=d_dat))
+            t_formulas_tv.append(Formula(lhs("pseudo"), [i()], data=dat))
 
             init_coef.append(np.log(1))
             form_n_coef.append(t_formulas[-1].n_coef)
             _ = build_penalties(t_formulas[-1])
+            _ = build_penalties(t_formulas_tv[-1])
             Xs.append(build_model_matrix(t_formulas[-1]))
-            ys.append(d_dat["y"].values.reshape(-1, 1))
+            ys.append(d_dat["pseudo"].values.reshape(-1, 1))
+            tv_Xs.append(build_model_matrix(t_formulas_tv[-1]))
+            tv_ys.append(dat["pseudo"].values.reshape(-1, 1))
             build_matrix.append(True)
             build_mat_idx.append(len(build_mat_idx))
             pars += 1
 
     pi_formulas = []
-
+    pi_formulas_tv = []
     for par in range(n_S - 1):
         # Model of initial state probability
-        pi_formulas.append(Formula(lhs("y"), [i()], data=d_dat))
+        pi_formulas.append(Formula(lhs("pseudo"), [i()], data=d_dat))
+        pi_formulas_tv.append(Formula(lhs("pseudo"), [i()], data=dat))
 
         init_coef.append(np.log(1))
         form_n_coef.append(pi_formulas[-1].n_coef)
         _ = build_penalties(pi_formulas[-1])
+        _ = build_penalties(pi_formulas_tv[-1])
         Xs.append(build_model_matrix(pi_formulas[-1]))
-        ys.append(d_dat["y"].values.reshape(-1, 1))
+        ys.append(d_dat["pseudo"].values.reshape(-1, 1))
+        tv_Xs.append(build_model_matrix(pi_formulas_tv[-1]))
+        tv_ys.append(dat["pseudo"].values.reshape(-1, 1))
         build_matrix.append(True)
         build_mat_idx.append(len(build_mat_idx))
         pars += 1
 
     # Initialize Families
-    fam = HSMMFamily(
+    fam1 = HSMMFamily(
         pars,
         links,
         n_S,
@@ -306,7 +331,26 @@ class Test_MultivariateHSMM_hard:
         build_mat_idx=build_mat_idx,
     )
 
+    # Time-varying version
     fam2 = HSMMFamily(
+        pars,
+        links,
+        n_S,
+        obs_fams=obs_families,
+        d_fams=d_families,
+        sid=sid,
+        tid=None,  # Can set to None since it's same as sid
+        D=D,
+        M=M,
+        starts_with_first=starts_with_first,
+        ends_with_last=False,
+        ends_in_last=False,
+        n_cores=1,
+        build_mat_idx=build_mat_idx,
+    )
+
+    # Fixed pi and T
+    fam3 = HSMMFamily(
         od_pars,
         od_links,
         n_S,
@@ -348,249 +392,560 @@ class Test_MultivariateHSMM_hard:
     init_coef = np.array(init_coef).reshape(-1, 1)
     od_init_coef = np.array(od_init_coef).reshape(-1, 1)
 
-    S_emb = scp.sparse.csc_array(scp.sparse.eye(total_coef))
-    od_S_emb = scp.sparse.csc_array(scp.sparse.eye(od_total_coef))
-
-    penalties = [
-        LambdaTerm(
-            S_J=S_emb,
-            S_J_emb=S_emb,
-            D_J_emb=S_emb,
-            start_index=0,
-            lam=10,
-            rank=total_coef,
+    def test_llk(self):
+        # Test llk
+        llk1 = self.fam1.llk(self.init_coef, self.coef_split_idx, self.ys, self.Xs)
+        llk2 = self.fam2.llk(
+            self.init_coef, self.coef_split_idx, self.tv_ys, self.tv_Xs
         )
-    ]
-    od_penalties = [
-        LambdaTerm(
-            S_J=od_S_emb,
-            S_J_emb=od_S_emb,
-            D_J_emb=od_S_emb,
-            start_index=0,
-            lam=10,
-            rank=od_total_coef,
+        llk3 = self.fam3.llk(
+            self.od_init_coef, self.od_coef_split_idx, self.od_ys, self.od_Xs
         )
-    ]
 
-    # Now can estimate
-    def callback(outer, pen_llk, coef, lam):
-        print(outer, pen_llk, lam, coef[:9])
-
-    test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
-    test_kwargs["control_lambda"] = 1
-    test_kwargs["extend_lambda"] = False
-    test_kwargs["max_outer"] = 500
-    test_kwargs["max_inner"] = 500
-    test_kwargs["method"] = "qEFS"
-    test_kwargs["repara"] = False
-    test_kwargs["prefit_grad"] = True
-    test_kwargs["progress_bar"] = True
-    test_kwargs["max_restarts"] = -1
-    test_kwargs["seed"] = 5
-    test_kwargs["global_opt_qefs"] = True
-    test_kwargs["init_lambda"] = [10]
-
-    bfgs_options = {
-        "gtol": 1.1 * 1e-7,
-        "ftol": 1.1 * 1e-7,
-        "maxcor": 30,
-        "maxls": 20,
-        "maxfun": 500,
-    }
-
-    test_kwargs["bfgs_options"] = bfgs_options
-    test_kwargs["init_coef"] = init_coef
-    test_kwargs["extra_penalties"] = penalties
-    test_kwargs["callback"] = callback
-
-    hsmm = GSMM([*obs_formulas, *d_formulas, *t_formulas, *pi_formulas], family=fam)
-    hsmm.fit(**test_kwargs)
-
-    test_kwargs["init_coef"] = od_init_coef
-    test_kwargs["extra_penalties"] = od_penalties
-
-    hsmm2 = GSMM([*obs_formulas, *d_formulas], family=fam2)
-    hsmm2.fit(**test_kwargs)
-
-    # Standard tests
-    def test_GAMedf(self):
         np.testing.assert_allclose(
-            self.hsmm.edf,
-            35.695945757029314,
+            llk1,
+            llk2,
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.1),
         )
 
-    def test_GAMcoef(self):
-        coef = self.hsmm.coef
         np.testing.assert_allclose(
-            coef,
-            np.array(
-                [
-                    [-0.01936465],
-                    [0.00817976],
-                    [0.02563425],
-                    [-1.95208348],
-                    [0.00517209],
-                    [-5.00445096],
-                    [0.13447266],
-                    [2.40962538],
-                    [5.05054534],
-                    [1.90028138],
-                    [-3.1597454],
-                    [2.31954038],
-                    [-2.09700616],
-                    [2.81426287],
-                    [-1.41867593],
-                    [0.29349792],
-                    [-1.1756628],
-                    [0.09782385],
-                    [1.08065604],
-                    [0.4341386],
-                    [-0.01586282],
-                    [-0.02783987],
-                    [-0.06346497],
-                    [0.21290136],
-                    [0.68564144],
-                    [0.03753095],
-                    [0.28118655],
-                    [-0.71335842],
-                    [0.85483309],
-                    [0.05220327],
-                    [-0.2932202],
-                    [-0.03627107],
-                    [0.23512547],
-                    [0.36591222],
-                    [-0.71050034],
-                    [-0.01383196],
-                    [0.03921854],
-                    [0.0570436],
-                ]
-            ),
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.5),
-        )
-
-    def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.hsmm.overall_penalties])
-        np.testing.assert_allclose(
-            lam,
-            np.array([0.36071882606318695]),
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 2.5),
-        )
-
-    def test_GAMreml(self):
-        reml = self.hsmm.get_reml()
-        np.testing.assert_allclose(
-            reml, -1260.4943823469362, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
-        )
-
-    def test_GAMllk(self):
-        llk = self.hsmm.get_llk(False)
-        np.testing.assert_allclose(
-            llk, -1134.711336277765, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
-        )
-
-    def test_GAMedf2(self):
-        np.testing.assert_allclose(
-            self.hsmm2.edf,
-            32.858595174548306,
+            llk1,
+            -2422.1207972824186,
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.1),
         )
 
-    def test_GAMcoef2(self):
-        coef = self.hsmm2.coef
         np.testing.assert_allclose(
-            coef,
+            llk3,
+            -2422.408060704047,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_grad(self):
+        # Test grad function of hsmm and time-varying hsmm
+        grad1 = self.fam1.gradient(
+            self.init_coef, self.coef_split_idx, self.ys, self.Xs
+        )
+        grad2 = self.fam2.gradient(
+            self.init_coef, self.coef_split_idx, self.tv_ys, self.tv_Xs
+        )
+
+        pos_llk_warp = lambda x: self.fam1.llk(
+            x.reshape(-1, 1), self.coef_split_idx, self.ys, self.Xs
+        )
+
+        grad3 = scp.optimize.approx_fprime(self.init_coef.flatten(), pos_llk_warp)
+
+        grad_diff1 = np.abs(np.round(grad1 - grad3.reshape(-1, 1), decimals=3)).max()
+        grad_diff2 = np.abs(np.round(grad2 - grad3.reshape(-1, 1), decimals=3)).max()
+
+        np.testing.assert_allclose(
+            grad_diff1,
+            0.0,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+        np.testing.assert_allclose(
+            grad_diff2,
+            0.0,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_grad_fixed(self):
+        # Test grad function of fixed hsmm
+        grad4 = self.fam3.gradient(
+            self.od_init_coef, self.od_coef_split_idx, self.od_ys, self.od_Xs
+        )
+        pos_llk_warp = lambda x: self.fam3.llk(
+            x.reshape(-1, 1), self.od_coef_split_idx, self.od_ys, self.od_Xs
+        )
+        grad5 = scp.optimize.approx_fprime(self.od_init_coef.flatten(), pos_llk_warp)
+
+        grad_diff3 = np.abs(np.round(grad4 - grad5.reshape(-1, 1), decimals=3)).max()
+
+        np.testing.assert_allclose(
+            grad_diff3,
+            0.0,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_ods(self):
+        # Check observation and duration probs
+        ods1 = self.fam1.compute_od_probs(
+            self.init_coef, self.coef_split_idx, self.ys, self.Xs
+        )
+
+        ods2 = self.fam2.compute_od_probs(
+            self.init_coef, self.coef_split_idx, self.tv_ys, self.tv_Xs
+        )
+
+        ods3 = self.fam3.compute_od_probs(
+            self.od_init_coef, self.od_coef_split_idx, self.od_ys, self.od_Xs
+        )
+
+        np.testing.assert_allclose(
+            ods1[0][0],
+            ods2[0][0],
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+        np.testing.assert_allclose(
+            ods1[0][1],
+            ods2[0][1][:, :, 0],
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+        np.testing.assert_allclose(
+            ods3[0][0][:5, :],
             np.array(
                 [
-                    [-0.01936699],
-                    [0.00817927],
-                    [0.0256361],
-                    [-1.95204075],
-                    [0.00499744],
-                    [-5.00480245],
-                    [0.13458375],
-                    [2.40975425],
-                    [5.05080119],
-                    [1.90032838],
-                    [-3.16462809],
-                    [2.31979025],
-                    [-2.10046128],
-                    [2.81491996],
-                    [-1.42122901],
-                    [-0.0158635],
-                    [-0.0278502],
-                    [-0.06347819],
-                    [0.21293755],
-                    [0.68574448],
-                    [0.03753274],
-                    [0.28124869],
-                    [-0.71348837],
-                    [0.85497674],
-                    [0.05220913],
-                    [-0.29324338],
-                    [-0.03627037],
-                    [0.23515093],
-                    [0.36594015],
-                    [-0.71056214],
-                    [-0.01383214],
-                    [0.03922228],
-                    [0.05704667],
+                    [-4.40202288, -3.8485654, -4.34099828],
+                    [-3.8074954, -3.87171952, -3.6856842],
+                    [-5.10074097, -4.5286156, -4.96309288],
+                    [-3.10149621, -3.24096177, -3.15586644],
+                    [-3.06516362, -2.61534322, -2.90384498],
                 ]
             ),
             atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.5),
+            rtol=min(max_rtol, 0.1),
         )
 
-    def test_GAMlam2(self):
-        lam = np.array([p.lam for p in self.hsmm2.overall_penalties])
         np.testing.assert_allclose(
-            lam,
-            np.array([0.3416055393086223]),
+            ods3[0][1][:5, :],
+            np.array(
+                [
+                    [-11.61207055, -11.61207055, -11.61207055],
+                    [-7.79337881, -7.79337881, -7.79337881],
+                    [-5.81113444, -5.81113444, -5.81113444],
+                    [-4.58076989, -4.58076989, -4.58076989],
+                    [-3.76239347, -3.76239347, -3.76239347],
+                ]
+            ),
             atol=min(max_atol, 0),
-            rtol=min(max_rtol, 2.5),
+            rtol=min(max_rtol, 0.1),
         )
 
-    def test_GAMreml2(self):
-        reml = self.hsmm2.get_reml()
-        np.testing.assert_allclose(
-            reml, -1271.0859442419023, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+    def test_tps(self):
+        # Check Ts and ps
+        Tps1 = self.fam1.compute_Tpi(
+            self.init_coef, self.coef_split_idx, self.ys, self.Xs
         )
 
-    def test_GAMllk2(self):
-        llk = self.hsmm2.get_llk(False)
-        np.testing.assert_allclose(
-            llk, -1150.6714419260961, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+        Tps2 = self.fam2.compute_Tpi(
+            self.init_coef, self.coef_split_idx, self.tv_ys, self.tv_Xs
         )
 
-    # Test family specific functions
-    def test_t(self):
-        ps = self.fam.compute_Tpi(self.hsmm.coef, self.coef_split_idx, self.ys, self.Xs)
-        T = ps[0][0]
+        Tps3 = self.fam3.compute_Tpi(
+            self.od_init_coef, self.od_coef_split_idx, self.od_ys, self.od_Xs
+        )
 
         np.testing.assert_allclose(
+            Tps1[0][0],
+            Tps2[0][0][:, :, 0],
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+        np.testing.assert_allclose(
+            Tps1[0][1],
+            Tps2[0][1],
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+        np.testing.assert_allclose(
+            Tps3[0][0],
             T,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+        np.testing.assert_allclose(
+            Tps3[0][1],
+            pi,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_viterbi(self):
+        # Test viterbi
+        viterbi1 = self.fam1.decode_viterbi(
+            self.init_coef, self.coef_split_idx, self.ys, self.Xs
+        )
+
+        viterbi2 = self.fam2.decode_viterbi(
+            self.init_coef, self.coef_split_idx, self.tv_ys, self.tv_Xs
+        )
+
+        viterbi3 = self.fam3.decode_viterbi(
+            self.od_init_coef, self.od_coef_split_idx, self.od_ys, self.od_Xs
+        )
+
+        np.testing.assert_allclose(
+            viterbi1[0][1],
+            viterbi2[0][1],
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+        np.testing.assert_allclose(
+            viterbi1[0][1][:20],
+            viterbi3[0][1][:20],
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+        np.testing.assert_allclose(
+            viterbi1[0][1][:20],
+            np.array([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_state_samples(self):
+        # test state samples
+        state_samples1 = self.fam1.sample_posterior_states(
+            self.init_coef, self.coef_split_idx, self.ys, self.Xs, 2
+        )
+
+        state_samples2 = self.fam2.sample_posterior_states(
+            self.init_coef, self.coef_split_idx, self.tv_ys, self.tv_Xs, 2
+        )
+
+        state_samples3 = self.fam3.sample_posterior_states(
+            self.od_init_coef, self.od_coef_split_idx, self.od_ys, self.od_Xs, 2
+        )
+
+        np.testing.assert_allclose(
+            state_samples1[0][1],
+            state_samples2[0][1],
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+        np.testing.assert_allclose(
+            state_samples1[0][1][:20, 1],
+            np.array([1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 0, 0, 0]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+        np.testing.assert_allclose(
+            state_samples3[0][1][:20, 1],
+            np.array([0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 0, 0, 0]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_predict(self):
+        # test prediction
+        prediction1 = self.fam1.predict(
+            self.init_coef, self.coef_split_idx, self.ys, self.Xs, n_samples=2
+        )
+
+        prediction2 = self.fam2.predict(
+            self.init_coef, self.coef_split_idx, self.tv_ys, self.tv_Xs, n_samples=2
+        )
+
+        prediction3 = self.fam3.predict(
+            self.od_init_coef,
+            self.od_coef_split_idx,
+            self.od_ys,
+            self.od_Xs,
+            n_samples=2,
+        )
+
+        np.testing.assert_allclose(
+            prediction1[0][0],
+            prediction2[0][0],
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+        np.testing.assert_allclose(
+            prediction1[0][1],
+            prediction2[0][1],
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+        np.testing.assert_allclose(
+            prediction1[0][0][:5, :, 0],
             np.array(
                 [
-                    [0.0, 0.42714773, 0.57285227],
-                    [0.76416707, 0.0, 0.23583293],
-                    [0.47556352, 0.52443648, 0.0],
+                    [-2.96476414, -0.65006362, -7.60078721],
+                    [0.25008563, 3.18114284, 1.81762191],
+                    [-2.22843751, -1.68034947, -8.39775076],
+                    [0.04533482, 1.47884745, -0.24022577],
+                    [-1.90705985, -1.56167648, -1.1013139],
                 ]
             ),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.1),
         )
 
-    def test_p(self):
-        ps = self.fam.compute_Tpi(self.hsmm.coef, self.coef_split_idx, self.ys, self.Xs)
-        p = ps[0][1]
+        np.testing.assert_allclose(
+            prediction3[0][0][:5, :, 0],
+            np.array(
+                [
+                    [-2.96476414, -0.65006362, -7.60078721],
+                    [0.25008563, 3.18114284, 1.81762191],
+                    [-2.22843751, -1.68034947, -8.39775076],
+                    [0.04533482, 1.47884745, -0.24022577],
+                    [-1.90705985, -1.56167648, -1.1013139],
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_predictive_resid(self):
+        # Test predictive resid
+        pred_resid1 = self.fam1.get_resid(
+            self.init_coef,
+            self.coef_split_idx,
+            self.ys,
+            self.Xs,
+            resid_type="predictive",
+        )
+
+        pred_resid2 = self.fam2.get_resid(
+            self.init_coef,
+            self.coef_split_idx,
+            self.tv_ys,
+            self.tv_Xs,
+            resid_type="predictive",
+        )
+
+        pred_resid3 = self.fam3.get_resid(
+            self.od_init_coef,
+            self.od_coef_split_idx,
+            self.od_ys,
+            self.od_Xs,
+            resid_type="predictive",
+        )
 
         np.testing.assert_allclose(
-            p,
-            np.array([0.18214124, 0.53669957, 0.28115919]),
+            pred_resid1,
+            pred_resid2,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+        np.testing.assert_allclose(
+            pred_resid1[:5, :],
+            np.array(
+                [
+                    [-2.85046777, -1.7181105, -4.19853279],
+                    [-0.7696748, -1.30788421, -1.40362903],
+                    [-1.25885595, -1.64247998, -1.72167249],
+                    [-1.24941138, -1.66806177, -1.99060636],
+                    [-1.5177543, -1.92540368, -2.2091171],
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+        np.testing.assert_allclose(
+            pred_resid3[:5, :],
+            np.array(
+                [
+                    [-2.81573851, -1.71229736, -4.08310188],
+                    [-0.75344712, -1.3088929, -1.4026881],
+                    [-1.24805185, -1.64312734, -1.72083857],
+                    [-1.23201096, -1.67057077, -1.9899709],
+                    [-1.50021403, -1.92840169, -2.20746248],
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_forward_resid(self):
+        # Test forward resid
+        forward_resid1 = self.fam1.get_resid(
+            self.init_coef,
+            self.coef_split_idx,
+            self.ys,
+            self.Xs,
+            resid_type="forward",
+        )
+
+        forward_resid2 = self.fam2.get_resid(
+            self.init_coef,
+            self.coef_split_idx,
+            self.tv_ys,
+            self.tv_Xs,
+            resid_type="forward",
+        )
+
+        forward_resid3 = self.fam3.get_resid(
+            self.od_init_coef,
+            self.od_coef_split_idx,
+            self.od_ys,
+            self.od_Xs,
+            resid_type="forward",
+        )
+
+        np.testing.assert_allclose(
+            forward_resid1,
+            forward_resid2,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+        np.testing.assert_allclose(
+            forward_resid1[:5, :],
+            np.array(
+                [
+                    [-1.94598191, -0.65367552, -0.96855481],
+                    [1.56183752, 0.64444896, -1.20854879],
+                    [-2.26434264, -0.52807118, -0.9964072],
+                    [0.97091134, 1.09212051, -0.99332044],
+                    [-0.26832785, 0.5483176, -1.38903507],
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+        np.testing.assert_allclose(
+            forward_resid3[:5, :],
+            np.array(
+                [
+                    [-1.97745873, -0.62443529, -0.9983917],
+                    [1.53899815, 0.59128775, -1.25965858],
+                    [-2.29025925, -0.51067471, -1.03167802],
+                    [0.97242687, 1.0164081, -1.02992055],
+                    [-0.28974535, 0.50511576, -1.44570645],
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_viterbi_resid(self):
+        # Test viterbi resid
+        viterbi_resid1 = self.fam1.get_resid(
+            self.init_coef,
+            self.coef_split_idx,
+            self.ys,
+            self.Xs,
+            resid_type="viterbi_dur",
+        )
+
+        viterbi_resid2 = self.fam2.get_resid(
+            self.init_coef,
+            self.coef_split_idx,
+            self.tv_ys,
+            self.tv_Xs,
+            resid_type="viterbi_dur",
+        )
+
+        viterbi_resid3 = self.fam3.get_resid(
+            self.od_init_coef,
+            self.od_coef_split_idx,
+            self.od_ys,
+            self.od_Xs,
+            resid_type="viterbi_dur",
+        )
+
+        np.testing.assert_allclose(
+            viterbi_resid1,
+            viterbi_resid2,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+        np.testing.assert_allclose(
+            viterbi_resid1,
+            np.array(
+                [
+                    [0.26190762, 0.01786241, 0.523248],
+                    [1.01132804, 0.85198392, 0.58350554],
+                    [0.50689602, 0.76070477, 0.74922525],
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+        np.testing.assert_allclose(
+            viterbi_resid3,
+            np.array(
+                [
+                    [0.79597972, 1.0079424, 0.70741119],
+                    [0.63609553, 0.73972272, 0.4817017],
+                    [0.50689602, 0.76070477, 0.74922525],
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_posterior_resid(self):
+        # Test posterior resid
+        posterior_resid1 = self.fam1.get_resid(
+            self.init_coef,
+            self.coef_split_idx,
+            self.ys,
+            self.Xs,
+            resid_type="posterior_dur",
+        )
+
+        posterior_resid2 = self.fam2.get_resid(
+            self.init_coef,
+            self.coef_split_idx,
+            self.tv_ys,
+            self.tv_Xs,
+            resid_type="posterior_dur",
+        )
+
+        posterior_resid3 = self.fam3.get_resid(
+            self.od_init_coef,
+            self.od_coef_split_idx,
+            self.od_ys,
+            self.od_Xs,
+            resid_type="posterior_dur",
+        )
+
+        np.testing.assert_allclose(
+            posterior_resid1,
+            posterior_resid2,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+        np.testing.assert_allclose(
+            posterior_resid1[:, :, 0],
+            np.array(
+                [
+                    [0.16469857, -0.4488697, 0.13306259],
+                    [0.19098355, 0.11323988, 0.01077971],
+                    [-0.39889136, -0.39197353, -0.53289776],
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+        np.testing.assert_allclose(
+            posterior_resid3[:, :, 0],
+            np.array(
+                [
+                    [0.39645963, -0.11576908, 0.22357649],
+                    [0.2105846, -0.23401751, -0.20967159],
+                    [-0.08712459, -0.5551245, -0.41983202],
+                ]
+            ),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.1),
         )
@@ -876,51 +1231,18 @@ class Test_UnivariateHSMM_hard:
     total_coef = np.sum(form_n_coef)
     init_coef = np.array(init_coef).reshape(-1, 1)
 
-    S_emb = scp.sparse.csc_array(scp.sparse.eye(init_coef.shape[0]))
+    def test_llk(self):
+        # Test log-likelihood of univariate hsmm
+        llk = self.fam.llk(self.init_coef, self.coef_split_idx, self.ys, self.Xs)
 
-    penalties = [
-        LambdaTerm(
-            S_J=S_emb,
-            S_J_emb=S_emb,
-            D_J_emb=S_emb,
-            start_index=0,
-            lam=10,
-            rank=init_coef.shape[0],
+        np.testing.assert_allclose(
+            llk,
+            -4870.823813514383,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
         )
-    ]
 
-    # And fit
-    test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
-    test_kwargs["control_lambda"] = 1
-    test_kwargs["extend_lambda"] = False
-    test_kwargs["max_outer"] = 500
-    test_kwargs["max_inner"] = 500
-    test_kwargs["method"] = "qEFS"
-    test_kwargs["repara"] = False
-    test_kwargs["prefit_grad"] = True
-    test_kwargs["progress_bar"] = True
-    test_kwargs["max_restarts"] = -1
-    test_kwargs["seed"] = 5
-    test_kwargs["global_opt_qefs"] = True
-    test_kwargs["init_lambda"] = [10]
-
-    bfgs_options = {
-        "gtol": 1.1 * 1e-7,
-        "ftol": 1.1 * 1e-7,
-        "maxcor": 30,
-        "maxls": 20,
-        "maxfun": 500,
-    }
-
-    test_kwargs["bfgs_options"] = bfgs_options
-    test_kwargs["init_coef"] = init_coef
-    test_kwargs["extra_penalties"] = penalties
-    test_kwargs["build_mat"] = build_matrix
-
-    hsmm = GSMM([*obs_formulas, *d_formulas, *t_formulas, *pi_formulas], family=fam)
-    hsmm.fit(**test_kwargs)
-
-    def test_grad1(self):
+    def test_grad(self):
         # Test grad function of univariate hsmm
         grad = self.fam.gradient(self.init_coef, self.coef_split_idx, self.ys, self.Xs)
         pos_llk_warp = lambda x: self.fam.llk(
@@ -933,214 +1255,6 @@ class Test_UnivariateHSMM_hard:
         np.testing.assert_allclose(
             grad_diff,
             0.0,
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.1),
-        )
-
-    # Test coef
-
-    def test_GAMedf(self):
-        np.testing.assert_allclose(
-            self.hsmm.edf,
-            33.11384860717911,
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.1),
-        )
-
-    def test_GAMcoef(self):
-        coef = self.hsmm.coef
-        np.testing.assert_allclose(
-            np.round(coef, decimals=4),
-            np.array(
-                [
-                    [-1.9200e-02],
-                    [1.7000e-02],
-                    [7.8000e-03],
-                    [-3.2000e-02],
-                    [2.6100e-02],
-                    [-3.8000e-02],
-                    [-1.9485e00],
-                    [4.5600e-02],
-                    [2.1000e-03],
-                    [-8.0000e-03],
-                    [-5.0039e00],
-                    [3.6800e-02],
-                    [1.3650e-01],
-                    [2.0000e-03],
-                    [2.4099e00],
-                    [1.4400e-02],
-                    [5.0515e00],
-                    [-5.7100e-02],
-                    [-2.8500e-02],
-                    [6.2000e-03],
-                    [1.3584e00],
-                    [-1.9502e00],
-                    [-6.4820e-01],
-                    [-5.4340e-01],
-                    [1.9002e00],
-                    [-3.1787e00],
-                    [2.3785e00],
-                    [-2.8071e00],
-                    [2.8661e00],
-                    [-2.9061e00],
-                    [2.9660e-01],
-                    [-1.1941e00],
-                    [9.9200e-02],
-                    [1.1991e00],
-                    [5.2940e-01],
-                ]
-            ),
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.5),
-        )
-
-    def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.hsmm.overall_penalties])
-        np.testing.assert_allclose(
-            lam,
-            np.array([0.2911866149837378]),
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 2.5),
-        )
-
-    def test_GAMreml(self):
-        reml = self.hsmm.get_reml()
-        np.testing.assert_allclose(
-            reml, -3489.508246303468, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
-        )
-
-    def test_GAMllk(self):
-        llk = self.hsmm.get_llk(False)
-        np.testing.assert_allclose(
-            llk, -3378.8345006947566, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
-        )
-
-    # Test family specific functions
-    def test_t(self):
-        ps = self.fam.compute_Tpi(self.hsmm.coef, self.coef_split_idx, self.ys, self.Xs)
-        T = ps[0][0]
-
-        np.testing.assert_allclose(
-            T,
-            np.array(
-                [
-                    [0.0, 0.42638427, 0.57361573],
-                    [0.76747515, 0.0, 0.23252485],
-                    [0.47521251, 0.52478749, 0.0],
-                ]
-            ),
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.1),
-        )
-
-    def test_p(self):
-        ps = self.fam.compute_Tpi(self.hsmm.coef, self.coef_split_idx, self.ys, self.Xs)
-        p = ps[0][1]
-
-        np.testing.assert_allclose(
-            p,
-            np.array([0.16625215, 0.55147263, 0.28227523]),
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.1),
-        )
-
-    def test_viterbi(self):
-        viterbi = self.fam.decode_viterbi(
-            self.hsmm.coef, self.coef_split_idx, self.ys, self.Xs
-        )
-
-        np.testing.assert_allclose(
-            viterbi[0][1][:20],
-            np.array([1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]),
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.1),
-        )
-
-    def test_state_samples(self):
-        state_samples = self.fam.sample_posterior_states(
-            self.hsmm.coef, self.coef_split_idx, self.ys, self.Xs, 2
-        )
-
-        np.testing.assert_allclose(
-            state_samples[0][1][:20, 1],
-            np.array([1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]),
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.1),
-        )
-
-    def test_pred_resid(self):
-        pred_resid = self.fam.get_resid(
-            self.hsmm.coef,
-            self.coef_split_idx,
-            self.ys,
-            self.Xs,
-            resid_type="predictive",
-        )
-
-        np.testing.assert_allclose(
-            pred_resid[:5, :],
-            np.array(
-                [
-                    [-2.44220001, -1.40776388, -2.3386541],
-                    [-0.17296623, -0.80491917, -0.97356931],
-                    [-0.7277487, -1.14872244, -0.80666366],
-                    [-0.52777857, -0.50255834, -1.04803087],
-                    [-0.79525784, -0.54793967, -1.43441559],
-                ]
-            ),
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.1),
-        )
-
-    def test_forward_resid(self):
-        forward_resid = self.fam.get_resid(
-            self.hsmm.coef,
-            self.coef_split_idx,
-            self.ys,
-            self.Xs,
-            resid_type="forward",
-        )
-
-        np.testing.assert_allclose(
-            forward_resid[:5, :],
-            np.array(
-                [
-                    [-1.75596183, -0.97223235, -0.00774127],
-                    [1.76195888, 0.25303344, 0.1062796],
-                    [-1.94304417, -0.69401835, 0.61348917],
-                    [0.51631522, 0.7035971, 0.13665445],
-                    [-0.78088569, -0.21806228, -1.17172933],
-                ]
-            ),
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.1),
-        )
-
-    def test_viterbi_post_resid(self):
-        viterbi_resid = self.fam.get_resid(
-            self.hsmm.coef,
-            self.coef_split_idx,
-            self.ys,
-            self.Xs,
-            resid_type="viterbi_dur",
-        )
-        posterior_resid = self.fam.get_resid(
-            self.hsmm.coef,
-            self.coef_split_idx,
-            self.ys,
-            self.Xs,
-            resid_type="posterior_dur",
-        )
-
-        np.testing.assert_allclose(
-            posterior_resid.mean(axis=2) - viterbi_resid,
-            np.array(
-                [
-                    [-1.35929254e-03, 1.01871257e-03, 2.77555756e-17],
-                    [-2.85539928e-05, -4.21063701e-05, 1.11022302e-16],
-                    [1.11022302e-16, 0.00000000e00, 0.00000000e00],
-                ]
-            ),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.1),
         )
@@ -1472,6 +1586,101 @@ class Test_UnivariateHMP:
         np.testing.assert_allclose(
             total_coefs,
             np.array([39, 21, 39, 21]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_ods(self):
+        # Test observation and duration probabilities for hmp
+        ods = self.families[0].compute_od_probs(
+            self.init_coefs[0],
+            self.coef_split_idxs[0],
+            self.yss[0],
+            self.Xss[0],
+            log=False,
+        )
+
+        np.testing.assert_allclose(
+            np.round(ods[0][0][:5, :, 1], decimals=6),
+            np.array(
+                [
+                    [0.002269, 0.005953, 0.005823, 0.005953, 0.002269],
+                    [0.0002, 0.001067, 0.001368, 0.001067, 0.0002],
+                    [0.029579, 0.023166, 0.014269, 0.023166, 0.029579],
+                    [0.054175, 0.019046, 0.008643, 0.019046, 0.054175],
+                    [0.04037, 0.023882, 0.013221, 0.023882, 0.04037],
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+        np.testing.assert_allclose(
+            ods[0][1][:5, :],
+            np.array(
+                [
+                    [0.10865586, 0.0, 0.10865586, 0.0, 0.10865586],
+                    [0.06993352, 0.0, 0.06993352, 0.0, 0.06993352],
+                    [0.0539878, 0.0, 0.0539878, 0.0, 0.0539878],
+                    [0.04489946, 0.0, 0.04489946, 0.0, 0.04489946],
+                    [0.03889596, 1.0, 0.03889596, 1.0, 0.03889596],
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_predict(self):
+        # Test signal + state prediction for hmp
+        prediction = self.families[2].predict(
+            self.init_coefs[2],
+            self.coef_split_idxs[2],
+            self.yss[2],
+            self.Xss[2],
+            n_samples=2,
+        )
+
+        np.testing.assert_allclose(
+            prediction[0][0][:5, :, 0],
+            np.array(
+                [
+                    [1.76405235, 1.62434536, -0.41675785],
+                    [1.72963813, 0.35476253, -2.05837901],
+                    [2.48217173, 0.92684626, -2.58235028],
+                    [2.06388657, 1.97447444, -0.85566706],
+                    [0.94255314, 1.26353318, -1.34404703],
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+        np.testing.assert_allclose(
+            prediction[0][1][:20, 0],
+            np.array(
+                [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0,
+                    2.0,
+                    2.0,
+                    2.0,
+                    2.0,
+                    2.0,
+                    2.0,
+                    2.0,
+                    2.0,
+                    2.0,
+                ]
+            ),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.1),
         )

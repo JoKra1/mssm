@@ -26,7 +26,7 @@ def _split_matrices(
     Xs: list[scp.sparse.csc_array | None],
     shared_pars: list[int],
     shared_m: bool,
-    obs_fams: list[list[GAMLSSFamily | GSMMFamily | None]],
+    obs_fams: list[list[GAMLSSFamily | MultiGauss | None]],
     d_fams: list[GAMLSSFamily | None],
     sid: np.ndarray,
     tid: np.ndarray,
@@ -60,7 +60,7 @@ def _split_matrices(
     :param obs_fams: Distribution of emissions - one list per state containing the specific families
         (can be multiple if ``M>1`` or a single class:`MultiGauss`). The state-specific list can
         also include multiple Nones, in case of a HMP-like model.
-    :type obs_fams: list[list[GAMLSSFamily | GSMMFamily | None]]
+    :type obs_fams: list[list[GAMLSSFamily | MultiGauss | None]]
     :param d_fams: Distribution of state durations - one per state. Can also contain None for the
         'bump states' of a HMP-like model, which have a fixed duration.
     :type d_fams: list[GAMLSSFamily | None]
@@ -238,7 +238,7 @@ def _compute_series_probs(
     ys: list[np.ndarray | None],
     Xs: list[scp.sparse.csc_array | None],
     n_S: int,
-    obs_fams: list[list[GAMLSSFamily | GSMMFamily | None]],
+    obs_fams: list[list[GAMLSSFamily | MultiGauss | None]],
     d_fams: list[GAMLSSFamily | None],
     D: int,
     M: int,
@@ -297,7 +297,7 @@ def _compute_series_probs(
     ::param obs_fams: Distribution of emissions - one list per state containing the specific
         families (can be multiple if ``M>1`` or a single class:`MultiGauss`). The state-specific
         list can also include multiple Nones, in case of a HMP-like model.
-    :type obs_fams: list[list[GAMLSSFamily | GSMMFamily | None]]
+    :type obs_fams: list[list[GAMLSSFamily | MultiGauss | None]]
     :param d_fams: Distribution of state durations - one per state. Can also contain None for the
         'bump states' of a HMP-like model, which have a fixed duration.
     :type d_fams: list[GAMLSSFamily | None]
@@ -798,7 +798,7 @@ def _sample_series_emissions(
     shared_m: bool,
     Xs: list[scp.sparse.csc_array | None],
     n_S: int,
-    obs_fams: list[list[GAMLSSFamily | GSMMFamily | None]],
+    obs_fams: list[list[GAMLSSFamily | MultiGauss | None]],
     M: int,
     scale: float | None,
     build_mat_idx: list[int] | None,
@@ -838,7 +838,7 @@ def _sample_series_emissions(
     ::param obs_fams: Distribution of emissions - one list per state containing the specific
         families (can be multiple if ``M>1`` or a single class:`MultiGauss`). The state-specific
         list can also include multiple Nones, in case of a HMP-like model.
-    :type obs_fams: list[list[GAMLSSFamily | GSMMFamily | None]]
+    :type obs_fams: list[list[GAMLSSFamily | MultiGauss | None]]
     :param M: Number of signals recorded if the HSMM is multivariate.
     :type M: int
     :param scale: Scale parameter to use for the the observation probabilities under a hmp model
@@ -1078,7 +1078,7 @@ def _compute_dur_res_series(
 
 
 class HSMMFamily(GSMMFamily):
-    """Family to estimate (Hidden semi-Markov Models) HsMM models via the `mssm` toolbox.
+    """Family to estimate (Hidden semi-Markov Models) HsMM models via the ``mssm`` toolbox.
 
     Instead of treating HsMM parameters as constant, in this implementation parameters can be
     represented as additive mixed models including smooth functions of experimental covariates and
@@ -1108,7 +1108,7 @@ class HSMMFamily(GSMMFamily):
     :param obs_fams: Distribution of emissions - one list per state containing the specific families
         (can be multiple if ``M>1`` or a single class:`MultiGauss`). The state-specific list can
         also include multiple Nones, in case of a HMP-like model.
-    :type obs_fams: list[list[GAMLSSFamily | GSMMFamily | None]]
+    :type obs_fams: list[list[GAMLSSFamily | MultiGauss | None]]
     :param d_fams: Distribution of state durations - one per state. Can also contain None for the
         'bump states' of a HMP-like model, which have a fixed duration.
     :type d_fams: list[GAMLSSFamily | None]
@@ -1179,7 +1179,7 @@ class HSMMFamily(GSMMFamily):
         pars: int,
         links: list[Link],
         n_S: int,
-        obs_fams: list[list[GAMLSSFamily, GSMMFamily] | None],
+        obs_fams: list[list[GAMLSSFamily, MultiGauss] | None],
         d_fams: list[GAMLSSFamily],
         sid: np.ndarray,
         tid: np.ndarray | None,
@@ -1772,7 +1772,7 @@ class HSMMFamily(GSMMFamily):
 
                 # and duration of initial state
                 dur = np_gen.choice(
-                    d_vals, p=ds[0, :, state] if tvdtpi else ds[:, state]
+                    d_vals, p=ds[:, state, 0] if tvdtpi else ds[:, state]
                 )
 
                 if series_seed is not None:
