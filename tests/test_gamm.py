@@ -17,6 +17,7 @@ from mssm.src.python.utils import correct_VB, estimateVp
 import io
 from contextlib import redirect_stdout
 from .defaults import default_gamm_test_kwargs, max_atol, max_rtol
+from mssm.src.python.mcmc import sample_mssm
 
 ################################################################## Tests ##################################################################
 
@@ -3458,4 +3459,58 @@ class Test_transformX:
     def test_VP(self):
         np.testing.assert_allclose(
             self.VP1[0], self.VP2[0], atol=min(max_atol, 0), rtol=min(max_rtol, 1e-6)
+        )
+
+
+class Test_Nuts_output:
+    # Another sampler test
+    dat = sim3(5000, 10, family=Gaussian(), seed=20, binom_offset=0)
+
+    formula = Formula(lhs("y"), [i(), f(["x0"])], data=dat)
+
+    model = GAMM(formula, Gaussian())
+    model.fit()
+
+    chains = sample_mssm(
+        model,
+        n_iter=1000,
+        n_steps=20,
+        auto_converge=True,
+        M_adapt=20,
+        parallelize_chains=True,
+        sample_rho=True,
+        n_chains=4,
+        make_proper=True,
+        max_j=10,
+        max_j_adapt=5,
+        seed=0,
+    )
+
+    def test_posterior_coef(self):
+        np.testing.assert_allclose(
+            np.mean(self.chains.coefs, axis=(0, 1)),
+            np.array(
+                [
+                    7.87331299,
+                    -0.69024163,
+                    0.15851067,
+                    0.80691378,
+                    1.07582066,
+                    1.51994181,
+                    1.28148066,
+                    0.24431961,
+                    -1.16853928,
+                    -2.55140693,
+                ]
+            ),
+            atol=min(max_atol, 0.2),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_posterior_rho(self):
+        np.testing.assert_allclose(
+            np.mean(self.chains.rhos, axis=(0, 1)),
+            np.array([0.45279859]),
+            atol=min(max_atol, 0.2),
+            rtol=min(max_rtol, 0.1),
         )
