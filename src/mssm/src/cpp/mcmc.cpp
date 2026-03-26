@@ -14,6 +14,8 @@
 
 namespace py = pybind11;
 
+typedef std::mt19937 rnd_eng;
+
 double compute_energy(
     const Eigen::Ref<Eigen::MatrixXd> &r,
     const Eigen::SparseMatrix<double,0,long long int> &Minv
@@ -114,7 +116,7 @@ Computes the dynamic termination criterion proposed by M. J. Betancourt (2013,20
     return s;
 }
 
-
+template<typename RandDist>
 std::tuple<Eigen::MatrixXd, // statem
            Eigen::MatrixXd, // statep
            Eigen::MatrixXd, // stateprime
@@ -138,7 +140,9 @@ build_tree(
     double H0,
     double DeltaMax,
     const std::function<double(const Eigen::Ref<Eigen::MatrixXd>&)> &llk_fun,
-    const std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)> &grad_fun
+    const std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)> &grad_fun,
+    rnd_eng &gen,
+    RandDist &U
 )
 /*
 Tree building algorithm as described in Algorithm 6 of Hoffman & Gelman (2014), but adapted
@@ -199,7 +203,7 @@ M. J. Betancourt (2013,2018) - requiring book-keeping for the additional rsum va
         std::tie(statem,statep,stateprime,rm,rp,
                  rsum,nprime,sprime,
                  aprime,naprime,Lprime) = build_tree(state,r,Minv,logu,v,j-1,epsilon,H0,
-                                                     DeltaMax,llk_fun,grad_fun);
+                                                     DeltaMax,llk_fun,grad_fun,gen,U);
             
         if (sprime == 1)
         {
@@ -234,8 +238,8 @@ M. J. Betancourt (2013,2018) - requiring book-keeping for the additional rsum va
                 // Now integrate
                 std::tie(statem,statep2,stateprime2,rm,rb2,
                          rsum2,nprime2,sprime2,
-                         aprime2,naprime2,Lprime2) = build_tree(statem,rm,Minv,logu,v,j-1,epsilon,H0,
-                                                                DeltaMax,llk_fun,grad_fun);
+                         aprime2,naprime2,Lprime2) = build_tree(statem,rm,Minv,logu,v,j-1,epsilon,
+                                                                H0,DeltaMax,llk_fun,grad_fun,gen,U);
                 
                 re2 = rm; // momentum at end of tree 2
 
@@ -251,14 +255,10 @@ M. J. Betancourt (2013,2018) - requiring book-keeping for the additional rsum va
                 std::tie(statem2,statep,stateprime2,rb2,rp,
                          rsum2,nprime2,sprime2,
                          aprime2,naprime2,Lprime2) = build_tree(statep,rp,Minv,logu,v,j-1,epsilon,H0,
-                                                                DeltaMax,llk_fun,grad_fun);
+                                                                DeltaMax,llk_fun,grad_fun,gen,U);
                                                                 
                 re2 = rp; // momentum at end of tree 2
             }
-
-            std::random_device rd;
-            std::mt19937 gen(rd());
-            std::uniform_real_distribution<> U(0.0, 1.0);
             
             // Accept state'' with probability
             if (
@@ -304,13 +304,17 @@ double find_reasonable_epsilon(
     double L,
     std::function<double(const Eigen::Ref<Eigen::MatrixXd>&)> llk_fun,
     std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)> grad_fun,
-    std::function<Eigen::MatrixXd()> r_sampler_fun
+    std::function<Eigen::MatrixXd(size_t)> r_sampler_fun,
+    size_t seed
 )
 /*
 Heuristic algorithm to determine an initial value for epsilon as described in Algorithm 4 of
 Hoffman & Gelman (2014).
 */
 {
+    // Random number engine
+    rnd_eng gen(seed);
+    
     // Build Minv
     Eigen::Map<Eigen::SparseMatrix<double,0,long long int>> Minv (  
         Mrows,Mcols,Mnnz,
@@ -323,7 +327,7 @@ Hoffman & Gelman (2014).
     double epsilon = 0.1;
 
     // Get initial r
-    Eigen::MatrixXd r = r_sampler_fun();
+    Eigen::MatrixXd r = r_sampler_fun(gen());
 
     // Define storeage for state', grad', and r'
     Eigen::MatrixXd stateprime;
@@ -371,6 +375,7 @@ std::tuple<Eigen::VectorXd,
            double,
            double
 >advance_chain(
+            size_t seed,
             size_t m,
             size_t Madapt,
             size_t steps,
@@ -393,7 +398,7 @@ std::tuple<Eigen::VectorXd,
             size_t max_j,
             std::function<double(const Eigen::Ref<Eigen::MatrixXd>&)> llk,
             std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)> grad,
-            std::function<Eigen::MatrixXd()> r_sampler
+            std::function<Eigen::MatrixXd(size_t)> r_sampler
 )
 /*
 Complete steps of algorithm 6 as defined by Hoffman & Gelman (2014) to sample next states and llks
@@ -413,8 +418,7 @@ References:
     https://doi.org/10.18637/jss.v076.i01
 */
 {
-    std::random_device rd;
-    std::mt19937 gen(rd());
+    rnd_eng gen(seed);
     std::uniform_real_distribution<> U(0.0, 1.0);
     std::exponential_distribution<> ed(1);
     double DeltaMax = 1000;
@@ -439,7 +443,7 @@ References:
     {
 
         // Sample r0
-        Eigen::MatrixXd r0 = r_sampler();
+        Eigen::MatrixXd r0 = r_sampler(gen());
 
         // Compute H0
         double H0 = cL - compute_energy(r0,Minv);
@@ -491,7 +495,7 @@ References:
                 std::tie(statem,statep2,stateprime,rm,rb2,
                         rsumprime,nprime,sprime,
                         a,na,Lprime) = build_tree(statem,rm,Minv,logu,v,j,epsilon,H0,
-                                                DeltaMax,llk,grad);
+                                                DeltaMax,llk,grad,gen,U);
                 
                 re2 = rm; // momentum at end of new tree
             }
@@ -505,7 +509,7 @@ References:
                 std::tie(statem2,statep,stateprime,rb2,rp,
                         rsumprime,nprime,sprime,
                         a,na,Lprime) = build_tree(statep,rp,Minv,logu,v,j,epsilon,H0,
-                                                DeltaMax,llk,grad);
+                                                DeltaMax,llk,grad,gen,U);
                 
                 re2 = rp; // momentum at end of new tree
             }

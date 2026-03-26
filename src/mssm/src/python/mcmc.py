@@ -206,6 +206,7 @@ def check_convergence(
 
 def advance_chain_mssm(
     chain_id: int,
+    chain_seed: int,
     return_dict: dict,
     iter: int,
     M_adapt: int,
@@ -258,6 +259,7 @@ def advance_chain_mssm(
         )
 
     llks, omegas, epsilon, epsilonbar, Hbar = mcmc.advance_chain(
+        chain_seed,  # To seed the c++ side
         iter,
         M_adapt,
         steps,
@@ -310,6 +312,7 @@ def sample_mssm(
     drop_NA: bool = True,
     sample_rho: bool = False,
     convergence_type: int = 0,
+    seed: int = 0,
 ) -> SamplerResult:
     """Samples the posterior of any model using a No-U-Turn (NUTS) sampler (Hoffman & Gelman, 2014).
 
@@ -467,6 +470,8 @@ def sample_mssm(
         from all chains.
     :rtype: SamplerResult
     """
+
+    np_gen = np.random.default_rng(seed)
 
     # Make sure model has been estimated
     if model.coef is None:
@@ -714,21 +719,24 @@ def sample_mssm(
 
     # Sample initial coefs for chains (n_coef,n_chains)
     init_coef = sample_MVN(
-        n_chains, model.coef.flatten(), 1, L=None, P=None, LI=model.lvi
+        n_chains, model.coef.flatten(), 1, L=None, P=None, LI=model.lvi, seed=seed
     )
 
     # Sample initial scales
     init_scales = None
     if n_scale > 0:
         init_scales = scp.stats.norm.rvs(
-            size=n_chains, loc=np.log(orig_scale), scale=np.sqrt(V_scale)
+            size=n_chains,
+            loc=np.log(orig_scale),
+            scale=np.sqrt(V_scale),
+            random_state=seed,
         )
 
     # Sample initial thetas
     init_theta = None
     if n_theta > 0:
         init_theta = sample_MVN(
-            n_chains, orig_theta.flatten(), 1, L=None, P=None, LI=Ri_theta
+            n_chains, orig_theta.flatten(), 1, L=None, P=None, LI=Ri_theta, seed=seed
         )
 
     # Can combine dimension of total parameter vector
@@ -752,6 +760,7 @@ def sample_mssm(
             mean=ep.flatten(),
             cov=Vpreg,
             size=n_chains,
+            random_state=seed,
         )
 
         if len(ep) == 1:
@@ -986,9 +995,9 @@ def sample_mssm(
         pgrad = np.append(pgrad, pen_grads, axis=0)
         return pgrad
 
-    def r_sampler():
+    def r_sampler(seed):
         # Function to sample momentum variables
-        return sample_MVN(1, 0, scale=1, P=None, L=None, LI=MLT)
+        return sample_MVN(1, 0, scale=1, P=None, L=None, LI=MLT, seed=seed)
 
     # Initialize samplers
     omegas = []
@@ -1018,6 +1027,8 @@ def sample_mssm(
         # And log-likelihood
         cLs.append(llk_wrapper(omega))
 
+        chain_seed = int(np_gen.random() * 10000)
+
         # Initialize epsilon and mu per chain
         epsilons.append(
             mcmc.find_reasonable_epsilon(
@@ -1028,6 +1039,7 @@ def sample_mssm(
                 llk_wrapper,
                 grad_wrapper,
                 r_sampler,
+                chain_seed,
             )
         )
         epsilonbars.append(1)
@@ -1074,8 +1086,11 @@ def sample_mssm(
 
         for chain in range(n_chains):
 
+            chain_seed = int(np_gen.random() * 10000)
+
             args = (
                 chain,
+                chain_seed,
                 return_dict,
                 iter,
                 M_adapt,
