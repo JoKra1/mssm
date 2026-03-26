@@ -562,14 +562,14 @@ class Test_MultivariateHSMM_hard:
 
         np.testing.assert_allclose(
             Tps3[0][0],
-            T,
+            self.T,
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.1),
         )
 
         np.testing.assert_allclose(
             Tps3[0][1],
-            pi,
+            self.pi,
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.1),
         )
