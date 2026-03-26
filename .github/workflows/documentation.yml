@@ -31,7 +31,7 @@ jobs:
               pip install .
         - name: Install mssmViz
           run: |
-              pip install mssmViz==0.1.5
+              pip install mssmViz==0.1.51
         - name: Install sphinx
           run: |
                 pip install sphinx sphinx-rtd-theme myst-nb
@@ -44,4 +44,4 @@ jobs:
             path: './docs/_build'
         - name: Deploy to GitHub Pages
           id: deployment
-          uses: actions/deploy-pages@v4
+          uses: actions/deploy-pages@v5
