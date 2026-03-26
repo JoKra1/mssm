@@ -1589,9 +1589,10 @@ class ExtendedFamily(Family):
         have to be estimated.
     :type theta: float or np.ndarray, optional
     :ivar None | np.ndarray theta: The (estimated) extra parameters of the log-likelihood.
-        Each implementation of this class should initalize these if not provided and calls to
-        :func:`GAMM.fit` will overwrite this attribute if the initial value for ``theta`` passed to
-        the constructor was None. Defaults to None
+        Each implementation of this class must initalize these if not provided (i.e., by
+        implementing the ``init_theta`` method) and calls to :func:`GAMM.fit` will overwrite this
+        attribute if the initial value for ``theta`` passed to the constructor was None.
+        Defaults to None
     """
 
     def __init__(
@@ -1602,6 +1603,21 @@ class ExtendedFamily(Family):
         super().__init__(link, False, 1)
         self.est_theta = theta is None
         self.theta = theta
+
+        if self.theta is None:
+            self.theta = self.init_theta()
+
+    def init_theta(self) -> np.ndarray:
+        """Function to initialize ``theta``, the extra parameters of the log-likelihood, if no value
+        (i.e., ``None``) was passed to the constructor.
+
+        Take a look at the :class:`ScaledT` implementation as an example.
+
+        :return: Any additional parameters of the likelihood (``theta``). Array needs to be of shape
+            (-1,1).
+        :rtype: np.ndarray
+        """
+        pass
 
     def V(self, mu: np.ndarray, theta: None | np.ndarray = None) -> np.ndarray:
         """
@@ -1956,8 +1972,14 @@ class ScaledT(ExtendedFamily):
     def __init__(self, link, theta=None, min_df=3):
         super().__init__(link, theta)
         self.min_df = min_df
-        if theta is None:
-            self.theta = np.array([0.5, 10]).reshape(-1, 1)
+
+    def init_theta(self) -> np.ndarray:
+        """Function that automatically initializes ``theta`` to the default.
+
+        :return: Default value for theta: ``np.array([0.5, 10]).reshape(-1, 1)``
+        :rtype: np.ndarray
+        """
+        return np.array([0.5, 10]).reshape(-1, 1)
 
     def V(self, mu: np.ndarray, theta: None | np.ndarray = None) -> np.ndarray:
         """
@@ -3243,14 +3265,21 @@ class GSMMFamily:
         Estimation and Selection of Large Multi-Level Statistical Models. \
         https://doi.org/10.48550/arXiv.2506.13132
 
-    :param pars: Number of parameters of the likelihood.
+    :param pars: Number of parameters of the likelihood for which an additive (mixed) model is
+        specified. **Note**, that extra parameters that are constant (and thus do not need an
+        extra :class:`mssm.src.python.formula.Formula` specified) but nevertheless need to be
+        estimated can be handled via the ``extra_coef`` argument.
     :type pars: int
     :param links: List of Link functions for each parameter of the likelihood,
         e.g., `links=[Identity(),LOG()]`.
     :type links: [Link]
-    :ivar int, optional extra_coef: Number of extra coefficients required by specific family or
-        ``None``. By default set to ``None`` and changed to ``int`` by specific families requiring
-        this.
+    :ivar int, optional extra_coef: Number of extra coefficients required by specific family for
+        parameters of the log-likelihood that are constant (i.e., not a function of predictor
+        variables) or ``None``. If this is not set to ``None``, ``mssm`` will automatically append
+        ``extra_coef`` elements to the coefficient vector passed to the log-likelihood and gradient
+        methods of this family. Additionally, ``coef_split_idx`` will be modified, so that the last
+        list of the split holds the ``extra_coef``. By default set to ``None`` and changed to
+        ``int`` by specific families requiring this.
     :ivar list[any] llkargs: A list holding any extra arguments passed to the constructor via
         ``llkargs``.
 

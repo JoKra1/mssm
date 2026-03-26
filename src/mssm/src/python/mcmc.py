@@ -524,7 +524,7 @@ def sample_mssm(
             orig_theta = family.theta  # noqa
             n_theta = len(family.theta)
 
-        deriv_fam = GAMLSSGSMMFamily(n_scale + n_theta + 1, family)
+        deriv_fam = GAMLSSGSMMFamily(1, family)
 
     else:
         if isinstance(family, GAMLSSFamily):
@@ -1304,6 +1304,9 @@ def sample_mssm(
 
     if parallelize_chains:
         mem_manager.shutdown()
+
+    if auto_converge is False:
+        pbar.close()
 
     res = SamplerResult(
         lps=llk_samples,

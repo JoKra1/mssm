@@ -174,7 +174,10 @@ class GAMLSSGSMMFamily(GSMMFamily):
             Models.
         - Nocedal & Wright (2006). Numerical Optimization. Springer New York.
 
-    :param pars: Number of parameters of the likelihood.
+    :param pars: Number of parameters of the likelihood for which an additive (mixed) model is
+        specified. **Example**: if the family is a member of :class:`Family` (i.e., the model to be
+        estimated is truly a GAMM), then this must be set to 1. For a :class:`GAMLSSFamily`
+        ``family``, this must instead be set to ``family.n_par``.
     :type pars: int
     :param gammlss_family: Any implemented member of the :class:`GAMLSSFamily` or :class:`Family`
         class. Available in ``self.llkargs[0]``.
@@ -193,8 +196,8 @@ class GAMLSSGSMMFamily(GSMMFamily):
         )
         if isinstance(gammlss_family, Family):
             if isinstance(gammlss_family, ExtendedFamily):
-                self.extra_coef = pars - 1  # Theta
-            elif pars > 1:
+                self.extra_coef = len(gammlss_family.theta)  # Theta
+            elif gammlss_family.twopar:
                 self.extra_coef = 1  # Scale
 
     def llk(
@@ -231,13 +234,13 @@ class GAMLSSGSMMFamily(GSMMFamily):
             # Handle GAMMs
 
             if isinstance(gammlss_family, ExtendedFamily):
-                n_theta = self.n_par - 1  # subtract mu
+                n_theta = self.extra_coef
                 mu = gammlss_family.link.fi(Xs[0] @ coef[:-n_theta])
                 theta = coef[-n_theta:]
                 llk = gammlss_family.llk(y, mu, theta=theta)
 
             else:
-                if self.n_par > 1:
+                if self.extra_coef is not None:
                     # Two-par case - remember, scale coef is log of scale
                     mu = gammlss_family.link.fi(Xs[0] @ coef[:-1])
                     scale = np.exp(coef[-1, 0])
@@ -297,7 +300,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
             # Handle GAMMs
 
             if isinstance(gammlss_family, ExtendedFamily):
-                n_theta = self.n_par - 1  # subtract mu
+                n_theta = self.extra_coef
                 mu = gammlss_family.link.fi(Xs[0] @ coef[:-n_theta])
                 theta = coef[-n_theta:]
                 d1 = gammlss_family.dDdmu(y, mu, theta=theta)
@@ -307,7 +310,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
                 grad = np.concatenate((grad_coef, grad_theta), axis=0)
 
             else:
-                if self.n_par > 1:
+                if self.extra_coef is not None:
                     # Two-par case - remember, scale coef is log of scale
                     scale = np.exp(coef[-1, 0])
                     grad_coef = gammlss_family.dllkdcoef(
