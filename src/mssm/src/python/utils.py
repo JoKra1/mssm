@@ -2225,7 +2225,7 @@ def estimateVp(
         # Compute MC estimate for generic model and given prior
         prior = MVUniformRhoPrior(b=np.log(1e12)) # Set up uniform prior
         Vp_MC, Vpr_MC, Ri_MC, Rir_MC, ep_MC, _ = estimateVp(model,
-            strategy="JJJ2",seed=20,use_importance_weights=True,prior=prior)
+            grid_type="JJJ2",seed=20,use_importance_weights=True,prior=prior)
 
 
     References:

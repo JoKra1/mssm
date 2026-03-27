@@ -2704,7 +2704,7 @@ class Test_Vp_estimation_hard:
 
     model.fit(**test_kwargs)
 
-    Vp, _, _, _, _, _ = estimateVp(model, strategy="JJJ1", Vp_fidiff=True)
+    Vp, _, _, _, _, _ = estimateVp(model, grid_type="JJJ1", Vp_fidiff=True)
 
     def test_Vp(self):
         np.testing.assert_allclose(
