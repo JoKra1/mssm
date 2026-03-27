@@ -3372,8 +3372,8 @@ class RhoPrior:
         """Compute log density for log smoothing penalty parameters included in rho under this
         prior.
 
-        :param rho: Numpy array of shape (``nR``,``nrho``) containing ``nR`` proposed candidate
-        vectors for the ``nrho`` log-smoothing parameters.
+        :param rho: Numpy array of shape ``(nR, nrho)`` containing ``nR`` proposed candidate
+            vectors for the ``nrho`` log-smoothing parameters.
         :type rho: np.ndarray
         :return: Log-density (flattened) array of length ``nR``, containing the prior density for
             each candidate vector
@@ -3386,8 +3386,8 @@ class RhoPrior:
         elements that would be considered invalid under this prior have been replaced with some
         plausible value.
 
-        :param rho: Numpy array of shape (``nR``,``nrho``) containing ``nR`` proposed candidate
-        vectors for the ``nrho`` log-smoothing parameters.
+        :param rho: Numpy array of shape ``(nR, nrho)`` containing ``nR`` proposed candidate
+            vectors for the ``nrho`` log-smoothing parameters.
         :type rho: np.ndarray
         :return: Copy of ``rho``, with all elements outside of the prior limits being changed to
             be within the prior limits.
@@ -3399,10 +3399,10 @@ class RhoPrior:
         """Compute gradient of log density for log smoothing penalty parameters included in rho
         under this prior.
 
-        :param rho: Numpy array of shape (``nR``,``nrho``) containing ``nR`` proposed candidate
-        vectors for the ``nrho`` log-smoothing parameters.
+        :param rho: Numpy array of shape ``(nR, nrho)`` containing ``nR`` proposed candidate
+            vectors for the ``nrho`` log-smoothing parameters.
         :type rho: np.ndarray
-        :return: Array of shape (``nR``,``nrho``), containing the gradient of the prior
+        :return: Array of shape ``(nR, nrho)``, containing the gradient of the prior
             density with respect to the ``nrho`` parameters for for each candidate vector
         :rtype: np.ndarray
         """
@@ -3423,10 +3423,10 @@ class MVUniformRhoPrior(RhoPrior):
 
     def logpdf(self, rho: np.ndarray) -> np.ndarray:
         """Returns an array holding ``-log(self.b-self.a)`` for all candidate vectors for which all
-        :math:`log(\\lambda)` parameters are within ``self.a`` and ``self.b``, and``-np.inf``
+        :math:`log(\\lambda)` parameters are within ``self.a`` and ``self.b``, and ``-np.inf``
         otherwise.
 
-        :param rho: Numpy array of shape (``nR``,``nrho``) containing ``nR`` proposed candidate
+        :param rho: Numpy array of shape ``(nR, nrho)`` containing ``nR`` proposed candidate
             vectors for the ``nrho`` log-smoothing parameters :math:`log(\\lambda)`.
         :type rho: np.ndarray
         :return: Log-density array of length ``nR``, containing the prior density for each candidate
@@ -3444,7 +3444,7 @@ class MVUniformRhoPrior(RhoPrior):
         """Sets elements in a copy of ``rho`` smaller than ``self.a`` to ``0.9*self.a`` and
         enforces the same for the upper limit (``self.b``).
 
-        :param rho: Numpy array of shape (``nR``,``nrho``) containing ``nR`` proposed candidate
+        :param rho: Numpy array of shape ``(nR, nrho)`` containing ``nR`` proposed candidate
             vectors for the ``nrho`` log-smoothing parameters :math:`log(\\lambda)`.
         :type rho: np.ndarray
         :return: Copy of ``rho``, with all elements outside of the prior limits being changed to
@@ -3495,7 +3495,7 @@ class CenteredUniformRhoPriors(RhoPrior):
         """Returns an array holding the prior log density for all candidate vectors for which all
         :math:`log(\\lambda)` parameters are within their prior intervals.
 
-        :param rho: Numpy array of shape (``nR``,``nrho``) containing ``nR`` proposed candidate
+        :param rho: Numpy array of shape ``(nR, nrho)`` containing ``nR`` proposed candidate
             vectors for the ``nrho`` log-smoothing parameters :math:`log(\\lambda)`.
         :type rho: np.ndarray
         :return: Log-density array of length ``nR``, containing the prior density for each candidate
@@ -3518,7 +3518,7 @@ class CenteredUniformRhoPriors(RhoPrior):
         """Replaces elements in a copy of ``rho`` to ensure that they fall just within the
         boundaries of their prior intervals.
 
-        :param rho: Numpy array of shape (``nR``,``nrho``) containing ``nR`` proposed candidate
+        :param rho: Numpy array of shape ``(nR, nrho)`` containing ``nR`` proposed candidate
             vectors for the ``nrho`` log-smoothing parameters :math:`log(\\lambda)`.
         :type rho: np.ndarray
         :return: Copy of ``rho``, with all elements outside of the prior limits being changed to

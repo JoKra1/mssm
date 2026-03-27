@@ -4752,8 +4752,8 @@ class MultiGauss(GSMMFamily):
          - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for \
             General Smooth Models.
 
-        :param mus: Numpy array of shape ``(N, self.n_par)``, where ``self.n_par is the dimension of
-            the multivariate normal distributions.
+        :param mus: Numpy array of shape ``(N, self.n_par)``, where ``self.n_par`` is the dimension
+            of the multivariate normal distributions.
         :type mus: np.ndarray
         :param theta: Flattened array holding inverses of log(variance) and co-variance parameters
         :type theta: np.ndarray

@@ -228,7 +228,7 @@ class GSMM:
         of the model.
     :ivar bool has_extra_coef: A bool, indicating whether the model has any extra coefficients not
         associated with a formula. These will be appended to the end of the coefficient vector
-         when calling the ``fit`` method, and a suitable splitting index will be added automatically
+        when calling the ``fit`` method, and a suitable splitting index will be added automatically
         to ``coef_split_idx``. Defaults to False.
     """
 
