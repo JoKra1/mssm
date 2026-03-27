@@ -7137,7 +7137,7 @@ def update_coef_gen_smooth(
     min_inner: int,
     conv_tol: float,
     method: str,
-    piv_tol: float,
+    n_c: int,
     keep_drop: tuple[np.typing.NDArray[np.int_], np.typing.NDArray[np.int_]] | None,
     opt_raw: scp.sparse.linalg.LinearOperator | None,
     global_opt_qefs: bool,
@@ -7200,8 +7200,8 @@ def update_coef_gen_smooth(
     :type conv_tol: float
     :param method: Method to use to estimate coefficients
     :type method: str
-    :param piv_tol: Deprecated
-    :type piv_tol: float
+    :param n_c: Number of cores to use for parallelized computations.
+    :type n_c: int
     :param keep_drop: Set of previously kept and dropped coeeficients or None
     :type keep_drop: tuple[np.typing.NDArray[np.int_],np.typing.NDArray[np.int_]] | None
     :param opt_raw: If the L-qEFS update is used to estimate coefficients/lambda parameters,
@@ -7292,7 +7292,11 @@ def update_coef_gen_smooth(
                     "jac": __neg_grad,
                     "options": {"maxiter": max_inner, **opt_raw.bfgs_options},
                 },
+                seed=outer,
             )
+
+            # Get hessian approximation to the location where it is expected below
+            opt.hess_inv = opt["lowest_optimization_result"].hess_inv
 
         if not opt["success"]:
             warnings.warn(
@@ -7366,7 +7370,9 @@ def update_coef_gen_smooth(
                 # print(yks[[k]].T - (grad2 - grad1))
 
                 # Can now approximate hessian at post step coef.
-                nHfdk = -1 * family.jhessian(fcols, coef2, coef_split_idx, ys, Xs)
+                nHfdk = -1 * family.jhessian(
+                    fcols, coef2, coef_split_idx, ys, Xs, n_c=n_c
+                )
 
                 # Make PD and dampen
                 nHfdk, _, IonHBBk, onHBb = makepdd_fd2llk(
@@ -7387,7 +7393,9 @@ def update_coef_gen_smooth(
 
             # Still need hessian at current coef if there were no updates
             if nHfd is None:
-                nHfd = -1 * family.jhessian(fcols, coef, coef_split_idx, ys, Xs)
+                nHfd = -1 * family.jhessian(
+                    fcols, coef, coef_split_idx, ys, Xs, n_c=n_c
+                )
 
                 # Make PD again
                 nHfd, _, IonHBB, _ = makepdd_fd2llk(nHfd, fcols, acols, dampen_HBb)
@@ -7414,7 +7422,9 @@ def update_coef_gen_smooth(
         if sample_hessian:
 
             if fcols is not None:
-                nHfd = -1 * family.jhessian(fcols, coef, coef_split_idx, ys, Xs)
+                nHfd = -1 * family.jhessian(
+                    fcols, coef, coef_split_idx, ys, Xs, n_c=n_c
+                )
 
                 nHfd, onHBB, IonHBB, onHBb = makepdd_fd2llk(
                     nHfd, fcols, acols, dampen_HBb
@@ -8016,7 +8026,6 @@ def correct_lambda_step_gen_smooth(
                     __old_opt_rp.nHfd = None
                     __old_opt_rp.IonHBB = None
                     __old_opt_rp.sqEFS_options = sqEFS_options
-                    __old_opt_rp
 
                     if fcols is not None:
                         __old_opt_rp.acols = [
@@ -8069,7 +8078,7 @@ def correct_lambda_step_gen_smooth(
                     min_inner,
                     conv_tol,
                     method,
-                    piv_tol,
+                    n_c,
                     keep_drop,
                     __old_opt_rp,
                     global_opt_qefs,
@@ -8626,7 +8635,7 @@ def solve_generalSmooth_sparse(
             min_inner,
             conv_tol,
             "Grad",
-            piv_tol,
+            n_c,
             None,
             None,
             False,
@@ -8863,7 +8872,9 @@ def solve_generalSmooth_sparse(
         if control_lambda in [1, 3] and outer > 0:
 
             if fcols is not None:
-                nHfd = -1 * family.jhessian(fcols, coef, coef_split_idx, ys, Xs)
+                nHfd = -1 * family.jhessian(
+                    fcols, coef, coef_split_idx, ys, Xs, n_c=n_c
+                )
 
                 dampen_HBb = (
                     LV.sqEFS_options["dampen_HBb"]

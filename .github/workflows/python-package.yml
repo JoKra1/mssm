@@ -20,7 +20,7 @@ jobs:
       - name: Set up Python for Linting
         uses: actions/setup-python@v6
         with:
-          python-version: '3.13'
+          python-version: '3.x'
       - name: Install package + dependencies
         run: |
           python -m pip install --upgrade pip
@@ -112,8 +112,8 @@ jobs:
           pip install .
       - name: Test with pytest
         run: |
-          pip install pytest pytest-cov mssmViz==0.1.5 numdifftools arviz>=0.23.0
-          pytest ./tests/test_fast.py ./tests/test_gamm.py ./tests/test_gammlss.py ./tests/test_gsmm.py ./tests/test_compare.py --cov=mssm --cov-report=xml --cov-report=html
+          pip install pytest pytest-cov mssmViz==0.1.51 numdifftools arviz>=0.23.0
+          pytest ./tests/test_fast.py ./tests/test_gamm.py ./tests/test_gammlss.py ./tests/test_gsmm.py ./tests/test_compare.py ./tests/test_hsmm.py --cov=mssm --cov-report=xml --cov-report=html
       - name: Upload coverage reports to Codecov with GitHub Action
         uses: codecov/codecov-action@v5
         env:
@@ -164,7 +164,7 @@ jobs:
           gh release create
           '${{ github.ref_name }}'
           --repo '${{ github.repository }}'
-          --notes ""
+          --generate-notes
           
       - name: Connect Artifacts to release
         env:

@@ -31,6 +31,9 @@ from .src.python.exp_fam import (  # noqa: F401
     Poisson,
     MultiGauss,
 )
+
+from .src.python.hsmm import HSMMFamily  # noqa: F401
+
 from .src.python.gamm_solvers import (  # noqa: F401
     solve_gamm_sparse,
     mp,
@@ -60,6 +63,7 @@ from .src.python.penalties import (  # noqa: F401
     IdentityPenalty,
     DifferencePenalty,
     sort_penalties,
+    split_shared_penalties,
     combine_shared_penalties,
 )
 from .src.python.utils import (  # noqa: F401
@@ -222,6 +226,10 @@ class GSMM:
         Initialized with ``None``.
     :ivar Fit_info info: A :class:`Fit_info` instance, with information about convergence (speed)
         of the model.
+    :ivar bool has_extra_coef: A bool, indicating whether the model has any extra coefficients not
+        associated with a formula. These will be appended to the end of the coefficient vector
+        when calling the ``fit`` method, and a suitable splitting index will be added automatically
+        to ``coef_split_idx``. Defaults to False.
     """
 
     def __init__(self, formulas: list[Formula], family: GSMMFamily):
@@ -247,6 +255,7 @@ class GSMM:
         self.overall_penalties: list[LambdaTerm] | None = None
         self.info: Fit_info | None = None
         self.coef_split_idx: list[int] | None = None
+        self.has_extra_coef: bool = False
 
     ##################################### Getters ####################################  # noqa: E266
 
@@ -773,10 +782,10 @@ class GSMM:
             current :math:`lambda` parameters. Defaults to None.
         :type callback: Callable | None, optional
         :param bfgs_options: An optional dictionary holding arguments that should be passed on to
-            the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If none are provided,
+            the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If None is provided,
             the ``gtol`` argument will be initialized to ``conv_tol``. Note also, that in any case
             the ``maxiter`` argument is automatically set to ``max_inner``. Defaults to None.
-        :type bfgs_options: dict, optional
+        :type bfgs_options: dict | None, optional
         :param global_opt_qefs: Whether or not to use a stochastic global optimization algorithm to
             estimate the coefficients when the L-qEFS update is used to estimate coefficients/lambda
             parameters. Defaults to False, which means standard quasi-Newton is used.
@@ -944,6 +953,7 @@ class GSMM:
             form_n_coef.append(self.family.extra_coef)
             form_up_coef.append(self.family.extra_coef)
             n_coef += self.family.extra_coef
+            self.has_extra_coef = True
 
         # Again check first for family wide initialization
         if init_coef is None:
@@ -987,6 +997,10 @@ class GSMM:
                         fcols.extend(form.coef_idx_per_term[tidx] + start_idx)
 
                     start_idx += form.n_coef
+
+                # Also account for extra coef that are un-penalized
+                if self.has_extra_coef:
+                    fcols.extend(np.arange(self.family.extra_coef) + start_idx)
 
                 np_gen = np.random.default_rng(seed)
                 if len(fcols) == len(coef) and len(fcols) <= structured_qefs_budget:
@@ -1137,7 +1151,7 @@ class GSMM:
         """
 
         # Extract coef and cols of lvi associated with par
-        if len(self.formulas) > 1:
+        if len(self.formulas) > 1 or self.has_extra_coef:
             split_coef = np.split(self.coef, self.coef_split_idx)
             split_idx = np.ndarray.flatten(
                 np.split(np.arange(len(self.coef)), self.coef_split_idx)[par]
@@ -1244,7 +1258,7 @@ class GSMM:
                     raise IndexError(f"Variable {k} is missing in new data.")
 
         # Extract coef and cols of lvi associated with par
-        if len(self.formulas) > 1:
+        if len(self.formulas) > 1 or self.has_extra_coef:
             split_coef = np.split(self.coef, self.coef_split_idx)
             split_idx = np.ndarray.flatten(
                 np.split(np.arange(len(self.coef)), self.coef_split_idx)[par]
@@ -1390,7 +1404,7 @@ class GSMM:
         pmat_diff = pmat1 - pmat2
 
         # Extract coef and cols of lvi associated with par
-        if len(self.formulas) > 1:
+        if len(self.formulas) > 1 or self.has_extra_coef:
             split_coef = np.split(self.coef, self.coef_split_idx)
             split_idx = np.ndarray.flatten(
                 np.split(np.arange(len(self.coef)), self.coef_split_idx)[par]

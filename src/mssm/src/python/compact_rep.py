@@ -86,7 +86,7 @@ def computeH(
     :param y: np.ndarray of shape (m,p), where p is the number of coefficients, holding the second
         set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
     :type y: np.ndarray
-    :param rho: flattened numpy.array of shape (m,), holding element-wise ```1/y.T@s`` from Byrd,
+    :param rho: flattened numpy.array of shape (m,), holding element-wise ``1/y.T@s`` from Byrd,
         Nocdeal & Schnabel (1992).
     :type rho: np.ndarray
     :param H0: Initial estimate for the hessian of the negative (penalized) likelihood. Here some
@@ -445,7 +445,7 @@ def computeHSR1(
     :param y: np.ndarray of shape (m,p), where p is the number of coefficients, holding the
         second set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
     :type y: np.ndarray
-    :param rho: flattened numpy.array of shape (m,), holding element-wise ```1/y.T@s`` from
+    :param rho: flattened numpy.array of shape (m,), holding element-wise ``1/y.T@s`` from
         Byrd, Nocdeal & Schnabel (1992).
     :type rho: np.ndarray
     :param H0: Initial estimate for the hessian of the negative (penalized) likelihood. Here
@@ -582,22 +582,26 @@ def computeSH(
     First, note that we can always re-order the negative Hessian :math:`\\mathbf{H}` so that
 
     .. math::
+        :nowrap:
+
+        $$
         \\mathbf{H} =
-        \begin{bmatrix}
-        \\mathbf{H}_{\\boldsymbol{\\beta}\\boldsymbol{\\beta}} &
-        \\mathbf{H}_{\\boldsymbol{\\beta}\\mathbf{b}}\\
-        \\mathbf{H}_{\\mathbf{b}\\boldsymbol{\\beta}} &
-        \\mathbf{H}_{\\mathbf{b}\\mathbf{b}} \\
+        \\begin{bmatrix}
+            \\mathbf{H}_{\\boldsymbol{\\beta}\\boldsymbol{\\beta}} &
+            \\mathbf{H}_{\\boldsymbol{\\beta}\\mathbf{b}} \\\\
+            \\mathbf{H}_{\\mathbf{b}\\boldsymbol{\\beta}} &
+            \\mathbf{H}_{\\mathbf{b}\\mathbf{b}} \\\\
         \\end{bmatrix}
+        $$
 
     Second, consider the Schur complement (:math:`\\mathbf{D}`) of :math:`\\mathbf{H}` with respect
-    to :math`\\mathbf{H}_{\\mathbf{b}\\mathbf{b}}`:
+    to :math:`\\mathbf{H}_{\\mathbf{b}\\mathbf{b}}`:
 
     .. math::
         \\mathbf{D} = \\mathbf{H}_{\\mathbf{b}\\mathbf{b}} -
         \\mathbf{H}_{\\boldsymbol{b}\\boldsymbol{\\beta}}
         (\\mathbf{H}_{\\boldsymbol{\\beta}\\boldsymbol{\\beta}})^{-1}
-        \\mathbf{H}_{\\bolsymbol{\\beta}\\mathbf{b}}
+        \\mathbf{H}_{\\boldsymbol{\\beta}\\mathbf{b}}
 
     Third, note that (for quadratic negative log-likelihood or Taylor approximation to -llk) we can
     define a structured secant equation for :math:`\\mathbf{H}_{\\mathbf{b}\\mathbf{b}}` using the
@@ -613,7 +617,7 @@ def computeSH(
         \\mathbf{s}
 
     Here :math:`\\mathbf{s}` is a step applied to the coefficient vector (i.e.,
-    :math:`\\left[\\boldsymbol{\\beta}, \\boldsymbol{b} \\right]), :math:`\\mathbf{y}` is the
+    :math:`\\left[\\boldsymbol{\\beta}, \\boldsymbol{b} \\right])`, :math:`\\mathbf{y}` is the
     difference between the gradients of the negative llk after and before taking this step, and
     versions with :math:`\\mathbf{b}` subscripts index elements in :math:`\\boldsymbol{b}`.
 
@@ -636,13 +640,17 @@ def computeSH(
     and the entire negative Hessian:
 
     .. math::
+        :nowrap:
+
+        $$
         \\hat{\\mathbf{H}} =
-        \begin{bmatrix}
-        \\mathbf{H}_{\\boldsymbol{\\beta}\\boldsymbol{\\beta}} &
-        \\mathbf{H}_{\\boldsymbol{\\beta}\\mathbf{b}}\\
-        \\mathbf{H}_{\\mathbf{b}\\boldsymbol{\\beta}} &
-        \\hat{\\mathbf{H}}_{\\mathbf{b}\\mathbf{b}} \\
+        \\begin{bmatrix}
+            \\mathbf{H}_{\\boldsymbol{\\beta}\\boldsymbol{\\beta}} &
+            \\mathbf{H}_{\\boldsymbol{\\beta}\\mathbf{b}} \\\\
+            \\mathbf{H}_{\\mathbf{b}\\boldsymbol{\\beta}} &
+            \\hat{\\mathbf{H}}_{\\mathbf{b}\\mathbf{b}} \\\\
         \\end{bmatrix}
+        $$
 
     Note, that if we use a quasi Newton update that ensures positive semi-definiteness of the Schur
     complement :math:`\\hat{\\mathbf{D}}`, then :math:`\\hat{\\mathbf{H}}_{\\mathbf{b}\\mathbf{b}}`
@@ -651,28 +659,36 @@ def computeSH(
     8 update matrices):
 
     .. math::
+        :nowrap:
+
+        $$
         \\hat{\\mathbf{H}} =
         \\begin{bmatrix}
-        \\mathbf{H}_{\\boldsymbol{\\beta}\\boldsymbol{\\beta}} & \\mathbf{0}\\
-        \\mathbf{0} & \\mathbf{I}\\omega \\
+            \\mathbf{H}_{\\boldsymbol{\\beta}\\boldsymbol{\\beta}} & \\mathbf{0} \\\\
+            \\mathbf{0} & \\mathbf{I}\\omega \\\\
         \\end{bmatrix} +
         \\begin{bmatrix}
-        \\mathbf{0} & \\mathbf{0}\\
-        \\mathbf{0} & \\mathbf{H}_{\\mathbf{b}\\boldsymbol{\\beta}}
-        (\\mathbf{H}_{\\boldsymbol{\beta}\\boldsymbol{\\beta}})^{-1}
-        \\mathbf{H}_{\\boldsymbol{\\beta}\\mathbf{b}} \\
+            \\mathbf{0} & \\mathbf{0} \\\\
+            \\mathbf{0} & \\mathbf{H}_{\\mathbf{b}\\boldsymbol{\\beta}}
+            (\\mathbf{H}_{\\boldsymbol{\\beta}\\boldsymbol{\\beta}})^{-1}
+            \\mathbf{H}_{\\boldsymbol{\\beta}\\mathbf{b}} \\\\
         \\end{bmatrix} +
         \\begin{bmatrix}
-        \\mathbf{0} & \\mathbf{H}_{\\boldsymbol{\\beta}\\mathbf{b}}\\
-        \\mathbf{H}_{\\mathbf{b}\\boldsymbol{\\beta}} & \\mathbf{0} \\
+            \\mathbf{0} & \\mathbf{H}_{\\boldsymbol{\\beta}\\mathbf{b}} \\\\
+            \\mathbf{H}_{\\mathbf{b}\\boldsymbol{\\beta}} & \\mathbf{0} \\\\
         \\end{bmatrix} +
         \\begin{bmatrix}
-        \\mathbf{0} & \\mathbf{0}\\
-        \\mathbf{0} & \\mathbf{Q}\\boldsymbol{\\Delta}\\mathbf{Q}^\\top \\
+            \\mathbf{0} & \\mathbf{0} \\\\
+            \\mathbf{0} & \\mathbf{Q}\\boldsymbol{\\Delta}\\mathbf{Q}^\\top \\\\
         \\end{bmatrix}
+        $$
 
-    Finally, note that :math:`\\hat{\\mathbf{H}}` can be inverted (after adding
-    :math:`\\mathbf{S}_{\\boldsymbol{\\lambda}}, the total penalty matrix to the initial matrix)
+    This is returned by this function, so that::
+
+      nH = nH1 + (nH2t1 @ nH2t2 @ nH2t3) + (nH3t1 @ nH3t3) + (nH4t1 @ nH4t2 @ nH4t3)
+
+    Finally, note that :math:`\\hat{\\mathbf{H}} + \\mathbf{S}_{\\boldsymbol{\\lambda}}` can be
+    inverted (:math:`\\mathbf{S}_{\\boldsymbol{\\lambda}}` is the total penalty matrix)
     via repeated application of the modified Woodbury identity of Henderson & Searle (1981).
 
     :param yks: np.ndarray of shape (m,p), where p is the number of coefficients, holding the
@@ -718,7 +734,8 @@ def computeSH(
         approximation or the standard bfgs update (``qEFSH='BFGS'``). Defaults to 'SR1'.
     :type form: str
     :return: H, either as np.ndarray (``explicit=='True'``) or represented implicitly via an initial
-        matrix and 8 update matrices as defined in the description.
+        matrix and 8 update matrices as defined in the description (i.e.,
+        ``nH1, nH2t1, nH2t2, nH2t3, nH3t1, nH3t3, nH4t1, nH4t2, nH4t3``).
     :rtype: np.ndarray | tuple[scp.sparse.csc_array, scp.sparse.csc_array, np.ndarray,
         scp.sparse.csc_array, scp.sparse.csc_array, scp.sparse.csc_array, scp.sparse.csc_array,
         np.ndarray, scp.sparse.csc_array]
@@ -890,39 +907,43 @@ def computeSVPS(
     ]
 ):
     """Computes inverse of structured approximation to the negative Hessian of the **penalized
-    log-likelihood.
+    log-likelihood**.
 
     Expects matrix of the form returned by :func:`computeSH`, i.e.,:
 
     .. math::
+        :nowrap:
+
+        $$
         \\hat{\\mathbf{H}} =
         \\begin{bmatrix}
-        \\mathbf{H}_{\\boldsymbol{\\beta}\\boldsymbol{\\beta}} & \\mathbf{0}\\
-        \\mathbf{0} & \\mathbf{I}\\omega \\
+            \\mathbf{H}_{\\boldsymbol{\\beta}\\boldsymbol{\\beta}} & \\mathbf{0} \\\\
+            \\mathbf{0} & \\mathbf{I}\\omega \\\\
         \\end{bmatrix} +
         \\begin{bmatrix}
-        \\mathbf{0} & \\mathbf{0}\\
-        \\mathbf{0} & \\mathbf{H}_{\\mathbf{b}\\boldsymbol{\\beta}}
-        (\\mathbf{H}_{\\boldsymbol{\beta}\\boldsymbol{\\beta}})^{-1}
-        \\mathbf{H}_{\\boldsymbol{\\beta}\\mathbf{b}} \\
+            \\mathbf{0} & \\mathbf{0} \\\\
+            \\mathbf{0} & \\mathbf{H}_{\\mathbf{b}\\boldsymbol{\\beta}}
+            (\\mathbf{H}_{\\boldsymbol{\\beta}\\boldsymbol{\\beta}})^{-1}
+            \\mathbf{H}_{\\boldsymbol{\\beta}\\mathbf{b}} \\\\
         \\end{bmatrix} +
         \\begin{bmatrix}
-        \\mathbf{0} & \\mathbf{H}_{\\boldsymbol{\\beta}\\mathbf{b}}\\
-        \\mathbf{H}_{\\mathbf{b}\\boldsymbol{\\beta}} & \\mathbf{0} \\
+            \\mathbf{0} & \\mathbf{H}_{\\boldsymbol{\\beta}\\mathbf{b}} \\\\
+            \\mathbf{H}_{\\mathbf{b}\\boldsymbol{\\beta}} & \\mathbf{0} \\\\
         \\end{bmatrix} +
         \\begin{bmatrix}
-        \\mathbf{0} & \\mathbf{0}\\
-        \\mathbf{0} & \\mathbf{Q}\\boldsymbol{\\Delta}\\mathbf{Q}^\\top \\
+            \\mathbf{0} & \\mathbf{0} \\\\
+            \\mathbf{0} & \\mathbf{Q}\\boldsymbol{\\Delta}\\mathbf{Q}^\\top \\\\
         \\end{bmatrix}
+        $$
 
-    And then computes the inverse :math:`\\methbf{V}` of
+    And then computes the inverse :math:`\\mathbf{V}` of
     :math:`\\hat{\\mathbf{H}} + \\mathbf{S}_{\\boldsymbol{\\lambda}}` by applying the modified
     Woodbury identity of Henderson & Searle (1981) three times. Optionally, the second update
     can be skipped in case the off-diagonal derivative blocks
     :math:`\\mathbf{H}_{\\mathbf{b}\\boldsymbol{\\beta}}` contain only zeroes
     (``fully_dampened_HBb is True``).
 
-    Function either returns :math:`\\methbf{V}` directly, or returns an initial matrix ``V0`` as
+    Function either returns :math:`\\mathbf{V}` directly, or returns an initial matrix ``V0`` as
     well as nine update matrices, so that::
 
       V = V0 - (inv1t1 @ inv1t2 @ inv1t3) - (inv2t1 @ inv2t2 @ inv2t3) - (inv3t1 @ inv3t2 @ inv3t3)
@@ -957,7 +978,8 @@ def computeSVPS(
     :param n_c: Number of cores to use for multi-processing parts. Defaults to 10
     :type n_c: int, optional
     :return: V, either as np.ndarray (``explicit=='True'``) or represented implicitly via an initial
-        matrix and 9 update matrices as defined in the description.
+        matrix and 9 update matrices as defined in the description (i.e.,
+        ``V0, inv1t1, inv1t2, inv1t3, inv2t1, inv2t2, inv2t3, inv3t1, inv3t2, inv3t3``).
     :rtype: np.ndarray | tuple[scp.sparse.csc_array, scp.sparse.csc_array, np.ndarray,
         scp.sparse.csc_array, scp.sparse.csc_array, np.ndarray, scp.sparse.csc_array,
         np.ndarray, np.ndarray, np.ndarray,]

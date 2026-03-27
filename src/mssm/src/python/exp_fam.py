@@ -5,6 +5,12 @@ import warnings
 import copy
 from collections.abc import Callable
 
+HAS_MP = True
+try:
+    import multiprocess as mp
+except ImportError:
+    HAS_MP = False
+
 
 class Link:
     """
@@ -622,6 +628,135 @@ class Family:
         :rtype: np.ndarray
         """
         pass
+
+    def dllkdcoef(
+        self, coef: np.ndarray, y: np.ndarray, X: scp.sparse.csc_array, scale: float = 1
+    ) -> np.ndarray:
+        """Returns vector of partial derivatives of the log-likelihood with respect to ``coef``
+        evaluated at the (optional) ``scale`` parameter.
+
+        Applies to all families, so does not have to be re-implemented by families implementing
+        the base class. Derivation follows from IRLS routine and is given for example in Wood
+        (2017).
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
+        :type coef: np.ndarray
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param X: Model matrix used by a model
+        :type X: scp.sparse.csc_array
+        :param scale: Optional scale parameter if ``self.twopar is True``, defaults to 1
+        :type scale: float, optional
+        :return: The Gradient of the log-likelihood evaluated at ``coef`` as numpy array of
+            shape (-1,1).
+        :rtype: np.ndarray
+        """
+
+        # Compute mean
+        mu = self.link.fi(X @ coef)
+
+        # Get derivative of link and variance function at ``mu``
+        dy1 = self.link.dy1(mu)
+        V = self.V(mu)
+
+        # Compute gradient
+        with warnings.catch_warnings():  # Divide by zero or invalid value in multiply
+            warnings.simplefilter("ignore")
+            G = (y - mu) / (dy1 * V)
+        G[np.isnan(G) | np.isinf(G)] = 0
+        grad = np.sum(G * X, axis=0).reshape(-1, 1) / scale
+
+        return grad
+
+    def dllkdlscale(
+        self, coef: np.ndarray, y: np.ndarray, X: scp.sparse.csc_array, scale: float = 1
+    ) -> float:
+        """Returns partial derivative of the log-likelihood with respect to ``log(scale)`` if this
+        family has a scale parameter (i.e., if ``self.twopar is True``). Otherwise this function
+        returns zero.
+
+        Base-class implementation relies on finite differencing to compute the required partial
+        derivative. For efficiency reasons, families inheriting from the base class should
+        implement an analytic solution. Note however, that this function is only used by the
+        mcmc samplers and thus this is only necessary if you want to perform fully Bayesian
+        inference.
+
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
+        :type coef: np.ndarray
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param X: Model matrix used by a model
+        :type X: scp.sparse.csc_array
+        :param scale: Optional scale parameter if ``self.twopar is True``, defaults to 1
+        :type scale: float, optional
+        :return: The partial derivative of the log-likelihood with respect to ``log(scale)`` if
+            this family has a scale parameter, otherwise zero.
+        :rtype: None | float
+        """
+
+        if self.twopar is True:
+            # Compute mean and log-scale
+            mu = self.link.fi(X @ coef)
+            lscale = np.log(scale)
+
+            def llk_wrap(x: float) -> float:
+
+                return self.llk(y, mu, scale=np.exp(x[0]))
+
+            deriv = scp.optimize.approx_fprime(np.array([lscale]), llk_wrap)
+            return deriv[0]
+
+        return 0.0
+
+    def d2llkd2lscale(
+        self, coef: np.ndarray, y: np.ndarray, X: scp.sparse.csc_array, scale: float = 1
+    ) -> float:
+        """Returns second partial derivative of the log-likelihood with respect to ``log(scale)``
+        if this family has a scale parameter (i.e., if ``self.twopar is True``). Otherwise this
+        function returns zero.
+
+        Base-class implementation relies on finite differencing to compute the required partial
+        derivative. For efficiency reasons, families inheriting from the base class should
+        implement an analytic solution. Note however, that this function is only used by the
+        mcmc samplers (and only once) and thus this is only necessary if you want to perform fully
+        Bayesian inference.
+
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
+        :type coef: np.ndarray
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param X: Model matrix used by a model
+        :type X: scp.sparse.csc_array
+        :param scale: Optional scale parameter if ``self.twopar is True``, defaults to 1
+        :type scale: float, optional
+        :return: The second partial derivative of the log-likelihood with respect to ``log(scale)``
+            if this family has a scale parameter, otherwise zero.
+        :rtype: None | float
+        """
+
+        if self.twopar is True:
+            mu = self.link.fi(X @ coef)
+            lscale = np.log(scale)
+
+            def llk_wrap(x: float) -> float:
+
+                return self.llk(y, mu, scale=np.exp(x[0]))
+
+            H = scp.differentiate.hessian(
+                lambda r: np.apply_along_axis(llk_wrap, axis=0, arr=r),
+                np.array([lscale]),
+            )
+
+            return H.ddf[0, 0]
+
+        return 0.0
 
 
 class Binomial(Family):
@@ -1460,9 +1595,10 @@ class ExtendedFamily(Family):
         have to be estimated.
     :type theta: float or np.ndarray, optional
     :ivar None | np.ndarray theta: The (estimated) extra parameters of the log-likelihood.
-        Each implementation of this class should initalize these if not provided and calls to
-        :func:`GAMM.fit` will overwrite this attribute if the initial value for ``theta`` passed to
-        the constructor was None. Defaults to None
+        Each implementation of this class must initalize these if not provided (i.e., by
+        implementing the ``init_theta`` method) and calls to :func:`GAMM.fit` will overwrite this
+        attribute if the initial value for ``theta`` passed to the constructor was None.
+        Defaults to None
     """
 
     def __init__(
@@ -1473,6 +1609,21 @@ class ExtendedFamily(Family):
         super().__init__(link, False, 1)
         self.est_theta = theta is None
         self.theta = theta
+
+        if self.theta is None:
+            self.theta = self.init_theta()
+
+    def init_theta(self) -> np.ndarray:
+        """Function to initialize ``theta``, the extra parameters of the log-likelihood, if no value
+        (i.e., ``None``) was passed to the constructor.
+
+        Take a look at the :class:`ScaledT` implementation as an example.
+
+        :return: Any additional parameters of the likelihood (``theta``). Array needs to be of shape
+            (-1,1).
+        :rtype: np.ndarray
+        """
+        pass
 
     def V(self, mu: np.ndarray, theta: None | np.ndarray = None) -> np.ndarray:
         """
@@ -1827,8 +1978,14 @@ class ScaledT(ExtendedFamily):
     def __init__(self, link, theta=None, min_df=3):
         super().__init__(link, theta)
         self.min_df = min_df
-        if theta is None:
-            self.theta = np.array([0.5, 10]).reshape(-1, 1)
+
+    def init_theta(self) -> np.ndarray:
+        """Function that automatically initializes ``theta`` to the default.
+
+        :return: Default value for theta: ``np.array([0.5, 10]).reshape(-1, 1)``
+        :rtype: np.ndarray
+        """
+        return np.array([0.5, 10]).reshape(-1, 1)
 
     def V(self, mu: np.ndarray, theta: None | np.ndarray = None) -> np.ndarray:
         """
@@ -3114,14 +3271,21 @@ class GSMMFamily:
         Estimation and Selection of Large Multi-Level Statistical Models. \
         https://doi.org/10.48550/arXiv.2506.13132
 
-    :param pars: Number of parameters of the likelihood.
+    :param pars: Number of parameters of the likelihood for which an additive (mixed) model is
+        specified. **Note**, that extra parameters that are constant (and thus do not need an
+        extra :class:`mssm.src.python.formula.Formula` specified) but nevertheless need to be
+        estimated can be handled via the ``extra_coef`` argument.
     :type pars: int
     :param links: List of Link functions for each parameter of the likelihood,
         e.g., `links=[Identity(),LOG()]`.
     :type links: [Link]
-    :ivar int, optional extra_coef: Number of extra coefficients required by specific family or
-        ``None``. By default set to ``None`` and changed to ``int`` by specific families requiring
-        this.
+    :ivar int, optional extra_coef: Number of extra coefficients required by specific family for
+        parameters of the log-likelihood that are constant (i.e., not a function of predictor
+        variables) or ``None``. If this is not set to ``None``, ``mssm`` will automatically append
+        ``extra_coef`` elements to the coefficient vector passed to the log-likelihood and gradient
+        methods of this family. Additionally, ``coef_split_idx`` will be modified, so that the last
+        list of the split holds the ``extra_coef``. By default set to ``None`` and changed to
+        ``int`` by specific families requiring this.
     :ivar list[any] llkargs: A list holding any extra arguments passed to the constructor via
         ``llkargs``.
 
@@ -3229,6 +3393,7 @@ class GSMMFamily:
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
         Xs: list[scp.sparse.csc_array | None],
+        n_c: int = 1,
     ) -> scp.sparse.csc_array:
         """(Optional) method to compute a sparse approximation to the Hessian of the llk, containing
         only the ``j`` columns and rows of the Hessian indexed by ``jcols``.
@@ -3254,6 +3419,9 @@ class GSMMFamily:
             at indices for matrices which were flagged as "do not build" via the ``build_mat``
             argument of the :func:`mssm.models.GSMM.fit` method.
         :type Xs: list[scp.sparse.csc_array | None]
+        :param n_c: Number of cores to use to parallelize computation over ``j`` cols, defaults to
+            1.
+        :type n_c: int, optional
         :return: Finite difference approximation matrix which is symmetric sparse matrix with
             ``jcols`` rows and columns set to finite difference approximation of columns of
             Hessian of llk
@@ -3268,24 +3436,54 @@ class GSMMFamily:
 
         Hdim = len(coef)
 
-        for j in jcols:
+        if HAS_MP and n_c > 1:
+            # Compute columns in parallel
+            def __d2llk(j):
 
-            def __d2llkj(r):
-                # Function to evaluate Hessian column via finite difference approximation
-                n_coef = copy.deepcopy(coef)
-                n_coef[j] = r
+                def __d2llkj(r):
+                    # Function to evaluate Hessian column via finite difference approximation
+                    n_coef = copy.deepcopy(coef)
+                    n_coef[j] = r
 
-                n_grad = self.gradient(n_coef, coef_split_idx, ys, Xs)
+                    n_grad = self.gradient(n_coef, coef_split_idx, ys, Xs)
 
-                return n_grad.flatten()
+                    return n_grad.flatten()
 
-            def vectorized_d2(r):
-                return np.apply_along_axis(__d2llkj, axis=0, arr=r)
+                def vectorized_d2(r):
+                    return np.apply_along_axis(__d2llkj, axis=0, arr=r)
 
-            Hsk = scp.differentiate.jacobian(vectorized_d2, coef[j], order=2)
+                Hsk = scp.differentiate.jacobian(vectorized_d2, coef[j], order=2)
 
-            # Entire column j of negative hessian
-            Hj = Hsk.df.flatten()
+                # Entire column j of negative hessian
+                Hj = Hsk.df.flatten()
+                return Hj
+
+            with mp.Pool(processes=n_c) as pool:
+                Hjs = pool.map(__d2llk, jcols)
+
+        for ji, j in enumerate(jcols):
+
+            if HAS_MP and n_c > 1:
+                # Simply extract
+                Hj = Hjs[ji]
+            else:
+
+                def __d2llkj(r):
+                    # Function to evaluate Hessian column via finite difference approximation
+                    n_coef = copy.deepcopy(coef)
+                    n_coef[j] = r
+
+                    n_grad = self.gradient(n_coef, coef_split_idx, ys, Xs)
+
+                    return n_grad.flatten()
+
+                def vectorized_d2(r):
+                    return np.apply_along_axis(__d2llkj, axis=0, arr=r)
+
+                Hsk = scp.differentiate.jacobian(vectorized_d2, coef[j], order=2)
+
+                # Entire column j of negative hessian
+                Hj = Hsk.df.flatten()
 
             # Take out elements previously computed
             Hjrows = np.arange(Hdim)
@@ -4594,8 +4792,8 @@ class MultiGauss(GSMMFamily):
          - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for \
             General Smooth Models.
 
-        :param mus: Numpy array of shape ``(N, self.n_par)``, where ``self.n_par is the dimension of
-            the multivariate normal distributions.
+        :param mus: Numpy array of shape ``(N, self.n_par)``, where ``self.n_par`` is the dimension
+            of the multivariate normal distributions.
         :type mus: np.ndarray
         :param theta: Flattened array holding inverses of log(variance) and co-variance parameters
         :type theta: np.ndarray

@@ -19,6 +19,7 @@ from .defaults import (
 )
 
 from mssm.src.python.mcmc import sample_mssm
+from mssm.src.python.formula import build_model_matrix
 
 mssm.src.python.exp_fam.GAUMLSS.init_coef = init_coef_gaumlss_tests
 mssm.src.python.exp_fam.GAMMALS.init_coef = init_coef_gammals_tests
@@ -1483,7 +1484,7 @@ class Test_NUTS:
     model.fit(**default_gammlss_test_kwargs)
 
     def test_NUTS(self):
-        llks, coef_samples, rho_samples = sample_mssm(
+        res = sample_mssm(
             self.model,
             auto_converge=False,
             M_adapt=100,
@@ -1493,6 +1494,8 @@ class Test_NUTS:
             delta=0.6,
             n_iter=100,
         )
+
+        llks, coef_samples, rho_samples = res.lps, res.coefs, res.rhos
 
         assert (
             rho_samples is None
