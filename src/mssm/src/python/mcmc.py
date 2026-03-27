@@ -236,14 +236,80 @@ def advance_chain_mssm(
 ) -> None:
     """Wrapper function to advancethe state of a NUTS ``chain`` (implemented in c++ class).
 
+    References:
+     - Hoffman, M. D., & Gelman, A. (2014). The No-U-Turn Sampler: Adaptively Setting Path Lengths\
+        in Hamiltonian Monte Carlo. Journal of Machine Learning Research, 15(47), 1593–1623.
+     - Betancourt, M. J. (2013). Generalizing the No-U-Turn Sampler to Riemannian Manifolds\
+        (No. arXiv:1304.1920). arXiv. https://doi.org/10.48550/arXiv.1304.1920
+     - Betancourt, M. (2018). A Conceptual Introduction to Hamiltonian Monte Carlo\
+        (No. arXiv:1701.02434). arXiv. https://doi.org/10.48550/arXiv.1701.02434
+
     :param chain_id: Id of chain, just an integer >= 0.
     :type chain_id: int
+    :param chain_seed: Seed to use by the chain on the cpp side, just an integer >= 0.
+    :type chain_seed: int
     :param steps: For how many steps to run the chain, just another integer >= 0.
     :type steps: int
     :param return_dict: The shared dictionary in which all states dump the outcome of the next step.
     :type return_dict: dict
-    :param chain: Python wrapper around the c++ NUTS class.
-    :type chain: Callable
+    :param iter: Current iteration of the chain, just an integer >= 0.
+    :type iter: int
+    :param M_adapt: Number of steps to use for adaptation/tuning of the chain, just an integer >= 0.
+    :type M_adapt: int
+    :param steps: Steps to advance the chain on the cpp side, just an integer >= 0.
+    :type steps: int
+    :param cllk: Current log-joint probability (up to a constant)
+    :type cllk: float
+    :param omega: Current total parameter vector
+    :type omega: np.ndarray
+    :param epsilon: Parameter defined by Hoffman & Gelman (2014), affecting the tuning phase of
+        the Nuts sampler
+    :type epsilon: float
+    :param epsilonbar: Parameter defined by Hoffman & Gelman (2014), affecting the tuning phase of
+        the Nuts sampler
+    :type epsilonbar: float
+    :param Hbar: Parameter defined by Hoffman & Gelman (2014), affecting the tuning phase of
+        the Nuts sampler
+    :type Hbar: float
+    :param mu: Parameter defined by Hoffman & Gelman (2014), affecting the tuning phase of
+        the Nuts sampler
+    :type mu: float
+    :param Minv: Inverse of the metric used by the sampler (see Betancourt; 2013, 2018)
+    :type Minv: scp.sparse.csc_array | None
+    :param Mrows: Rows of ``Minv``
+    :type Mrows: int | None
+    :param address_Mdat: Address to buffer holding data of ``Minv``
+    :type address_Mdat: str | None
+    :param address_Mptr: Address to buffer holding pointer of ``Minv``
+    :type address_Mptr: str | None
+    :param address_Midx: Address to buffer holding indices of ``Minv``
+    :type address_Midx: str | None
+    :param shape_Mdat: Shape of buffer holding data of ``Minv``
+    :type shape_Mdat: tuple[int, int] | None
+    :param shape_Mptr: Shape of buffer holding pointer of ``Minv``
+    :type shape_Mptr: tuple[int, int] | None
+    :param delta: Expected rate of accepted states. Lower values might mean that the sampler
+        get's stuck with particular values for more iterations
+    :type delta: float
+    :param kappa: Parameter defined by Hoffman & Gelman (2014), affecting the tuning phase of
+        the Nuts sampler
+    :type kappa: float
+    :param gamma: Parameter defined by Hoffman & Gelman (2014), affecting the tuning phase of
+        the Nuts sampler
+    :type gamma: float
+    :param t0: Parameter defined by Hoffman & Gelman (2014), affecting the tuning phase of
+        the Nuts sampler
+    :type t0: int, optional
+    :param max_j: Maximum number of binary tree doublings. At every iteration the size of the tree
+        is ``2**j``
+    :type max_j: int, optional
+    :param llk_fun: Function to compute the log joint probability (up to a constant)
+    :type llk_fun: Callable
+    :param grad_fun: Function to compute the gradient of the log joint probability (up to a
+        constant)
+    :type grad_fun: Callable
+    :param r_sampler: Function to sample momentum variables for the NUTS sampler
+    :type r_sampler: Callable
     """
 
     if Minv is None:
@@ -463,7 +529,7 @@ def sample_mssm(
         False
     :type sample_rho: bool, optional
     :param convergence_type: For which parameters to monitor convergence (**also determines which
-        parameteters are considered for the ``auto-convergence`` feature). See the
+        parameteters are considered for the** ``auto-convergence`` **feature**). See the
         :func:`check_convergence` function for details, defaults to 0
     :type convergence_type: int, optional
     :param progress_bar: Whether a progress bar should be displayed, defaults to True

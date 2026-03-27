@@ -2304,9 +2304,8 @@ def estimateVp(
     :param seed: Seed to use for random parts of the correction. Defaults to None
     :type seed: int|None,optional
     :param bfgs_options: An optional dictionary holding arguments that should be passed on to
-            the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If None is provided,
-            the ``ftol`` argument will be initialized to 1e-7.
-        Defaults to None.
+        the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If None is provided,
+        the ``ftol`` argument will be initialized to 1e-7. Defaults to None.
     :type bfgs_options: dict | None, optional
     :return: A tuple with 6 elements: an estimate of the covariance matrix of the posterior for
         :math:`\\boldsymbol{\\rho} = log(\\boldsymbol{\\lambda})`, a regularized version of the
@@ -3757,9 +3756,8 @@ def correct_VB(
         :func:`estimateVp` function for details. Defaults to 'JJJ1'
     :type grid_type: str, optional
     :param bfgs_options: An optional dictionary holding arguments that should be passed on to
-            the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If None is provided,
-            the ``ftol`` argument will be initialized to 1e-7.
-        Defaults to None.
+        the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If None is provided,
+        the ``ftol`` argument will be initialized to 1e-7. Defaults to None.
     :type bfgs_options: dict | None, optional
     :return: A tuple containing: ``V`` - an estimate of the unconditional covariance matrix, ``LV``
         - the Cholesky of the former, ``Vp`` - an estimate of the covariance matrix for

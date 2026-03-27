@@ -26,7 +26,7 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 # -- myst_nb configuration ---------------------------------------------------
 # https://myst-nb.readthedocs.io/en/latest/configuration.html
-nb_execution_timeout = 1000
+nb_execution_timeout = 1500
 nb_execution_show_tb = True
 nb_scroll_outputs = True
 

@@ -2478,10 +2478,11 @@ class HSMMFamily(GSMMFamily):
         sid: None | np.ndarray = None,
         tid: None | np.ndarray = None,
     ) -> np.ndarray:
-        """Get forward or ordinary pseudo/quantile residuals for a :class:`HSMMFamily` model.
+        """Get forward pseudo/quantile or predictive residuals for a :class:`HSMMFamily` model.
 
         (Forward) "pseudo-residuals" (also known as "independent quantile residuals") have
-        previously been defined by Zucchini et al. (2017) and Dunn & Smyth (1996).
+        previously been defined by Zucchini et al. (2017) and Dunn & Smyth (1996). Predictive
+        residuals have been defined by Buckby et al. (2020).
 
         References:
          - Zucchini, W., MacDonald, I. L., & Langrock, R. (2017). Hidden Markov Models for \
@@ -2490,6 +2491,9 @@ class HSMMFamily(GSMMFamily):
          - Dunn, P. K., & Smyth, G. K. (1996). Randomized Quantile Residuals. Journal of \
             Computational and Graphical Statistics, 5(3), 236–244. \
             https://doi.org/10.2307/1390802
+         - Buckby, J., Wang, T., Zhuang, J., & Obara, K. (2020). Model Checking for Hidden Markov \
+            Models. Journal of Computational and Graphical Statistics, 29(4), 859–874. \
+            https://doi.org/10.1080/10618600.2020.1743295
 
         :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
             be flattened!).
