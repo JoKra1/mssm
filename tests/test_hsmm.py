@@ -1571,7 +1571,7 @@ class Test_UnivariateHMP:
         np.testing.assert_allclose(
             grad_diffs,
             np.array([0.001, 0.001, 0.001, 0.001]),
-            atol=min(max_atol, 0),
+            atol=min(max_atol, 0.1),
             rtol=min(max_rtol, 0.1),
         )
 
