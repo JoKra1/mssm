@@ -1082,7 +1082,7 @@ class HSMMFamily(GSMMFamily):
 
     Instead of treating HsMM parameters as constant, in this implementation parameters can be
     represented as additive mixed models including smooth functions of experimental covariates and
-    i.i.d random effects.
+    i.i.d random effects (see Krause et al., 2025).
 
     Supports models for which the state transition matrix and initial state distribution
     should be kept fixed. Also supports 'HMP-like' HsMMs as defined by Weindel et al. (2024).
@@ -1098,6 +1098,9 @@ class HSMMFamily(GSMMFamily):
         https://doi.org/10.1162/imag_a_00400
      - Michelot, T. (2025). hmmTMB: Hidden Markov Models with Flexible Covariate Effects in R.\
         Journal of Statistical Software, 114, 1–45. https://doi.org/10.18637/jss.v114.i05
+     - Krause, J., Rij, J. van, & Borst, J. P. (2025). Hierarchical Semi-Markov Smooth Models of\
+        Latent Neural States (p. 2025.12.25.696483).\
+        https://doi.org/10.64898/2025.12.25.696483
 
     :param pars: Number of parameters of the log-likelihood of the HSMM
     :type pars: int
