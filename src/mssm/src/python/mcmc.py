@@ -536,7 +536,7 @@ def sample_mssm(
     :type progress_bar: bool, optional
     :raises ValueError: If the function is called for a model that has not previously been
         estimated for at least a single iteration.
-    :return: A :class`mssm.src.python.custom_types.SamplerResult` holding all sampled quantities
+    :return: A :class:`mssm.src.python.custom_types.SamplerResult` holding all sampled quantities
         from all chains.
     :rtype: SamplerResult
     """
