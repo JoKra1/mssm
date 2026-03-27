@@ -14,14 +14,6 @@ from ..python.gamm_solvers import (
 from .custom_types import SamplerResult
 from .utils import sample_MVN, estimateVp, GAMLSSGSMMFamily, RhoPrior, MVUniformRhoPrior
 
-try:
-    import multiprocess as mp
-except ImportError:
-    warnings.warn(
-        "Multi-processing mcmc computations might require the `multiprocess` package."
-    )
-    from .file_loading import mp
-
 from ...models import (
     GAMM,
     GAMMLSS,
@@ -40,6 +32,15 @@ from collections.abc import Callable
 
 import mcmc
 from tqdm import tqdm
+
+HAS_MP = True
+try:
+    import multiprocess as mp
+except ImportError:
+    warnings.warn(
+        "Multi-processing mcmc computations will require the `multiprocess` package."
+    )
+    HAS_MP = False
 
 HAS_ARVIZ = True
 try:
@@ -487,6 +488,15 @@ def sample_mssm(
 
     # Makes no sense to parallelize
     if parallelize_chains and n_chains == 1:
+        parallelize_chains = False
+
+    if HAS_MP is False and parallelize_chains:
+        warnings.warn(
+            (
+                "Multi-processing mcmc computations requires the `multiprocess` package. "
+                "Ignoring the ``parallelize_chains`` argument."
+            )
+        )
         parallelize_chains = False
 
     # Create managers for parallelization
