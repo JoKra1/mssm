@@ -10,9 +10,9 @@
 > [!NOTE]
 > Our preprint detailing the algorithms implemented in the mssm toolbox is now available on [arXiv](https://arxiv.org/abs/2506.13132).
 
-``mssm`` is a toolbox to estimate Generalized Additive Mixed Models (GAMMs), Generalized Additive Mixed Models of Location Scale and Shape (GAMMLSS), and more general (mixed) smooth models in the sense defined by [Wood, Pya, & Säfken (2016)](https://doi.org/10.1080/01621459.2016.1180986). Approximate estimation (and automatic regularization) of the latter only requires users to provide the (gradient of) the log-likelihood. Furthermore, ``mssm`` is an excellent choice for the modeling of multi-level time-series data, often estimating additive models with separate smooths for thousands of levels in a couple of minutes.
+``mssm`` is a toolbox to estimate Generalized Additive Mixed Models (GAMMs), Generalized Additive Mixed Models of Location Scale and Shape (GAMMLSS), and more general (mixed) smooth models in the sense defined by [Wood, Pya, & Säfken (2016)](https://doi.org/10.1080/01621459.2016.1180986). Approximate estimation (and automatic regularization) of the latter only requires users to provide the (gradient of) the log-likelihood. Furthermore, ``mssm`` is an excellent choice for the modeling of multi-level time-series data, often estimating additive models with separate smooths for thousands of levels in a couple of minutes. ``mssm`` also supports fully Bayesian inference about model coefficients and regularization parameters.
 
-**Note**: The ``main`` branch is updated frequently to reflect new developments. The ``stable`` branch should reflect the latest releases. If you don't need the newest functionality, you should install from the ``stable`` branch (see below for instructions). **Documentation** is hosted [here](https://jokra1.github.io/mssm/index.html) - together with a tutorial for `mssm`! Plotting code to visualize and validate `mssm` models is provided in this [repository](https://github.com/JoKra1/mssmViz)!
+**Note**: The ``main`` branch is updated frequently to reflect new developments. The ``stable`` branch reflects the latest releases. If you don't need the newest functionality, you should install from the ``stable`` branch (see below for instructions). **Documentation** (built from the stable branch) is hosted [here](https://jokra1.github.io/mssm/index.html) - together with a tutorial for `mssm`! Plotting code to visualize and validate `mssm` models is provided in this [repository](https://github.com/JoKra1/mssmViz)!
 
 ## Installation
 
@@ -26,15 +26,14 @@ The latest release of mssm can be installed from [pypi](https://pypi.org/project
 ```
 conda create -n mssm_env python=3.13
 conda activate mssm_env
-pip install mssm[plot] # [plot] also installs ``mssmViz``
+pip install mssm[plot,mp,mcmc] # on Windows use quotes: "mssm[plot,mp,mcmc]"
 ```
-
-**Note**: pypi will only reflect releases (Basically, the state of the stable branch). If you urgently need a feature currently only available on the main branch, consider building from source.
+**Note**: This will also install optional dependencies, listed in the square brackets, required for model visualization, parallelization of selected functions, and convergence statistics for the mcmc sampler.
+Also note, that pypi will only reflect releases (Basically, the state of the stable branch). If you urgently need a feature currently only available on the main branch, consider building from source.
 
 ### Building from source
 
-You can also build directly from source. This requires ``conda`` or an installation of [eigen](https://eigen.tuxfamily.org/index.php?title=Main_Page) (``setup.py`` then expects ``eigen`` in "usr/local/include/eigen3". This will probably not work on windows - the ``conda`` strategy should.). Once you have ``conda`` installed,
-[install eigen from conda-forge](https://anaconda.org/conda-forge/eigen). After cloning and navigating into the downloaded repository you can then install via:
+You can also build directly from source. This requires an installation of [eigen](https://eigen.tuxfamily.org/index.php?title=Main_Page). ``setup.py`` first checks whether ``eigen`` has been installed via ``conda`` [from conda-forge](https://anaconda.org/conda-forge/eigen), alternatively checks for ``eigen`` in "usr/local/include/eigen3", and finally falls back to cloning it from their git (this will fail if you have not set up git on your machine). After cloning and navigating into the downloaded ``mssm`` repository you can then install via:
 
 ```
 pip install .
