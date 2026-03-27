@@ -782,10 +782,10 @@ class GSMM:
             current :math:`lambda` parameters. Defaults to None.
         :type callback: Callable | None, optional
         :param bfgs_options: An optional dictionary holding arguments that should be passed on to
-            the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If none are provided,
+            the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If None is provided,
             the ``gtol`` argument will be initialized to ``conv_tol``. Note also, that in any case
             the ``maxiter`` argument is automatically set to ``max_inner``. Defaults to None.
-        :type bfgs_options: dict, optional
+        :type bfgs_options: dict | None, optional
         :param global_opt_qefs: Whether or not to use a stochastic global optimization algorithm to
             estimate the coefficients when the L-qEFS update is used to estimate coefficients/lambda
             parameters. Defaults to False, which means standard quasi-Newton is used.

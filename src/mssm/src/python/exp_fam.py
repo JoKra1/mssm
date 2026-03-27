@@ -5,6 +5,12 @@ import warnings
 import copy
 from collections.abc import Callable
 
+HAS_MP = True
+try:
+    import multiprocess as mp
+except ImportError:
+    HAS_MP = False
+
 
 class Link:
     """
@@ -3387,6 +3393,7 @@ class GSMMFamily:
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
         Xs: list[scp.sparse.csc_array | None],
+        n_c: int = 1,
     ) -> scp.sparse.csc_array:
         """(Optional) method to compute a sparse approximation to the Hessian of the llk, containing
         only the ``j`` columns and rows of the Hessian indexed by ``jcols``.
@@ -3412,6 +3419,9 @@ class GSMMFamily:
             at indices for matrices which were flagged as "do not build" via the ``build_mat``
             argument of the :func:`mssm.models.GSMM.fit` method.
         :type Xs: list[scp.sparse.csc_array | None]
+        :param n_c: Number of cores to use to parallelize computation over ``j`` cols, defaults to
+            1.
+        :type n_c: int, optional
         :return: Finite difference approximation matrix which is symmetric sparse matrix with
             ``jcols`` rows and columns set to finite difference approximation of columns of
             Hessian of llk
@@ -3426,24 +3436,54 @@ class GSMMFamily:
 
         Hdim = len(coef)
 
-        for j in jcols:
+        if HAS_MP and n_c > 1:
+            # Compute columns in parallel
+            def __d2llk(j):
 
-            def __d2llkj(r):
-                # Function to evaluate Hessian column via finite difference approximation
-                n_coef = copy.deepcopy(coef)
-                n_coef[j] = r
+                def __d2llkj(r):
+                    # Function to evaluate Hessian column via finite difference approximation
+                    n_coef = copy.deepcopy(coef)
+                    n_coef[j] = r
 
-                n_grad = self.gradient(n_coef, coef_split_idx, ys, Xs)
+                    n_grad = self.gradient(n_coef, coef_split_idx, ys, Xs)
 
-                return n_grad.flatten()
+                    return n_grad.flatten()
 
-            def vectorized_d2(r):
-                return np.apply_along_axis(__d2llkj, axis=0, arr=r)
+                def vectorized_d2(r):
+                    return np.apply_along_axis(__d2llkj, axis=0, arr=r)
 
-            Hsk = scp.differentiate.jacobian(vectorized_d2, coef[j], order=2)
+                Hsk = scp.differentiate.jacobian(vectorized_d2, coef[j], order=2)
 
-            # Entire column j of negative hessian
-            Hj = Hsk.df.flatten()
+                # Entire column j of negative hessian
+                Hj = Hsk.df.flatten()
+                return Hj
+
+            with mp.Pool(processes=n_c) as pool:
+                Hjs = pool.map(__d2llk, jcols)
+
+        for ji, j in enumerate(jcols):
+
+            if HAS_MP and n_c > 1:
+                # Simply extract
+                Hj = Hjs[ji]
+            else:
+
+                def __d2llkj(r):
+                    # Function to evaluate Hessian column via finite difference approximation
+                    n_coef = copy.deepcopy(coef)
+                    n_coef[j] = r
+
+                    n_grad = self.gradient(n_coef, coef_split_idx, ys, Xs)
+
+                    return n_grad.flatten()
+
+                def vectorized_d2(r):
+                    return np.apply_along_axis(__d2llkj, axis=0, arr=r)
+
+                Hsk = scp.differentiate.jacobian(vectorized_d2, coef[j], order=2)
+
+                # Entire column j of negative hessian
+                Hj = Hsk.df.flatten()
 
             # Take out elements previously computed
             Hjrows = np.arange(Hdim)

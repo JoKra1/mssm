@@ -23,13 +23,13 @@ from ..python.gamm_solvers import (
     calculate_edf,
     compute_eigen_perm,
     computeHSR1,
-    computeH,
     update_coef,
     deriv_transform_mu_eta,
     deriv_transform_eta_beta,
     translate_sparse,
     map_csc_to_eigen,
     updateTheta,
+    compute_omega,
 )
 from ..python.terms import fs, rs
 
@@ -1897,10 +1897,19 @@ def compute_REML_candidate_GSMM(
                     np.array([1]).reshape(1, 1), np.array([1]).reshape(1, 1)
                 )
                 __old_opt.init = False
-                __old_opt.omega = 1
                 __old_opt.method = "qEFS"
                 __old_opt.form = "SR1"
                 __old_opt.bfgs_options = bfgs_options
+                __old_opt.sample_hessian = True
+                __old_opt.sample_hessian_method = 0
+                __old_opt.sample_hessian_options = {}
+                __old_opt.fcols = None
+                __old_opt.acols = None
+                __old_opt.P1 = None
+                __old_opt.P2 = None
+                __old_opt.nHfd = None
+                __old_opt.IonHBB = None
+                __old_opt.sqEFS_options = {}
 
             coef, H, L, LV, c_llk, _, _, keep, drop = update_coef_gen_smooth(
                 family,
@@ -1919,7 +1928,7 @@ def compute_REML_candidate_GSMM(
                 1000,
                 conv_tol,
                 method,
-                None,
+                n_c,
                 keep_drop,
                 __old_opt,
                 False,
@@ -1927,30 +1936,25 @@ def compute_REML_candidate_GSMM(
 
             if method == "qEFS":
 
-                # Get an approximation of the Hessian of the likelihood
-                if LV.form == "SR1":
-                    H = -1 * computeHSR1(
-                        LV.sk,
-                        LV.yk,
-                        LV.rho,
-                        scp.sparse.identity(len(coef), format="csc") * LV.omega,
-                        omega=LV.omega,
-                        make_psd=True,
-                        explicit=True,
-                    )
-                else:
-                    H = -1 * computeH(
-                        LV.sk,
-                        LV.yk,
-                        LV.rho,
-                        scp.sparse.identity(len(coef), format="csc") * LV.omega,
-                        True,
-                    )
+                # Get explicit approximation of the Hessian of the likelihood
+                omega = compute_omega(LV.yk, LV.sk, method="mean")
 
-                # Get Cholesky factor of approximate inverse of penalized hessian (needed for CIs)
+                H = -1 * computeHSR1(
+                    LV.sk,
+                    LV.yk,
+                    LV.rho,
+                    scp.sparse.identity(len(coef), format="csc") * omega,
+                    omega=omega,
+                    make_psd=True,
+                    explicit=True,
+                )
+
+                H = scp.sparse.csc_array(H)
+
+                # Get Cholesky factor of approximate inverse of penalized hessian
                 pH = scp.sparse.csc_array((-1 * H) + S_emb)
                 Lp, Pr, _ = cpp_cholP(pH)
-                LVp0 = compute_Linv(Lp, 10)
+                LVp0 = compute_Linv(Lp, n_c)
                 LV = apply_eigen_perm(Pr, LVp0)
 
             V = LV.T @ LV  # inverse of hessian of penalized likelihood
@@ -2179,7 +2183,7 @@ def estimateVp(
     use_importance_weights: bool = True,
     prior: Callable | None = None,
     seed: int | None = None,
-    **bfgs_options,
+    bfgs_options: dict | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Estimate covariance matrix :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` of posterior for
     :math:`\\boldsymbol{\\rho} = log(\\boldsymbol{\\lambda})`.
@@ -2299,11 +2303,11 @@ def estimateVp(
     :type recompute_H: bool, optional
     :param seed: Seed to use for random parts of the correction. Defaults to None
     :type seed: int|None,optional
-    :param bfgs_options: Any additional keyword arguments that should be passed on to the call of
-        ``scipy.optimize.minimize``. If none are provided, the ``gtol`` argument will be initialized
-        to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100.
+    :param bfgs_options: An optional dictionary holding arguments that should be passed on to
+            the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If None is provided,
+            the ``ftol`` argument will be initialized to 1e-7.
         Defaults to None.
-    :type bfgs_options: key=value,optional
+    :type bfgs_options: dict | None, optional
     :return: A tuple with 6 elements: an estimate of the covariance matrix of the posterior for
         :math:`\\boldsymbol{\\rho} = log(\\boldsymbol{\\lambda})`, a regularized version of the
         former, a root of the covariance matrix, a root of the regularized covariance matrix, an
@@ -2326,7 +2330,7 @@ def estimateVp(
 
     if isinstance(family, GSMMFamily):
         if not bfgs_options:
-            bfgs_options = {"ftol": 1e-9, "maxcor": 30, "maxls": 100}
+            bfgs_options = {"ftol": 1e-9, "maxcor": 30, "maxls": 100, "maxfun": 5000}
 
     # nPen = len(model.overall_penalties)
     rPen = copy.deepcopy(model.overall_penalties)
@@ -3560,9 +3564,9 @@ def correct_VB(
     seed: int | None = None,
     compute_Vcc: bool = True,
     VP_grid_type: str = "JJJ1",
-    **bfgs_options,
+    bfgs_options: dict | None = None,
 ) -> tuple[
-    scp.sparse.csc_array | None,
+    np.ndarray | None,
     scp.sparse.csc_array | None,
     np.ndarray | None,
     np.ndarray | None,
@@ -3752,11 +3756,11 @@ def correct_VB(
         of the covariance matrix of the :math:`log(\\lambda)` parameters, see the
         :func:`estimateVp` function for details. Defaults to 'JJJ1'
     :type grid_type: str, optional
-    :param bfgs_options: Any additional keyword arguments that should be passed on to the call of
-        :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be
-        initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically
-        set to 100. Defaults to None.
-    :type bfgs_options: key=value,optional
+    :param bfgs_options: An optional dictionary holding arguments that should be passed on to
+            the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If None is provided,
+            the ``ftol`` argument will be initialized to 1e-7.
+        Defaults to None.
+    :type bfgs_options: dict | None, optional
     :return: A tuple containing: ``V`` - an estimate of the unconditional covariance matrix, ``LV``
         - the Cholesky of the former, ``Vp`` - an estimate of the covariance matrix for
         :math:`\\boldsymbol{\\rho}`, ``Vpr`` - a regularized version of the former, ``edf`` -
@@ -3766,7 +3770,7 @@ def correct_VB(
         smoothness bias corrected total (i.e., model) edf, ``expected_edf`` - an optional estimate
         of total_edf that does not require forming ``V``, ``mean_coef`` - an optional estimate of
         the mean of the posterior of the coefficients
-    :rtype: tuple[scp.sparse.csc_array|None, scp.sparse.csc_array|None, np.ndarray|None,
+    :rtype: tuple[np.ndarray|None, scp.sparse.csc_array|None, np.ndarray|None,
         np.ndarray|None, np.ndarray|None, float|None, np.ndarray|None, float|None, float,
         np.ndarray]
     """
@@ -3795,7 +3799,7 @@ def correct_VB(
 
     if isinstance(family, GSMMFamily):
         if not bfgs_options:
-            bfgs_options = {"ftol": 1e-9, "maxcor": 30, "maxls": 100}
+            bfgs_options = {"ftol": 1e-7, "maxcor": 30, "maxls": 100, "maxfun": 5000}
 
     # nPen = len(model.overall_penalties)
     rPen = copy.deepcopy(model.overall_penalties)
