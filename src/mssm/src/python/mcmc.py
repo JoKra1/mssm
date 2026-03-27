@@ -314,6 +314,7 @@ def sample_mssm(
     sample_rho: bool = False,
     convergence_type: int = 0,
     seed: int = 0,
+    progress_bar: bool = True,
 ) -> SamplerResult:
     """Samples the posterior of any model using a No-U-Turn (NUTS) sampler (Hoffman & Gelman, 2014).
 
@@ -465,6 +466,8 @@ def sample_mssm(
         parameteters are considered for the ``auto-convergence`` feature). See the
         :func:`check_convergence` function for details, defaults to 0
     :type convergence_type: int, optional
+    :param progress_bar: Whether a progress bar should be displayed, defaults to True
+    :type progress_bar: bool, optional
     :raises ValueError: If the function is called for a model that has not previously been
         estimated for at least a single iteration.
     :return: A :class`mssm.src.python.custom_types.SamplerResult` holding all sampled quantities
@@ -1072,7 +1075,9 @@ def sample_mssm(
     if sample_rho:
         lam_samples = np.zeros((n_chains, n_iter, n_lam))
 
-    pbar = tqdm(total=n_iter + M_adapt, desc="Warming up...", leave=True)
+    if progress_bar:
+        pbar = tqdm(total=n_iter + M_adapt, desc="Warming up...", leave=True)
+
     iter = 0
     while iter < (n_iter + M_adapt):
 
@@ -1179,7 +1184,9 @@ def sample_mssm(
                 llk_samples[chain, sidx:eidx, 0] = llkprime
 
         iter += steps
-        pbar.update(steps)
+
+        if progress_bar:
+            pbar.update(steps)
 
         if (iter - M_adapt) == 0:
             # Average epsilons across chains, since we are done adapting.
@@ -1187,7 +1194,8 @@ def sample_mssm(
             epsilons = [m_epsilon for _ in range(n_chains)]
             epsilonbars = epsilons
 
-            pbar.set_description_str(desc="Sampling...", refresh=True)
+            if progress_bar:
+                pbar.set_description_str(desc="Sampling...", refresh=True)
 
         # Convergence:
         if iter > M_adapt:
@@ -1240,14 +1248,15 @@ def sample_mssm(
                     type=convergence_type,
                 )
 
-                desc = (
-                    f"Sampling... Iter: {iter-M_adapt}, "
-                    f"Min. ESS: {np.round(np.min(ess), decimals=2)}, "
-                    f"Max. Rhat: {np.round(np.max(rhat), decimals=2)}, "
-                    f"Max. MCSE: {np.round(np.max(mcse), decimals=2)}"
-                )
+                if progress_bar:
+                    desc = (
+                        f"Sampling... Iter: {iter-M_adapt}, "
+                        f"Min. ESS: {np.round(np.min(ess), decimals=2)}, "
+                        f"Max. Rhat: {np.round(np.max(rhat), decimals=2)}, "
+                        f"Max. MCSE: {np.round(np.max(mcse), decimals=2)}"
+                    )
 
-                pbar.set_description_str(desc=desc, refresh=True)
+                    pbar.set_description_str(desc=desc, refresh=True)
 
                 # Auto convergence
                 if (
@@ -1289,15 +1298,16 @@ def sample_mssm(
                             :,
                         ]
 
-                    desc = (
-                        f"Converged! Iter: {iter-M_adapt}, "
-                        f"Min. ESS: {np.round(np.min(ess), decimals=2)}, "
-                        f"Max. Rhat: {np.round(np.max(rhat), decimals=2)}, "
-                        f"Max. MCSE: {np.round(np.max(mcse), decimals=2)}"
-                    )
+                    if progress_bar:
+                        desc = (
+                            f"Converged! Iter: {iter-M_adapt}, "
+                            f"Min. ESS: {np.round(np.min(ess), decimals=2)}, "
+                            f"Max. Rhat: {np.round(np.max(rhat), decimals=2)}, "
+                            f"Max. MCSE: {np.round(np.max(mcse), decimals=2)}"
+                        )
 
-                    pbar.set_description_str(desc=desc, refresh=True)
-                    pbar.close()
+                        pbar.set_description_str(desc=desc, refresh=True)
+                        pbar.close()
                     if parallelize_chains:
                         mem_manager.shutdown()
                     break
@@ -1330,7 +1340,7 @@ def sample_mssm(
     if parallelize_chains:
         mem_manager.shutdown()
 
-    if auto_converge is False:
+    if auto_converge is False and progress_bar:
         pbar.close()
 
     res = SamplerResult(
