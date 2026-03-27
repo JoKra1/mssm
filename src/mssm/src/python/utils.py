@@ -2219,13 +2219,13 @@ def estimateVp(
         # ep will be an estimate of the mean of the marginal posterior of log regularization
         # parameters (for ``grid_type="JJJ1"`` this will simply be the log of the estimated
         # regularization parameters)
-        Vp, Vpr, Ri, Rir, ep, _ = estimateVp(model,grid_type="JJJ1",verbose=True,seed=20)
+        Vp, Vpr, Ri, Rir, ep, _ = estimateVp(model,grid_type="JJJ1",seed=20)
 
 
         # Compute MC estimate for generic model and given prior
         prior = MVUniformRhoPrior(b=np.log(1e12)) # Set up uniform prior
         Vp_MC, Vpr_MC, Ri_MC, Rir_MC, ep_MC, _ = estimateVp(model,
-            strategy="JJJ2",verbose=True,seed=20,use_importance_weights=True,prior=prior)
+            strategy="JJJ2",seed=20,use_importance_weights=True,prior=prior)
 
 
     References:
