@@ -65,10 +65,26 @@ mssm.src.python.gamm_solvers module
    :undoc-members:
    :show-inheritance:
 
+mssm.src.python.hsmm module
+------------------------------
+
+.. automodule:: mssm.src.python.hsmm
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 mssm.src.python.matrix_solvers module
 ------------------------------
 
 .. automodule:: mssm.src.python.matrix_solvers
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+mssm.src.python.mcmc module
+------------------------------
+
+.. automodule:: mssm.src.python.mcmc
    :members:
    :undoc-members:
    :show-inheritance:

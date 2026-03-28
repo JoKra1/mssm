@@ -5,6 +5,12 @@ import warnings
 import copy
 from collections.abc import Callable
 
+HAS_MP = True
+try:
+    import multiprocess as mp
+except ImportError:
+    HAS_MP = False
+
 
 class Link:
     """
@@ -537,7 +543,7 @@ class Family:
         model's log-likelihood (i.e., ``two_par=True``) must pass as key-word argument a ``scale``
         parameter with a default value, e.g.,::
 
-           def llk(self, mu, scale=1):
+           def llk(self, y, mu, scale=1):
               ...
 
         You can check the implementation of the :class:`Gaussian` Family for an example.
@@ -565,7 +571,7 @@ class Family:
         model's log-likelihood (i.e., ``two_par=True``) must pass as key-word argument a ``scale``
         parameter with a default value, e.g.,::
 
-           def lp(self, mu, scale=1):
+           def lp(self, y, mu, scale=1):
               ...
 
         You can check the implementation of the :class:`Gaussian` Family for an example.
@@ -622,6 +628,135 @@ class Family:
         :rtype: np.ndarray
         """
         pass
+
+    def dllkdcoef(
+        self, coef: np.ndarray, y: np.ndarray, X: scp.sparse.csc_array, scale: float = 1
+    ) -> np.ndarray:
+        """Returns vector of partial derivatives of the log-likelihood with respect to ``coef``
+        evaluated at the (optional) ``scale`` parameter.
+
+        Applies to all families, so does not have to be re-implemented by families implementing
+        the base class. Derivation follows from IRLS routine and is given for example in Wood
+        (2017).
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
+        :type coef: np.ndarray
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param X: Model matrix used by a model
+        :type X: scp.sparse.csc_array
+        :param scale: Optional scale parameter if ``self.twopar is True``, defaults to 1
+        :type scale: float, optional
+        :return: The Gradient of the log-likelihood evaluated at ``coef`` as numpy array of
+            shape (-1,1).
+        :rtype: np.ndarray
+        """
+
+        # Compute mean
+        mu = self.link.fi(X @ coef)
+
+        # Get derivative of link and variance function at ``mu``
+        dy1 = self.link.dy1(mu)
+        V = self.V(mu)
+
+        # Compute gradient
+        with warnings.catch_warnings():  # Divide by zero or invalid value in multiply
+            warnings.simplefilter("ignore")
+            G = (y - mu) / (dy1 * V)
+        G[np.isnan(G) | np.isinf(G)] = 0
+        grad = np.sum(G * X, axis=0).reshape(-1, 1) / scale
+
+        return grad
+
+    def dllkdlscale(
+        self, coef: np.ndarray, y: np.ndarray, X: scp.sparse.csc_array, scale: float = 1
+    ) -> float:
+        """Returns partial derivative of the log-likelihood with respect to ``log(scale)`` if this
+        family has a scale parameter (i.e., if ``self.twopar is True``). Otherwise this function
+        returns zero.
+
+        Base-class implementation relies on finite differencing to compute the required partial
+        derivative. For efficiency reasons, families inheriting from the base class should
+        implement an analytic solution. Note however, that this function is only used by the
+        mcmc samplers and thus this is only necessary if you want to perform fully Bayesian
+        inference.
+
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
+        :type coef: np.ndarray
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param X: Model matrix used by a model
+        :type X: scp.sparse.csc_array
+        :param scale: Optional scale parameter if ``self.twopar is True``, defaults to 1
+        :type scale: float, optional
+        :return: The partial derivative of the log-likelihood with respect to ``log(scale)`` if
+            this family has a scale parameter, otherwise zero.
+        :rtype: None | float
+        """
+
+        if self.twopar is True:
+            # Compute mean and log-scale
+            mu = self.link.fi(X @ coef)
+            lscale = np.log(scale)
+
+            def llk_wrap(x: float) -> float:
+
+                return self.llk(y, mu, scale=np.exp(x[0]))
+
+            deriv = scp.optimize.approx_fprime(np.array([lscale]), llk_wrap)
+            return deriv[0]
+
+        return 0.0
+
+    def d2llkd2lscale(
+        self, coef: np.ndarray, y: np.ndarray, X: scp.sparse.csc_array, scale: float = 1
+    ) -> float:
+        """Returns second partial derivative of the log-likelihood with respect to ``log(scale)``
+        if this family has a scale parameter (i.e., if ``self.twopar is True``). Otherwise this
+        function returns zero.
+
+        Base-class implementation relies on finite differencing to compute the required partial
+        derivative. For efficiency reasons, families inheriting from the base class should
+        implement an analytic solution. Note however, that this function is only used by the
+        mcmc samplers (and only once) and thus this is only necessary if you want to perform fully
+        Bayesian inference.
+
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
+        :type coef: np.ndarray
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param X: Model matrix used by a model
+        :type X: scp.sparse.csc_array
+        :param scale: Optional scale parameter if ``self.twopar is True``, defaults to 1
+        :type scale: float, optional
+        :return: The second partial derivative of the log-likelihood with respect to ``log(scale)``
+            if this family has a scale parameter, otherwise zero.
+        :rtype: None | float
+        """
+
+        if self.twopar is True:
+            mu = self.link.fi(X @ coef)
+            lscale = np.log(scale)
+
+            def llk_wrap(x: float) -> float:
+
+                return self.llk(y, mu, scale=np.exp(x[0]))
+
+            H = scp.differentiate.hessian(
+                lambda r: np.apply_along_axis(llk_wrap, axis=0, arr=r),
+                np.array([lscale]),
+            )
+
+            return H.ddf[0, 0]
+
+        return 0.0
 
 
 class Binomial(Family):
@@ -755,7 +890,7 @@ class Binomial(Family):
         :rtype: float
         """
         # y is observed proportion of success
-        return sum(self.lp(y, mu))[0]
+        return np.sum(self.lp(y, mu))
 
     def deviance(self, y: np.ndarray, mu: np.ndarray) -> float:
         """
@@ -875,7 +1010,7 @@ class Gaussian(Family):
         """
         return np.zeros_like(mu)
 
-    def lp(self, y: np.ndarray, mu: np.ndarray, sigma: float = 1) -> np.ndarray:
+    def lp(self, y: np.ndarray, mu: np.ndarray, scale: float = 1) -> np.ndarray:
         """Log-probability of observing every proportion in :math:`\\mathbf{y}` under their
         respective Normal with mean = :math:`\\boldsymbol{\\mu}`.
 
@@ -888,15 +1023,15 @@ class Gaussian(Family):
         :param mu: A numpy array containing the predicted mean for the response distribution
             corresponding to each observation.
         :type mu: np.ndarray
-        :param sigma: The (estimated) sigma parameter, defaults to 1
-        :type sigma: float, optional
+        :param scale: The (estimated) sigma (variance) parameter, defaults to 1
+        :type scale: float, optional
         :return: a N-dimensional vector containing the log-probability of observing each data-point
             under the current model.
         :rtype: np.ndarray
         """
-        return scp.stats.norm.logpdf(y, loc=mu, scale=math.sqrt(sigma))
+        return scp.stats.norm.logpdf(y, loc=mu, scale=math.sqrt(scale))
 
-    def llk(self, y: np.ndarray, mu: np.ndarray, sigma: float = 1) -> float:
+    def llk(self, y: np.ndarray, mu: np.ndarray, scale: float = 1) -> float:
         """log-probability of data under given model. Essentially sum over all elements in the
         vector returned by the :func:`lp` method.
 
@@ -909,12 +1044,12 @@ class Gaussian(Family):
         :param mu: A numpy array containing the predicted mean for the response distribution
             corresponding to each observation.
         :type mu: np.ndarray
-        :param sigma: The (estimated) sigma parameter, defaults to 1
-        :type sigma: float, optional
+        :param scale: The (estimated) sigma (variance) parameter, defaults to 1
+        :type scale: float, optional
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
-        return sum(self.lp(y, mu, sigma))[0]
+        return np.sum(self.lp(y, mu, scale))
 
     def deviance(self, y: np.ndarray, mu: np.ndarray) -> float:
         """Deviance of the model under this family: 2 * (llk_max - llk_c) * scale
@@ -1070,7 +1205,7 @@ class Gamma(Family):
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
-        return sum(self.lp(y, mu, scale))[0]
+        return np.sum(self.lp(y, mu, scale))
 
     def D(self, y: np.ndarray, mu: np.ndarray) -> np.ndarray:
         """Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
@@ -1226,7 +1361,7 @@ class InvGauss(Family):
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
-        return sum(self.lp(y, mu, scale))[0]
+        return np.sum(self.lp(y, mu, scale))
 
     def D(self, y: np.ndarray, mu: np.ndarray) -> np.ndarray:
         """Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
@@ -1368,7 +1503,7 @@ class Poisson(Family):
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
-        return sum(self.lp(y, mu))[0]
+        return np.sum(self.lp(y, mu))
 
     def D(self, y: np.ndarray, mu: np.ndarray) -> np.ndarray:
         """Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
@@ -1438,6 +1573,898 @@ class Poisson(Family):
         mu = gmu * norm
 
         return mu
+
+
+class ExtendedFamily(Family):
+    """
+    Base class to be implemented by any "extended family" member. This family, defined by
+    Wood et al. (2016) essentially includes any model which we can estimate via iterative
+    reweighted least-squares. Likelihood can have additional parameters beyond scale and mean
+    which can be estimated along model coefficients (see ``theta`` parameter).
+
+    References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+        Smooth Models.
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+        Edition (2nd ed.).
+
+    :param link: The link function to be used by the model of the mean of this family.
+    :type link: Link
+    :param theta: Any additional parameters of the likelihood (**inculding any required scale
+        parameter**). Array needs to be of shape (-1,1). Setting this to None means the parameters
+        have to be estimated.
+    :type theta: float or np.ndarray, optional
+    :ivar None | np.ndarray theta: The (estimated) extra parameters of the log-likelihood.
+        Each implementation of this class must initalize these if not provided (i.e., by
+        implementing the ``init_theta`` method) and calls to :func:`GAMM.fit` will overwrite this
+        attribute if the initial value for ``theta`` passed to the constructor was None.
+        Defaults to None
+    """
+
+    def __init__(
+        self,
+        link: Link,
+        theta: None | np.ndarray = None,
+    ):
+        super().__init__(link, False, 1)
+        self.est_theta = theta is None
+        self.theta = theta
+
+        if self.theta is None:
+            self.theta = self.init_theta()
+
+    def init_theta(self) -> np.ndarray:
+        """Function to initialize ``theta``, the extra parameters of the log-likelihood, if no value
+        (i.e., ``None``) was passed to the constructor.
+
+        Take a look at the :class:`ScaledT` implementation as an example.
+
+        :return: Any additional parameters of the likelihood (``theta``). Array needs to be of shape
+            (-1,1).
+        :rtype: np.ndarray
+        """
+        pass
+
+    def V(self, mu: np.ndarray, theta: None | np.ndarray = None) -> np.ndarray:
+        """
+        The variance function (of the mean; see Wood, 2017, 3.1.2) for an extended family.
+
+        Take a look at the :class:`ScaledT` implementation as an example.
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Any additional parameters of the likelihood. Array needs to be of shape
+            (-1,1). When this is set to None, ``self.theta`` should be used.
+        :type theta: None | np.ndarray, optional
+        :return: a N-dimensional vector of shape (-1,1) containing the variance function
+            evaluated for each mean
+        :rtype: np.ndarray
+        """
+        pass
+
+    def dVy1(
+        self, mu: np.ndarray, theta: None | np.ndarray = None
+    ) -> np.ndarray | None:
+        """
+        The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with
+        respect ot the mean. Optional function that might simply return None
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the
+            response distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Any additional parameters of the likelihood. Array needs to be of shape
+            (-1,1). When this is set to None, ``self.theta`` should be used.
+        :type theta: None | np.ndarray, optional
+        :return: a N-dimensional vector of shape (-1,1) containing the first derivative of
+            the variance function with respect to each mean or None
+        :rtype: np.ndarray | None
+        """
+        return None
+
+    def llk(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+    ) -> float:
+        """
+        log-probability of :math:`\\mathbf{y}` under this family with
+        mean = :math:`\\boldsymbol{\\mu}`. Essentially sum over all elements in the vector returned
+        by the :func:`lp` method.
+
+        Take a look at the :class:`ScaledT` implementation as an example.
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Any additional parameters of the likelihood. Array needs to be of shape
+            (-1,1). When this is set to None, ``self.theta`` should be used.
+        :type theta: None | np.ndarray, optional
+        :return: log-likelihood of the model under this family
+        :rtype: float
+        """
+        pass
+
+    def lp(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+    ) -> np.ndarray:
+        """
+        Log-probability of observing every value in :math:`\\mathbf{y}` under this family with
+        mean = :math:`\\boldsymbol{\\mu}`.
+
+        Take a look at the :class:`ScaledT` implementation as an example.
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Any additional parameters of the likelihood. Array needs to be of shape
+            (-1,1). When this is set to None, ``self.theta`` should be used.
+        :type theta: None | np.ndarray, optional
+        :return: a N-dimensional vector of shape (-1,1) containing the log-probability of observing
+            each data-point under the current model.
+        :rtype: np.ndarray
+        """
+        pass
+
+    def deviance(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+    ) -> float:
+        """
+        Deviance of the model under this family: 2 * (llk_max - llk_c) * scale
+        (Wood, 2017; Faraway, 2016).
+
+        Take a look at the :class:`ScaledT` implementation as an example.
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Any additional parameters of the likelihood. Array needs to be of shape
+            (-1,1). When this is set to None, ``self.theta`` should be used.
+        :type theta: None | np.ndarray, optional
+        :return: Deviance of the model under this family
+        :rtype: float
+        """
+        pass
+
+    def D(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+    ) -> np.ndarray:
+        """
+        Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016).
+
+        Take a look at the :class:`ScaledT` implementation as an example.
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Any additional parameters of the likelihood. Array needs to be of shape
+            (-1,1). When this is set to None, ``self.theta`` should be used.
+        :type theta: None | np.ndarray, optional
+        :return: a N-dimensional vector of shape (-1,1) containing the contribution of each
+            observation to the overall deviance.
+        :rtype: np.ndarray
+        """
+        pass
+
+    def dDdmu(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+    ) -> np.ndarray:
+        """
+        Computes derivative of the deviance **or twice the negative log-likelihood** with respect to
+        ``mu``.
+
+        Take a look at the :class:`ScaledT` implementation as an example.
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Any additional parameters of the likelihood. Array needs to be of shape
+            (-1,1). When this is set to None, ``self.theta`` should be used.
+        :type theta: None | np.ndarray, optional
+        :return: a N-dimensional vector of shape ``(len(mu),1)`` containing the derivatives of
+            the deviance with respect to ``mu`` for each observation.
+        :rtype: np.ndarray
+        """
+        pass
+
+    def d2Ddmu(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+    ) -> np.ndarray:
+        """
+        Computes second derivative of the deviance **or twice the negative log-likelihood** with
+        respect to ``mu``. This function is by default used directly during fitting, but can be
+        overwritten by implementing the ``Ed2Ddmu`` method. In that case, this function is only
+        called after estimation has been completed to get the observed hessian at the final
+        coefficient estimate.
+
+        Take a look at the :class:`ScaledT` implementation as an example.
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Any additional parameters of the likelihood. Array needs to be of shape
+            (-1,1). When this is set to None, ``self.theta`` should be used.
+        :type theta: None | np.ndarray, optional
+        :return: a N-dimensional vector of shape ``(len(mu),1)`` containing
+            the second derivative of the deviance with respect to ``mu`` for each observation.
+        :rtype: np.ndarray
+        """
+        pass
+
+    def Ed2Ddmu(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+    ) -> np.ndarray:
+        """
+        Computes expected second derivative of the deviance **or twice the negative log-likelihood**
+        with respect to ``mu``. This function is used during fitting, but by default simply falls
+        back to calling the ``d2Ddmu`` function to get the observed second derivatives.
+
+        Take a look at the :class:`ScaledT` implementation as an example.
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Any additional parameters of the likelihood. Array needs to be of shape
+            (-1,1). When this is set to None, ``self.theta`` should be used.
+        :type theta: None | np.ndarray, optional
+        :return: a N-dimensional vector of shape ``(len(mu),1)`` containing
+            the expected second derivatives of the deviance with respect to ``mu`` per observation.
+        :rtype: np.ndarray
+        """
+        return self.d2Ddmu(y, mu, theta)
+
+    def gradientLTheta(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+    ) -> np.ndarray:
+        """
+        Computes gradient of the log-likelihood with respect to ``self.theta``, given ``mu``.
+
+        Take a look at the :class:`ScaledT` implementation as an example.
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Any additional parameters of the likelihood. Array needs to be of shape
+            (-1,1). When this is set to None, ``self.theta`` should be used.
+        :type theta: None | np.ndarray, optional
+        :return: a N-dimensional vector of shape ``(len(self.theta),1)`` containing the gradient of
+            the log-likelihood with respect to theta.
+        :rtype: np.ndarray
+        """
+        pass
+
+    def hessianLTheta(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+    ) -> np.ndarray:
+        """
+        Computes (expected) hessian of the log-likelihood with respect to ``self.theta``, given
+        ``mu``.
+
+        Take a look at the :class:`ScaledT` implementation as an example.
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Any additional parameters of the likelihood. Array needs to be of shape
+            (-1,1). When this is set to None, ``self.theta`` should be used.
+        :type theta: None | np.ndarray, optional
+        :return: a N-dimensional vector of shape ``(len(self.theta),len(self.theta))`` containing
+            the hessian of the log-likelihood with respect to theta.
+        :rtype: np.ndarray
+        """
+        pass
+
+
+class ScaledT(ExtendedFamily):
+    """
+    This class implements the scaled T family, based on the implementation in ``mgcv`` by
+    Natalya Pya.
+
+    Specifically, we assume that :math:`(y_i-\\mu_i)/\\phi) \\sim t_{\\nu}`, so that
+    :math:`\\phi` takes on the role of the scale parameter and :math:`\\nu` are the degrees of
+    freedom of the T-distribution. Note, that as :math:`\\nu \\to \\infty`, this family will behave
+    like a Normal distribution with standard deviation :math:`\\phi`.
+
+    Examples::
+
+       from mssm.models import *
+       from mssmViz.sim import *
+       from mssmViz.plot import *
+
+       # Simulate some data
+       sim_fit_dat = sim3(n=500, scale=2, c=0.0, family=Gaussian(), seed=1)
+
+       # Specify formula
+       sim_fit_formula = Formula(
+            lhs("y"),
+            [i(), f(["x0"]), f(["x1"]), f(["x2"]), f(["x3"])],
+            data=sim_fit_dat,
+        )
+
+        # Now fit a model assuming a scaled T family
+        model = GAMM(sim_fit_formula, ScaledT(link=Identity()))
+        model.fit()
+
+    References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+        Smooth Models.
+     - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+        Edition (2nd ed.).
+     - ``scat`` Family implemented in ``mgcv`` by Natalya Pya, see: \
+        https://github.com/cran/mgcv/blob/master/R/efam.r#L2195
+
+    :param link: The link function to be used by the model of the mean of this family.
+    :type link: Link
+    :param theta: An optional array containing an estimate of the log of the scale parameter and
+        an estimate of the log of :math:`\\nu`. Setting this to None means both parameters
+        have to be estimated.
+    :type theta: None | np.ndarray, optional
+    :ivar None | np.ndarray theta: The latest estimate of ``theta``. Calls to :func:`GAMM.fit` will
+        overwrite this attribute if the initial value for ``theta`` passed to
+        the constructor was None. Defaults to ``np.array([0.5, 10]).reshape(-1, 1)`` or whatever
+        is passed to the constructor for ``theta``.
+    """
+
+    def __init__(self, link, theta=None, min_df=3):
+        super().__init__(link, theta)
+        self.min_df = min_df
+
+    def init_theta(self) -> np.ndarray:
+        """Function that automatically initializes ``theta`` to the default.
+
+        :return: Default value for theta: ``np.array([0.5, 10]).reshape(-1, 1)``
+        :rtype: np.ndarray
+        """
+        return np.array([0.5, 10]).reshape(-1, 1)
+
+    def V(self, mu: np.ndarray, theta: None | np.ndarray = None) -> np.ndarray:
+        """
+        The variance function (of the mean; see Wood, 2017, 3.1.2) for the scaled T family.
+
+        The variance function is computed as in the ``scat`` implementation available in
+        ``mgcv`` by Natalya Pya. Specifically, function returns :math:`\\phi^2 * \\nu / (\\nu - 2)`
+        for each element in ``mu``.
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Optionally, the latest estimate of ``theta``, containing an estimate of
+            the log of the scale parameter and the log of the degrees of freedom parameter.
+            Array needs to be of shape (-1,1). When this is set to None, ``self.theta`` is used.
+        :type theta: None | np.ndarray, optional
+        :return: a N-dimensional vector of shape (-1,1) containing the variance function
+            evaluated for each mean
+        :rtype: np.ndarray
+        """
+
+        # Get theta
+        if theta is None:
+            theta = self.theta
+
+        # Transform to DoF parameter nu and scale parameter phi
+        phi = np.exp(theta[0, 0])
+        nu = np.exp(theta[1, 0]) + self.min_df
+
+        return np.ones_like(mu) * (np.power(phi, 2) * nu / (nu - 2))
+
+    def lp(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+    ) -> np.ndarray:
+        """
+        Log-probability of observing every value in :math:`\\mathbf{y}` under this family with
+        mean = :math:`\\boldsymbol{\\mu}`.
+
+        Log-likelihood contributions are computed as in the ``scat`` implementation available in
+        ``mgcv`` by Natalya Pya.
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+         - ``scat`` Family implemented in ``mgcv`` by Natalya Pya, see: \
+            https://github.com/cran/mgcv/blob/master/R/efam.r#L2195
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Optionally, the latest estimate of ``theta``, containing an estimate of
+            the log of the scale parameter and the log of the degrees of freedom parameter.
+            Array needs to be of shape (-1,1). When this is set to None, ``self.theta`` is used.
+        :type theta: None | np.ndarray, optional
+        :return: a N-dimensional vector of shape (-1,1) containing the log-probability of observing
+            each data-point under the current model.
+        :rtype: np.ndarray
+        """
+        # Get theta
+        if theta is None:
+            theta = self.theta
+
+        # Transform to DoF parameter nu and scale parameter phi
+        phi = np.exp(theta[0, 0])
+        nu = np.exp(theta[1, 0]) + self.min_df
+
+        # Now can compute llk for each obs
+        lp = (
+            -scp.special.gammaln((nu + 1) / 2)
+            + scp.special.gammaln(nu / 2)
+            + np.log(phi * np.power(np.pi * nu, 0.5))
+            + (nu + 1) * np.log1p(np.power((y - mu) / phi, 2) / nu) / 2
+        )
+        return -1 * lp
+
+    def llk(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+    ) -> float:
+        """
+        log-probability of :math:`\\mathbf{y}` under this family with
+        mean = :math:`\\boldsymbol{\\mu}`. Essentially sum over all elements in the vector returned
+        by the :func:`lp` method.
+
+        Log-likelihood is computed as in the ``scat`` implementation available in
+        ``mgcv`` by Natalya Pya.
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+         - ``scat`` Family implemented in ``mgcv`` by Natalya Pya, see: \
+            https://github.com/cran/mgcv/blob/master/R/efam.r#L2195
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Optionally, the latest estimate of ``theta``, containing an estimate of
+            the log of the scale parameter and the log of the degrees of freedom parameter.
+            Array needs to be of shape (-1,1). When this is set to None, ``self.theta`` is used.
+        :type theta: None | np.ndarray, optional
+        :return: log-likelihood of the model under this family
+        :rtype: float
+        """
+        return np.sum(self.lp(y, mu, theta))
+
+    def D(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+    ) -> np.ndarray:
+        """
+        Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016).
+
+        Deviance contributions are computed as in the ``scat`` implementation available in
+        ``mgcv`` by Natalya Pya.
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+         - ``scat`` Family implemented in ``mgcv`` by Natalya Pya, see: \
+            https://github.com/cran/mgcv/blob/master/R/efam.r#L2195
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Optionally, the latest estimate of ``theta``, containing an estimate of
+            the log of the scale parameter and the log of the degrees of freedom parameter.
+            Array needs to be of shape (-1,1). When this is set to None, ``self.theta`` is used.
+        :type theta: None | np.ndarray, optional
+        :return: a N-dimensional vector of shape (-1,1) containing the contribution of each
+            observation to the overall deviance.
+        :rtype: np.ndarray
+        """
+
+        # Get theta
+        if theta is None:
+            theta = self.theta
+
+        # Transform to DoF parameter nu and scale parameter phi
+        phi = np.exp(theta[0, 0])
+        nu = np.exp(theta[1, 0]) + self.min_df
+
+        D = (nu + 1) * np.log1p(np.power((y - mu) / phi, 2) / nu)
+        return D
+
+    def deviance(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+    ) -> float:
+        """
+        Deviance of the model under this family: 2 * (llk_max - llk_c) * scale
+        (Wood, 2017; Faraway, 2016).
+
+        Deviance is computed as in the ``scat`` implementation available in ``mgcv`` by
+        Natalya Pya.
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+         - ``scat`` Family implemented in ``mgcv`` by Natalya Pya, see: \
+            https://github.com/cran/mgcv/blob/master/R/efam.r#L2195
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Optionally, the latest estimate of ``theta``, containing an estimate of
+            the log of the scale parameter and the log of the degrees of freedom parameter.
+            Array needs to be of shape (-1,1). When this is set to None, ``self.theta`` is used.
+        :type theta: None | np.ndarray, optional
+        :return: Deviance of the model under this family
+        :rtype: float
+        """
+
+        return np.sum(self.D(y, mu, theta))
+
+    def dDdmu(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+    ) -> np.ndarray:
+        """
+        Computes derivative of the deviance with respect to ``mu``.
+
+        Derivatives are computed as in the ``scat`` implementation available in ``mgcv`` by
+        Natalya Pya.
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+         - ``scat`` Family implemented in ``mgcv`` by Natalya Pya, see: \
+            https://github.com/cran/mgcv/blob/master/R/efam.r#L2195
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Optionally, the latest estimate of ``theta``, containing an estimate of
+            the log of the scale parameter and the log of the degrees of freedom parameter.
+            Array needs to be of shape (-1,1). When this is set to None, ``self.theta`` is used.
+        :type theta: None | np.ndarray, optional
+        :return: a N-dimensional vector of shape ``(len(mu),1)`` containing the derivatives of
+            the deviance with respect to ``mu`` for each observation.
+        :rtype: np.ndarray
+        """
+
+        # Get theta
+        if theta is None:
+            theta = self.theta
+
+        # Transform to DoF parameter nu and scale parameter phi
+        phi = np.exp(theta[0, 0])
+        nu = np.exp(theta[1, 0]) + self.min_df
+
+        # Get gradient of deviance
+        ymu = y - mu
+        dDdmu = ((nu + 1) * ymu) / (
+            nu * (np.power(phi, 2) * (1 + np.power(ymu / phi, 2) / nu))
+        )
+        return -2 * dDdmu
+
+    def d2Ddmu(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+    ) -> np.ndarray:
+        """
+        Computes second derivative of the deviance with respect to ``mu``. This function is only
+        called after estimation has been completed to get the observed hessian at the final
+        coefficient estimate.
+
+        Derivatives are computed as in the ``scat`` implementation available in ``mgcv`` by
+        Natalya Pya.
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+         - ``scat`` Family implemented in ``mgcv`` by Natalya Pya, see: \
+            https://github.com/cran/mgcv/blob/master/R/efam.r#L2195
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Optionally, the latest estimate of ``theta``, containing an estimate of
+            the log of the scale parameter and the log of the degrees of freedom parameter.
+            Array needs to be of shape (-1,1). When this is set to None, ``self.theta`` is used.
+        :type theta: None | np.ndarray, optional
+        :return: a N-dimensional vector of shape ``(len(mu),1)`` containing
+            the second derivative of the deviance with respect to ``mu`` for each observation.
+        :rtype: np.ndarray
+        """
+
+        # Get theta
+        if theta is None:
+            theta = self.theta
+
+        # Transform to DoF parameter nu and scale parameter phi
+        phi = np.exp(theta[0, 0])
+        nu = np.exp(theta[1, 0]) + self.min_df
+
+        ymu = y - mu
+        sig2a = np.power(phi, 2) * (1 + np.power(ymu / phi, 2) / nu)
+        d2Ddmu = (nu + 1) * (1 / (nu * sig2a) - 2 * np.power(ymu / (nu * sig2a), 2))
+        return 2 * d2Ddmu
+
+    def Ed2Ddmu(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+    ) -> np.ndarray:
+        """
+        Computes expected second derivative of the deviance with respect to ``mu``.
+        This function is used during fitting, i.e., estimation is based on Fisher weights.
+
+        Derivatives are computed as in the ``scat`` implementation available in ``mgcv`` by
+        Natalya Pya.
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+         - ``scat`` Family implemented in ``mgcv`` by Natalya Pya, see: \
+            https://github.com/cran/mgcv/blob/master/R/efam.r#L2195
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Optionally, the latest estimate of ``theta``, containing an estimate of
+            the log of the scale parameter and the log of the degrees of freedom parameter.
+            Array needs to be of shape (-1,1). When this is set to None, ``self.theta`` is used.
+        :type theta: None | np.ndarray, optional
+        :return: a N-dimensional vector of shape ``(len(mu),1)`` containing
+            the expected second derivatives of the deviance with respect to ``mu`` per observation.
+        :rtype: np.ndarray
+        """
+
+        # Get theta
+        if theta is None:
+            theta = self.theta
+
+        # Transform to DoF parameter nu and scale parameter phi
+        phi = np.exp(theta[0, 0])
+        nu = np.exp(theta[1, 0]) + self.min_df
+
+        Ed2Ddmu = np.ones_like(y) * (nu + 1) / np.power(phi, 2) / (nu + 3)
+        return 2 * Ed2Ddmu
+
+    def gradientLTheta(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+    ) -> np.ndarray:
+        """
+        Computes gradient of the log-likelihood with respect to ``self.theta``, given ``mu``.
+
+        Gradient is based on the derivatives of the deviance and saturated log-likelihood with
+        respect to theta. The latter are computed as in the ``scat`` implementation available in
+        ``mgcv`` by Natalya Pya.
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+         - ``scat`` Family implemented in ``mgcv`` by Natalya Pya, see: \
+            https://github.com/cran/mgcv/blob/master/R/efam.r#L2195
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Optionally, the latest estimate of ``theta``, containing an estimate of
+            the log of the scale parameter and the log of the degrees of freedom parameter.
+            Array needs to be of shape (-1,1). When this is set to None, ``self.theta`` is used.
+        :type theta: None | np.ndarray, optional
+        :return: a N-dimensional vector of shape ``(len(self.theta),1)`` containing the gradient of
+            the log-likelihood with respect to theta.
+        :rtype: np.ndarray
+        """
+
+        # Get theta
+        if theta is None:
+            theta = self.theta
+
+        # Transform to DoF parameter nu and scale parameter phi
+        phi = np.exp(theta[0, 0])
+        nu = np.exp(theta[1, 0]) + self.min_df
+
+        # Compute gradient of deviance with respect to theta
+        grad = np.zeros(2).reshape(-1, 1)
+
+        a = 1 + np.power((y - mu) / phi, 2) / nu
+        ymu = y - mu
+        nu1ymu = (nu + 1) * ymu
+        nusig2a = nu * np.power(phi, 2) * a
+        f = nu1ymu / nusig2a
+        fymu = f * ymu
+        # print(fymu)
+        grad[0, 0] = np.sum(-2 * fymu)
+        grad[1, 0] = np.sum((nu - self.min_df) * (np.log(a) - fymu / nu))
+
+        grad *= 0.5
+
+        # grad is now grad(l_sat) - grad(llk)
+
+        # Now need to adjust gradient by subtracting gradient of saturated llk with respect to theta
+        grad[0, 0] += len(y)
+        grad[1, 0] -= len(y) * (
+            (nu - self.min_df) * scp.special.digamma((nu + 1) / 2) / 2
+            - (nu - self.min_df) * scp.special.digamma(nu / 2) / 2
+            - 0.5 * ((nu - self.min_df) / nu)
+        )
+
+        return -1 * grad
+
+    def hessianLTheta(
+        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+    ) -> np.ndarray:
+        """
+        Computes hessian of the log-likelihood with respect to ``self.theta``, given
+        ``mu``.
+
+        Hessian is based on the derivatives of the deviance and saturated log-likelihood with
+        respect to theta. The latter are computed as in the ``scat`` implementation available in
+        ``mgcv`` by Natalya Pya.
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+            Smooth Models.
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+         - ``scat`` Family implemented in ``mgcv`` by Natalya Pya, see: \
+            https://github.com/cran/mgcv/blob/master/R/efam.r#L2195
+
+        :param y: A numpy array of shape (-1,1) containing each observation.
+        :type y: np.ndarray
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
+            distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Optionally, the latest estimate of ``theta``, containing an estimate of
+            the log of the scale parameter and the log of the degrees of freedom parameter.
+            Array needs to be of shape (-1,1). When this is set to None, ``self.theta`` is used.
+        :type theta: None | np.ndarray, optional
+        :return: a N-dimensional vector of shape ``(len(self.theta),len(self.theta))`` containing
+            the hessian of the log-likelihood with respect to theta.
+        :rtype: np.ndarray
+        """
+
+        # Get theta
+        if theta is None:
+            theta = self.theta
+
+        # Transform to DoF parameter nu and scale parameter phi
+        phi = np.exp(theta[0, 0])
+        nu = np.exp(theta[1, 0]) + self.min_df
+
+        a = 1 + np.power((y - mu) / phi, 2) / nu
+        ymu = y - mu
+        nu1ymu = (nu + 1) * ymu
+        nusig2a = nu * np.power(phi, 2) * a
+        f = nu1ymu / nusig2a
+        f1 = ymu / nusig2a
+        fymu = f * ymu
+        f1ymu = f1 * ymu
+
+        H = np.zeros((2, 2))
+
+        # Compute hessian of deviance with respect to theta
+        d2Ddphi = 4 * fymu * (1 - f1ymu)
+        d2Ddnu = (nu - self.min_df) * np.log(a) + ((nu - self.min_df) / nu) * np.power(
+            ymu, 2
+        ) * (
+            -2 * (nu - self.min_df)
+            - (nu + 1)
+            + 2 * (nu + 1) * ((nu - self.min_df) / nu)
+            - (nu + 1) * ((nu - self.min_df) / nu) * f1ymu
+        ) / nusig2a
+        dDdphidnu = (
+            2
+            * (fymu - ymu * (ymu / (np.power(phi, 2) * a)) - (fymu * f1ymu))
+            * ((nu - self.min_df) / nu)
+        )
+        H[0, 0] = np.sum(d2Ddphi)
+        H[1, 1] = np.sum(d2Ddnu)
+        H[0, 1] = H[1, 0] = np.sum(dDdphidnu)
+
+        H *= 0.5
+
+        # Now H is H of sat llk - H of llk
+
+        # Now need to adjust hessian by subtracting hessian of saturated llk with respect to theta
+        H[1, 1] -= len(y) * (
+            np.power(nu - self.min_df, 2) * scp.special.polygamma(1, (nu + 1) / 2) / 4
+            + (nu - self.min_df) * scp.special.digamma((nu + 1) / 2) / 2
+            - np.power(nu - self.min_df, 2) * scp.special.polygamma(1, nu / 2) / 4
+            - (nu - self.min_df) * scp.special.digamma(nu / 2) / 2
+            + 0.5 * np.power((nu - self.min_df) / nu, 2)
+            - 0.5 * ((nu - self.min_df) / nu)
+        )
+
+        return -1 * H
 
 
 class GAMLSSFamily:
@@ -1560,6 +2587,36 @@ class GAMLSSFamily:
         :return: a N-dimensional vector of shape (-1,1) containing the log cumulative probability
             of observing a value as extreme or less extreme for every data-point under the current
             model or None if this function is not implemented by the specific family.
+        :rtype: np.ndarray
+        """
+        return None
+
+    def rvs(
+        self, *mus: list[np.ndarray], size: int = 1, seed: int | None = 0
+    ) -> np.ndarray | None:
+        """Returns ``size`` random samples for each of the distributions parameterized by ``mus``.
+
+        **Note**, the returned array - if this function is implemented - will be of size
+        ``(size, mus[0].shape[0])``. I.e., ``size`` random samples will be obtained for each of
+        the ``mus[0].shape[0])`` distributions, all parameterized by their individual ``mus``.
+
+        **Important:** Families for which this function is not implemented can return None.
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param mus: A list including `self.n_par` lists - one for each parameter of the
+            distribution. Each of those lists contains a numpy array of shape (-1,1) holding the
+            expected value for a particular parmeter for each of the N observations.
+        :type mus: [np.ndarray]
+        :param size: Number of random samples to return per distribution. Defaults to 1.
+        :type size: int, optional
+        :param seed: Seed to use for random number generation. Defaults to 0.
+        :type seed: int, optional
+        :return: a numpy array of shape ``(size, mus[0].shape[0])`` containing random
+            samples from every distribution parameterized by their ``mus``. Can also return None if
+            this function is not implemented by the specific family.
         :rtype: np.ndarray
         """
         return None
@@ -1735,7 +2792,37 @@ class GAUMLSS(GAMLSSFamily):
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
-        return sum(self.lp(y, mu, sigma))[0]
+        return np.sum(self.lp(y, mu, sigma))
+
+    def rvs(
+        self, mu: np.ndarray, sigma: np.ndarray, size: int = 1, seed: int | None = 0
+    ) -> np.ndarray:
+        """Returns ``size`` random samples for each of the distributions parameterized by ``mu``
+        and ``sigma``.
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param mu: A numpy array containing the predicted mean for each response distribution.
+        :type mu: np.ndarray
+        :param sigma: A numpy array containing the predicted stdandard deviation for each response
+            distribution.
+        :type sigma: np.ndarray
+        :param size: Number of random samples to return per distribution. Defaults to 1.
+        :type size: int, optional
+        :param seed: Seed to use for random number generation. Defaults to 0.
+        :type seed: int, optional
+        :return: a numpy array of shape ``(size, mu[0].shape[0])`` containing random
+            samples from every distribution parameterized by ``mu`` and ``sigma``.
+        :rtype: np.ndarray
+        """
+        return scp.stats.norm.rvs(
+            size=(size, mu.shape[0]),
+            loc=mu.flatten(),
+            scale=sigma.flatten(),
+            random_state=seed,
+        )
 
     def get_resid(self, y: np.ndarray, mu: np.ndarray, sigma: np.ndarray) -> float:
         """Get standardized residuals for a Normal GAMMLSS model (Rigby & Stasinopoulos, 2005).
@@ -1919,7 +3006,7 @@ class MULNOMLSS(GAMLSSFamily):
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
-        return sum(self.lp(y, *mus))[0]
+        return np.sum(self.lp(y, *mus))
 
     def get_resid(self, y: np.ndarray, *mus: list[np.ndarray]) -> None:
         """Placeholder function for residuals of a Multinomial model - yet to be implemented.
@@ -2075,7 +3162,39 @@ class GAMMALS(GAMLSSFamily):
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
-        return sum(self.lp(y, mu, scale))[0]
+        return np.sum(self.lp(y, mu, scale))
+
+    def rvs(
+        self, mu: np.ndarray, scale: np.ndarray, size: int = 1, seed: int | None = 0
+    ) -> np.ndarray:
+        """Returns ``size`` random samples for each of the distributions parameterized by ``mu``
+        and ``scale``.
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param mu: A numpy array containing the predicted mean for each response distribution.
+        :type mu: np.ndarray
+        :param scale: A numpy array containing the predicted stdandard deviation for each response
+            distribution.
+        :type scale: np.ndarray
+        :param size: Number of random samples to return per distribution. Defaults to 1.
+        :type size: int, optional
+        :param seed: Seed to use for random number generation. Defaults to 0.
+        :type seed: int, optional
+        :return: a numpy array of shape ``(size, mu[0].shape[0])`` containing random
+            samples from every distribution parameterized by ``mu`` and ``scale``.
+        :rtype: np.ndarray
+        """
+        alpha = 1 / scale
+        beta = alpha / mu
+        return scp.stats.gamma.rvs(
+            size=(size, mu.shape[0]),
+            a=alpha.flatten(),
+            scale=(1 / beta.flatten()),
+            random_state=seed,
+        )
 
     def get_resid(self, y: np.ndarray, mu: np.ndarray, scale: np.ndarray) -> np.ndarray:
         """Get standardized residuals for a Gamma GAMMLSS model (Rigby & Stasinopoulos, 2005).
@@ -2152,14 +3271,23 @@ class GSMMFamily:
         Estimation and Selection of Large Multi-Level Statistical Models. \
         https://doi.org/10.48550/arXiv.2506.13132
 
-    :param pars: Number of parameters of the likelihood.
+    :param pars: Number of parameters of the likelihood for which an additive (mixed) model is
+        specified. **Note**, that extra parameters that are constant (and thus do not need an
+        extra :class:`mssm.src.python.formula.Formula` specified) but nevertheless need to be
+        estimated can be handled via the ``extra_coef`` argument.
     :type pars: int
     :param links: List of Link functions for each parameter of the likelihood,
         e.g., `links=[Identity(),LOG()]`.
     :type links: [Link]
-    :ivar int, optional extra_coef: Number of extra coefficients required by specific family or
-        ``None``. By default set to ``None`` and changed to ``int`` by specific families requiring
-        this.
+    :ivar int, optional extra_coef: Number of extra coefficients required by specific family for
+        parameters of the log-likelihood that are constant (i.e., not a function of predictor
+        variables) or ``None``. If this is not set to ``None``, ``mssm`` will automatically append
+        ``extra_coef`` elements to the coefficient vector passed to the log-likelihood and gradient
+        methods of this family. Additionally, ``coef_split_idx`` will be modified, so that the last
+        list of the split holds the ``extra_coef``. By default set to ``None`` and changed to
+        ``int`` by specific families requiring this.
+    :ivar list[any] llkargs: A list holding any extra arguments passed to the constructor via
+        ``llkargs``.
 
     """
 
@@ -2258,17 +3386,141 @@ class GSMMFamily:
         grad = scp.optimize.approx_fprime(coef.flatten(), llk_warp)
         return grad.reshape(-1, 1)
 
+    def jhessian(
+        self,
+        jcols: np.ndarray,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray | None],
+        Xs: list[scp.sparse.csc_array | None],
+        n_c: int = 1,
+    ) -> scp.sparse.csc_array:
+        """(Optional) method to compute a sparse approximation to the Hessian of the llk, containing
+        only the ``j`` columns and rows of the Hessian indexed by ``jcols``.
+
+        By default the method relies on a finite difference approximation to evaluate the ``j``
+        columns of the Hessian of the llk. Result is returned as symmetric sparse matrix.
+
+        :param jcols: Array holding indices of columns to approximate.
+        :type jcols: np.ndarray
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
+        :type coef: np.ndarray
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each paramter of the llk.
+        :type coef_split_idx: [int]
+        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
+            ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the
+            actual observed data is passed along via the first formula (so it is stored in
+            ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula,
+            then ``ys`` contains ``None`` at their indices to save memory.
+        :type ys: list[np.ndarray | None]
+        :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None``
+            at indices for matrices which were flagged as "do not build" via the ``build_mat``
+            argument of the :func:`mssm.models.GSMM.fit` method.
+        :type Xs: list[scp.sparse.csc_array | None]
+        :param n_c: Number of cores to use to parallelize computation over ``j`` cols, defaults to
+            1.
+        :type n_c: int, optional
+        :return: Finite difference approximation matrix which is symmetric sparse matrix with
+            ``jcols`` rows and columns set to finite difference approximation of columns of
+            Hessian of llk
+        :rtype: scp.sparse.csc_array
+        """
+
+        ccols = []
+
+        Hdat = []
+        Hrows = []
+        Hcols = []
+
+        Hdim = len(coef)
+
+        if HAS_MP and n_c > 1:
+            # Compute columns in parallel
+            def __d2llk(j):
+
+                def __d2llkj(r):
+                    # Function to evaluate Hessian column via finite difference approximation
+                    n_coef = copy.deepcopy(coef)
+                    n_coef[j] = r
+
+                    n_grad = self.gradient(n_coef, coef_split_idx, ys, Xs)
+
+                    return n_grad.flatten()
+
+                def vectorized_d2(r):
+                    return np.apply_along_axis(__d2llkj, axis=0, arr=r)
+
+                Hsk = scp.differentiate.jacobian(vectorized_d2, coef[j], order=2)
+
+                # Entire column j of negative hessian
+                Hj = Hsk.df.flatten()
+                return Hj
+
+            with mp.Pool(processes=n_c) as pool:
+                Hjs = pool.map(__d2llk, jcols)
+
+        for ji, j in enumerate(jcols):
+
+            if HAS_MP and n_c > 1:
+                # Simply extract
+                Hj = Hjs[ji]
+            else:
+
+                def __d2llkj(r):
+                    # Function to evaluate Hessian column via finite difference approximation
+                    n_coef = copy.deepcopy(coef)
+                    n_coef[j] = r
+
+                    n_grad = self.gradient(n_coef, coef_split_idx, ys, Xs)
+
+                    return n_grad.flatten()
+
+                def vectorized_d2(r):
+                    return np.apply_along_axis(__d2llkj, axis=0, arr=r)
+
+                Hsk = scp.differentiate.jacobian(vectorized_d2, coef[j], order=2)
+
+                # Entire column j of negative hessian
+                Hj = Hsk.df.flatten()
+
+            # Take out elements previously computed
+            Hjrows = np.arange(Hdim)
+            Hjc = np.delete(Hj, ccols)
+            Hjrows = np.delete(Hjrows, ccols)
+
+            Hdat.extend(Hjc)
+            Hrows.extend(Hjrows)
+            Hcols.extend(np.tile(j, len(Hjrows)))
+
+            # Keep symmetric - remove element on diagonal
+            ccols.append(j)
+
+            Hjcols = np.arange(Hdim)
+            Hjr = np.delete(Hj, ccols)
+            Hjcols = np.delete(Hjcols, ccols)
+
+            Hdat.extend(Hjr)
+            Hcols.extend(Hjcols)
+            Hrows.extend(np.tile(j, len(Hjcols)))
+
+        # Build sparse hessian approximation
+        Ha = scp.sparse.csc_array((Hdat, (Hrows, Hcols)), shape=(Hdim, Hdim))
+
+        return Ha
+
     def hessian(
         self,
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
         Xs: list[scp.sparse.csc_array | None],
-    ) -> scp.sparse.csc_array | None:
+    ) -> scp.sparse.csc_array:
         """Function to evaluate the hessian of the llk at current coefficient estimate ``coef``.
 
         Only has to be implemented if full Newton is to be used to estimate coefficients. If the
-        L-qEFS update by Krause et al. (in preparation) is to be used insetad, this method does not
+        L-qEFS update by Krause et al. (in preparation) is to be used instead, this method does not
         have to be implemented.
 
         References:
@@ -2299,7 +3551,7 @@ class GSMMFamily:
         :return: The Hessian of the log-likelihood evaluated at ``coef``.
         :rtype: scp.sparse.csc_array
         """
-        return None
+        return self.jhessian(np.arange(len(coef)), coef, coef_split_idx, ys, Xs)
 
     def get_resid(
         self,
@@ -2638,10 +3890,10 @@ class PropHaz(GSMMFamily):
 
     def get_resid(
         self,
-        coef,
-        coef_split_idx,
-        ys,
-        Xs,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray],
+        Xs: list[scp.sparse.csc_array],
         resid_type: str = "Martingale",
         reorder: np.ndarray | None = None,
     ) -> np.ndarray:
@@ -3051,3 +4303,526 @@ class PropHaz(GSMMFamily):
             -1, 1
         )
         return coef
+
+
+class MultiGauss(GSMMFamily):
+    """Family for multivariate additive models - a type of General Smooth model as discussed by
+    Wood, Pya, & Säfken (2016).
+
+    Implementation based on Supplementary materials H in Wood, Pya, & Säfken (2016). Currently,
+    these models can only be estimated via the ``L-qEFS`` update in ``mssm``.
+
+    Examples::
+
+        from mssm.models import *
+        from mssmViz.sim import *
+        from mssmViz.plot import *
+        import matplotlib.pyplot as plt
+
+        # Simulate data
+        sim_dat = sim16(500,seed=1134,correlate=True)
+
+        # We need formulas for each mean!
+        formulas = [
+            Formula(lhs("y0"), [i(), f(["x0"])], data=sim_dat),
+            Formula(lhs("y1"), [i(), f(["x1"]), f(["x2"])], data=sim_dat),
+            Formula(lhs("y2"), [i(), f(["x3"])], data=sim_dat)
+        ]
+
+        # Now define the model...
+        model = GSMM(formulas, MultiGauss(3,[Identity() for _ in range(3)]))
+
+        # ... and fit!
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            model.fit(method='qEFS')
+
+        # Get overview:
+        model.print_parametric_terms()
+        model.print_smooth_terms(p_values=True)
+
+        # And plot smooth function estimates for mean at index 1
+        plot(model,dist_par=1)
+
+    References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for \
+        General Smooth Models.
+     - Nocedal & Wright (2006). Numerical Optimization. Springer New York.
+
+    :param pars: Number of means (i.e., dimension of the multivariate Gaussian)
+    :type pars: int
+    :param links: List of link functions for the models of the means. For example
+        ``[Identity() for _ in range(pars)]``.
+    :type links: list[Link]
+    """
+
+    def __init__(self, pars: int, links: list[Link]):
+        super().__init__(pars, links)
+
+        # Elements of cholesky of precision matrix of multivariate Gaussian
+        self.extra_coef = int(pars * (pars + 1) / 2)
+
+    def getR(self, theta: np.ndarray) -> tuple[np.ndarray, float]:
+        """Returns transpose of Cholesky of precision matrix of multivariate Gaussian.
+
+        Examples::
+
+            from mssm.models import *
+            from mssmViz.sim import *
+            from mssmViz.plot import *
+            import matplotlib.pyplot as plt
+
+            # Simulate data
+            sim_dat = sim16(500,seed=1134,correlate=True)
+
+            # We need formulas for each mean!
+            formulas = [
+                Formula(lhs("y0"), [i(), f(["x0"])], data=sim_dat),
+                Formula(lhs("y1"), [i(), f(["x1"]), f(["x2"])], data=sim_dat),
+                Formula(lhs("y2"), [i(), f(["x3"])], data=sim_dat)
+            ]
+
+            # Now define the model...
+            model = GSMM(formulas, MultiGauss(3,[Identity() for _ in range(3)]))
+
+            # ... and fit!
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                model.fit(method='qEFS')
+
+            # Extract R
+            split_coef = np.split(model.coef,model.coef_split_idx)
+            theta = split_coef[-1].flatten()
+            R,log_det = model.family.getR(theta)
+
+            # R is the transpose of the Cholesky of the precision matrix. So to get the
+            # Covariance matrix of the multivariate Gaussian we need to compute:
+            Sigma = np.linalg.inv(R.T@R)
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for \
+            General Smooth Models.
+
+        :param theta: Flattened array holding inverses of log(variance) and co-variance parameters
+        :type theta: np.ndarray
+        :return: Transpose of Cholesky as a numpy array and log-determinant of Cholesky
+        :rtype: tuple[np.ndarray,float]
+        """
+
+        R = np.zeros((self.n_par, self.n_par))
+
+        dat_idx = 0
+        logdet = 0
+        for m in range(self.n_par):
+
+            R[m, m:] = theta[dat_idx : dat_idx + (self.n_par - m)]  # noqa: E203
+            logdet += R[m, m]
+            R[m, m] = np.exp(R[m, m])
+
+            dat_idx += self.n_par - m
+
+        return R, logdet
+
+    def llk(
+        self,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray],
+        Xs: list[scp.sparse.csc_array | None],
+    ) -> float:
+        """Computes the log-likelihood under a multivariate normal given coefficients in the
+        additive models of the mean and the log(variance) and co-variance parameters.
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for \
+            General Smooth Models.
+
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!). **Note** the last ``int(pars * (pars + 1) / 2)`` elements contain the
+            log(variance) and co-variance parameters.
+        :type coef: np.ndarray
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each mean and a final sub-set containing all log(variance) and
+            co-variance parameters.
+        :type coef_split_idx: [int]
+        :param ys: List containing the vectors of observations.
+        :type ys: [np.ndarray]
+        :param Xs: A list containing the sparse model matrices associated with the models of the
+            means. **Note**, this implementation allows to make use of the ``build_mat`` argument
+            of the :func:`GSMM.fit` method. Specifically, for means that have the same predictor
+            structure as the first mean we can set ``build_mat[idx] = False``. The code then
+            automatically assigns ``X[idx] = X[0]``. See the :func:`GSMM.fit` documentation for
+            more details.
+        :type Xs: [scp.sparse.csc_array | None]
+        """
+
+        # Extract extra info and fix model matrices, then compute mu and theta
+        y = np.concatenate(ys, axis=1)
+        mus, theta = self.predict(coef, coef_split_idx, Xs)
+
+        # Get transpose of Cholesky of precision
+        R, logdet = self.getR(theta)
+
+        # yR is of shape n * m
+        yR = (y - mus) @ R.T
+
+        # Compute np.sum([yR[oi, :] @ yR.T[:, oi] for oi in range(Xfix[0].shape[0])]) as shown
+        # by WPS (2016)
+        llk = -0.5 * (yR * yR).sum() + yR.shape[0] * logdet
+
+        return llk
+
+    def gradient(
+        self,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray],
+        Xs: list[scp.sparse.csc_array | None],
+    ) -> np.ndarray:
+        """Computes gradient of a multivariate normal containing partial derivatives with
+        respect to coefficients in the additive models of the mean and the log(variance) and
+        co-variance parameters.
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for \
+            General Smooth Models.
+
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!). **Note** the last ``int(pars * (pars + 1) / 2)`` elements contain the
+            log(variance) and co-variance parameters.
+        :type coef: np.ndarray
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each mean and a final sub-set containing all log(variance) and
+            co-variance parameters.
+        :type coef_split_idx: [int]
+        :param ys: List containing the vectors of observations.
+        :type ys: [np.ndarray]
+        :param Xs: A list containing the sparse model matrices associated with the models of the
+            means. **Note**, this implementation allows to make use of the ``build_mat`` argument
+            of the :func:`GSMM.fit` method. Specifically, for means that have the same predictor
+            structure as the first mean we can set ``build_mat[idx] = False``. The code then
+            automatically assigns ``X[idx] = X[0]``. See the :func:`GSMM.fit` documentation for
+            more details.
+        :type Xs: [scp.sparse.csc_array | None]
+        :return: The gradient at the current parameters estimates in a numpy array of shape (-1,1)
+        :rtype: np.ndarray
+        """
+
+        # Extract extra info and fix model matrices, then compute mu and theta
+        Xfix = [X if X is not None else Xs[0] for X in Xs]
+        y = np.concatenate(ys, axis=1)
+        split_coef = np.split(coef, coef_split_idx)
+        mus = np.concatenate(
+            [
+                self.links[mui].fi(Xfix[mui] @ split_coef[mui].reshape(-1, 1))
+                for mui in range(self.n_par)
+            ],
+            axis=1,
+        )
+        theta = split_coef[-1].flatten()
+
+        # Get transpose of Cholesky of precision
+        R, logdet = self.getR(theta)
+        Rdiag = R.diagonal()
+
+        # yR is of shape n * m
+        yR = (y - mus) @ R.T
+        # RRy is of shape m * n
+        RRy = R.T @ yR.T
+
+        total_idx = 0
+        n_obs = Xfix[0].shape[0]
+        grad = np.zeros(coef.shape[0])
+
+        # Compute np.sum([xbarR[oi, :] @ yR.T[:, oi] for oi in range(n_obs)]) as
+        # shown by WPS (2016)
+        for mui in range(self.n_par):
+
+            yRmui = RRy[mui, :]
+
+            grad[total_idx : total_idx + Xfix[mui].shape[1]] = (  # noqa: E203
+                Xfix[mui] * yRmui[:, None]
+            ).sum(axis=0)
+            total_idx += Xfix[mui].shape[1]
+
+        # Now partials for variance parameters
+        Rp = np.zeros((self.n_par, self.n_par))  # partial of transpose of cholesky
+        for mr in range(self.n_par):
+
+            for mc in range(mr, self.n_par):
+
+                # Diagonal elements are exp(theta) so partial differs
+                Rp[mr, mc] = Rdiag[mr] if mr == mc else 1
+
+                # Compute np.sum([yR[oi, :] @ Rpy[:, oi] for oi in range(n_obs)]) as shown
+                # by Wps (2016)
+                yRp = (y - mus) @ Rp.T
+                dldtheta = -np.sum(yR * yRp)
+
+                # Index function part from WPS (2016)
+                if mr == mc:
+                    dldtheta += n_obs
+
+                grad[total_idx] = dldtheta
+
+                # Reset partial of R
+                Rp[mr, mc] = 0
+                total_idx += 1
+
+        return grad.reshape(-1, 1)
+
+    def get_resid(
+        self,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray],
+        Xs: list[scp.sparse.csc_array | None],
+        mean: int | None = None,
+    ) -> np.ndarray:
+        """Computes Deviance residuals of a multivariate normal model given coefficients in the
+        additive models of the mean and the log(variance) and co-variance parameters.
+
+        If the model is correct, each column in the returned matrix should look like an i.i.d sample
+        of size ``N`` from :math:`N(0,1)`.
+
+        Examples::
+
+            from mssm.models import *
+            from mssmViz.sim import *
+            from mssmViz.plot import *
+            import matplotlib.pyplot as plt
+
+            # Simulate data
+            sim_dat = sim16(500,seed=1134,correlate=True)
+
+            # We need formulas for each mean!
+            formulas = [
+                Formula(lhs("y0"), [i(), f(["x0"])], data=sim_dat),
+                Formula(lhs("y1"), [i(), f(["x1"]), f(["x2"])], data=sim_dat),
+                Formula(lhs("y2"), [i(), f(["x3"])], data=sim_dat)
+            ]
+
+            # Now define the model...
+            model = GSMM(formulas, MultiGauss(3,[Identity() for _ in range(3)]))
+
+            # ... and fit!
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                model.fit(method='qEFS')
+
+            # Can now extract the residual matrix
+            res = model.get_resid()
+
+            # The ``get_resid`` method supports a ``mean`` key-word to extract univariate residuals
+            # for an individual mean. We can use mssmViz's plot function to visualize these
+            # for example for mean at index 2:
+            plot_val(model,gsmm_kwargs={"mean":2})
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for \
+            General Smooth Models.
+
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!). **Note** the last ``int(pars * (pars + 1) / 2)`` elements contain the
+            log(variance) and co-variance parameters.
+        :type coef: np.ndarray
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each mean and a final sub-set containing all log(variance) and
+            co-variance parameters.
+        :type coef_split_idx: [int]
+        :param ys: List containing the vectors of observations.
+        :type ys: [np.ndarray]
+        :param Xs: A list containing the sparse model matrices associated with the models of the
+            means. **Note**, this implementation allows to make use of the ``build_mat`` argument
+            of the :func:`GSMM.fit` method. Specifically, for means that have the same predictor
+            structure as the first mean we can set ``build_mat[idx] = False``. The code then
+            automatically assigns ``X[idx] = X[0]``. See the :func:`GSMM.fit` documentation for
+            more details.
+        :type Xs: [scp.sparse.csc_array | None]
+        :param mean: Optionally, the index of a specific mean for which to extract the residuals.
+            This allows to extract univariate residuals for a specific mean. Setting this to
+            ``None`` means the ``(N * self.n_par)`` residual matrix is returned where ``N`` is the
+            number of observations. Defaults to None
+        :type mean: int | None, optional
+        :return: Residual matrix. Will be a residual vector if ``mean`` is not set to None.
+        :rtype: np.ndarray
+        """
+        # Extract extra info and fix model matrices, then compute mu and theta
+        y = np.concatenate(ys, axis=1)
+        mus, theta = self.predict(coef, coef_split_idx, Xs)
+
+        # Get transpose of Cholesky of precision
+        R, logdet = self.getR(theta)
+
+        # Standard covariance transform for normal random variable:
+        res = (y - mus) @ R.T
+
+        if mean is not None:
+            res = res[:, mean].reshape(-1, 1)
+
+        return res
+
+    def predict(
+        self,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        Xs: list[scp.sparse.csc_array | None],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Gets the predicted means, variance, and co-variance parameters for given coefficients
+        and model matrices.
+
+        Examples::
+
+            from mssm.models import *
+            from mssmViz.sim import *
+            from mssmViz.plot import *
+            import matplotlib.pyplot as plt
+
+            # Simulate data
+            sim_dat = sim16(500,seed=1134,correlate=True)
+
+            # We need formulas for each mean!
+            formulas = [
+                Formula(lhs("y0"), [i(), f(["x0"])], data=sim_dat),
+                Formula(lhs("y1"), [i(), f(["x1"]), f(["x2"])], data=sim_dat),
+                Formula(lhs("y2"), [i(), f(["x3"])], data=sim_dat)
+            ]
+
+            # Now define the model...
+            model = GSMM(formulas, MultiGauss(3,[Identity() for _ in range(3)]))
+
+            # ... and fit!
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                model.fit(method='qEFS')
+
+            # Can now extract fitted means and theta vector
+            Xs = model.get_mmat()
+            mus, theta = model.family.predict(model.coef,model.coef_split_idx,Xs)
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for \
+            General Smooth Models.
+
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!). **Note** the last ``int(pars * (pars + 1) / 2)`` elements contain the
+            log(variance) and co-variance parameters.
+        :type coef: np.ndarray
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each mean and a final sub-set containing all log(variance) and
+            co-variance parameters.
+        :type coef_split_idx: [int]
+        :param ys: List containing the vectors of observations.
+        :type ys: [np.ndarray]
+        :param Xs: A list containing the sparse model matrices associated with the models of the
+            means. **Note**, this implementation allows to make use of the ``build_mat`` argument
+            of the :func:`GSMM.fit` method. Specifically, for means that have the same predictor
+            structure as the first mean we can set ``build_mat[idx] = False``. The code then
+            automatically assigns ``X[idx] = X[0]``. See the :func:`GSMM.fit` documentation for
+            more details.
+        :type Xs: [scp.sparse.csc_array | None]
+        :return: The predicted means as a ``(N, self.n_par)`` numpy array and the theta vector (as
+            a flattened numpy array), holding the variance and covariance parameters.
+        :rtype: tuple[np.ndarray, np.ndarray]
+        """
+
+        # Extract extra info and fix model matrices, then compute mu and theta
+        Xfix = [X if X is not None else Xs[0] for X in Xs]
+
+        split_coef = np.split(coef, coef_split_idx)
+        mus = np.concatenate(
+            [
+                self.links[mui].fi(Xfix[mui] @ split_coef[mui].reshape(-1, 1))
+                for mui in range(self.n_par)
+            ],
+            axis=1,
+        )
+        theta = split_coef[-1].flatten()
+
+        return mus, theta
+
+    def rvs(
+        self,
+        mus: np.ndarray,
+        theta: np.ndarray,
+        size: int = 1,
+        seed: int | None = 0,
+    ) -> np.ndarray:
+        """Computes Random samples from a multivariate normal model given coefficients in the
+        additive models of the mean and the log(variance) and co-variance parameters.
+
+        **Note**, the numpy array returned is of shape ``(size, self.n_pars, mus.shape[0])``. See
+        the return description for details.
+
+        Examples::
+
+            from mssm.models import *
+            from mssmViz.sim import *
+            from mssmViz.plot import *
+            import matplotlib.pyplot as plt
+
+            # Simulate data
+            sim_dat = sim16(500,seed=1134,correlate=True)
+
+            # We need formulas for each mean!
+            formulas = [
+                Formula(lhs("y0"), [i(), f(["x0"])], data=sim_dat),
+                Formula(lhs("y1"), [i(), f(["x1"]), f(["x2"])], data=sim_dat),
+                Formula(lhs("y2"), [i(), f(["x3"])], data=sim_dat)
+            ]
+
+            # Now define the model...
+            model = GSMM(formulas, MultiGauss(3,[Identity() for _ in range(3)]))
+
+            # ... and fit!
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                model.fit(method='qEFS')
+
+            # Can now extract fitted means and theta vector
+            Xs = model.get_mmat()
+            mus, theta = model.family.predict(model.coef,model.coef_split_idx,Xs)
+
+            # Can now generate random samples
+            # rvs will be of shape (10000, 3, 500) for 10000 samples, a 3 dimensional
+            # multivariate Gaussian, and 500 predicted mean vectors
+            rvs = model.family.rvs(mus,theta,size=10000)
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for \
+            General Smooth Models.
+
+        :param mus: Numpy array of shape ``(N, self.n_par)``, where ``self.n_par`` is the dimension
+            of the multivariate normal distributions.
+        :type mus: np.ndarray
+        :param theta: Flattened array holding inverses of log(variance) and co-variance parameters
+        :type theta: np.ndarray
+        :param size: Number of random samples to return per distribution. Defaults to 1.
+        :type size: int, optional
+        :param seed: Seed to use for random number generation. Defaults to 0.
+        :type seed: int, optional
+        :return: a numpy array of shape ``(size, self.n_pars, mus.shape[0])`` containing random
+            samples from ``i`` mulitvariate normal distributions with means ``mus[i,:]``.
+        :rtype: np.ndarray
+        """
+
+        rvs = np.zeros((size, self.n_par, mus.shape[0]))
+
+        # Get transpose of Cholesky of precision
+        R, _ = self.getR(theta)
+
+        cov = np.linalg.inv(R.T @ R)
+
+        for mui in range(mus.shape[0]):
+            rvs[:, :, mui] = scp.stats.multivariate_normal.rvs(
+                size=size,
+                mean=mus[mui, :],
+                cov=cov,
+                random_state=seed,
+            )
+
+            # Update seed
+            if seed is not None:
+                seed += 1
+
+        return rvs

@@ -15,7 +15,6 @@ from ..python.gamm_solvers import (
     managers,
     shared_memory,
     update_PIRLS,
-    PIRLS_pdat_weights,
     correct_coef_step,
     update_coef_gen_smooth,
     cpp_cholP,
@@ -24,12 +23,13 @@ from ..python.gamm_solvers import (
     calculate_edf,
     compute_eigen_perm,
     computeHSR1,
-    computeH,
     update_coef,
     deriv_transform_mu_eta,
     deriv_transform_eta_beta,
     translate_sparse,
     map_csc_to_eigen,
+    updateTheta,
+    compute_omega,
 )
 from ..python.terms import fs, rs
 
@@ -39,7 +39,14 @@ except ImportError:
     from .file_loading import mp
 
 from .repara import reparam
-from ..python.exp_fam import Family, Gaussian, Identity, GAMLSSFamily, GSMMFamily
+from ..python.exp_fam import (
+    Family,
+    ExtendedFamily,
+    Gaussian,
+    Identity,
+    GAMLSSFamily,
+    GSMMFamily,
+)
 from ..python.formula import Formula, LambdaTerm
 from ..python.penalties import split_shared_penalties, combine_shared_penalties
 import davies
@@ -48,14 +55,16 @@ from collections.abc import Callable
 
 
 def computeAr1Chol(formula: Formula, rho: float) -> tuple[scp.sparse.csc_array, float]:
-    """Computes the inverse of the cholesky of the (scaled) variance matrix of an ar1 model.
+    """Computes the inverse of the transpose of the cholesky of the co-variance (before scaling)
+    matrix of an ar1 model.
 
     :param formula: Formula of the model
     :type formula: Formula
     :param rho: ar1 weight.
     :type rho: float
-    :return: Tuple, containing banded inverse Cholesky as a scipy array and the correction needed
-        to get the likelihood of the ar1 model.
+    :return: Tuple, containing banded inverse Cholesky transpose as a scipy array and the correction
+        needed to get the log-likelihood of the ar1 model (i.e., the root of the log-determiant of
+        the inverse of the co-variance matrix (before scaling)).
     :rtype: tuple[scp.sparse.csc_array,float]
     """
 
@@ -74,10 +83,14 @@ def computeAr1Chol(formula: Formula, rho: float) -> tuple[scp.sparse.csc_array, 
 
         d0[sid0] = 1
         d1[sid1] = 0
+    else:
+        # Only correct first obs
+        d0[0] = 1
 
     Lrhoi = scp.sparse.diags_array([d0, d1], format="csr", offsets=[0, 1])
 
-    # Likelihood correction computed as done by mgcv. see:
+    # Log-likelihood correction computed as done by mgcv. Simply the root of the log-determinant of
+    # the inverse of the co-variance matrix (before scaling). see:
     # https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/bam.r#L2761
     llc = (n_y - (np.sum(start) if formula.series_id is not None else 1)) * np.log(
         1 / np.sqrt(1 - np.power(rho, 2))
@@ -88,9 +101,10 @@ def computeAr1Chol(formula: Formula, rho: float) -> tuple[scp.sparse.csc_array, 
 
 class GAMLSSGSMMFamily(GSMMFamily):
     """Implementation of the ``GSMMFamily`` class that uses only information about the likelihood to
-    estimate any implemented GAMMLSS model.
+    estimate any implemented ``GAMMLSS`` or ``GAMM`` model.
 
-    Allows to estimate any GAMMLSS as a GSMM via the L-qEFS & Newton update. Example::
+    Allows to estimate any ``GAMMLSS`` or ``GAMM`` as a GSMM via the L-qEFS & Newton update.
+    Example::
 
         # Simulate 500 data points
         sim_dat = sim3(500,2,c=1,seed=0,family=Gaussian(),binom_offset = 0, correlate=False)
@@ -160,15 +174,31 @@ class GAMLSSGSMMFamily(GSMMFamily):
             Models.
         - Nocedal & Wright (2006). Numerical Optimization. Springer New York.
 
-    :param pars: Number of parameters of the likelihood.
+    :param pars: Number of parameters of the likelihood for which an additive (mixed) model is
+        specified. **Example**: if the family is a member of :class:`Family` (i.e., the model to be
+        estimated is truly a GAMM), then this must be set to 1. For a :class:`GAMLSSFamily`
+        ``family``, this must instead be set to ``family.n_par``.
     :type pars: int
-    :param gammlss_family: Any implemented member of the :class:`GAMLSSFamily` class. Available
-        in ``self.llkargs[0]``.
-    :type gammlss_family: GAMLSSFamily
+    :param gammlss_family: Any implemented member of the :class:`GAMLSSFamily` or :class:`Family`
+        class. Available in ``self.llkargs[0]``.
+    :type gammlss_family: GAMLSSFamily | Family
     """
 
-    def __init__(self, pars: int, gammlss_family: GAMLSSFamily) -> None:
-        super().__init__(pars, gammlss_family.links, gammlss_family)
+    def __init__(self, pars: int, gammlss_family: GAMLSSFamily | Family) -> None:
+        super().__init__(
+            pars,
+            (
+                [gammlss_family.link]
+                if isinstance(gammlss_family, Family)
+                else gammlss_family.links
+            ),
+            gammlss_family,
+        )
+        if isinstance(gammlss_family, Family):
+            if isinstance(gammlss_family, ExtendedFamily):
+                self.extra_coef = len(gammlss_family.theta)  # Theta
+            elif gammlss_family.twopar:
+                self.extra_coef = 1  # Scale
 
     def llk(
         self,
@@ -199,11 +229,35 @@ class GAMLSSGSMMFamily(GSMMFamily):
         """
         y = ys[0]
         gammlss_family = self.llkargs[0]
-        split_coef = np.split(coef, coef_split_idx)
-        etas = [Xs[ei] @ split_coef[ei] for ei in range(len(Xs))]
-        mus = [self.links[ei].fi(etas[ei]) for ei in range(len(Xs))]
 
-        llk = gammlss_family.llk(y, *mus)
+        if isinstance(gammlss_family, Family):
+            # Handle GAMMs
+
+            if isinstance(gammlss_family, ExtendedFamily):
+                n_theta = self.extra_coef
+                mu = gammlss_family.link.fi(Xs[0] @ coef[:-n_theta])
+                theta = coef[-n_theta:]
+                llk = gammlss_family.llk(y, mu, theta=theta)
+
+            else:
+                if self.extra_coef is not None:
+                    # Two-par case - remember, scale coef is log of scale
+                    mu = gammlss_family.link.fi(Xs[0] @ coef[:-1])
+                    scale = np.exp(coef[-1, 0])
+                    llk = gammlss_family.llk(y, mu, scale=scale)
+
+                else:
+                    # Single parameter case
+                    mu = gammlss_family.link.fi(Xs[0] @ coef)
+                    llk = gammlss_family.llk(y, mu)
+        else:
+            # Handle GAMMLSS
+
+            split_coef = np.split(coef, coef_split_idx)
+            etas = [Xs[ei] @ split_coef[ei] for ei in range(len(Xs))]
+            mus = [self.links[ei].fi(etas[ei]) for ei in range(len(Xs))]
+
+            llk = gammlss_family.llk(y, *mus)
 
         if np.isnan(llk):
             return -np.inf
@@ -239,25 +293,59 @@ class GAMLSSGSMMFamily(GSMMFamily):
         :rtype: np.ndarray
         """
         y = ys[0]
-        split_coef = np.split(coef, coef_split_idx)
-        etas = [Xs[ei] @ split_coef[ei] for ei in range(len(Xs))]
-        mus = [self.links[ei].fi(etas[ei]) for ei in range(len(Xs))]
-
         # Get the Gamlss family
         gammlss_family = self.llkargs[0]
 
-        if gammlss_family.d_eta is False:
+        if isinstance(gammlss_family, Family):
+            # Handle GAMMs
 
-            d1eta, d2eta, d2meta = deriv_transform_mu_eta(y, mus, gammlss_family)
+            if isinstance(gammlss_family, ExtendedFamily):
+                n_theta = self.extra_coef
+                mu = gammlss_family.link.fi(Xs[0] @ coef[:-n_theta])
+                theta = coef[-n_theta:]
+                d1 = gammlss_family.dDdmu(y, mu, theta=theta)
+                ld1 = gammlss_family.link.dy1(d1)
+                grad_coef = -0.5 * ((d1 / ld1).T @ Xs[0]).T
+                grad_theta = gammlss_family.gradientLTheta(y, mu, theta=theta)
+                grad = np.concatenate((grad_coef, grad_theta), axis=0)
+
+            else:
+                if self.extra_coef is not None:
+                    # Two-par case - remember, scale coef is log of scale
+                    scale = np.exp(coef[-1, 0])
+                    grad_coef = gammlss_family.dllkdcoef(
+                        coef[:-1], y, Xs[0], scale=scale
+                    )
+                    grad_scale = np.array(
+                        [gammlss_family.dllkdlscale(coef[:-1], y, Xs[0], scale=scale)]
+                    ).reshape(-1, 1)
+                    grad = np.concatenate((grad_coef, grad_scale), axis=0)
+
+                else:
+                    # Single parameter case
+                    grad = gammlss_family.dllkdcoef(coef, y, Xs[0])
         else:
-            d1eta = [fd1(y, *mus) for fd1 in gammlss_family.d1]
-            d2eta = [fd2(y, *mus) for fd2 in gammlss_family.d2]
-            d2meta = [fd2m(y, *mus) for fd2m in gammlss_family.d2m]
+            # Handle GAMMLSS
 
-        # Get gradient
-        grad, _ = deriv_transform_eta_beta(d1eta, d2eta, d2meta, Xs, only_grad=True)
+            split_coef = np.split(coef, coef_split_idx)
+            etas = [Xs[ei] @ split_coef[ei] for ei in range(len(Xs))]
+            mus = [self.links[ei].fi(etas[ei]) for ei in range(len(Xs))]
 
-        return grad.reshape(-1, 1)
+            if gammlss_family.d_eta is False:
+
+                d1eta, d2eta, d2meta = deriv_transform_mu_eta(y, mus, gammlss_family)
+            else:
+                d1eta = [fd1(y, *mus) for fd1 in gammlss_family.d1]
+                d2eta = [fd2(y, *mus) for fd2 in gammlss_family.d2]
+                d2meta = [fd2m(y, *mus) for fd2m in gammlss_family.d2m]
+
+            # Get gradient
+            grad, _ = deriv_transform_eta_beta(d1eta, d2eta, d2meta, Xs, only_grad=True)
+
+            # Reshape and done.
+            grad = grad.reshape(-1, 1)
+
+        return grad
 
     def hessian(
         self,
@@ -287,12 +375,16 @@ class GAMLSSGSMMFamily(GSMMFamily):
         :rtype: scp.sparse.csc_array
         """
         y = ys[0]
+        # Get the Gamlss family
+        gammlss_family = self.llkargs[0]
+
+        if isinstance(gammlss_family, Family):
+            # Fall back to finite differencing for now...
+            return super().hessian(coef, coef_split_idx, ys, Xs)
+
         split_coef = np.split(coef, coef_split_idx)
         etas = [Xs[ei] @ split_coef[ei] for ei in range(len(Xs))]
         mus = [self.links[ei].fi(etas[ei]) for ei in range(len(Xs))]
-
-        # Get the Gamlss family
-        gammlss_family = self.llkargs[0]
 
         if gammlss_family.d_eta is False:
 
@@ -666,7 +758,7 @@ def print_smooth_terms(
             term_edf = None
         else:
             term_edf = []
-            prev_start_idx = 0
+            prev_start_idx = -1
             prev_edf_idx = 0
             # edf are best computed on term-pecific penalties
             penalties = split_shared_penalties(model.overall_penalties)
@@ -860,7 +952,7 @@ def compute_bias_corrected_edf(model, overwrite: bool = False) -> None:
 
         F_diag = F.diagonal()
 
-        prev_start_idx = 0
+        prev_start_idx = -1
 
         # edf are best computed on term-pecific penalties
         penalties = split_shared_penalties(model.overall_penalties)
@@ -1000,7 +1092,7 @@ def approx_smooth_p_values(
         term_edf = []
         rs_df = None
 
-        prev_start_idx = 0
+        prev_start_idx = -1
         prev_edf_idx = 0
 
         # edf are best computed on term-pecific penalties
@@ -1498,7 +1590,12 @@ def compute_reml_candidate_GAMM(
     # Need pseudo-data only in case of GAM
     z = None
     Wr = None
-    mu_inval = None
+    inval = None
+
+    # Keep track of any theta at entry
+    prev_theta = None
+    if isinstance(family, ExtendedFamily) and family.est_theta:
+        prev_theta = copy.deepcopy(family.theta)
 
     try:
         if isinstance(family, Gaussian) and isinstance(family.link, Identity):
@@ -1554,6 +1651,22 @@ def compute_reml_candidate_GAMM(
                         offset,
                     )
 
+                    # Optionally update theta parameter for extended family models
+                    if isinstance(family, ExtendedFamily) and family.est_theta:
+                        ntheta = updateTheta(mu, y, family)
+                        family.theta = ntheta
+
+                        # Need to re-compute deviance + penalized one with new theta
+                        inval = np.isnan(mu).flatten()
+
+                        # fmt: off
+                        dev = family.deviance(y[inval == False], mu[inval == False])  # noqa: E712
+                        # fmt: on
+                        pen_dev = dev
+
+                        # Has to be coef below since we already corrected
+                        pen_dev += coef.T @ S_emb @ coef
+
                 # Update PIRLS weights
                 yb, Xb, z, Wr = update_PIRLS(
                     y, yb, mu, eta - offset, X, Xb, family, None
@@ -1582,16 +1695,19 @@ def compute_reml_candidate_GAMM(
             # At this point, Wr/z might not match the dimensions of y and X, because observations
             # might be excluded at convergence. eta and mu are of correct dimension, so we need to
             # re-compute Wr - this time with a weight of zero for any dropped obs.
-            inval_check = np.any(np.isnan(z))
+            inval = np.isnan(z)
+            inval_check = np.any(inval)
 
             if inval_check:
-                _, w, inval = PIRLS_pdat_weights(y, mu, eta - offset, family)
-                w[inval] = 0
+                w_full = np.zeros_like(eta)
+                w_full[inval == False] = Wr.diagonal()  # noqa: E712
+                w = w_full
 
                 # Re-compute weight matrix
                 Wr_fix = scp.sparse.spdiags([np.sqrt(np.ndarray.flatten(w))], [0])
             else:
                 Wr_fix = Wr
+            inval = inval.flatten()
 
             W = Wr_fix @ Wr_fix
             nH = (X.T @ W @ X).tocsc()
@@ -1628,22 +1744,26 @@ def compute_reml_candidate_GAMM(
         # edf = (InvCholXXS.T@InvCholXXS@nH).trace()
 
         if family.twopar:
-            if mu_inval is None:
-                llk = family.llk(y, mu, scale)
+            if inval is None:
+                llk = family.llk(y, mu, scale=scale)
             else:
                 llk = family.llk(
-                    y[mu_inval == False], mu[mu_inval == False], scale  # noqa: E712
+                    y[inval == False],  # noqa: E712
+                    mu[inval == False],  # noqa: E712
+                    scale=scale,
                 )
         else:
-            if mu_inval is None:
+            if inval is None:
                 llk = family.llk(y, mu)
             else:
-                llk = family.llk(
-                    y[mu_inval == False], mu[mu_inval == False]  # noqa: E712
-                )
+                llk = family.llk(y[inval == False], mu[inval == False])  # noqa: E712
 
         # Now compute REML for candidate
         reml = REML(llk, nH / scale, coef, scale, penalties, keep)
+
+        # Optionally reset theta parameters
+        if isinstance(family, ExtendedFamily) and family.est_theta:
+            family.theta = prev_theta
 
         Linv = None
         if compute_inv or origNH is not None:
@@ -1669,6 +1789,11 @@ def compute_reml_candidate_GAMM(
                 edf = (Linv @ origNH @ Linv.T).trace() * scale
 
     except:  # noqa: E722
+
+        # Make sure to still reset theta parameters
+        if isinstance(family, ExtendedFamily) and family.est_theta:
+            family.theta = prev_theta
+
         return (
             -np.inf,
             scp.sparse.csc_matrix((len(coef), len(coef))),
@@ -1772,10 +1897,19 @@ def compute_REML_candidate_GSMM(
                     np.array([1]).reshape(1, 1), np.array([1]).reshape(1, 1)
                 )
                 __old_opt.init = False
-                __old_opt.omega = 1
                 __old_opt.method = "qEFS"
                 __old_opt.form = "SR1"
                 __old_opt.bfgs_options = bfgs_options
+                __old_opt.sample_hessian = True
+                __old_opt.sample_hessian_method = 0
+                __old_opt.sample_hessian_options = {}
+                __old_opt.fcols = None
+                __old_opt.acols = None
+                __old_opt.P1 = None
+                __old_opt.P2 = None
+                __old_opt.nHfd = None
+                __old_opt.IonHBB = None
+                __old_opt.sqEFS_options = {}
 
             coef, H, L, LV, c_llk, _, _, keep, drop = update_coef_gen_smooth(
                 family,
@@ -1794,37 +1928,33 @@ def compute_REML_candidate_GSMM(
                 1000,
                 conv_tol,
                 method,
-                None,
+                n_c,
                 keep_drop,
                 __old_opt,
+                False,
             )
 
             if method == "qEFS":
 
-                # Get an approximation of the Hessian of the likelihood
-                if LV.form == "SR1":
-                    H = -1 * computeHSR1(
-                        LV.sk,
-                        LV.yk,
-                        LV.rho,
-                        scp.sparse.identity(len(coef), format="csc") * LV.omega,
-                        omega=LV.omega,
-                        make_psd=True,
-                        explicit=True,
-                    )
-                else:
-                    H = -1 * computeH(
-                        LV.sk,
-                        LV.yk,
-                        LV.rho,
-                        scp.sparse.identity(len(coef), format="csc") * LV.omega,
-                        True,
-                    )
+                # Get explicit approximation of the Hessian of the likelihood
+                omega = compute_omega(LV.yk, LV.sk, method="mean")
 
-                # Get Cholesky factor of approximate inverse of penalized hessian (needed for CIs)
+                H = -1 * computeHSR1(
+                    LV.sk,
+                    LV.yk,
+                    LV.rho,
+                    scp.sparse.identity(len(coef), format="csc") * omega,
+                    omega=omega,
+                    make_psd=True,
+                    explicit=True,
+                )
+
+                H = scp.sparse.csc_array(H)
+
+                # Get Cholesky factor of approximate inverse of penalized hessian
                 pH = scp.sparse.csc_array((-1 * H) + S_emb)
                 Lp, Pr, _ = cpp_cholP(pH)
-                LVp0 = compute_Linv(Lp, 10)
+                LVp0 = compute_Linv(Lp, n_c)
                 LV = apply_eigen_perm(Pr, LVp0)
 
             V = LV.T @ LV  # inverse of hessian of penalized likelihood
@@ -2053,7 +2183,7 @@ def estimateVp(
     use_importance_weights: bool = True,
     prior: Callable | None = None,
     seed: int | None = None,
-    **bfgs_options,
+    bfgs_options: dict | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Estimate covariance matrix :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` of posterior for
     :math:`\\boldsymbol{\\rho} = log(\\boldsymbol{\\lambda})`.
@@ -2089,13 +2219,13 @@ def estimateVp(
         # ep will be an estimate of the mean of the marginal posterior of log regularization
         # parameters (for ``grid_type="JJJ1"`` this will simply be the log of the estimated
         # regularization parameters)
-        Vp, Vpr, Ri, Rir, ep, _ = estimateVp(model,grid_type="JJJ1",verbose=True,seed=20)
+        Vp, Vpr, Ri, Rir, ep, _ = estimateVp(model,grid_type="JJJ1",seed=20)
 
 
         # Compute MC estimate for generic model and given prior
-        prior = DummyRhoPrior(b=np.log(1e12)) # Set up uniform prior
+        prior = MVUniformRhoPrior(b=np.log(1e12)) # Set up uniform prior
         Vp_MC, Vpr_MC, Ri_MC, Rir_MC, ep_MC, _ = estimateVp(model,
-            strategy="JJJ2",verbose=True,seed=20,use_importance_weights=True,prior=prior)
+            grid_type="JJJ2",seed=20,use_importance_weights=True,prior=prior)
 
 
     References:
@@ -2173,11 +2303,10 @@ def estimateVp(
     :type recompute_H: bool, optional
     :param seed: Seed to use for random parts of the correction. Defaults to None
     :type seed: int|None,optional
-    :param bfgs_options: Any additional keyword arguments that should be passed on to the call of
-        ``scipy.optimize.minimize``. If none are provided, the ``gtol`` argument will be initialized
-        to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically set to 100.
-        Defaults to None.
-    :type bfgs_options: key=value,optional
+    :param bfgs_options: An optional dictionary holding arguments that should be passed on to
+        the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If None is provided,
+        the ``ftol`` argument will be initialized to 1e-7. Defaults to None.
+    :type bfgs_options: dict | None, optional
     :return: A tuple with 6 elements: an estimate of the covariance matrix of the posterior for
         :math:`\\boldsymbol{\\rho} = log(\\boldsymbol{\\lambda})`, a regularized version of the
         former, a root of the covariance matrix, a root of the regularized covariance matrix, an
@@ -2200,7 +2329,7 @@ def estimateVp(
 
     if isinstance(family, GSMMFamily):
         if not bfgs_options:
-            bfgs_options = {"ftol": 1e-9, "maxcor": 30, "maxls": 100}
+            bfgs_options = {"ftol": 1e-9, "maxcor": 30, "maxls": 100, "maxfun": 5000}
 
     # nPen = len(model.overall_penalties)
     rPen = copy.deepcopy(model.overall_penalties)
@@ -3231,48 +3360,187 @@ def compute_Vb_corr_WPS(
 
 class RhoPrior:
     """
-    Base class to demonstrate the functionlaity that any prior passed to the correct_VB function
-    has to implement.
+    Base class to demonstrate the functionality that any prior passed to the :func:`correct_VB`
+    and :func:`mssm.src.python.mcmc.sample_mssm` functions has to implement. Note, that only the
+    later requires implementing the ``dlpdrho`` and ``make_valid`` methods. Also note, that this
+    class can be used to implement true multivariate priors, a shared univriate prior, and even
+    separate univariate priors placed on different log smoothing penalties.
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs) -> None:
         self.args = args
         self.kwargs = kwargs
 
-    def logpdf(self, rho: np.ndarray):
+    def logpdf(self, rho: np.ndarray) -> np.ndarray:
         """Compute log density for log smoothing penalty parameters included in rho under this
         prior.
 
-        :param rho: Numpy array of shape (nR,nrho) containing nR proposed candidate vectors for the
-            nrho log-smoothing parameters.
+        :param rho: Numpy array of shape ``(nR, nrho)`` containing ``nR`` proposed candidate
+            vectors for the ``nrho`` log-smoothing parameters.
         :type rho: np.ndarray
+        :return: Log-density (flattened) array of length ``nR``, containing the prior density for
+            each candidate vector
+        :rtype: np.ndarray
         """
         pass
 
+    def make_valid(self, rho: np.ndarray) -> np.ndarray:
+        """Takes log smoothing penalty parameters included in rho and creates a copy in which
+        elements that would be considered invalid under this prior have been replaced with some
+        plausible value.
 
-class DummyRhoPrior(RhoPrior):
+        :param rho: Numpy array of shape ``(nR, nrho)`` containing ``nR`` proposed candidate
+            vectors for the ``nrho`` log-smoothing parameters.
+        :type rho: np.ndarray
+        :return: Copy of ``rho``, with all elements outside of the prior limits being changed to
+            be within the prior limits.
+        :rtype: np.ndarray
+        """
+        pass
+
+    def dlpdrho(self, rho: np.ndarray) -> np.ndarray:
+        """Compute gradient of log density for log smoothing penalty parameters included in rho
+        under this prior.
+
+        :param rho: Numpy array of shape ``(nR, nrho)`` containing ``nR`` proposed candidate
+            vectors for the ``nrho`` log-smoothing parameters.
+        :type rho: np.ndarray
+        :return: Array of shape ``(nR, nrho)``, containing the gradient of the prior
+            density with respect to the ``nrho`` parameters for for each candidate vector
+        :rtype: np.ndarray
+        """
+        return np.zeros(rho.shape)
+
+
+class MVUniformRhoPrior(RhoPrior):
     """
-    Simple uniform prior for rho - the log-smoothing penalty parameters
+    Simple multivariate uniform prior (which is really a shared univariate prior)
+    for rho, the log-smoothing penalty parameters, to be used by :func:`correct_VB` and
+    :func:`mssm.src.python.mcmc.sample_mssm`.
     """
 
-    def __init__(self, a=np.log(1e-7), b=np.log(1e7)) -> None:
+    def __init__(self, a: float = np.log(1e-7), b: float = np.log(1e7)) -> None:
         super().__init__(a=a, b=b)
+        self.scale = b - a  # Scipy parameterization
+        self.lpdf = -np.log(self.scale)
 
     def logpdf(self, rho: np.ndarray) -> np.ndarray:
-        """Returns an array holding zeroes for all log(lambda) parameters within ``self.a`` and
-        ``self.b``, otherwise ``-np.inf``.
+        """Returns an array holding ``-log(self.b-self.a)`` for all candidate vectors for which all
+        :math:`log(\\lambda)` parameters are within ``self.a`` and ``self.b``, and ``-np.inf``
+        otherwise.
 
-        :param rho: Array of log(lambda) parameters
+        :param rho: Numpy array of shape ``(nR, nrho)`` containing ``nR`` proposed candidate
+            vectors for the ``nrho`` log-smoothing parameters :math:`log(\\lambda)`.
         :type rho: np.ndarray
-        :return: Log-density array as described above
+        :return: Log-density array of length ``nR``, containing the prior density for each candidate
+            vector as described above.
         :rtype: np.ndarray
         """
         a = self.kwargs["a"]
         b = self.kwargs["b"]
 
-        ld = np.zeros(rho.shape[0])
+        ld = np.zeros(rho.shape[0]) + (rho.shape[1] * self.lpdf)
         ld[(np.min(rho, axis=1) < a) | (np.max(rho, axis=1) > b)] = -np.inf
         return ld
+
+    def make_valid(self, rho: np.ndarray) -> np.ndarray:
+        """Sets elements in a copy of ``rho`` smaller than ``self.a`` to ``0.9*self.a`` and
+        enforces the same for the upper limit (``self.b``).
+
+        :param rho: Numpy array of shape ``(nR, nrho)`` containing ``nR`` proposed candidate
+            vectors for the ``nrho`` log-smoothing parameters :math:`log(\\lambda)`.
+        :type rho: np.ndarray
+        :return: Copy of ``rho``, with all elements outside of the prior limits being changed to
+            be within the prior limits.
+        :rtype: np.ndarray
+        """
+
+        a = self.kwargs["a"]
+        b = self.kwargs["b"]
+
+        crho = copy.deepcopy(rho)
+        crho[crho < a] = 0.9 * a
+        crho[crho > b] = 0.9 * b
+        return crho
+
+
+class CenteredUniformRhoPriors(RhoPrior):
+    """Combines separate uniform priors for rho, the log-smoothing penalty parameters, to be used
+    by :func:`correct_VB` and :func:`mssm.src.python.mcmc.sample_mssm`.
+
+    This class corresponds to placing a uniform prior on every log-smoothing penalty, centered
+    on the corresponding value ``mrho[j]`` (typically the MAP/estimate) with support ranging
+    from ``max(mrho[j] - c, a)`` to ``min(mrho[j] + c, b)``.
+    """
+
+    def __init__(
+        self,
+        mrho: np.ndarray,
+        a: float = np.log(1e-7),
+        b: float = np.log(1e7),
+        c: float = 2,
+    ):
+        super().__init__()
+
+        self.a = []
+        self.b = []
+        self.lpdf = []
+
+        for rhoi, rho in enumerate(mrho):
+            arho = max(rho - c, a)
+            brho = min(rho + c, b)
+            lpdfrho = -np.log(brho - arho)
+            self.a.append(arho)
+            self.b.append(brho)
+            self.lpdf.append(lpdfrho)
+
+    def logpdf(self, rho: np.ndarray) -> np.ndarray:
+        """Returns an array holding the prior log density for all candidate vectors for which all
+        :math:`log(\\lambda)` parameters are within their prior intervals.
+
+        :param rho: Numpy array of shape ``(nR, nrho)`` containing ``nR`` proposed candidate
+            vectors for the ``nrho`` log-smoothing parameters :math:`log(\\lambda)`.
+        :type rho: np.ndarray
+        :return: Log-density array of length ``nR``, containing the prior density for each candidate
+            vector as described above.
+        :rtype: np.ndarray
+        """
+        a = self.a
+        b = self.b
+        lpdf = self.lpdf
+
+        ld = np.zeros(rho.shape[0])
+        for rhoi in range(rho.shape[1]):
+            ld += lpdf[rhoi]
+            inval = (rho[:, rhoi] < a[rhoi]) | (rho[:, rhoi] > b[rhoi])
+            ld[inval] = -np.inf
+
+        return ld
+
+    def make_valid(self, rho: np.ndarray) -> np.ndarray:
+        """Replaces elements in a copy of ``rho`` to ensure that they fall just within the
+        boundaries of their prior intervals.
+
+        :param rho: Numpy array of shape ``(nR, nrho)`` containing ``nR`` proposed candidate
+            vectors for the ``nrho`` log-smoothing parameters :math:`log(\\lambda)`.
+        :type rho: np.ndarray
+        :return: Copy of ``rho``, with all elements outside of the prior limits being changed to
+            be within the prior limits.
+        :rtype: np.ndarray
+        """
+
+        a = self.a
+        b = self.b
+
+        crho = copy.deepcopy(rho)
+        for rhoi in range(rho.shape[1]):
+            invala = crho[:, rhoi] < a[rhoi]
+            invalb = crho[:, rhoi] > b[rhoi]
+
+            crho[invala, rhoi] = 0.9 * a[rhoi]
+            crho[invalb, rhoi] = 0.9 * b[rhoi]
+
+        return crho
 
 
 def correct_VB(
@@ -3295,9 +3563,9 @@ def correct_VB(
     seed: int | None = None,
     compute_Vcc: bool = True,
     VP_grid_type: str = "JJJ1",
-    **bfgs_options,
+    bfgs_options: dict | None = None,
 ) -> tuple[
-    scp.sparse.csc_array | None,
+    np.ndarray | None,
     scp.sparse.csc_array | None,
     np.ndarray | None,
     np.ndarray | None,
@@ -3385,7 +3653,7 @@ def correct_VB(
             grid_type="JJJ1",verbose=True,seed=20)
 
         # Compute MC estimate for generic model and given prior
-        prior = DummyRhoPrior(b=np.log(1e12)) # Set up uniform prior
+        prior = MVUniformRhoPrior(b=np.log(1e12)) # Set up uniform prior
         V_MC,LV_MC,Vp_MC,Vpr_MC,edf_MC,\
         total_edf_MC,edf2_MC,total_edf2_MC,expected_edf_MC,mean_coef_MC = correct_VB(model2,
             grid_type="JJJ3", verbose=True, seed=20, df=10, prior=prior, recompute_H=True)
@@ -3487,11 +3755,10 @@ def correct_VB(
         of the covariance matrix of the :math:`log(\\lambda)` parameters, see the
         :func:`estimateVp` function for details. Defaults to 'JJJ1'
     :type grid_type: str, optional
-    :param bfgs_options: Any additional keyword arguments that should be passed on to the call of
-        :func:`scipy.optimize.minimize`. If none are provided, the ``gtol`` argument will be
-        initialized to 1e-3. Note also, that in any case the ``maxiter`` argument is automatically
-        set to 100. Defaults to None.
-    :type bfgs_options: key=value,optional
+    :param bfgs_options: An optional dictionary holding arguments that should be passed on to
+        the call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``. If None is provided,
+        the ``ftol`` argument will be initialized to 1e-7. Defaults to None.
+    :type bfgs_options: dict | None, optional
     :return: A tuple containing: ``V`` - an estimate of the unconditional covariance matrix, ``LV``
         - the Cholesky of the former, ``Vp`` - an estimate of the covariance matrix for
         :math:`\\boldsymbol{\\rho}`, ``Vpr`` - a regularized version of the former, ``edf`` -
@@ -3501,7 +3768,7 @@ def correct_VB(
         smoothness bias corrected total (i.e., model) edf, ``expected_edf`` - an optional estimate
         of total_edf that does not require forming ``V``, ``mean_coef`` - an optional estimate of
         the mean of the posterior of the coefficients
-    :rtype: tuple[scp.sparse.csc_array|None, scp.sparse.csc_array|None, np.ndarray|None,
+    :rtype: tuple[np.ndarray|None, scp.sparse.csc_array|None, np.ndarray|None,
         np.ndarray|None, np.ndarray|None, float|None, np.ndarray|None, float|None, float,
         np.ndarray]
     """
@@ -3530,7 +3797,7 @@ def correct_VB(
 
     if isinstance(family, GSMMFamily):
         if not bfgs_options:
-            bfgs_options = {"ftol": 1e-9, "maxcor": 30, "maxls": 100}
+            bfgs_options = {"ftol": 1e-7, "maxcor": 30, "maxls": 100, "maxfun": 5000}
 
     # nPen = len(model.overall_penalties)
     rPen = copy.deepcopy(model.overall_penalties)
@@ -4066,6 +4333,11 @@ def correct_VB(
                 z = None
                 Wr = None
 
+                # Keep track of theta
+                prev_theta = None
+                if isinstance(family, ExtendedFamily) and family.est_theta:
+                    prev_theta = copy.deepcopy(family.theta)
+
                 S_emb, _, S_root, _ = compute_S_emb_pinv_det(
                     X.shape[1], model.overall_penalties, "svd", method != "Chol"
                 )
@@ -4081,18 +4353,23 @@ def correct_VB(
 
                     mu = family.link.fi(eta)
 
+                    # Optionally update theta parameter for extended family models
+                    if isinstance(family, ExtendedFamily) and family.est_theta:
+                        ntheta = updateTheta(mu, y, family)
+                        family.theta = ntheta
+
                     # Compute pseudo-dat and weights for mean coef
                     yb, Xb, z, Wr = update_PIRLS(
                         y, yb, mu, eta - model.offset, X, Xb, family, None
                     )
 
-                    inval_check = np.any(np.isnan(z))
+                    inval = np.isnan(z)
+                    inval_check = np.any(inval)
 
                     if inval_check:
-                        _, w, inval = PIRLS_pdat_weights(
-                            y, mu, eta - model.offset, family
-                        )
-                        w[inval] = 0
+                        w_full = np.zeros_like(eta)
+                        w_full[inval == False] = Wr.diagonal()  # noqa: E712
+                        w = w_full
 
                         # Re-compute weight matrix
                         Wr_fix = scp.sparse.spdiags(
@@ -4103,6 +4380,10 @@ def correct_VB(
 
                     W = Wr_fix @ Wr_fix
                     nH = (X.T @ W @ X).tocsc()
+
+                    # Can reset theta now:
+                    if isinstance(family, ExtendedFamily) and family.est_theta:
+                        family.theta = prev_theta
 
                 # Solve for coef to get Cholesky needed to re-compute scale
                 _, _, _, Pr, _, LP, keep, drop = update_coef(
@@ -4139,7 +4420,7 @@ def correct_VB(
                         nH[drop, :] = 0
 
             else:  # GSMM/GAMLSS case
-                if isinstance(Family, GAMLSSFamily):  # GAMLSS case
+                if isinstance(family, GAMLSSFamily):  # GAMLSS case
                     split_coef = np.split(mean_coef, model.coef_split_idx)
 
                     # Update etas and mus

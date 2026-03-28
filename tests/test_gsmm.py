@@ -4,6 +4,7 @@ from mssm.models import *
 from mssm.src.python.utils import correct_VB, estimateVp
 import numpy as np
 import os
+import copy
 import io
 from contextlib import redirect_stdout
 from mssmViz.sim import *
@@ -14,6 +15,7 @@ from .defaults import (
     init_penalties_tests_gammlss,
     init_penalties_tests_gsmm,
 )
+from mssm.src.python.mcmc import sample_mssm
 
 mssm.src.python.exp_fam.GAUMLSS.init_lambda = init_penalties_tests_gammlss
 mssm.src.python.exp_fam.GAMMALS.init_lambda = init_penalties_tests_gammlss
@@ -47,8 +49,8 @@ class Test_GAUMLSSGEN_hard:
     gsmm_fam = GAMLSSGSMMFamily(2, GAUMLSS(links))
     model = GSMM(formulas=formulas, family=gsmm_fam)
 
-    # First fit with SR1
-    bfgs_opt = {"gtol": 1e-9, "ftol": 1e-9, "maxcor": 30, "maxls": 200, "maxfun": 1e7}
+    # fit with BFGS
+    bfgs_opt = {"gtol": 1e-7, "ftol": 1e-7, "maxcor": 30, "maxls": 200, "maxfun": 1e7}
 
     test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
     test_kwargs["method"] = "qEFS"
@@ -59,179 +61,146 @@ class Test_GAUMLSSGEN_hard:
     test_kwargs["min_inner"] = 500
     test_kwargs["seed"] = 0
     test_kwargs["max_restarts"] = 5
-    test_kwargs["overwrite_coef"] = False
-    test_kwargs["qEFS_init_converge"] = False
     test_kwargs["prefit_grad"] = True
+    test_kwargs["sample_hessian"] = False
+    test_kwargs["structured_qefs"] = False
+    test_kwargs["qEFSH"] = "BFGS"
     test_kwargs["bfgs_options"] = bfgs_opt
 
     model.fit(**test_kwargs)
 
-    model2 = copy.deepcopy(model)
-    test_kwargs["qEFSH"] = "BFGS"
-    test_kwargs["max_restarts"] = 0
-    test_kwargs["overwrite_coef"] = True
-    test_kwargs["qEFS_init_converge"] = True
-    test_kwargs["prefit_grad"] = False
-
-    # Now fit with BFGS
-    model2.fit(**test_kwargs)
-
     def test_GAMedf(self):
         np.testing.assert_allclose(
             self.model.edf,
-            19.06605212367808,
-            atol=min(max_atol, 0.5),
-            rtol=min(max_rtol, 0.025),
-        )
-
-    def test_GAMedf2(self):
-        np.testing.assert_allclose(
-            self.model2.edf,
-            20.085993154912806,
-            atol=min(max_atol, 1.3),
-            rtol=min(max_rtol, 0.07),
+            18.377187361889852,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
         )
 
     def test_GAMcoef(self):
-        coef = self.model.coef.flatten()
+        coef = self.model.coef
         np.testing.assert_allclose(
             coef,
             np.array(
                 [
-                    7.64896332,
-                    -0.87163571,
-                    -0.84714219,
-                    0.05745359,
-                    1.19376365,
-                    1.65146764,
-                    0.45272538,
-                    -0.54724611,
-                    -0.76214353,
-                    -0.76137743,
-                    -1.8210173,
-                    -1.04816578,
-                    -0.41222123,
-                    0.34134332,
-                    1.0342988,
-                    2.01876926,
-                    3.18538175,
-                    4.08327798,
-                    5.17126124,
-                    -8.62853231,
-                    4.78466146,
-                    5.76753761,
-                    -1.98400143,
-                    0.10081098,
-                    -1.16777336,
-                    -3.57420725,
-                    -4.0600672,
-                    -1.08798903,
-                    -0.04889937,
-                    -0.01052461,
-                    0.01277757,
-                    0.02972515,
-                    0.04714203,
-                    0.06622719,
-                    0.08729984,
-                    0.0969056,
-                    0.10180631,
-                    0.66763451,
-                ]
-            ),
-            atol=min(max_atol, 0.7),
-            rtol=min(max_rtol, 1e-6),
-        )
-
-    def test_GAMcoef2(self):
-        coef = self.model2.coef.flatten()
-        np.testing.assert_allclose(
-            coef,
-            np.array(
-                [
-                    7.64898791,
-                    -0.87442422,
-                    -0.7302071,
-                    0.14596979,
-                    1.27647368,
-                    1.70078317,
-                    0.56790503,
-                    -0.41554354,
-                    -0.73983263,
-                    -0.90265256,
-                    -1.83369152,
-                    -1.02612303,
-                    -0.38474768,
-                    0.35920819,
-                    1.05915048,
-                    2.05300297,
-                    3.20549805,
-                    4.06563624,
-                    5.12037278,
-                    -8.52043318,
-                    4.84751426,
-                    5.85726955,
-                    -1.89210962,
-                    0.16967413,
-                    -1.06785945,
-                    -3.53406784,
-                    -3.88453386,
-                    -2.01468058,
-                    -0.04870832,
-                    -0.01048352,
-                    0.0127276,
-                    0.02960897,
-                    0.04695781,
-                    0.06596845,
-                    0.08695881,
-                    0.09652709,
-                    0.10140869,
-                    0.66877099,
+                    [7.64905069],
+                    [-0.86673491],
+                    [-0.90094528],
+                    [0.03276751],
+                    [1.15914006],
+                    [1.65315849],
+                    [0.38976786],
+                    [-0.62349091],
+                    [-0.7531447],
+                    [-0.62543635],
+                    [-1.77827109],
+                    [-1.16369955],
+                    [-0.53206949],
+                    [0.30195526],
+                    [0.94751062],
+                    [1.86610313],
+                    [3.08262143],
+                    [4.13731307],
+                    [5.35515618],
+                    [-7.9746717],
+                    [5.31754213],
+                    [6.43841665],
+                    [-1.39549816],
+                    [0.72747751],
+                    [-0.56335123],
+                    [-2.93264959],
+                    [-3.69271431],
+                    [-1.03991244],
+                    [-0.04562291],
+                    [-0.01165826],
+                    [0.00888674],
+                    [0.02409037],
+                    [0.04134725],
+                    [0.06172081],
+                    [0.08447056],
+                    [0.09714901],
+                    [0.10562989],
+                    [0.66701223],
                 ]
             ),
             atol=min(max_atol, 0.3),
-            rtol=min(max_rtol, 1e-6),
+            rtol=min(max_rtol, 0.5),
         )
 
     def test_GAMlam(self):
         lam = np.array([p.lam for p in self.model.overall_penalties])
         np.testing.assert_allclose(
             lam,
-            np.array([7.35504400e-01, 7.27801598e00, 8.04428324e-03, 1.00000000e07]),
-            atol=min(max_atol, 1.5),
-            rtol=min(max_rtol, 0.37),
-        )
-
-    def test_GAMlam2(self):
-        lam = np.array([p.lam for p in self.model2.overall_penalties])
-        np.testing.assert_allclose(
-            lam,
-            np.array([9.58110974e-01, 8.39545471e00, 8.87952624e-03, 1.00000000e07]),
-            atol=min(max_atol, 15),
-            rtol=min(max_rtol, 0.35),
+            np.array(
+                [
+                    0.5660081066190392,
+                    3.6344843285366273,
+                    0.009036189964515981,
+                    2111.2780420530066,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 3),
         )
 
     def test_GAMreml(self):
         reml = self.model.get_reml()
         np.testing.assert_allclose(
-            reml, -1080.9668585544648, atol=min(max_atol, 2), rtol=min(max_rtol, 1e-6)
-        )
-
-    def test_GAMreml2(self):
-        reml = self.model2.get_reml()
-        np.testing.assert_allclose(
-            reml, -1083.887431273825, atol=min(max_atol, 2), rtol=min(max_rtol, 0.015)
+            reml, -1073.8484425587437, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
         np.testing.assert_allclose(
-            llk, -1043.3141308788472, atol=min(max_atol, 0.5), rtol=min(max_rtol, 0.001)
+            llk, -1043.0223032680815, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
-    def test_GAMllk2(self):
-        llk = self.model2.get_llk(False)
+    def test_edf1(self):
+        compute_bias_corrected_edf(self.model, overwrite=False)
+        edf1 = np.array([edf1 for edf1 in self.model.term_edf1])
         np.testing.assert_allclose(
-            llk, -1043.8544317953304, atol=min(max_atol, 0.5), rtol=min(max_rtol, 0.002)
+            edf1,
+            np.array(
+                [
+                    5.31951572924431,
+                    3.6329012604530178,
+                    8.634074326598565,
+                    1.0297773848735796,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
+        )
+
+    def test_ps(self):
+        ps = []
+        for par in range(len(self.model.formulas)):
+            pps, _ = approx_smooth_p_values(self.model, par=par)
+            ps.extend(pps)
+        np.testing.assert_allclose(
+            ps,
+            np.array([0.0047744792490702626, 0.0, 0.0, 0.8676565723545753]),
+            atol=min(max_atol, 0.01),
+            rtol=min(max_rtol, 0.5),
+        )
+
+    def test_TRs(self):
+        Trs = []
+        for par in range(len(self.model.formulas)):
+            _, pTrs = approx_smooth_p_values(self.model, par=par)
+            Trs.extend(pTrs)
+        np.testing.assert_allclose(
+            Trs,
+            np.array(
+                [
+                    17.544251844815605,
+                    97.98996254745872,
+                    346.09962445913857,
+                    0.04502732327983149,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
         )
 
 
@@ -256,7 +225,7 @@ class Test_PropHaz_hard:
 
     # Fit with Newton
     gsmm_newton_fam = PropHaz(ut, r)
-    gsmm_newton = GSMM([copy.deepcopy(sim_formula_m)], gsmm_newton_fam)
+    model = GSMM([copy.deepcopy(sim_formula_m)], gsmm_newton_fam)
 
     test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
     test_kwargs["method"] = "QR/Chol"
@@ -266,125 +235,147 @@ class Test_PropHaz_hard:
     test_kwargs["max_inner"] = 500
     test_kwargs["min_inner"] = 500
     test_kwargs["seed"] = 0
+    test_kwargs["repara"] = False
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        gsmm_newton.fit(**test_kwargs)
+        model.fit(**test_kwargs)
 
-    resid = gsmm_newton.get_resid(resid_type="Martingale")
-
-    gsmm_qefs_fam = PropHaz(ut, r)
-    gsmm_qefs = GSMM([copy.deepcopy(sim_formula_m)], gsmm_qefs_fam)
-
-    # Fit with qEFS update without initialization
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        bfgs_opt = {
-            "gtol": 1e-7,
-            "ftol": 1e-7,
-            "maxcor": 30,
-            "maxls": 20,
-            "maxfun": 100,
-        }
-
-        test_kwargs["method"] = "qEFS"
-        test_kwargs["extend_lambda"] = False
-        test_kwargs["control_lambda"] = 1
-        test_kwargs["max_outer"] = 200
-        test_kwargs["max_inner"] = 500
-        test_kwargs["min_inner"] = 500
-        test_kwargs["seed"] = 0
-        test_kwargs["max_restarts"] = 0
-        test_kwargs["overwrite_coef"] = False
-        test_kwargs["qEFS_init_converge"] = False
-        test_kwargs["prefit_grad"] = True
-        test_kwargs["bfgs_options"] = bfgs_opt
-
-        gsmm_qefs.fit(**test_kwargs)
+    resid = model.get_resid(resid_type="Martingale")
 
     def resid_test(self):
         assert self.resid.shape == (500, 1)
 
-    def test_GAMcoef(self):
-
+    def test_GAMedf(self):
         np.testing.assert_allclose(
-            (self.gsmm_newton.coef - self.gsmm_qefs.coef).flatten(),
+            self.model.edf,
+            17.70139744543187,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_GAMcoef(self):
+        coef = self.model.coef
+        np.testing.assert_allclose(
+            coef,
             np.array(
                 [
-                    -5.44700213e-04,
-                    -5.57025326e-04,
-                    1.64013870e-04,
-                    8.67670135e-04,
-                    4.92493649e-04,
-                    7.65198038e-04,
-                    5.14628775e-04,
-                    -9.50230485e-04,
-                    -2.48488958e-03,
-                    -6.72884363e-04,
-                    -1.17596358e-03,
-                    -6.75266364e-04,
-                    6.72783782e-05,
-                    1.07678488e-04,
-                    -2.63805422e-07,
-                    1.65661496e-03,
-                    -1.61770568e-03,
-                    -6.64843399e-03,
-                    -4.78166505e-02,
-                    -3.54112498e-02,
-                    -4.53015190e-02,
-                    -3.99937127e-02,
-                    -4.29717381e-02,
-                    -4.15610992e-02,
-                    -4.73157234e-02,
-                    -1.93293685e-02,
-                    -2.61343991e-02,
-                    5.38161813e-05,
-                    -3.18588497e-04,
-                    -3.70497505e-04,
-                    7.79857596e-05,
-                    5.19593795e-04,
-                    5.72184426e-04,
-                    -2.22179748e-04,
-                    -1.67729712e-03,
-                    -3.14518797e-03,
+                    [-0.71387545],
+                    [0.06955704],
+                    [0.62401006],
+                    [1.06531137],
+                    [1.19839925],
+                    [1.03063443],
+                    [0.50277917],
+                    [-0.5497074],
+                    [-1.66865464],
+                    [-1.45494926],
+                    [-0.69155732],
+                    [-0.2809881],
+                    [0.11233951],
+                    [0.70202522],
+                    [1.68674218],
+                    [2.79443246],
+                    [3.88466532],
+                    [5.20452557],
+                    [-10.86368411],
+                    [-0.12353043],
+                    [0.69872199],
+                    [-6.03417634],
+                    [-4.54182276],
+                    [-4.57937448],
+                    [-8.17466594],
+                    [-5.02892314],
+                    [-4.86821306],
+                    [0.11913661],
+                    [0.02177487],
+                    [-0.05112351],
+                    [-0.12708209],
+                    [-0.18859235],
+                    [-0.20433111],
+                    [-0.15688625],
+                    [-0.03459626],
+                    [0.10412985],
                 ]
             ),
-            atol=0.025,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
         )
 
     def test_GAMlam(self):
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         np.testing.assert_allclose(
-            np.round(
-                np.array(
-                    [
-                        p1.lam - p2.lam
-                        for p1, p2 in zip(
-                            self.gsmm_newton.overall_penalties,
-                            self.gsmm_qefs.overall_penalties,
-                        )
-                    ]
-                ),
-                decimals=3,
+            lam,
+            np.array(
+                [
+                    6.955990167024357,
+                    6.718132388893934,
+                    0.00536660757744937,
+                    101.52004507997195,
+                ]
             ),
-            np.array([-0.098, 0.149, -0.0, 2.152]),
-            atol=min(max_atol, 2),
-            rtol=min(max_rtol, 0.35),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 2.5),
         )
 
     def test_GAMreml(self):
+        reml = self.model.get_reml()
         np.testing.assert_allclose(
-            self.gsmm_newton.get_reml() - self.gsmm_qefs.get_reml(),
-            0.0907684010567209,
-            atol=min(max_atol, 0.2),
-            rtol=min(max_rtol, 4e-4),
+            reml, -1809.885338980533, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_GAMllk(self):
+        llk = self.model.get_llk(False)
         np.testing.assert_allclose(
-            self.gsmm_newton.get_llk(True) - self.gsmm_qefs.get_llk(True),
-            0.07796569660399655,
-            atol=min(max_atol, 0.1),
-            rtol=min(max_rtol, 9e-4),
+            llk, -1772.5517665619386, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+        )
+
+    def test_edf1(self):
+        compute_bias_corrected_edf(self.model, overwrite=False)
+        edf1 = np.array([edf1 for edf1 in self.model.term_edf1])
+        np.testing.assert_allclose(
+            edf1,
+            np.array(
+                [
+                    4.314129203718049,
+                    4.330180049072045,
+                    8.872759352525616,
+                    2.4734068397134137,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
+        )
+
+    def test_ps(self):
+        ps = []
+        for par in range(len(self.model.formulas)):
+            pps, _ = approx_smooth_p_values(self.model, par=par)
+            ps.extend(pps)
+        np.testing.assert_allclose(
+            ps,
+            np.array([0.0, 0.0, 0.0, 0.21062684440882912]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
+        )
+
+    def test_TRs(self):
+        Trs = []
+        for par in range(len(self.model.formulas)):
+            _, pTrs = approx_smooth_p_values(self.model, par=par)
+            Trs.extend(pTrs)
+        np.testing.assert_allclose(
+            Trs,
+            np.array(
+                [
+                    72.63212701087522,
+                    328.5041277852474,
+                    463.90284670844085,
+                    4.721875845689623,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
         )
 
 
@@ -409,7 +400,7 @@ class Test_PropHaz_repara_hard:
 
     # Fit with Newton
     gsmm_newton_fam = PropHaz(ut, r)
-    gsmm_newton = GSMM([copy.deepcopy(sim_formula_m)], gsmm_newton_fam)
+    model = GSMM([copy.deepcopy(sim_formula_m)], gsmm_newton_fam)
 
     test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
     test_kwargs["method"] = "QR/Chol"
@@ -423,118 +414,138 @@ class Test_PropHaz_repara_hard:
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        gsmm_newton.fit(**test_kwargs)
+        model.fit(**test_kwargs)
 
-    gsmm_qefs_fam = PropHaz(ut, r)
-    gsmm_qefs = GSMM([copy.deepcopy(sim_formula_m)], gsmm_qefs_fam)
-
-    # Fit with qEFS update without initialization
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        bfgs_opt = {
-            "gtol": 1e-7,
-            "ftol": 1e-7,
-            "maxcor": 30,
-            "maxls": 20,
-            "maxfun": 100,
-        }
-
-        test_kwargs["method"] = "qEFS"
-        test_kwargs["extend_lambda"] = False
-        test_kwargs["control_lambda"] = 1
-        test_kwargs["max_outer"] = 200
-        test_kwargs["max_inner"] = 500
-        test_kwargs["min_inner"] = 500
-        test_kwargs["seed"] = 0
-        test_kwargs["max_restarts"] = 0
-        test_kwargs["overwrite_coef"] = False
-        test_kwargs["qEFS_init_converge"] = False
-        test_kwargs["prefit_grad"] = True
-        test_kwargs["repara"] = True
-        test_kwargs["bfgs_options"] = bfgs_opt
-
-        gsmm_qefs.fit(**test_kwargs)
+    def test_GAMedf(self):
+        np.testing.assert_allclose(
+            self.model.edf,
+            17.701397445431944,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
 
     def test_GAMcoef(self):
-
+        coef = self.model.coef
         np.testing.assert_allclose(
-            (self.gsmm_newton.coef - self.gsmm_qefs.coef).flatten(),
+            coef,
             np.array(
                 [
-                    -6.00505655e-04,
-                    -9.64003472e-04,
-                    -3.83549187e-04,
-                    1.17537678e-03,
-                    1.59927985e-03,
-                    7.38051198e-04,
-                    -4.44997108e-04,
-                    -1.80074704e-03,
-                    -3.11562028e-03,
-                    -1.82326872e-03,
-                    3.14446254e-03,
-                    3.46507392e-03,
-                    2.31289573e-03,
-                    2.99595003e-03,
-                    3.18175605e-03,
-                    1.01399062e-03,
-                    1.37963294e-02,
-                    3.14823158e-02,
-                    -1.02728366e-01,
-                    -7.73625299e-02,
-                    -9.77585419e-02,
-                    -8.96668581e-02,
-                    -9.31593570e-02,
-                    -9.24209095e-02,
-                    -1.01698088e-01,
-                    -4.87830255e-02,
-                    -1.39815381e-02,
-                    -9.37696374e-05,
-                    -2.59179471e-03,
-                    -3.05352437e-03,
-                    -2.36146501e-04,
-                    3.03758717e-03,
-                    3.90425367e-03,
-                    -7.14453093e-05,
-                    -7.63733239e-03,
-                    -1.53736159e-02,
+                    [-0.71387545],
+                    [0.06955704],
+                    [0.62401006],
+                    [1.06531137],
+                    [1.19839925],
+                    [1.03063443],
+                    [0.50277917],
+                    [-0.5497074],
+                    [-1.66865464],
+                    [-1.45494926],
+                    [-0.69155732],
+                    [-0.2809881],
+                    [0.11233951],
+                    [0.70202522],
+                    [1.68674218],
+                    [2.79443246],
+                    [3.88466532],
+                    [5.20452557],
+                    [-10.86368411],
+                    [-0.12353043],
+                    [0.69872199],
+                    [-6.03417634],
+                    [-4.54182276],
+                    [-4.57937448],
+                    [-8.17466594],
+                    [-5.02892314],
+                    [-4.86821306],
+                    [0.11913661],
+                    [0.02177487],
+                    [-0.05112351],
+                    [-0.12708209],
+                    [-0.18859235],
+                    [-0.20433111],
+                    [-0.15688625],
+                    [-0.03459626],
+                    [0.10412985],
                 ]
             ),
-            atol=min(max_atol, 0.05),
-            rtol=min(max_rtol, 5e-6),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
         )
 
     def test_GAMlam(self):
+        lam = np.array([p.lam for p in self.model.overall_penalties])
         np.testing.assert_allclose(
+            lam,
             np.array(
                 [
-                    p1.lam - p2.lam
-                    for p1, p2 in zip(
-                        self.gsmm_newton.overall_penalties,
-                        self.gsmm_qefs.overall_penalties,
-                    )
+                    6.955990167024334,
+                    6.7181323888940545,
+                    0.005366607577449276,
+                    101.52004507996567,
                 ]
             ),
-            np.array(
-                [-9.87297096e-03, -5.29255787e-01, -2.50321169e-04, 1.10708062e01]
-            ),
-            atol=min(max_atol, 5),
-            rtol=min(max_rtol, 1.1),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 2.5),
         )
 
     def test_GAMreml(self):
+        reml = self.model.get_reml()
         np.testing.assert_allclose(
-            self.gsmm_newton.get_reml() - self.gsmm_qefs.get_reml(),
-            2.9739911355409276,
-            atol=min(max_atol, 0.5),
-            rtol=min(max_rtol, 1),
+            reml, -1809.8853389805336, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_GAMllk(self):
+        llk = self.model.get_llk(False)
         np.testing.assert_allclose(
-            self.gsmm_newton.get_llk(True) - self.gsmm_qefs.get_llk(True),
-            0.21546192785831408,
-            atol=min(max_atol, 0.2),
-            rtol=min(max_rtol, 2e-4),
+            llk, -1772.5517665619386, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+        )
+
+    def test_edf1(self):
+        compute_bias_corrected_edf(self.model, overwrite=False)
+        edf1 = np.array([edf1 for edf1 in self.model.term_edf1])
+        np.testing.assert_allclose(
+            edf1,
+            np.array(
+                [
+                    4.314129203718056,
+                    4.330180049072032,
+                    8.87275935252572,
+                    2.473406839713454,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
+        )
+
+    def test_ps(self):
+        ps = []
+        for par in range(len(self.model.formulas)):
+            pps, _ = approx_smooth_p_values(self.model, par=par)
+            ps.extend(pps)
+        np.testing.assert_allclose(
+            ps,
+            np.array([0.0, 0.0, 0.0, 0.21062684440883006]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
+        )
+
+    def test_TRs(self):
+        Trs = []
+        for par in range(len(self.model.formulas)):
+            _, pTrs = approx_smooth_p_values(self.model, par=par)
+            Trs.extend(pTrs)
+        np.testing.assert_allclose(
+            Trs,
+            np.array(
+                [
+                    72.63212701087531,
+                    328.5041277852453,
+                    463.902846708443,
+                    4.721875845689723,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
         )
 
 
@@ -1291,266 +1302,278 @@ class Test_shared_qefs:
     test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
     test_kwargs["control_lambda"] = 1
     test_kwargs["extend_lambda"] = False
-    test_kwargs["max_outer"] = 200
+    test_kwargs["max_outer"] = 20
     test_kwargs["max_inner"] = 500
-    test_kwargs["method"] = "QR/Chol"
+    test_kwargs["method"] = "qEFS"
     test_kwargs["repara"] = True
     test_kwargs["prefit_grad"] = True
-    test_kwargs["method"] = "qEFS"
+    test_kwargs["max_restarts"] = -1
+    test_kwargs["sample_hessian"] = True
+    test_kwargs["structured_qefs"] = True
+    test_kwargs["n_cores"] = 4
 
-    bfgs_opt = {"gtol": 1e-7, "ftol": 1e-7, "maxcor": 30, "maxls": 20, "maxfun": 100}
+    bfgs_options = {
+        "gtol": 1e-7,
+        "ftol": 1e-7,
+        "maxcor": 30,
+        "maxls": 100,
+        "maxfun": 5000,
+    }
 
-    test_kwargs["bfgs_options"] = bfgs_opt
+    test_kwargs["bfgs_options"] = bfgs_options
+
+    def callback(outer, pen_llk, coef, lam):
+        print(outer, pen_llk, lam)
 
     # Now define the model and fit!
     gsmm_fam = GAMLSSGSMMFamily(2, family)
     model = GSMM([sim_formula_m, sim_formula_sd], gsmm_fam)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        model.fit(**test_kwargs)
+        model.fit(**test_kwargs, callback=callback)
 
     def test_GAMedf(self):
         np.testing.assert_allclose(
             self.model.edf,
-            133.43747528447437,
+            104.11043984332206,
             atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.1),
+            rtol=min(max_rtol, 0.2),
         )
 
     def test_GAMcoef(self):
-        coef = self.model.coef
+        coef = np.round(self.model.coef, decimals=6)
         np.testing.assert_allclose(
             coef,
             np.array(
                 [
-                    [2.16799851e00],
-                    [-3.11219604e-01],
-                    [6.76269169e-03],
-                    [4.20140604e-01],
-                    [6.17972732e-01],
-                    [5.22020441e-01],
-                    [4.48950056e-01],
-                    [-6.50733371e-02],
-                    [-4.23976160e-01],
-                    [-6.88927308e-01],
-                    [-9.16685246e-01],
-                    [-4.11960874e-01],
-                    [-1.25097831e-01],
-                    [1.52420289e-01],
-                    [5.15211838e-01],
-                    [1.04286559e00],
-                    [1.69314981e00],
-                    [2.30579264e00],
-                    [2.95634309e00],
-                    [3.75362661e-03],
-                    [9.58028500e-04],
-                    [-1.74939422e-02],
-                    [4.86650755e-02],
-                    [1.61098841e-02],
-                    [1.20440949e-02],
-                    [9.19379906e-02],
-                    [4.24401022e-02],
-                    [-4.80598711e-02],
-                    [-3.98192431e-01],
-                    [7.00659664e-04],
-                    [-1.14589925e-03],
-                    [-3.42967689e-02],
-                    [-3.87385937e-02],
-                    [4.14405578e-02],
-                    [-7.59687391e-02],
-                    [1.89786406e-01],
-                    [-8.90506600e-02],
-                    [3.87773026e-03],
-                    [1.49488123e-01],
-                    [1.79145734e-03],
-                    [-2.26379646e-03],
-                    [1.23469061e-03],
-                    [-1.21154322e-03],
-                    [1.50792147e-02],
-                    [2.63347195e-02],
-                    [-2.08030259e-02],
-                    [-8.77894284e-03],
-                    [-4.38479669e-02],
-                    [1.12445596e-01],
-                    [3.47342619e-03],
-                    [1.35214943e-03],
-                    [-1.84493981e-02],
-                    [-4.48212936e-02],
-                    [2.41951033e-02],
-                    [4.93061792e-02],
-                    [7.60179066e-03],
-                    [5.94313560e-02],
-                    [4.05971441e-02],
-                    [4.77132541e-01],
-                    [-1.96325187e-03],
-                    [2.24136773e-04],
-                    [7.63534394e-03],
-                    [-1.63258393e-02],
-                    [2.26914484e-02],
-                    [-7.61302683e-02],
-                    [1.90841820e-04],
-                    [-4.06361616e-02],
-                    [-1.59559986e-01],
-                    [-1.52317443e00],
-                    [4.06978098e-03],
-                    [-3.72335832e-03],
-                    [4.07741839e-03],
-                    [2.39747417e-02],
-                    [2.33928304e-02],
-                    [3.24292915e-02],
-                    [-1.34212631e-03],
-                    [1.48332236e-01],
-                    [2.24186003e-01],
-                    [3.52343780e-01],
-                    [-4.37312146e-03],
-                    [-2.53807399e-03],
-                    [-9.99288422e-03],
-                    [-8.03628555e-03],
-                    [-2.58506068e-03],
-                    [2.97376643e-02],
-                    [-1.69558376e-01],
-                    [1.83403627e-02],
-                    [-1.12830423e-01],
-                    [-7.24985659e-01],
-                    [1.42941593e-03],
-                    [-7.92898283e-05],
-                    [4.56499873e-02],
-                    [-5.23165229e-04],
-                    [1.74092228e-02],
-                    [-1.45237854e-01],
-                    [-6.41605328e-02],
-                    [-1.61986118e-01],
-                    [-5.93535520e-02],
-                    [1.30441298e-01],
-                    [-4.11282910e-03],
-                    [-6.86032369e-05],
-                    [-1.50233367e-02],
-                    [-3.02595492e-02],
-                    [-1.12889828e-02],
-                    [6.95094525e-02],
-                    [3.19971719e-02],
-                    [5.20275202e-02],
-                    [-1.41656341e-01],
-                    [3.32811700e-02],
-                    [-2.36461043e-03],
-                    [-8.33253959e-04],
-                    [-4.09088931e-04],
-                    [1.28232717e-02],
-                    [1.47797375e-02],
-                    [8.89688614e-02],
-                    [-5.68381113e-02],
-                    [8.09825969e-02],
-                    [9.47155239e-03],
-                    [1.84835627e-01],
-                    [-9.73627363e-04],
-                    [7.51218395e-04],
-                    [1.05160414e-02],
-                    [1.94581800e-03],
-                    [5.62636046e-02],
-                    [4.73383804e-02],
-                    [1.14440944e-01],
-                    [5.28810359e-02],
-                    [-5.73622860e-02],
-                    [2.50293801e-01],
-                    [-3.30094939e-03],
-                    [6.74206424e-03],
-                    [-1.82323505e-02],
-                    [1.99326986e-02],
-                    [-3.65637229e-02],
-                    [-7.09471845e-02],
-                    [4.27466413e-02],
-                    [-1.07151149e-01],
-                    [-1.30017590e-01],
-                    [3.86878306e-01],
-                    [-2.41244282e-04],
-                    [8.95023332e-04],
-                    [-1.26697612e-02],
-                    [-4.05179231e-02],
-                    [-3.26662516e-02],
-                    [-4.01513732e-02],
-                    [-1.05181012e-01],
-                    [-2.67133069e-03],
-                    [4.98950630e-03],
-                    [1.85542473e-01],
-                    [1.54738394e-03],
-                    [-8.09925955e-04],
-                    [1.31737357e-02],
-                    [3.36112363e-02],
-                    [-1.31771000e-02],
-                    [-8.46072802e-02],
-                    [-3.06932427e-02],
-                    [6.51580992e-02],
-                    [1.40026696e-02],
-                    [5.27480447e-01],
-                    [3.73322443e-03],
-                    [-3.49249330e-03],
-                    [3.12624515e-02],
-                    [-7.07543436e-03],
-                    [-2.84260688e-02],
-                    [8.25055101e-02],
-                    [-4.68327199e-02],
-                    [1.83659115e-02],
-                    [6.57407090e-02],
-                    [1.33424326e-01],
-                    [-2.08824134e-03],
-                    [5.13101580e-03],
-                    [-7.44748380e-03],
-                    [-2.07789570e-02],
-                    [-5.37901894e-02],
-                    [7.67237393e-02],
-                    [8.11137029e-02],
-                    [-1.68592247e-01],
-                    [2.41163368e-01],
-                    [3.06750568e-01],
-                    [-1.08659988e-03],
-                    [-1.80985927e-03],
-                    [-5.53374832e-03],
-                    [-1.33542583e-02],
-                    [-3.61241553e-02],
-                    [-6.82585542e-02],
-                    [-1.15746479e-02],
-                    [-1.84868436e-01],
-                    [1.37491898e-01],
-                    [-3.02475682e-01],
-                    [3.11400774e-03],
-                    [-1.17209216e-03],
-                    [-3.37617670e-02],
-                    [1.54775546e-02],
-                    [-6.38832106e-02],
-                    [2.55759096e-02],
-                    [1.15841268e-01],
-                    [2.82953144e-01],
-                    [6.72059770e-02],
-                    [-5.27091767e-01],
-                    [-4.21802428e-03],
-                    [-6.01075582e-05],
-                    [1.22649687e-02],
-                    [-1.67255052e-02],
-                    [2.30622321e-02],
-                    [-2.39969177e-03],
-                    [-1.64353835e-01],
-                    [-2.16207721e-02],
-                    [-5.33093904e-02],
-                    [2.43240882e-01],
-                    [3.39574446e-01],
-                    [-3.38385034e-01],
-                    [8.11417321e-01],
-                    [1.08682132e00],
-                    [3.36857490e-01],
-                    [5.33502086e-01],
-                    [4.92955502e-01],
-                    [2.79993577e-01],
-                    [-2.50766508e-01],
-                    [-7.46029538e-01],
-                    [4.78746975e-02],
-                    [1.06014463e-02],
-                    [-1.20196029e-02],
-                    [-3.12772737e-02],
-                    [-4.59241022e-02],
-                    [-5.88939726e-02],
-                    [-6.86786150e-02],
-                    [-6.45100087e-02],
-                    [-6.19267987e-02],
+                    [2.160864e00],
+                    [-3.020230e-01],
+                    [1.475600e-02],
+                    [4.271040e-01],
+                    [6.370190e-01],
+                    [5.062180e-01],
+                    [4.786030e-01],
+                    [-7.319300e-02],
+                    [-4.103900e-01],
+                    [-6.698690e-01],
+                    [-9.106850e-01],
+                    [-4.200400e-01],
+                    [-1.360100e-01],
+                    [1.399220e-01],
+                    [5.040610e-01],
+                    [1.035494e00],
+                    [1.680491e00],
+                    [2.302906e00],
+                    [2.962853e00],
+                    [1.131700e-02],
+                    [3.337000e-03],
+                    [-4.359900e-02],
+                    [1.324210e-01],
+                    [3.860000e-02],
+                    [2.723300e-02],
+                    [1.485870e-01],
+                    [5.281100e-02],
+                    [-5.110800e-02],
+                    [-3.998320e-01],
+                    [2.081000e-03],
+                    [-3.328000e-03],
+                    [-8.567200e-02],
+                    [-1.027450e-01],
+                    [9.641600e-02],
+                    [-1.354240e-01],
+                    [2.858060e-01],
+                    [-1.111280e-01],
+                    [3.539000e-03],
+                    [1.508050e-01],
+                    [5.622000e-03],
+                    [-6.572000e-03],
+                    [5.469000e-03],
+                    [7.700000e-04],
+                    [3.619100e-02],
+                    [5.319900e-02],
+                    [-3.356200e-02],
+                    [-1.032700e-02],
+                    [-4.653500e-02],
+                    [1.049990e-01],
+                    [9.419000e-03],
+                    [3.639000e-03],
+                    [-4.792300e-02],
+                    [-1.157870e-01],
+                    [5.044500e-02],
+                    [9.349900e-02],
+                    [1.688100e-02],
+                    [7.425200e-02],
+                    [4.286500e-02],
+                    [4.715890e-01],
+                    [-6.137000e-03],
+                    [2.630000e-04],
+                    [2.698500e-02],
+                    [-3.787900e-02],
+                    [5.588700e-02],
+                    [-1.470120e-01],
+                    [1.162000e-03],
+                    [-4.895500e-02],
+                    [-1.692650e-01],
+                    [-1.530730e00],
+                    [1.116300e-02],
+                    [-1.182200e-02],
+                    [9.298000e-03],
+                    [6.169800e-02],
+                    [5.492900e-02],
+                    [6.412700e-02],
+                    [-1.829000e-03],
+                    [1.877160e-01],
+                    [2.403430e-01],
+                    [3.545390e-01],
+                    [-1.266100e-02],
+                    [-7.032000e-03],
+                    [-2.263800e-02],
+                    [-1.586800e-02],
+                    [-8.139000e-03],
+                    [5.381900e-02],
+                    [-2.739030e-01],
+                    [2.681900e-02],
+                    [-1.186510e-01],
+                    [-7.192470e-01],
+                    [3.767000e-03],
+                    [3.100000e-05],
+                    [1.203080e-01],
+                    [4.963000e-03],
+                    [4.134500e-02],
+                    [-2.764830e-01],
+                    [-9.887000e-02],
+                    [-2.067350e-01],
+                    [-6.383800e-02],
+                    [1.353810e-01],
+                    [-1.301800e-02],
+                    [-3.210000e-04],
+                    [-3.885100e-02],
+                    [-7.652900e-02],
+                    [-2.270700e-02],
+                    [1.380100e-01],
+                    [5.128900e-02],
+                    [6.727500e-02],
+                    [-1.487810e-01],
+                    [2.881400e-02],
+                    [-5.763000e-03],
+                    [-1.654000e-03],
+                    [9.770000e-04],
+                    [3.371500e-02],
+                    [3.880500e-02],
+                    [1.773270e-01],
+                    [-9.026600e-02],
+                    [9.954800e-02],
+                    [9.599000e-03],
+                    [1.800480e-01],
+                    [-3.968000e-03],
+                    [2.174000e-03],
+                    [3.037200e-02],
+                    [1.042100e-02],
+                    [1.307160e-01],
+                    [9.985200e-02],
+                    [1.888690e-01],
+                    [5.911400e-02],
+                    [-6.201100e-02],
+                    [2.547910e-01],
+                    [-1.103600e-02],
+                    [2.010000e-02],
+                    [-4.847000e-02],
+                    [5.510700e-02],
+                    [-8.618700e-02],
+                    [-1.330080e-01],
+                    [6.802800e-02],
+                    [-1.361800e-01],
+                    [-1.388490e-01],
+                    [3.876210e-01],
+                    [-1.199000e-03],
+                    [2.810000e-03],
+                    [-3.197000e-02],
+                    [-1.100520e-01],
+                    [-8.063100e-02],
+                    [-7.920600e-02],
+                    [-1.574580e-01],
+                    [-7.393000e-03],
+                    [3.366000e-03],
+                    [1.870890e-01],
+                    [4.445000e-03],
+                    [-3.828000e-03],
+                    [3.854800e-02],
+                    [9.810900e-02],
+                    [-3.109800e-02],
+                    [-1.742910e-01],
+                    [-4.549000e-02],
+                    [8.935200e-02],
+                    [1.533500e-02],
+                    [5.229710e-01],
+                    [1.082000e-02],
+                    [-1.026600e-02],
+                    [8.831800e-02],
+                    [-1.628200e-02],
+                    [-6.538200e-02],
+                    [1.648420e-01],
+                    [-7.902200e-02],
+                    [2.281800e-02],
+                    [6.818900e-02],
+                    [1.320460e-01],
+                    [-4.664000e-03],
+                    [1.262500e-02],
+                    [-3.137700e-02],
+                    [-4.189900e-02],
+                    [-1.134760e-01],
+                    [1.364500e-01],
+                    [1.139600e-01],
+                    [-2.003000e-01],
+                    [2.505810e-01],
+                    [3.099090e-01],
+                    [-4.283000e-03],
+                    [-6.093000e-03],
+                    [-2.365800e-02],
+                    [-3.309900e-02],
+                    [-9.191000e-02],
+                    [-1.465900e-01],
+                    [-2.720500e-02],
+                    [-2.389790e-01],
+                    [1.447770e-01],
+                    [-2.942130e-01],
+                    [9.428000e-03],
+                    [-3.632000e-03],
+                    [-8.634900e-02],
+                    [4.379200e-02],
+                    [-1.462510e-01],
+                    [4.933000e-02],
+                    [1.927510e-01],
+                    [3.538430e-01],
+                    [7.132400e-02],
+                    [-5.196620e-01],
+                    [-1.334200e-02],
+                    [8.980000e-04],
+                    [3.292800e-02],
+                    [-4.144700e-02],
+                    [5.409400e-02],
+                    [-3.142000e-03],
+                    [-2.496430e-01],
+                    [-2.127800e-02],
+                    [-5.843700e-02],
+                    [2.419310e-01],
+                    [3.294980e-01],
+                    [-4.380640e-01],
+                    [7.383870e-01],
+                    [1.054881e00],
+                    [1.885450e-01],
+                    [4.861200e-01],
+                    [3.867230e-01],
+                    [2.035280e-01],
+                    [-3.079280e-01],
+                    [-7.092030e-01],
+                    [6.573400e-02],
+                    [-4.560000e-03],
+                    [-4.274800e-02],
+                    [-6.485200e-02],
+                    [-7.393400e-02],
+                    [-8.000000e-02],
+                    [-8.352000e-02],
+                    [-6.961400e-02],
+                    [-5.919800e-02],
                 ]
             ),
             atol=min(max_atol, 0.5),
@@ -1563,27 +1586,27 @@ class Test_shared_qefs:
             lam,
             np.array(
                 [
-                    41.17260229420759,
-                    12.533666166891857,
-                    4.092764472110347,
-                    11118.20358119248,
-                    4.15187531639246,
+                    30.911273098167747,
+                    4.352183603224263,
+                    3.736828437514571,
+                    1439.016790152987,
+                    2.228446582494426,
                 ]
             ),
             atol=min(max_atol, 0),
-            rtol=min(max_rtol, 2.5),
+            rtol=min(max_rtol, 5),
         )
 
     def test_GAMreml(self):
         reml = self.model.get_reml()
         np.testing.assert_allclose(
-            reml, -15576.253064785291, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            reml, -15507.167669639082, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
         np.testing.assert_allclose(
-            llk, -15364.74212255429, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            llk, -15332.22497719553, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_edf1(self):
@@ -1593,11 +1616,11 @@ class Test_shared_qefs:
             edf1,
             np.array(
                 [
-                    8.517720894639751,
-                    6.248437814610253,
-                    148.4517833120425,
-                    8.56828260261986,
-                    1.5076592131479796,
+                    6.7878354819141205,
+                    4.84504964938634,
+                    119.25437367377154,
+                    6.906178817062174,
+                    2.1930889513762137,
                 ]
             ),
             atol=min(max_atol, 0),
@@ -1611,8 +1634,8 @@ class Test_shared_qefs:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.1245955153970093]),
-            atol=min(max_atol, 0.13),
+            np.array([0.0, 0.0, 0.0, 0.11794760560276107]),
+            atol=min(max_atol, 0.15),
             rtol=min(max_rtol, 0.5),
         )
 
@@ -1625,12 +1648,320 @@ class Test_shared_qefs:
             Trs,
             np.array(
                 [
-                    211.9695958713893,
-                    1711.8754238885585,
-                    399.1431710461262,
-                    3.21233862560394,
+                    53.793417631513805,
+                    2636.023014251915,
+                    242.62344340496455,
+                    4.5733272875356015,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 2.5),
+        )
+
+
+class Test_mvn:
+    # Simulate data
+    sim_dat = sim16(500, seed=1134, correlate=True)
+
+    # We need formulas for each mean
+    formulas = [
+        Formula(lhs("y0"), [i(), f(["x0"])], data=sim_dat),
+        Formula(lhs("y1"), [i(), f(["x1"]), f(["x2"])], data=sim_dat),
+        Formula(lhs("y2"), [i(), f(["x3"])], data=sim_dat),
+    ]
+
+    # Now define the model and fit!
+    test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
+    test_kwargs["control_lambda"] = 2
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["max_outer"] = 200
+    test_kwargs["max_inner"] = 500
+    test_kwargs["method"] = "qEFS"
+    test_kwargs["repara"] = False
+    test_kwargs["prefit_grad"] = True
+    test_kwargs["progress_bar"] = True
+    test_kwargs["max_restarts"] = 0
+    test_kwargs["sample_hessian"] = False
+    test_kwargs["structured_qefs"] = True
+    test_kwargs["structured_qefs_budget"] = 10
+    test_kwargs["n_cores"] = 1
+
+    bfgs_options = {
+        "gtol": 1e-7,
+        "ftol": 1e-7,
+        "maxcor": 30,
+        "maxls": 100,
+        "maxfun": 5000,
+    }
+
+    test_kwargs["bfgs_options"] = bfgs_options
+
+    model = GSMM(formulas, MultiGauss(3, [Identity() for _ in range(3)]))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model.fit(**test_kwargs)
+
+    # get deviance residuals
+    res = model.get_resid()
+    res0 = model.get_resid(mean=0)
+
+    # Get means and theta
+    Xs = model.get_mmat()
+    mus, theta = model.family.predict(model.coef, model.coef_split_idx, Xs)
+    R, _ = model.family.getR(theta)
+
+    # Get cov and rvs
+    size = 1000
+    seed = 1
+    rvs = model.family.rvs(mus, theta, size=size, seed=seed)
+    cov = np.linalg.inv(R.T @ R)
+
+    # Check qEFS correct_VP/Vp code
+    Vs = correct_VB(model, grid_type="JJJ3", method="qEFS", n_c=1)
+
+    def test_GAMedf(self):
+        np.testing.assert_allclose(
+            self.model.edf,
+            27.26660716411554,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_GAMedf2(self):
+        np.testing.assert_allclose(
+            self.Vs[5],
+            29.6379167498586,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_GAMedf3(self):
+        np.testing.assert_allclose(
+            self.Vs[7],
+            29.6379167498586,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_GAMcoef(self):
+        coef = self.model.coef
+        np.testing.assert_allclose(
+            coef,
+            np.array(
+                [
+                    [1.31074048],
+                    [-0.82449124],
+                    [0.74732063],
+                    [1.35666141],
+                    [1.58962518],
+                    [1.51463871],
+                    [1.15832293],
+                    [0.61886845],
+                    [-0.20066503],
+                    [-1.03612967],
+                    [6.61795726],
+                    [-1.71050815],
+                    [-0.76764661],
+                    [-0.16317317],
+                    [0.25415427],
+                    [0.91034138],
+                    [2.04682703],
+                    [3.42008699],
+                    [4.37831543],
+                    [5.34859176],
+                    [-8.10949384],
+                    [3.38529497],
+                    [5.47625018],
+                    [-2.57480595],
+                    [-1.01125643],
+                    [-1.64459724],
+                    [-4.45359295],
+                    [-3.92120298],
+                    [-0.53107608],
+                    [-0.00620283],
+                    [0.04282423],
+                    [0.02808818],
+                    [0.02588386],
+                    [0.01941173],
+                    [-0.00527162],
+                    [-0.05287618],
+                    [-0.11669858],
+                    [-0.18461226],
+                    [-0.25247992],
+                    [-0.26820167],
+                    [-0.09507427],
+                    [0.16818564],
+                    [-0.31313358],
+                    [-0.02441476],
+                    [-0.35594795],
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 8),
+        )
+
+    def test_GAMlam(self):
+        lam = np.array([p.lam for p in self.model.overall_penalties])
+        np.testing.assert_allclose(
+            lam,
+            np.array(
+                [
+                    6.590988841955899,
+                    6.635671283019496,
+                    0.009512670821963585,
+                    328.50377092695294,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 3),
+        )
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        np.testing.assert_allclose(
+            reml, -1287.4289524262672, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+        )
+
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        np.testing.assert_allclose(
+            llk, -1218.64400917532, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+        )
+
+    def test_edf1(self):
+        compute_bias_corrected_edf(self.model, overwrite=False)
+        edf1 = np.array([edf1 for edf1 in self.model.term_edf1])
+        np.testing.assert_allclose(
+            edf1,
+            np.array(
+                [
+                    5.473586623992419,
+                    4.491333911855849,
+                    8.92464814765902,
+                    1.7483511243189,
                 ]
             ),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 1.5),
+        )
+
+    def test_ps(self):
+        ps = []
+        for par in range(len(self.model.formulas)):
+            pps, _ = approx_smooth_p_values(self.model, par=par)
+            ps.extend(pps)
+        np.testing.assert_allclose(
+            ps,
+            np.array([0.0, 0.0, 0.0, 0.576055409981393]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
+        )
+
+    def test_TRs(self):
+        Trs = []
+        for par in range(len(self.model.formulas)):
+            _, pTrs = approx_smooth_p_values(self.model, par=par)
+            Trs.extend(pTrs)
+        np.testing.assert_allclose(
+            Trs,
+            np.array(
+                [
+                    115.90325465300074,
+                    298.2257039025024,
+                    1934.539505554873,
+                    0.9124833972765121,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
+        )
+
+    def test_res(self):
+
+        np.testing.assert_allclose(
+            self.res[:, 0].reshape(-1, 1),
+            self.res0,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1e-6),
+        )
+
+    def test_fitted(self):
+        np.testing.assert_allclose(
+            np.concatenate(self.model.mus, axis=1),
+            self.mus,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1e-6),
+        )
+
+    def test_rvs(self):
+
+        seed = self.seed
+        size = self.size
+
+        rvs2 = np.zeros_like(self.rvs)
+
+        for mui in range(self.mus.shape[0]):
+            rvs2[:, :, mui] = scp.stats.multivariate_normal.rvs(
+                size=size,
+                mean=self.mus[mui, :],
+                cov=self.cov,
+                random_state=seed,
+            )
+
+            seed += 1
+
+        np.testing.assert_allclose(
+            self.rvs, rvs2, atol=min(max_atol, 0), rtol=min(max_rtol, 1e-6)
+        )
+
+
+class Test_Nuts:
+    sim_dat = sim4(500, 2, family=Gamma(), seed=0)
+
+    # We again need to model the mean: \mu_i = \alpha + f(x0) + f(x1) + f_{x4}(x0)
+    sim_formula_m = Formula(
+        lhs("y"), [i(), f(["x0"]), f(["x1"]), f(["x2"]), f(["x3"])], data=sim_dat
+    )
+
+    # and the standard deviation
+    sim_formula_sd = Formula(lhs("y"), [i()], data=sim_dat)
+
+    family = GAMMALS([LOG(), LOGb(-0.0001)])
+
+    test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
+    test_kwargs["control_lambda"] = 2
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["max_outer"] = 200
+    test_kwargs["max_inner"] = 500
+    test_kwargs["method"] = "qEFS"
+    test_kwargs["repara"] = False
+    test_kwargs["prefit_grad"] = True
+    test_kwargs["sample_hessian"] = True
+    test_kwargs["structured_qefs"] = False
+
+    # Now define the model and fit!
+    gsmm_fam = GAMLSSGSMMFamily(2, family)
+    model = GSMM([sim_formula_m, sim_formula_sd], gsmm_fam)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model.fit(**test_kwargs)
+
+    def test_NUTS(self):
+        res = sample_mssm(
+            self.model,
+            auto_converge=True,
+            M_adapt=100,
+            parallelize_chains=False,
+            n_chains=1,
+            sample_rho=True,
+            delta=0.6,
+            n_iter=100,
+        )
+
+        llks, coef_samples, rho_samples = res.lps, res.coefs, res.rhos
+
+        assert (
+            rho_samples.shape == (1, 100, len(self.model.overall_penalties))
+            and coef_samples.shape == (1, 100, len(self.model.coef))
+            and llks.shape == (1, 100, 1)
         )

@@ -3,6 +3,7 @@ from mssm.models import *
 from mssm.src.python.compare import compare_CDL
 import numpy as np
 import os
+import copy
 from mssmViz.sim import *
 from mssm.src.python.repara import reparam
 from mssm.src.python.gamm_solvers import (
@@ -16,6 +17,7 @@ from mssm.src.python.utils import correct_VB, estimateVp
 import io
 from contextlib import redirect_stdout
 from .defaults import default_gamm_test_kwargs, max_atol, max_rtol
+from mssm.src.python.mcmc import sample_mssm
 
 ################################################################## Tests ##################################################################
 
@@ -813,7 +815,7 @@ class Test_inval_checks_ar_hard:
     def test_GAMedf(self):
         np.testing.assert_allclose(
             self.model.edf,
-            9.916179496952736,
+            9.914665636631954,
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.15),
         )
@@ -824,43 +826,43 @@ class Test_inval_checks_ar_hard:
             coef,
             np.array(
                 [
-                    [15.92982628],
-                    [5.20305592],
-                    [1.39435932],
-                    [-0.62636022],
-                    [-2.49782216],
-                    [-4.55238561],
-                    [-6.12388233],
-                    [-8.27440849],
-                    [-8.86604066],
-                    [-9.13663688],
-                    [-10.78167667],
-                    [-3.63166588],
-                    [1.32673993],
-                    [6.47535892],
-                    [9.74332076],
-                    [13.07529235],
-                    [16.86340316],
-                    [18.76129413],
-                    [19.44134501],
-                    [-13.27893097],
-                    [24.97448667],
-                    [39.93154592],
-                    [38.48734941],
-                    [29.02149839],
-                    [10.28687776],
-                    [-4.20723914],
-                    [-8.21816396],
-                    [-17.58423002],
-                    [-4.02800656],
-                    [0.19886441],
-                    [2.47788889],
-                    [3.59030413],
-                    [4.9727597],
-                    [6.11882263],
-                    [4.96189494],
-                    [1.71710551],
-                    [-1.91771102],
+                    [15.92571881],
+                    [5.19958373],
+                    [1.39343046],
+                    [-0.62593968],
+                    [-2.49615241],
+                    [-4.5493454],
+                    [-6.11979499],
+                    [-8.26888863],
+                    [-8.86013011],
+                    [-9.13055018],
+                    [-10.77638851],
+                    [-3.63007465],
+                    [1.32581683],
+                    [6.47189019],
+                    [9.73827685],
+                    [13.0687279],
+                    [16.85533256],
+                    [18.75284825],
+                    [19.43316167],
+                    [-13.27535565],
+                    [24.96597882],
+                    [39.92125163],
+                    [38.47794559],
+                    [29.01278051],
+                    [10.27933651],
+                    [-4.20668495],
+                    [-8.21978174],
+                    [-17.59385126],
+                    [-4.03084972],
+                    [0.19964786],
+                    [2.48084294],
+                    [3.59324394],
+                    [4.9748081],
+                    [6.12069348],
+                    [4.96482875],
+                    [1.72280157],
+                    [-1.90892359],
                 ]
             ),
             atol=min(max_atol, 0),
@@ -870,13 +872,13 @@ class Test_inval_checks_ar_hard:
     def test_GAMreml(self):
         reml = self.model.get_reml()
         np.testing.assert_allclose(
-            reml, -7.043260375631441, atol=min(max_atol, 0), rtol=min(max_rtol, 2.7)
+            reml, -7.038843850493777, atol=min(max_atol, 0), rtol=min(max_rtol, 2.7)
         )
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
         np.testing.assert_allclose(
-            llk, 1.5261519408294362, atol=min(max_atol, 0), rtol=min(max_rtol, 13.5)
+            llk, 1.5241928709018069, atol=min(max_atol, 0), rtol=min(max_rtol, 13.5)
         )
 
 
@@ -2702,7 +2704,7 @@ class Test_Vp_estimation_hard:
 
     model.fit(**test_kwargs)
 
-    Vp, _, _, _, _, _ = estimateVp(model, strategy="JJJ1", Vp_fidiff=True)
+    Vp, _, _, _, _, _ = estimateVp(model, grid_type="JJJ1", Vp_fidiff=True)
 
     def test_Vp(self):
         np.testing.assert_allclose(
@@ -2948,7 +2950,7 @@ class Test_shared:
     def test_GAMedf(self):
         np.testing.assert_allclose(
             self.model.edf,
-            14.474560341691095,
+            14.4719640578517,
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.1),
         )
@@ -2956,7 +2958,7 @@ class Test_shared:
     def test_GAMsigma(self):
         _, sigma = self.model.get_pars()
         np.testing.assert_allclose(
-            sigma, 1.7122644814590584, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            sigma, 1.7122409251122652, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_GAMcoef(self):
@@ -2965,43 +2967,43 @@ class Test_shared:
             coef,
             np.array(
                 [
-                    [6.63115934],
-                    [-0.0728171],
-                    [-0.0202448],
-                    [0.01181259],
-                    [0.0380147],
-                    [0.06274025],
-                    [0.09110549],
-                    [0.11721487],
-                    [0.12369589],
-                    [0.13045535],
-                    [-1.89545643],
-                    [-1.02998279],
-                    [-0.50963573],
-                    [0.01338543],
-                    [0.8723655],
-                    [2.10927161],
-                    [3.52039551],
-                    [4.40419881],
-                    [5.22845418],
-                    [-7.05710007],
-                    [3.770508],
-                    [6.38517406],
-                    [-1.7808684],
-                    [-0.47531908],
-                    [0.41080258],
-                    [-5.39519788],
-                    [-1.57547179],
-                    [-8.82661351],
-                    [-0.09628179],
-                    [-0.02911359],
-                    [0.0087516],
-                    [0.05074923],
-                    [0.09477548],
-                    [0.12442737],
-                    [0.152579],
-                    [0.16546373],
-                    [0.17582209],
+                    [6.63116239],
+                    [-0.07274685],
+                    [-0.02026652],
+                    [0.01171917],
+                    [0.0378775],
+                    [0.06260951],
+                    [0.09101756],
+                    [0.11719639],
+                    [0.12378689],
+                    [0.13065704],
+                    [-1.89545301],
+                    [-1.02998712],
+                    [-0.50964475],
+                    [0.01337334],
+                    [0.8723549],
+                    [2.10927078],
+                    [3.52039899],
+                    [4.40420506],
+                    [5.22846389],
+                    [-7.05725222],
+                    [3.77034657],
+                    [6.38497999],
+                    [-1.78112216],
+                    [-0.47549726],
+                    [0.41054967],
+                    [-5.39533875],
+                    [-1.57564961],
+                    [-8.82621135],
+                    [-0.09627863],
+                    [-0.0291371],
+                    [0.00872107],
+                    [0.05072234],
+                    [0.0947586],
+                    [0.12442353],
+                    [0.15258836],
+                    [0.1654832],
+                    [0.17585048],
                 ]
             ),
             atol=min(max_atol, 0),
@@ -3012,7 +3014,7 @@ class Test_shared:
         lam = np.array([p.lam for p in self.model.overall_penalties])
         np.testing.assert_allclose(
             lam,
-            np.array([14.629935583511205, 0.013963952614761084, 274960.77985164756]),
+            np.array([14.629502463063695, 0.01396334318637649, 10000000.0]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 2.5),
         )
@@ -3020,13 +3022,13 @@ class Test_shared:
     def test_GAMreml(self):
         reml = self.model.get_reml()
         np.testing.assert_allclose(
-            reml, -3735.1471784723763, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            reml, -3735.147402685833, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
         np.testing.assert_allclose(
-            llk, -3704.806458939361, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            llk, -3704.8083249628717, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_edf1(self):
@@ -3036,10 +3038,10 @@ class Test_shared:
             edf1,
             np.array(
                 [
-                    1.0026619803714023,
-                    3.9345191984495687,
-                    8.730848583106779,
-                    1.0027681370571946,
+                    1.0000733020995711,
+                    3.934546970101976,
+                    8.730868478791379,
+                    1.0000762308826694,
                 ]
             ),
             atol=min(max_atol, 0),
@@ -3053,7 +3055,7 @@ class Test_shared:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.3389291306383489, 0.0, 0.0, 0.19899991251845162]),
+            np.array([0.33824034340042264, 0.0, 0.0, 0.19845584583265063]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.5),
         )
@@ -3067,12 +3069,448 @@ class Test_shared:
             Trs,
             np.array(
                 [
-                    0.9194104426252923,
-                    263.96555423099835,
-                    238.8429544293655,
-                    1.6554767488819178,
+                    0.9199076884475281,
+                    263.97162489423096,
+                    238.84602172183725,
+                    1.660014588689431,
                 ]
             ),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 1.5),
+        )
+
+
+class Test_scaledT:
+    sim_fit_dat = sim3(n=500, scale=2, c=0.0, family=Gaussian(), seed=1)
+
+    sim_fit_formula = Formula(
+        lhs("y"),
+        [i(), f(["x0"]), f(["x1"]), f(["x2"]), f(["x3"])],
+        data=sim_fit_dat,
+        print_warn=False,
+    )
+
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["method"] = "QR"
+    test_kwargs["control_lambda"] = 2
+    test_kwargs["max_inner"] = 1
+    test_kwargs["max_outer"] = 200
+    test_kwargs["extend_lambda"] = False
+
+    model = GAMM(sim_fit_formula, ScaledT(Identity(), theta=None))
+    model.fit(**test_kwargs)
+
+    def test_GAMedf(self):
+        np.testing.assert_allclose(
+            self.model.edf,
+            13.553154568109704,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_GAMsigma(self):
+        _, sigma = self.model.get_pars()
+        np.testing.assert_allclose(
+            sigma, 1, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+        )
+
+    def test_GAMcoef(self):
+        coef, _ = self.model.get_pars()
+        np.testing.assert_allclose(
+            coef,
+            np.array(
+                [
+                    [6.7358217],
+                    [0.20208928],
+                    [0.05648062],
+                    [-0.03226934],
+                    [-0.104946],
+                    [-0.17373431],
+                    [-0.25281988],
+                    [-0.32580411],
+                    [-0.34443526],
+                    [-0.36384726],
+                    [-2.01606859],
+                    [-0.82650866],
+                    [-0.28394082],
+                    [0.14672796],
+                    [0.98042689],
+                    [2.33567605],
+                    [3.81207685],
+                    [4.56273183],
+                    [5.291303],
+                    [-5.76400254],
+                    [5.20123032],
+                    [8.26367233],
+                    [-0.38708794],
+                    [0.91947308],
+                    [1.45279389],
+                    [-3.41512094],
+                    [-1.94531263],
+                    [1.66396739],
+                    [0.13084146],
+                    [0.03959839],
+                    [-0.01185002],
+                    [-0.06892953],
+                    [-0.12877486],
+                    [-0.16908999],
+                    [-0.20736661],
+                    [-0.22489143],
+                    [-0.23898128],
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
+        )
+
+    def test_GAMlam(self):
+        lam = np.array([p.lam for p in self.model.overall_penalties])
+        np.testing.assert_allclose(
+            lam,
+            np.array(
+                [
+                    52363.54247738073,
+                    5.4805753616804145,
+                    0.011569098493613405,
+                    10000000.0,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 2.5),
+        )
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        np.testing.assert_allclose(
+            reml, -1068.5561157047302, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+        )
+
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        np.testing.assert_allclose(
+            llk, -1045.0408995624266, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+        )
+
+    def test_edf1(self):
+        compute_bias_corrected_edf(self.model, overwrite=False)
+        edf1 = np.array([edf1 for edf1 in self.model.term_edf1])
+        np.testing.assert_allclose(
+            edf1,
+            np.array(
+                [
+                    1.0036546846834846,
+                    3.6662086267392127,
+                    8.150525121272217,
+                    1.000019956808329,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
+        )
+
+    def test_ps(self):
+        ps = []
+        for par in range(len(self.model.formulas)):
+            pps, _ = approx_smooth_p_values(self.model, par=par)
+            ps.extend(pps)
+        np.testing.assert_allclose(
+            ps,
+            np.array([0.07484991939372287, 0.0, 0.0, 0.2412486959166208]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
+        )
+
+    def test_TRs(self):
+        Trs = []
+        for par in range(len(self.model.formulas)):
+            _, pTrs = approx_smooth_p_values(self.model, par=par)
+            Trs.extend(pTrs)
+        np.testing.assert_allclose(
+            Trs,
+            np.array(
+                [
+                    3.1809874866091556,
+                    487.24072555719874,
+                    986.9308330903519,
+                    1.373323661827929,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
+        )
+
+
+class Test_scaledT_inner:
+    sim_fit_dat = sim3(n=500, scale=2, c=0.0, family=Gaussian(), seed=1)
+
+    sim_fit_formula = Formula(
+        lhs("y"),
+        [i(), f(["x0"]), f(["x1"]), f(["x2"]), f(["x3"])],
+        data=sim_fit_dat,
+        print_warn=False,
+    )
+
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["method"] = "QR"
+    test_kwargs["control_lambda"] = 2
+    test_kwargs["max_inner"] = 500
+    test_kwargs["max_outer"] = 200
+    test_kwargs["extend_lambda"] = False
+
+    model = GAMM(sim_fit_formula, ScaledT(Identity(), theta=None))
+    model.fit(**test_kwargs)
+
+    def test_GAMedf(self):
+        np.testing.assert_allclose(
+            self.model.edf,
+            13.552911459965614,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_GAMsigma(self):
+        _, sigma = self.model.get_pars()
+        np.testing.assert_allclose(
+            sigma, 1, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+        )
+
+    def test_GAMcoef(self):
+        coef, _ = self.model.get_pars()
+        np.testing.assert_allclose(
+            coef,
+            np.array(
+                [
+                    [6.73582166],
+                    [0.20211598],
+                    [0.0564647],
+                    [-0.0323105],
+                    [-0.10499532],
+                    [-0.17378206],
+                    [-0.25285659],
+                    [-0.32581718],
+                    [-0.34440943],
+                    [-0.36378212],
+                    [-2.01607052],
+                    [-0.82650919],
+                    [-0.28394019],
+                    [0.14672867],
+                    [0.98042685],
+                    [2.33567734],
+                    [3.81208058],
+                    [4.56273677],
+                    [5.29130921],
+                    [-5.76399146],
+                    [5.20124744],
+                    [8.26368431],
+                    [-0.38707497],
+                    [0.91949542],
+                    [1.45280546],
+                    [-3.41509851],
+                    [-1.94530905],
+                    [1.66399171],
+                    [0.13084085],
+                    [0.03959821],
+                    [-0.01184997],
+                    [-0.06892921],
+                    [-0.12877426],
+                    [-0.1690892],
+                    [-0.20736564],
+                    [-0.22489038],
+                    [-0.23898017],
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
+        )
+
+    def test_GAMlam(self):
+        lam = np.array([p.lam for p in self.model.overall_penalties])
+        np.testing.assert_allclose(
+            lam,
+            np.array(
+                [60316.81114161794, 5.48057374716229, 0.01156912603877122, 10000000.0]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 2.5),
+        )
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        np.testing.assert_allclose(
+            reml, -1068.5561015571268, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+        )
+
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        np.testing.assert_allclose(
+            llk, -1045.0411372329013, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+        )
+
+    def test_edf1(self):
+        compute_bias_corrected_edf(self.model, overwrite=False)
+        edf1 = np.array([edf1 for edf1 in self.model.term_edf1])
+        np.testing.assert_allclose(
+            edf1,
+            np.array(
+                [
+                    1.0031736510713842,
+                    3.6662088219626874,
+                    8.15052365429748,
+                    1.00001995680169,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
+        )
+
+    def test_ps(self):
+        ps = []
+        for par in range(len(self.model.formulas)):
+            pps, _ = approx_smooth_p_values(self.model, par=par)
+            ps.extend(pps)
+        np.testing.assert_allclose(
+            ps,
+            np.array([0.07452861876116601, 0.0, 0.0, 0.24125108252257288]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
+        )
+
+    def test_TRs(self):
+        Trs = []
+        for par in range(len(self.model.formulas)):
+            _, pTrs = approx_smooth_p_values(self.model, par=par)
+            Trs.extend(pTrs)
+        np.testing.assert_allclose(
+            Trs,
+            np.array(
+                [
+                    3.19229229126508,
+                    487.24212623054916,
+                    986.9297816819574,
+                    1.3733097304844804,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
+        )
+
+
+class Test_transformX:
+    sim_dat = sim11(
+        5000, 2, c=0, seed=20, family=Gaussian(), n_ranef=20, binom_offset=0
+    )
+
+    sim_dat = sim_dat.sort_values(["x4"], ascending=[True])
+
+    sim_formula = Formula(
+        lhs("y"),
+        [i(), f(["x0"]), f(["x1"]), f(["x2"]), f(["x3"])],
+        data=sim_dat,
+        series_id="x4",
+    )
+
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["rho"] = 0.7
+    test_kwargs["max_inner"] = 1
+
+    model = GAMM(sim_formula, Gaussian())
+    model.fit(**test_kwargs)
+
+    # Test model matrix transformation code against ar1 model
+    Lrhoi, llc = computeAr1Chol(model.formulas[0], model.rho)
+    sim_dat["y2"] = Lrhoi.T @ sim_dat["y"].values.reshape(-1, 1)
+    X = model.get_mmat()
+    LX = Lrhoi.T @ X
+    LX.sort_indices()
+
+    def transform_X(X, LX=LX):
+        return LX
+
+    test_kwargs["rho"] = None
+    test_kwargs["transform_X"] = transform_X
+
+    sim_formula2 = Formula(
+        lhs("y2"), [i(), f(["x0"]), f(["x1"]), f(["x2"]), f(["x3"])], data=sim_dat
+    )
+
+    model2 = GAMM(sim_formula2, Gaussian())
+    model2.fit(**test_kwargs)
+
+    # Check that VP is same as well
+    VP1 = estimateVp(model)
+    VP2 = estimateVp(model2)
+
+    def test_coef(self):
+        np.testing.assert_allclose(
+            self.model.coef,
+            self.model2.coef,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1e-6),
+        )
+
+    def test_X(self):
+        np.testing.assert_allclose(
+            self.LX.toarray(),
+            self.model2.get_mmat().toarray(),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1e-6),
+        )
+
+    def test_VP(self):
+        np.testing.assert_allclose(
+            self.VP1[0], self.VP2[0], atol=min(max_atol, 0), rtol=min(max_rtol, 1e-6)
+        )
+
+
+class Test_Nuts_output:
+    # Another sampler test
+    dat = sim3(5000, 10, family=Gaussian(), seed=20, binom_offset=0)
+
+    formula = Formula(lhs("y"), [i(), f(["x0"])], data=dat)
+
+    model = GAMM(formula, Gaussian())
+    model.fit()
+
+    chains = sample_mssm(
+        model,
+        n_iter=1000,
+        n_steps=20,
+        auto_converge=True,
+        M_adapt=20,
+        parallelize_chains=True,
+        sample_rho=True,
+        n_chains=4,
+        make_proper=True,
+        max_j=10,
+        max_j_adapt=5,
+        seed=0,
+    )
+
+    def test_posterior_coef(self):
+        np.testing.assert_allclose(
+            np.mean(self.chains.coefs, axis=(0, 1)),
+            np.array(
+                [
+                    7.87331299,
+                    -0.69024163,
+                    0.15851067,
+                    0.80691378,
+                    1.07582066,
+                    1.51994181,
+                    1.28148066,
+                    0.24431961,
+                    -1.16853928,
+                    -2.55140693,
+                ]
+            ),
+            atol=min(max_atol, 0.2),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_posterior_rho(self):
+        np.testing.assert_allclose(
+            np.mean(self.chains.rhos, axis=(0, 1)),
+            np.array([0.45279859]),
+            atol=min(max_atol, 0.2),
+            rtol=min(max_rtol, 0.1),
         )

@@ -74,6 +74,9 @@ class LambdaTerm:
     :ivar list[int] | int term: The index (indices) of the term(s) in a
         :class:`mssm.src.python.formula.Formula` with which this penalty is associated.
         Initialized with ``None``.
+    :ivar bool frozen: Whether the penalty matrix with this term should be frozen during estimation
+        (i.e., preventing any update to the penalty) or not. Initialized with ``False``, meaning
+        the penalty is to be updated during estimation.
     """
 
     # Lambda term storage.
@@ -202,3 +205,37 @@ class Constraint:
 
     Z: np.ndarray | int | None = None
     type: ConstType | None = None
+
+
+@dataclass
+class SamplerResult:
+    """Holds quantities sampled from the posterior of GAMM, GAMMLSS, or GSMM models.
+
+    :ivar np.ndarray | None llks: An array holding the traces of the log-joint densities (up to a
+        constant) of coefficients, optional scale or theta parameters, and optional
+        :math:`\\rho = log(\\lambda)` log smoothing penalties for all chains sampled by a mcmc
+        sampler. Dimension is ``(n_chains,n_samples,1)``. Initialized with None.
+    :ivar np.ndarray | None coefs: An array holding the traces of the coefficients (i.e.,
+        :math`\\boldsymbol{\\beta}`) for all chains sampled by a mcmc sampler. Dimension is
+        ``(n_chains,n_samples,n_coef)``. Initialized with None.
+    :ivar np.ndarray | None lscales: If the model sampled is a :class:`mssm.models.GAMM` with
+        a scale parameter (i.e., :math:`\\phi`), then this array holds the traces of the **log**
+        scale parameter for all chains sampled by a mcmc sampler. Dimension is
+        ``(n_chains,n_samples,1)``. For all other models, this field is None. Initialized with None.
+    :ivar np.ndarray | None thetas: If the model sampled is a :class:`mssm.models.GAMM` with
+        family inheriting from :class:`mssm.src.python.exp_fam.ExtendedFamily`, then this array
+        holds the traces of the theta parameters of the extended family for all chains sampled by a
+        mcmc sampler. Dimension is ``(n_chains,n_samples,n_theta)``. For all other models, this
+        field is None. Initialized with None.
+    :ivar np.ndarray | None rhos: An array holding the traces of the log smoothing penalties (i.e.,
+        :math`\\boldsymbol{\\rho}`) for all chains sampled by a mcmc sampler. Dimension is
+        ``(n_chains,n_samples,n_rho)``. Note, that sampling these parameters is optional. Instead
+        they are often fixed at their MAP. If they are not sampled, this field will simply be None.
+        Initialized with None.
+    """
+
+    lps: np.ndarray | None = None
+    coefs: np.ndarray | None = None
+    lscales: np.ndarray | None = None
+    thetas: np.ndarray | None = None
+    rhos: np.ndarray | None = None
