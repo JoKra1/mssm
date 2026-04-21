@@ -7113,9 +7113,11 @@ def makepdd_fd2llk(
     IonHBB = U @ np.diag(1 / eigonHBB) @ U.T
 
     # Replace blocks in noHfd with PD and dampened versions
-    onHfd[np.ix_(np.arange(nF), np.arange(nF))] = onHBB
-    onHfd[np.ix_(np.arange(nF), np.arange(nF, nT))] = onHBb
-    onHfd[np.ix_(np.arange(nF, nT), np.arange(nF))] = onHBb.T
+    with warnings.catch_warnings():  # Sparsity efficiency warning
+        warnings.simplefilter("ignore")
+        onHfd[np.ix_(np.arange(nF), np.arange(nF))] = onHBB
+        onHfd[np.ix_(np.arange(nF), np.arange(nF, nT))] = onHBb
+        onHfd[np.ix_(np.arange(nF, nT), np.arange(nF))] = onHBb.T
 
     return P1 @ onHfd @ P1.T, onHBB, IonHBB, onHBb
 

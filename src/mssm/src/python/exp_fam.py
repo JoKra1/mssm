@@ -1556,7 +1556,7 @@ class Poisson(Family):
         """
         Function providing initial :math:`\\boldsymbol{\\mu}` vector for Poisson GAMM.
 
-        We shrink extreme observed counts towards mean.
+        Matches initialization of ``poisson()`` family in R.
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
@@ -1565,12 +1565,9 @@ class Poisson(Family):
         :rtype: np.ndarray
         """
 
-        gmu = np.mean(y)
-        norm = y / gmu
-
-        norm[norm > 1.9] = 1.9
-        norm[norm < 0.1] = 0.1
-        mu = gmu * norm
+        mu = np.zeros_like(y, dtype=np.float64)
+        mu[y > 0] = y[y > 0]
+        mu += 0.1
 
         return mu
 

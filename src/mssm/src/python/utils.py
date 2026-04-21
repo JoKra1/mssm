@@ -200,6 +200,38 @@ class GAMLSSGSMMFamily(GSMMFamily):
             elif gammlss_family.twopar:
                 self.extra_coef = 1  # Scale
 
+    def init_coef(self, models: list[Callable]) -> np.ndarray:
+        """Function to initialize the coefficients of the model.
+
+        :param models: A list of :class:`mssm.models.GAMM`'s, - each based on one of the formulas
+            provided to a model.
+        :type models: [mssm.models.GAMM]
+        :return: A numpy array of shape (-1,1), holding initial values for all model coefficients.
+        :rtype: np.ndarray
+        """
+        gammlss_family = self.llkargs[0]
+
+        if isinstance(gammlss_family, Family):
+            m = models[0]
+            m.family = gammlss_family
+            m.fit(max_outer=0, progress_bar=False)
+
+            init_coef = m.coef
+
+            if isinstance(gammlss_family, ExtendedFamily):
+                theta = gammlss_family.theta
+                init_coef = np.concatenate([init_coef, theta], axis=0)
+
+            else:
+                if self.extra_coef is not None:
+                    init_coef = np.concatenate(
+                        [init_coef, np.array([0]).reshape(-1, 1)], axis=0
+                    )
+
+            return init_coef
+
+        return gammlss_family.init_coef(models)
+
     def llk(
         self,
         coef: np.ndarray,
