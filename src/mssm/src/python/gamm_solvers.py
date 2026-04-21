@@ -6733,7 +6733,14 @@ def update_ys_qefs(
     if yk is None:
         yk = (-1 * next_grad_up) - (-1 * grad_up)
         sk = alpha * step
-        rhok = 1 / (yk.T @ sk)
+
+        with warnings.catch_warnings():  # Divide by zero
+            warnings.simplefilter("ignore")
+
+            rhok = 1 / (yk.T @ sk)
+
+            if np.isnan(rhok) | np.isinf(rhok):
+                skip = True
 
     if skip is False:
 
@@ -6939,8 +6946,8 @@ def sample_ys_qefs(
                 n_llk = family.llk(n_coef, coef_split_idx, ys, Xs)
                 n_pen_llk = n_llk - 0.5 * n_coef.T @ S_emb @ n_coef
 
-            # Compute Metropolis acceptance
-            acc = min(1, np.exp((n_pen_llk - c_pen_llk) / T))
+                # Compute Metropolis acceptance
+                acc = min(1, np.exp((n_pen_llk - c_pen_llk) / T))
 
             Hbar += delta - acc
 
