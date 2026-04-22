@@ -154,6 +154,10 @@ def init_coef_gammals_tests(self, models):
     return coef
 
 
+def init_coef_gsmmgammlss(self, models):
+    return None
+
+
 def init_penalties_tests_gammlss(self, penalties):
     return [0.01 for _ in range(len(penalties))]
 
