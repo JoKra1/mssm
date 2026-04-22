@@ -7112,7 +7112,7 @@ def makepdd_fd2llk(
 
     # Enforce PD
     eps = np.power(np.finfo(float).eps, 0.5)
-    thresh = eps * np.max(eigonHBB)
+    thresh = eps * np.max(np.abs(eigonHBB))
     eigonHBB[eigonHBB <= thresh] = thresh
 
     # Re-compute onHBB as PD and invert

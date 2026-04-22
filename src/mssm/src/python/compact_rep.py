@@ -986,6 +986,7 @@ def computeSVPS(
     """
     # Now seek implicit representation for inverse of nH + S_emb
     # Can be obtained by applying the modified Woodbury Identity of Henderson and Searle 3 times.
+    eps = np.power(np.finfo(float).eps, 0.5)
 
     # Start with obtaining inverse of nH1 + S_emb
     Lp, Pr, _ = cpp_cholP(nH1 + S_emb)  # noqa: F405
@@ -999,6 +1000,7 @@ def computeSVPS(
     invt2 = np.identity(nH2t2.shape[1]) + nH2t2 @ nH2t3 @ V0 @ nH2t1
 
     U, sv_invt2, VT = scp.linalg.svd(invt2, lapack_driver="gesvd")
+    sv_invt2[sv_invt2 < eps] = eps
 
     # Now we we can again compute all parts for the modified Woodbury identy to obtain
     # (nH1 + (nH2t1@nH2t2@nH2t3) + S_emb)^{-1}
@@ -1025,6 +1027,7 @@ def computeSVPS(
         invt2 = np.identity(nH3t1.shape[1]) + nH3t3 @ V0nH3t1
 
         U, sv_invt2, VT = scp.linalg.svd(invt2, lapack_driver="gesvd")
+        sv_invt2[sv_invt2 < eps] = eps
 
         # Now we we can again compute all parts for the modified Woodbury identy to obtain
         # (nH1 + (nH2t1@nH2t2@nH2t3) + (nH3t1@nH3t3) + S_emb)^{-1}
@@ -1051,6 +1054,7 @@ def computeSVPS(
     invt2 = np.identity(nH4t2.shape[1]) + nH4t2 @ nH4t3 @ V0nH4t1
 
     U, sv_invt2, VT = scp.linalg.svd(invt2, lapack_driver="gesvd")
+    sv_invt2[sv_invt2 < eps] = eps
 
     # Now we we can again compute all parts for the modified Woodbury identy to obtain
     # (nH1 + (nH2t1@nH2t2@nH2t3) + (nH3t1@nH3t3) + (nH4t1@nH4t2@nH4t3) + S_emb)^{-1}
