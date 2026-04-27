@@ -8109,12 +8109,10 @@ def correct_lambda_step_gen_smooth(
                 n_c=n_c,
             )
 
-            __old_opt_rp = None
+            __old_opt_rp = copy.deepcopy(__old_opt)
             if method == "qEFS" and outer > 0 and len(__old_opt.sk) > 0:
                 # sk and yk of previous optimizer are in state before re-param and will
                 # have to be transformed here
-                __old_opt_rp = copy.deepcopy(__old_opt)
-
                 __old_opt_rp.yk = __old_opt_rp.yk @ Q_emb
                 __old_opt_rp.sk = __old_opt_rp.sk @ Q_emb
 

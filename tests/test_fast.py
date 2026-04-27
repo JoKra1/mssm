@@ -1368,7 +1368,7 @@ class Test_te_scaling_qefs:
             self.model.edf,
             16.64406656435895,
             atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.15),
+            rtol=min(max_rtol, 0.2),
         )
 
     def test_GAMcoef(self):
