@@ -9,6 +9,7 @@ import io
 from contextlib import redirect_stdout
 from mssmViz.sim import *
 from .defaults import (
+    default_gamm_test_kwargs,
     default_gsmm_test_kwargs,
     max_atol,
     max_rtol,
@@ -1976,4 +1977,49 @@ class Test_Nuts:
             rho_samples.shape == (1, 100, len(self.model.overall_penalties))
             and coef_samples.shape == (1, 100, len(self.model.coef))
             and llks.shape == (1, 100, 1)
+        )
+
+
+class Test_no_pen:
+    # No penalties
+    sim_dat, _ = sim1(100, random_seed=100)
+
+    # Specify formula
+    formula = Formula(lhs("y"), [i(), *li(["x", "fact"])], data=sim_dat)
+
+    # ... and model
+    model = GAMM(formula, Gaussian())
+
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_outer"] = 100
+    test_kwargs["max_inner"] = 1
+
+    model.fit(**test_kwargs)
+
+    test_kwargs2 = copy.deepcopy(default_gsmm_test_kwargs)
+    test_kwargs2["method"] = "qEFS"
+
+    # Now fit with GSMM
+    # Now define the model and fit!
+    gsmm_fam = GAMLSSGSMMFamily(1, Gaussian())
+    gsmm = GSMM([formula], gsmm_fam)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        gsmm.fit(**test_kwargs2)
+
+    def test_coef(self):
+        np.testing.assert_allclose(
+            ((self.model.coef - self.gsmm.coef[:-1]) / self.gsmm.coef[:-1]),
+            np.array(
+                [
+                    [-1.18189822e-05],
+                    [-1.24714928e-05],
+                    [-6.19873768e-06],
+                    [-2.34373385e-05],
+                    [-4.64458871e-05],
+                    [-3.90664436e-05],
+                ]
+            ),
+            atol=min(max_atol, 0.01),
+            rtol=min(max_rtol, 1e-3),
         )

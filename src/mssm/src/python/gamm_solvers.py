@@ -7136,6 +7136,109 @@ def makepdd_fd2llk(
     return P1 @ onHfd @ P1.T, onHBB, IonHBB, onHBb
 
 
+def init_qEFS_storage(
+    coef: np.ndarray,
+    qEFSH: str,
+    bfgs_options: dict,
+    sample_hessian: bool,
+    sample_hessian_method: int,
+    sample_hessian_options: dict,
+    fcols: np.ndarray,
+    sqEFS_options: dict,
+) -> scp.optimize.LbfgsInvHessProduct:
+    """Initializes storage to hold l-qEFS approximations to the negative Hessian.
+
+    Returns a ``scp.optimize.LbfgsInvHessProduct`` object with extra attributes.
+
+    :param coef: Coefficient array
+    :type coef: np.ndarray
+    :param qEFSH: Should the hessian approximation use a symmetric rank 1 update (``qEFSH='SR1'``)
+        that is forced to result in positive semi-definiteness of the approximation or the standard
+        bfgs update (``qEFSH='BFGS'``)
+    :param bfgs_options: An optional dictionary holding arguments that should be passed on to the
+        call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``.
+    :type bfgs_options: dict
+    :param sample_hessian: Whether or not to sample the quasi-Newton approximation of the negative
+        Hessians of the penalized log-likelihood and log-likelihood.
+    :type sample_hessian: bool
+    :param sample_hessian_method: Method to use for hessian sampling step. See
+        :func:`sample_ys_qefs` docstring for details.
+    :type sample_hessian_method: int
+    :param sample_hessian_options: Optional key-word arguments determining behavior of hessian
+        sampling step. See :func:`sample_ys_qefs` docstring for details.
+    :type sample_hessian_options: dict
+    :param fcols: For structured qEFS update this will be an array holding indices of columns of
+        negative Hessian to be approximated via finite differencing. Otherwise this will be None
+    :type fcols: np.ndarray
+    :param sqEFS_options: Optional key-word arguments determining behavior of the structured qEFS
+        method. Currently only ``"dampen_HBB"``, ``"dampen_HBb"`` and ``"pre_cond"`` are supported.
+        ``"dampen_HBB"`` takes float values > 0, with values < 1 leading to more wiggly estimates of
+        smooths approximated via quasi Newton approximation. Values > 1 are possible but not really
+        a good idea. ``"dampen_HBb"`` takes float values >= 0 and <= 1 and is used to scale the
+        off-diagonal blocks of the approximation of the negative Hessian, holding mixed derivatives
+        of terms approximated via finite differencing with respect to those approximated via quasi
+        Newton. ``"pre_cond"`` is a bool, indicating whether a diagonal pre-conditioner should be
+        applied to the negative Hessian before inverting it.
+    :type sqEFS_options: dict
+    :return: ``scp.optimize.LbfgsInvHessProduct`` to store Hessian approximations
+    :rtype: scp.optimize.LbfgsInvHessProduct
+    """
+
+    # Initialize storage for qEFS update.
+    opt_storage = scp.optimize.LbfgsInvHessProduct(
+        np.array([1]).reshape(1, 1), np.array([1]).reshape(1, 1)
+    )
+
+    # Storage but not approximation has been set up.
+    opt_storage.init = False
+
+    opt_storage.method = "qEFS"
+    opt_storage.form = qEFSH
+    opt_storage.bfgs_options = bfgs_options
+    opt_storage.sample_hessian = sample_hessian
+    opt_storage.sample_hessian_method = sample_hessian_method
+    opt_storage.sample_hessian_options = sample_hessian_options
+    opt_storage.fcols = fcols
+    opt_storage.acols = None
+    opt_storage.P1 = None
+    opt_storage.P2 = None
+    opt_storage.nHfd = None
+    opt_storage.IonHBB = None
+    opt_storage.sqEFS_options = sqEFS_options
+
+    if fcols is not None:
+        opt_storage.acols = [c for c in range(len(coef)) if c not in fcols]
+
+        # Combined indices in order so that quasi Newton block is bottom right
+        tcols = [*fcols, *opt_storage.acols]
+
+        nA, nT = len(opt_storage.acols), len(tcols)
+
+        # Permutation matrix P1:
+        # len(tcols) * len(tcols) permutation matrix transforming entire nH into
+        # order (onH) so that fd approximated block is top left and quasi Newton
+        # block is bottom right via onH = P1.T @ nH @ P1
+        opt_storage.P1 = scp.sparse.csc_array(
+            (
+                np.tile(1, nT),
+                (tcols, np.arange(nT)),
+            ),
+            shape=(nT, nT),
+        )
+
+        # Need another permutation matrix, P2:
+        # len(tcols) * len(acols) permutation matrix transforming quasi Newton
+        # approximated block (nHqa) to fit into nH via P2 @ nHqa @ P2.T
+        opt_storage.P2 = scp.sparse.csc_array(
+            (
+                np.tile(1, nA),
+                (opt_storage.acols, np.arange(nA)),
+            ),
+            shape=(nT, nA),
+        )
+    return opt_storage
+
+
 def update_coef_gen_smooth(
     family: GSMMFamily,
     ys: list[np.ndarray | None],
@@ -7773,23 +7876,16 @@ def correct_lambda_step_gen_smooth(
     conv_tol: float,
     gamma: float,
     method: str,
-    qEFSH: str,
     optimizer: str,
     __old_opt: scp.sparse.linalg.LinearOperator | None,
-    piv_tol: float,
     keep_drop: tuple[np.typing.NDArray[np.int_], np.typing.NDArray[np.int_]] | None,
     extend_lambda: bool,
     extension_method_lam: str,
     control_lambda: int,
     repara: bool,
     n_c: int,
-    bfgs_options: dict,
     global_opt_qefs: bool,
-    sample_hessian: bool,
-    sample_hessian_method: int,
-    sample_hessian_options: dict,
     fcols: np.ndarray | None,
-    sqEFS_options: dict,
 ) -> tuple[
     np.ndarray,
     scp.sparse.csc_array | None,
@@ -7864,18 +7960,12 @@ def correct_lambda_step_gen_smooth(
     :type gamma: float
     :param method: Method to use to estimate coefficients (and lambda parameter)
     :type method: str
-    :param qEFSH: Should the hessian approximation use a symmetric rank 1 update (``qEFSH='SR1'``)
-        that is forced to result in positive semi-definiteness of the approximation or the standard
-        bfgs update (``qEFSH='BFGS'``)
-    :type qEFSH: str
     :param optimizer: Deprecated
     :type optimizer: str
     :param __old_opt: If the L-qEFS update is used to estimate coefficients/lambda parameters, then
         this is the previous state of the quasi-Newton approximations to the (inverse) of the
         hessian of the log-likelihood
     :type __old_opt: scp.sparse.linalg.LinearOperator | None
-    :param piv_tol: Deprecated
-    :type piv_tol: float
     :param keep_drop: Set of previously kept and dropped coeeficients or None
     :type keep_drop: tuple[np.typing.NDArray[np.int_],np.typing.NDArray[np.int_]] | None
     :param extend_lambda: Whether lambda proposals should be accelerated or not. Can lower the
@@ -7901,35 +7991,13 @@ def correct_lambda_step_gen_smooth(
     :type repara: bool
     :param n_c: Number of cores to use
     :type n_c: int
-    :param bfgs_options: An optional dictionary holding arguments that should be passed on to the
-        call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``.
-    :type bfgs_options: dict
     :param global_opt_qefs: Whether or not to use a stochastic global optimization algorithm to
         estimate the coefficients when the L-qEFS update is used to estimate coefficients/lambda
         parameters.
     :type global_opt_qefs: bool
-    :param sample_hessian: Whether or not to sample the quasi-Newton approximation of the negative
-        Hessians of the penalized log-likelihood and log-likelihood.
-    :type sample_hessian: bool
-    :param sample_hessian_method: Method to use for hessian sampling step. See
-        :func:`sample_ys_qefs` docstring for details.
-    :type sample_hessian_method: int
-    :param sample_hessian_options: Optional key-word arguments determining behavior of hessian
-        sampling step. See :func:`sample_ys_qefs` docstring for details.
-    :type sample_hessian_options: dict
     :param fcols: For structured qEFS update this will be an array holding indices of columns of
         negative Hessian to be approximated via finite differencing. Otherwise this will be None
     :type fcols: np.ndarray
-    :param sqEFS_options: Optional key-word arguments determining behavior of the structured qEFS
-        method. Currently only ``"dampen_HBB"``, ``"dampen_HBb"`` and ``"pre_cond"`` are supported.
-        ``"dampen_HBB"`` takes float values > 0, with values < 1 leading to more wiggly estimates of
-        smooths approximated via quasi Newton approximation. Values > 1 are possible but not really
-        a good idea. ``"dampen_HBb"`` takes float values >= 0 and <= 1 and is used to scale the
-        off-diagonal blocks of the approximation of the negative Hessian, holding mixed derivatives
-        of terms approximated via finite differencing with respect to those approximated via quasi
-        Newton. ``"pre_cond"`` is a bool, indicating whether a diagonal pre-conditioner should be
-        applied to the negative Hessian before inverting it.
-    :type sqEFS_options: dict
     :return: coef estimate under corrected lambda, the negative hessian of the log-likelihood,
         cholesky of negative hessian of the penalized log-likelihood, inverse of the former
         (or another instance of :class:`scp.sparse.linalg.LinearOperator` representing the new
@@ -8018,65 +8086,6 @@ def correct_lambda_step_gen_smooth(
 
         # Then re-compute coef
         if optimizer == "Newton":
-
-            if method == "qEFS":
-
-                if outer == 0:
-                    # Initialize storage for qEFS update.
-                    __old_opt_rp = scp.optimize.LbfgsInvHessProduct(
-                        np.array([1]).reshape(1, 1), np.array([1]).reshape(1, 1)
-                    )
-
-                    # Storage but not approximation has been set up.
-                    __old_opt_rp.init = False
-
-                    __old_opt_rp.method = "qEFS"
-                    __old_opt_rp.form = qEFSH
-                    __old_opt_rp.bfgs_options = bfgs_options
-                    __old_opt_rp.sample_hessian = sample_hessian
-                    __old_opt_rp.sample_hessian_method = sample_hessian_method
-                    __old_opt_rp.sample_hessian_options = sample_hessian_options
-                    __old_opt_rp.fcols = fcols
-                    __old_opt_rp.acols = None
-                    __old_opt_rp.P1 = None
-                    __old_opt_rp.P2 = None
-                    __old_opt_rp.nHfd = None
-                    __old_opt_rp.IonHBB = None
-                    __old_opt_rp.sqEFS_options = sqEFS_options
-
-                    if fcols is not None:
-                        __old_opt_rp.acols = [
-                            c for c in range(len(coef)) if c not in fcols
-                        ]
-
-                        # Combined indices in order so that quasi Newton block is bottom right
-                        tcols = [*fcols, *__old_opt_rp.acols]
-
-                        nA, nT = len(__old_opt_rp.acols), len(tcols)
-
-                        # Permutation matrix P1:
-                        # len(tcols) * len(tcols) permutation matrix transforming entire nH into
-                        # order (onH) so that fd approximated block is top left and quasi Newton
-                        # block is bottom right via onH = P1.T @ nH @ P1
-                        __old_opt_rp.P1 = scp.sparse.csc_array(
-                            (
-                                np.tile(1, nT),
-                                (tcols, np.arange(nT)),
-                            ),
-                            shape=(nT, nT),
-                        )
-
-                        # Need another permutation matrix, P2:
-                        # len(tcols) * len(acols) permutation matrix transforming quasi Newton
-                        # approximated block (nHqa) to fit into nH via P2 @ nHqa @ P2.T
-                        __old_opt_rp.P2 = scp.sparse.csc_array(
-                            (
-                                np.tile(1, nA),
-                                (__old_opt_rp.acols, np.arange(nA)),
-                            ),
-                            shape=(nT, nA),
-                        )
-
             next_coef, H, L, LV, next_llk, next_pen_llk, eps, keep, drop = (
                 update_coef_gen_smooth(
                     family,
@@ -8595,20 +8604,26 @@ def solve_generalSmooth_sparse(
     was_extended = [False for _ in enumerate(smooth_pen)]
 
     # Build current penalties
-    S_emb, S_pinv, _, FS_use_rank = compute_S_emb_pinv_det(n_coef, smooth_pen, "svd")
-
-    # Build normalized penalty for rank checks (e.g., Wood, Pya & Saefken, 2016)
     keep_drop = None
-
-    S_norm = copy.deepcopy(smooth_pen[0].S_J_emb) / scp.sparse.linalg.norm(
-        smooth_pen[0].S_J_emb, ord=None
-    )
-    for peni in range(1, len(smooth_pen)):
-        S_norm += smooth_pen[peni].S_J_emb / scp.sparse.linalg.norm(
-            smooth_pen[peni].S_J_emb, ord=None
+    if len(smooth_pen) > 0:
+        S_emb, S_pinv, _, FS_use_rank = compute_S_emb_pinv_det(
+            n_coef, smooth_pen, "svd"
         )
 
-    S_norm /= scp.sparse.linalg.norm(S_norm, ord=None)
+        # Build normalized penalty for rank checks (e.g., Wood, Pya & Saefken, 2016)
+        S_norm = copy.deepcopy(smooth_pen[0].S_J_emb) / scp.sparse.linalg.norm(
+            smooth_pen[0].S_J_emb, ord=None
+        )
+        for peni in range(1, len(smooth_pen)):
+            S_norm += smooth_pen[peni].S_J_emb / scp.sparse.linalg.norm(
+                smooth_pen[peni].S_J_emb, ord=None
+            )
+
+        S_norm /= scp.sparse.linalg.norm(S_norm, ord=None)
+    else:
+        # Un-penalized case
+        S_emb = scp.sparse.csc_array(([], ([], [])), shape=(n_coef, n_coef))
+        S_norm = S_emb.copy()
 
     # Compute penalized likelihood for current estimate
     c_llk = family.llk(coef, coef_split_idx, ys, Xs)
@@ -8658,6 +8673,7 @@ def solve_generalSmooth_sparse(
             None,
             False,
         )
+        print(coef)
 
         if repara:
             split_coef = np.split(coef, coef_split_idx)
@@ -8668,17 +8684,64 @@ def solve_generalSmooth_sparse(
             coef = np.concatenate(split_coef).reshape(-1, 1)
 
     iterator = range(max_outer)
-    if progress_bar:
+    if progress_bar and len(smooth_pen) > 0:
         iterator = tqdm(iterator, desc="Fitting", leave=True)
 
     fit_info = Fit_info()
     fit_info.eps = 0
-    __old_opt = None
+
+    # Initialize
+    __old_opt = (
+        None
+        if method != "qEFS"
+        else init_qEFS_storage(
+            coef,
+            qEFSH,
+            bfgs_options,
+            sample_hessian,
+            sample_hessian_method,
+            sample_hessian_options,
+            fcols,
+            sqEFS_options,
+        )
+    )
     one_update_counter = 0
     restart_counter = 0
     lam_delta = []
     prev_llk_hist = []
+
+    if len(smooth_pen) == 0:
+        coef, H, L, LV, c_llk, c_pen_llk, eps, keep, drop = update_coef_gen_smooth(
+            family,
+            ys,
+            Xs,
+            coef,
+            coef_split_idx,
+            S_emb,
+            S_norm,
+            None,
+            None,
+            None,
+            c_llk,
+            0,
+            max_inner,
+            min_inner,
+            conv_tol,
+            method,
+            n_c,
+            keep_drop,
+            __old_opt,
+            global_opt_qefs,
+        )
+        fit_info.eps = eps
+        fit_info.dropped = drop
+        fit_info.iter = 1
+        outer = 0
+
     for outer in iterator:
+
+        if len(smooth_pen) == 0:
+            break
 
         # 1) Update coef for given lambda
         # 2) Check lambda -> repeat 1 if necessary
@@ -8720,23 +8783,16 @@ def solve_generalSmooth_sparse(
             conv_tol,
             gamma,
             method,
-            qEFSH,
             optimizer,
             __old_opt,
-            piv_tol,
             keep_drop,
             extend_lambda,
             extension_method_lam,
             control_lambda,
             repara,
             n_c,
-            bfgs_options,
             global_opt_qefs,
-            sample_hessian,
-            sample_hessian_method,
-            sample_hessian_options,
             fcols,
-            sqEFS_options,
         )
 
         # Monitor whether we keep changing lambda but not actually updating coefficients..
@@ -8878,7 +8934,11 @@ def solve_generalSmooth_sparse(
     penalty = coef.T @ S_emb @ coef
 
     # Calculate actual term-specific edf
-    term_edfs = calculate_term_edf(smooth_pen, term_edfs)
+    if len(smooth_pen) > 0:
+        term_edfs = calculate_term_edf(smooth_pen, term_edfs)
+    else:
+        term_edfs = None
+        total_edf = n_coef
 
     LV_linop = None
     if method == "qEFS":

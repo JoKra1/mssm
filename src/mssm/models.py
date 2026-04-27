@@ -946,6 +946,11 @@ class GSMM:
         else:
             smooth_pen = self.overall_penalties
 
+        # Reparam makes no sense on models without penalty
+        if len(smooth_pen) == 0:
+            repara = False
+            max_outer = 0
+
         # Initialize overall coefficients
         form_n_coef = [form.n_coef for form in self.formulas]
         form_up_coef = [form.unpenalized_coef for form in self.formulas]
