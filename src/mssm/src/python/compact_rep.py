@@ -567,12 +567,12 @@ def computeSH(
         scp.sparse.csc_array,
         scp.sparse.csc_array,
         np.ndarray,
-        scp.sparse.csc_array,
-        scp.sparse.csc_array,
-        scp.sparse.csc_array,
+        scp.sparse.csr_array,
+        scp.sparse.csc_array | None,
+        scp.sparse.csr_array | None,
         scp.sparse.csc_array,
         np.ndarray,
-        scp.sparse.csc_array,
+        scp.sparse.csr_array,
     ]
 ):
     """Computes structured approximation to the negative Hessian of the log-likelihood. Combines
@@ -737,8 +737,8 @@ def computeSH(
         matrix and 8 update matrices as defined in the description (i.e.,
         ``nH1, nH2t1, nH2t2, nH2t3, nH3t1, nH3t3, nH4t1, nH4t2, nH4t3``).
     :rtype: np.ndarray | tuple[scp.sparse.csc_array, scp.sparse.csc_array, np.ndarray,
-        scp.sparse.csc_array, scp.sparse.csc_array, scp.sparse.csc_array, scp.sparse.csc_array,
-        np.ndarray, scp.sparse.csc_array]
+        scp.sparse.csr_array, scp.sparse.csc_array | None, scp.sparse.csr_array | None,
+        scp.sparse.csc_array, np.ndarray, scp.sparse.csr_array]
     """
 
     # Combined indices in order so that quasi Newton block is bottom right
@@ -871,7 +871,7 @@ def computeSH(
     # carries the quasi Newton information about the Schur complement
     nH4t1 = scp.sparse.csc_array(P2 @ qat1)
     nH4t2 = qat2
-    nH4t3 = scp.sparse.csc_array(qat3 @ P2.T)
+    nH4t3 = scp.sparse.csr_array(qat3 @ P2.T)
 
     # Now, nH = nH1 + (nH2t1@nH2t2@nH2t3) + (nH3t1@nH3t3) + (nH4t1@nH4t2@nH4t3)
     return nH1, nH2t1, nH2t2, nH2t3, nH3t1, nH3t3, nH4t1, nH4t2, nH4t3
@@ -881,15 +881,16 @@ def computeSVPS(
     nH1: scp.sparse.csc_array,
     nH2t1: scp.sparse.csc_array,
     nH2t2: np.ndarray,
-    nH2t3: scp.sparse.csc_array,
+    nH2t3: scp.sparse.csr_array,
     nH3t1: scp.sparse.csc_array | None,
-    nH3t3: scp.sparse.csc_array | None,
+    nH3t3: scp.sparse.csr_array | None,
     nH4t1: scp.sparse.csc_array,
     nH4t2: np.ndarray,
-    nH4t3: scp.sparse.csc_array,
+    nH4t3: scp.sparse.csr_array,
     S_emb: scp.sparse.csc_array,
     fully_dampened_HBb: bool = False,
     explicit: bool = True,
+    pre_cond: bool = True,
     n_c: int = 10,
 ) -> (
     np.ndarray
@@ -897,10 +898,10 @@ def computeSVPS(
         scp.sparse.csc_array,
         scp.sparse.csc_array,
         np.ndarray,
-        scp.sparse.csc_array,
-        scp.sparse.csc_array,
-        np.ndarray,
-        scp.sparse.csc_array,
+        scp.sparse.csr_array,
+        scp.sparse.csc_array | None,
+        np.ndarray | None,
+        scp.sparse.csr_array | None,
         np.ndarray,
         np.ndarray,
         np.ndarray,
@@ -948,6 +949,13 @@ def computeSVPS(
 
       V = V0 - (inv1t1 @ inv1t2 @ inv1t3) - (inv2t1 @ inv2t2 @ inv2t3) - (inv3t1 @ inv3t2 @ inv3t3)
 
+    Support approximate diagonal pre-conditioning of the negative Hessian, based on the procedure
+    outlined by Wood, Pya, & Säfken (2016).
+
+    References:
+     - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
+        Smooth Models.
+
     :param nH1: Initial approximation to the negative Hessian matrix
     :type nH1: scp.sparse.csc_array
     :param nH2t1: Hessian update matrix 1
@@ -955,17 +963,17 @@ def computeSVPS(
     :param nH2t2: Hessian update matrix 2
     :type nH2t2: np.ndarray
     :param nH2t3: Hessian update matrix 3
-    :type nH2t3: scp.sparse.csc_array
+    :type nH2t3: scp.sparse.csr_array
     :param nH3t1: Hessian update matrix 4
     :type nH3t1: scp.sparse.csc_array | None
     :param nH3t3: Hessian update matrix 5
-    :type nH3t3: scp.sparse.csc_array | None
+    :type nH3t3: scp.sparse.csr_array | None
     :param nH4t1: Hessian update matrix 6
     :type nH4t1: scp.sparse.csc_array
     :param nH4t2: Hessian update matrix 7
     :type nH4t2: np.ndarray
     :param nH4t3: Hessian update matrix 8
-    :type nH4t3: scp.sparse.csc_array
+    :type nH4t3: scp.sparse.csr_array
     :param S_emb: Total penalty matrix to be added to the negative Hessian
     :type S_emb: scp.sparse.csc_array
     :param fully_dampened_HBb: Whether the top right and lower left rectangular blocks (mixed
@@ -975,21 +983,44 @@ def computeSVPS(
     :param explicit: Whether or not to return the approximate matrix explicitly or implicitly in
         form of an initial matrix and 9 update matrices, defaults to True
     :type explicit: bool
+    :param pre_cond: Whether a diagonal pre-conditioner (based on the diagonal of ``nH1 + S_emb``)
+        should be applied to the negative Hessian before computing the inverse, defaults to True
+    :type pre_cond: bool
     :param n_c: Number of cores to use for multi-processing parts. Defaults to 10
     :type n_c: int, optional
     :return: V, either as np.ndarray (``explicit=='True'``) or represented implicitly via an initial
         matrix and 9 update matrices as defined in the description (i.e.,
         ``V0, inv1t1, inv1t2, inv1t3, inv2t1, inv2t2, inv2t3, inv3t1, inv3t2, inv3t3``).
     :rtype: np.ndarray | tuple[scp.sparse.csc_array, scp.sparse.csc_array, np.ndarray,
-        scp.sparse.csc_array, scp.sparse.csc_array, np.ndarray, scp.sparse.csc_array,
-        np.ndarray, np.ndarray, np.ndarray,]
+        scp.sparse.csr_array, scp.sparse.csc_array | None, np.ndarray | None,
+        scp.sparse.csr_array | None, np.ndarray, np.ndarray, np.ndarray,]
     """
     # Now seek implicit representation for inverse of nH + S_emb
     # Can be obtained by applying the modified Woodbury Identity of Henderson and Searle 3 times.
     eps = np.power(np.finfo(float).eps, 0.5)
 
     # Start with obtaining inverse of nH1 + S_emb
-    Lp, Pr, _ = cpp_cholP(nH1 + S_emb)  # noqa: F405
+    nH1S = nH1 + S_emb
+
+    # Diagonal pre-conditioning inspired by WPS (2016)
+    if pre_cond:
+        nHdgr = nH1S.diagonal()
+        nHdgr = np.power(np.abs(nHdgr), -0.5)
+    else:
+        nHdgr = np.ones(nH1.shape[1])
+
+    D = scp.sparse.diags_array(nHdgr, format="csc")
+
+    nH1S = (D @ nH1S @ D).tocsc()
+    nH2t1 = D @ nH2t1
+    nH2t3 = nH2t3 @ D
+    if nH3t1 is not None:
+        nH3t1 = D @ nH3t1
+        nH3t3 = nH3t3 @ D
+    nH4t1 = D @ nH4t1
+    nH4t3 = nH4t3 @ D
+
+    Lp, Pr, _ = cpp_cholP(nH1S)  # noqa: F405
     LVp0 = compute_Linv(Lp, n_c)  # noqa: F405
     LV0 = apply_eigen_perm(Pr, LVp0)
     V0 = LV0.T @ LV0
@@ -1005,8 +1036,8 @@ def computeSVPS(
     # Now we we can again compute all parts for the modified Woodbury identy to obtain
     # (nH1 + (nH2t1@nH2t2@nH2t3) + S_emb)^{-1}
     inv1t2 = VT.T @ np.diag(1 / sv_invt2) @ U.T
-    inv1t1 = V0 @ nH2t1
-    inv1t3 = scp.sparse.csc_array(nH2t2 @ (nH2t3 @ V0))
+    inv1t1 = (V0 @ nH2t1).tocsc()
+    inv1t3 = scp.sparse.csr_array(nH2t2 @ (nH2t3 @ V0))
 
     if fully_dampened_HBb:
         inv2t2 = None
@@ -1033,7 +1064,7 @@ def computeSVPS(
         # (nH1 + (nH2t1@nH2t2@nH2t3) + (nH3t1@nH3t3) + S_emb)^{-1}
         inv2t2 = VT.T @ np.diag(1 / sv_invt2) @ U.T
         inv2t1 = V0nH3t1
-        inv2t3 = scp.sparse.csc_array(
+        inv2t3 = scp.sparse.csr_array(
             (nH3t3 @ V0) - ((nH3t3 @ inv1t1) @ inv1t2 @ inv1t3)
         )
 
@@ -1078,6 +1109,17 @@ def computeSVPS(
 
         V -= inv3t1 @ inv3t2 @ inv3t3
 
-        return V
+        return D @ V @ D
 
-    return V0, inv1t1, inv1t2, inv1t3, inv2t1, inv2t2, inv2t3, inv3t1, inv3t2, inv3t3
+    return (
+        (D @ V0 @ D).tocsc(),
+        D @ inv1t1,
+        inv1t2,
+        inv1t3 @ D,
+        D @ inv2t1 if inv2t1 is not None else None,
+        inv2t2,
+        inv2t3 @ D if inv2t3 is not None else None,
+        D @ inv3t1,
+        inv3t2,
+        inv3t3 @ D,
+    )

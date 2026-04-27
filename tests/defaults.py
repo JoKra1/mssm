@@ -100,7 +100,7 @@ default_gsmm_test_kwargs = {
     "sample_hessian_options": {},
     "structured_qefs": True,
     "structured_qefs_budget": 100,
-    "sqEFS_options": {"dampen_HBB": 0.1, "dampen_HBb": 1},
+    "sqEFS_options": {"dampen_HBB": 0.1, "dampen_HBb": 1, "pre_cond": True},
 }
 
 

@@ -638,7 +638,7 @@ class GSMM:
         sample_hessian_options: dict = {},
         structured_qefs: bool = True,
         structured_qefs_budget: int | list[int] = 100,
-        sqEFS_options: dict = {"dampen_HBB": 0.1, "dampen_HBb": 1},
+        sqEFS_options: dict = {"dampen_HBB": 0.1, "dampen_HBb": 1, "pre_cond": True},
     ):
         """
         Fit the specified model.
@@ -817,15 +817,17 @@ class GSMM:
             Defaults to 100.
         :type structured_qefs_budget: int | list[int], optional
         :param sqEFS_options: Optional key-word arguments determining behavior of the structured
-            qEFS method (``structured_qefs is True``). Currently only ``"dampen_HBB"`` and
-            ``"dampen_HBb"`` are supported. ``"dampen_HBB"`` takes float values > 0, with values < 1
-            leading to more wiggly estimates of smooths approximated via quasi Newton update
-            vectors. Values > 1 are possible but usually a good idea. Defaults to 0.1 since 1 seems
-            to produce smooths more in line with ML rather than REML estimates. ``"dampen_HBb"``
-            takes float values >= 0 and <= 1 and is used to scale the off-diagonal blocks of the
-            approximation of the negative Hessian, holding mixed derivatives of terms approximated
-            via finite differencing with respect to those approximated via quasi Newton. Defaults
-            to 1.
+            qEFS method (``structured_qefs is True``). Currently only ``"dampen_HBB"``,
+            ``"dampen_HBb"``, and ``"pre_cond"`` are supported. ``"dampen_HBB"`` takes float values
+            > 0, with values < 1 leading to more wiggly estimates of smooths approximated via quasi
+            Newton update vectors. Values > 1 are possible but usually a good idea. Defaults to 0.1
+            since 1 seems to produce smooths more in line with ML rather than REML estimates.
+            ``"dampen_HBb"`` takes float values >= 0 and <= 1 and is used to scale the off-diagonal
+            blocks of the approximation of the negative Hessian, holding mixed derivatives of terms
+            approximated via finite differencing with respect to those approximated via quasi
+            Newton. Defaults to 1. ``"pre_cond"`` is a bool, indicating whether a diagonal
+            pre-conditioner should be applied to the negative Hessian before inverting it. Defaults
+            to True
         :type sqEFS_options: dict, optional
         :raises ValueError: Will throw an error when ``optimizer`` is not 'Newton'.
         """

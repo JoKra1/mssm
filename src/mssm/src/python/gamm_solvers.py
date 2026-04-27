@@ -618,12 +618,12 @@ def update_PIRLS(
 
 
 def computetrVS3(
-    t1: np.ndarray | None,
+    t1: scp.sparse.csc_array | np.ndarray | None,
     t2: np.ndarray | None,
-    t3: np.ndarray | None,
-    t4: np.ndarray | None,
+    t3: scp.sparse.csr_array | np.ndarray | None,
+    t4: scp.sparse.csc_array | np.ndarray | None,
     t5: np.ndarray | None,
-    t6: np.ndarray | None,
+    t6: scp.sparse.csr_array | np.ndarray | None,
     t7: np.ndarray | None,
     t8: np.ndarray | None,
     t9: np.ndarray | None,
@@ -652,17 +652,17 @@ def computetrVS3(
         129–156. https://doi.org/10.1007/BF01582063
 
     :param t1: Inverse update matrix 1
-    :type t1: np.ndarray or None
+    :type t1: scp.sparse.csc_array | np.ndarray or None
     :param t2: Inverse update matrix 2
     :type t2: np.ndarray or None
     :param t3: Inverse update matrix 3
-    :type t3: np.ndarray or None
+    :type t3: scp.sparse.csr_array | np.ndarray or None
     :param 4: Inverse update matrix 4
-    :type t4: np.ndarray or None
+    :type t4: scp.sparse.csc_array | np.ndarray or None
     :param t5: Inverse update matrix 5
     :type t5: np.ndarray or None
     :param t6: Inverse update matrix 6
-    :type t6: np.ndarray or None
+    :type t6: scp.sparse.csr_array | np.ndarray or None
     :param t7: Inverse update matrix 7
     :type t7: np.ndarray or None
     :param t8: Inverse update matrix 8
@@ -885,6 +885,11 @@ def calculate_edf(
                 if "dampen_HBB" in InvCholXXS.sqEFS_options
                 else 1
             )
+            pre_cond = (
+                InvCholXXS.sqEFS_options["pre_cond"]
+                if "pre_cond" in InvCholXXS.sqEFS_options
+                else True
+            )
 
             nH1, nH2t1, nH2t2, nH2t3, nH3t1, nH3t3, nH4t1, nH4t2, nH4t3 = computeSH(
                 y,
@@ -924,6 +929,8 @@ def calculate_edf(
                 S_emb,
                 dampen_HBb <= 0,
                 explicit=False,
+                pre_cond=pre_cond,
+                n_c=n_c,
             )
 
     for lti, lTerm in enumerate(penalties):
@@ -7914,13 +7921,14 @@ def correct_lambda_step_gen_smooth(
         negative Hessian to be approximated via finite differencing. Otherwise this will be None
     :type fcols: np.ndarray
     :param sqEFS_options: Optional key-word arguments determining behavior of the structured qEFS
-        method. Currently only ``"dampen_HBB"`` and ``"dampen_HBb"`` are supported. ``"dampen_HBB"``
-        takes float values > 0, with values < 1 leading to more wiggly estimates of smooths
-        approximated via quasi Newton approximation. Values > 1 are possible but not really a good
-        idea. ``"dampen_HBb"`` takes float values >= 0 and <= 1 and is used to scale the
+        method. Currently only ``"dampen_HBB"``, ``"dampen_HBb"`` and ``"pre_cond"`` are supported.
+        ``"dampen_HBB"`` takes float values > 0, with values < 1 leading to more wiggly estimates of
+        smooths approximated via quasi Newton approximation. Values > 1 are possible but not really
+        a good idea. ``"dampen_HBb"`` takes float values >= 0 and <= 1 and is used to scale the
         off-diagonal blocks of the approximation of the negative Hessian, holding mixed derivatives
         of terms approximated via finite differencing with respect to those approximated via quasi
-        Newton.
+        Newton. ``"pre_cond"`` is a bool, indicating whether a diagonal pre-conditioner should be
+        applied to the negative Hessian before inverting it.
     :type sqEFS_options: dict
     :return: coef estimate under corrected lambda, the negative hessian of the log-likelihood,
         cholesky of negative hessian of the penalized log-likelihood, inverse of the former
@@ -8560,13 +8568,14 @@ def solve_generalSmooth_sparse(
         negative Hessian to be approximated via finite differencing. Otherwise this will be None
     :type fcols: np.ndarray, optional
     :param sqEFS_options: Optional key-word arguments determining behavior of the structured qEFS
-        method. Currently only ``"dampen_HBB"`` and ``"dampen_HBb"`` are supported. ``"dampen_HBB"``
-        takes float values > 0, with values < 1 leading to more wiggly estimates of smooths
-        approximated via quasi Newton update vectors. Values > 1 are possible but usually not a good
-        idea. ``"dampen_HBb"`` takes float values >= 0 and <= 1 and is used to scale the
+        method.  Currently only ``"dampen_HBB"``, ``"dampen_HBb"`` and ``"pre_cond"`` are supported.
+        ``"dampen_HBB"`` takes float values > 0, with values < 1 leading to more wiggly estimates of
+        smooths approximated via quasi Newton approximation. Values > 1 are possible but not really
+        a good idea. ``"dampen_HBb"`` takes float values >= 0 and <= 1 and is used to scale the
         off-diagonal blocks of the approximation of the negative Hessian, holding mixed derivatives
         of terms approximated via finite differencing with respect to those approximated via quasi
-        Newton. Defaults to ``{}``
+        Newton. ``"pre_cond"`` is a bool, indicating whether a diagonal pre-conditioner should be
+        applied to the negative Hessian before inverting it. Defaults to ``{}``
     :type sqEFS_options: dict, optional
     :return: coef estimate, the negative hessian of the log-likelihood, inverse of cholesky of
         negative hessian of the penalized log-likelihood, if ``method=='qEFS'`` an instance of
