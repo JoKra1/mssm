@@ -6041,22 +6041,28 @@ def solve_gammlss_sparse(
         )
 
     # Build current penalties
-    S_emb, _, _, _ = compute_S_emb_pinv_det(n_coef, gamlss_pen, "svd")
+    keep_drop = None
+    if len(gamlss_pen) > 0:
+        S_emb, _, _, _ = compute_S_emb_pinv_det(n_coef, gamlss_pen, "svd")
+
+        # Build normalized penalty for rank checks (e.g., Wood, Pya & Saefken, 2016)
+        S_norm = copy.deepcopy(gamlss_pen[0].S_J_emb) / scp.sparse.linalg.norm(
+            gamlss_pen[0].S_J_emb, ord=None
+        )
+        for peni in range(1, len(gamlss_pen)):
+            S_norm += gamlss_pen[peni].S_J_emb / scp.sparse.linalg.norm(
+                gamlss_pen[peni].S_J_emb, ord=None
+            )
+
+        S_norm /= scp.sparse.linalg.norm(S_norm, ord=None)
+    else:
+        # Un-penalized case
+        S_emb = scp.sparse.csc_array(([], ([], [])), shape=(n_coef, n_coef))
+        S_norm = S_emb.copy()
+
+    # Compute penalized likelihood for current estimate
     c_llk = family.llk(y, *mus)
     c_pen_llk = c_llk - 0.5 * coef.T @ S_emb @ coef
-
-    # Build normalized penalty for rank checks (e.g., Wood, Pya & Saefken, 2016)
-    keep_drop = None
-
-    S_norm = copy.deepcopy(gamlss_pen[0].S_J_emb) / scp.sparse.linalg.norm(
-        gamlss_pen[0].S_J_emb, ord=None
-    )
-    for peni in range(1, len(gamlss_pen)):
-        S_norm += gamlss_pen[peni].S_J_emb / scp.sparse.linalg.norm(
-            gamlss_pen[peni].S_J_emb, ord=None
-        )
-
-    S_norm /= scp.sparse.linalg.norm(S_norm, ord=None)
 
     # Try improving start estimate via Gradient only
     if prefit_grad:
@@ -6113,14 +6119,59 @@ def solve_gammlss_sparse(
             coef = np.concatenate(split_coef).reshape(-1, 1)
 
     iterator = range(max_outer)
-    if progress_bar:
+    if progress_bar and len(gamlss_pen) > 0:
         iterator = tqdm(iterator, desc="Fitting", leave=True)
 
     fit_info = Fit_info()
     fit_info.eps = 0
     lam_delta = []
     prev_llk_hist = []
+
+    if len(gamlss_pen) == 0:
+        (
+            coef,
+            split_coef,
+            mus,
+            etas,
+            H,
+            L,
+            LV,
+            c_llk,
+            c_pen_llk,
+            eps,
+            keep,
+            drop,
+        ) = update_coef_gammlss(
+            family,
+            mus,
+            y,
+            Xs,
+            coef,
+            coef_split_idx,
+            S_emb,
+            S_norm,
+            None,
+            None,
+            None,
+            c_llk,
+            0,
+            max_inner,
+            min_inner,
+            conv_tol,
+            method,
+            piv_tol,
+            keep_drop,
+        )
+        fit_info.code = 0
+        fit_info.eps = eps
+        fit_info.dropped = drop
+        fit_info.iter = 1
+        outer = 0
+
     for outer in iterator:
+
+        if len(gamlss_pen) == 0:
+            break
 
         # 1) Update coef for given lambda
         # 2) Check lambda -> repeat 1 if necessary
@@ -6283,7 +6334,11 @@ def solve_gammlss_sparse(
     penalty = coef.T @ S_emb @ coef
 
     # Calculate actual term-specific edf
-    term_edfs = calculate_term_edf(gamlss_pen, term_edfs)
+    if len(gamlss_pen) > 0:
+        term_edfs = calculate_term_edf(gamlss_pen, term_edfs)
+    else:
+        term_edfs = None
+        total_edf = n_coef
 
     return (
         coef,
@@ -8673,7 +8728,6 @@ def solve_generalSmooth_sparse(
             None,
             False,
         )
-        print(coef)
 
         if repara:
             split_coef = np.split(coef, coef_split_idx)
@@ -8733,6 +8787,7 @@ def solve_generalSmooth_sparse(
             __old_opt,
             global_opt_qefs,
         )
+        fit_info.code = 0
         fit_info.eps = eps
         fit_info.dropped = drop
         fit_info.iter = 1

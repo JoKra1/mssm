@@ -1666,3 +1666,49 @@ class Test_shared_pen2:
             self.model.family.lcp(y, *self.model.mus),
             scp.stats.norm.logcdf(y, loc=self.model.mus[0], scale=self.model.mus[1]),
         )
+
+
+class Test_no_pen:
+    # No penalties
+    sim_dat, _ = sim1(100, random_seed=100)
+
+    # Specify formula
+    formula = Formula(lhs("y"), [i(), *li(["x", "fact"])], data=sim_dat)
+
+    # ... and model
+    model = GAMM(formula, Gaussian())
+
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_outer"] = 100
+    test_kwargs["max_inner"] = 1
+
+    model.fit(**test_kwargs)
+
+    test_kwargs2 = copy.deepcopy(default_gammlss_test_kwargs)
+
+    # Now fit with GAMMLSS
+    # Now define the model and fit!
+    gammlss_fam = GAUMLSS([Identity(), LOGb(-0.0001)])
+    formula2 = Formula(lhs("y"), [i()], data=sim_dat)  # For SD
+
+    gammlss = GAMMLSS([formula, formula2], gammlss_fam)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        gammlss.fit(**test_kwargs2)
+
+    def test_coef(self):
+        np.testing.assert_allclose(
+            ((self.model.coef - self.gammlss.coef[:-1]) / self.gammlss.coef[:-1]),
+            np.array(
+                [
+                    [6.37717963e-13],
+                    [9.18159142e-13],
+                    [5.95314480e-13],
+                    [6.56263861e-13],
+                    [5.39571809e-12],
+                    [1.23518307e-12],
+                ]
+            ),
+            atol=min(max_atol, 0.01),
+            rtol=min(max_rtol, 1e-4),
+        )

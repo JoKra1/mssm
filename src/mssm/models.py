@@ -1962,6 +1962,11 @@ class GAMMLSS(GSMM):
         else:
             gamlss_pen = self.overall_penalties
 
+        # Reparam makes no sense on models without penalty
+        if len(gamlss_pen) == 0:
+            repara = False
+            max_outer = 0
+
         # Initialize overall coefficients if not done by family
         form_n_coef = [form.n_coef for form in self.formulas]
         if coef is None:
@@ -3081,14 +3086,22 @@ class GAMM(GAMMLSS):
             )
 
         if max_inner > 1 and rho is not None:
-            raise ValueError(
-                "ar1 model of the residuals only supported for ``max_inner=1``."
+            warnings.warn(
+                (
+                    "ar1 model of the residuals only supported for ``max_inner=1``."
+                    " Ignoring value provided for max_inner."
+                )
             )
+            max_inner = 1
 
         if max_inner > 1 and len(penalties) == 0:
-            raise ValueError(
-                "Models without a single penalty are only supported for ``max_inner=1``."
+            warnings.warn(
+                (
+                    "Models without a single penalty are only supported for ``max_inner=1``."
+                    " Ignoring value provided for max_inner."
+                )
             )
+            max_inner = 1
 
         self.offset = 0
 
