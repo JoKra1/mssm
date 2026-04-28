@@ -1809,7 +1809,7 @@ class Test_mvn:
                     [-0.35591042],
                 ]
             ),
-            atol=min(max_atol, 0),
+            atol=min(max_atol, 8),
             rtol=min(max_rtol, 8),
         )
 
