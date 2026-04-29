@@ -22,6 +22,35 @@ from mssm.src.python.mcmc import sample_mssm
 ################################################################## Tests ##################################################################
 
 
+class Test_expected_ratio_acceleration:
+    # We simulate some data including a random smooth - but then dont include it in the model:
+    sim_dat = sim11(5000, 2, c=0, seed=20, family=Gamma(), n_ranef=20, binom_offset=0)
+
+    sim_dat = sim_dat.sort_values(["x4"], ascending=[True])
+
+    sim_formula = Formula(
+        lhs("y"),
+        [i(), f(["x0"]), f(["x1"]), f(["x2"]), f(["x3"])],
+        data=sim_dat,
+        series_id="x4",
+    )  # Can already specify this.
+
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["rho"] = 0.25
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["max_outer"] = 250
+    gamma_model2 = GAMM(sim_formula, Gamma())
+    gamma_model2.fit(**test_kwargs)
+    iter1 = gamma_model2.info.iter
+    test_kwargs["extend_lambda"] = True
+    test_kwargs["extension_method_lam"] = "expected_ratio"
+    gamma_model2.fit(**test_kwargs)
+    iter2 = gamma_model2.info.iter
+
+    def test_iter(self):
+        assert self.iter2 < self.iter1
+
+
 class Test_BIG_GAMM_Discretize:
     dat = pd.read_csv(
         "https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat.csv"
