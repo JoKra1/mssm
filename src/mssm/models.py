@@ -259,18 +259,59 @@ class GSMM:
 
     ##################################### Getters ####################################  # noqa: E266
 
-    def get_pars(self) -> np.ndarray:
+    def get_pars(
+        self, par: int | None = None, term: int | None = None
+    ) -> np.ndarray | None:
         """
-        Returns a list containing all coefficients estimated for the model. Use
+        Returns an array containing all coefficients estimated for the model. Use
         ``self.coef_split_idx`` to split the vector into separate subsets per parameter of the
         log-likelihood.
 
         Will return None if called before fitting was completed.
 
-        :return: Model coefficients - before splitting!
-        :rtype: [float] or None
+        :param par: The index corresponding to the parameter of the log-likelihood for which to
+            return the coefficient vector. Setting this to ``None`` means the vector containing
+            all coefficients is returned. **Note**, that this can be set to ``len(self.formulas)``
+            for models which ``has_extra_coef`` in which case the vector of estimated extra
+            coefficients of the log-likelihood will be returned. Defaults to ``None``.
+        :type par: int or None, optional
+        :param term: Ignored if ``par is None``. Optional index corresponding to a term
+            in the :class:`Formula` of parameter ``par``, in which case only the subset of
+            coefficients associated with that term and parameter is returned. Defaults to ``None``.
+        :type term: int or None, optional
+        :return: (Subset) of model coefficients as an array of shape (-1,1)
+        :rtype: np.ndarray or None
         """
-        return self.coef
+        # Check for valid index
+        if par is not None and par >= (
+            len(self.formulas) + (1 if self.has_extra_coef else 0)
+        ):
+            raise ValueError(
+                (
+                    f"Model has only {len(self.formulas)} formulas "
+                    f"but ``par`` was set to index {par}."
+                )
+            )
+
+        # Handle simple case immediately
+        if par is None or self.coef is None:
+            return self.coef
+
+        # Extract coef associated with par
+        if len(self.formulas) > 1 or self.has_extra_coef:
+            split_coef = np.split(self.coef, self.coef_split_idx)
+            sub_coef = split_coef[par]
+        else:
+            sub_coef = self.coef
+
+        # Return all coef associated with par/extra_coef
+        if term is None or par == len(self.formulas):
+            return sub_coef
+
+        # Extract desired formula
+        form = self.formulas[par]
+
+        return sub_coef[form.coef_idx_per_term[term]]
 
     def get_ys(
         self,
@@ -2514,17 +2555,24 @@ class GAMM(GAMMLSS):
 
     ##################################### Getters ####################################  # noqa: E266
 
-    def get_pars(self) -> tuple[np.ndarray | None, float | None]:
+    def get_pars(
+        self, term: int | None = None
+    ) -> tuple[np.ndarray | None, float | None]:
         """
         Returns a tuple. The first entry is a np.ndarray with all estimated coefficients.
         The second entry is the estimated scale parameter.
 
         Will instead return ``(None,None)`` if called before fitting.
 
+        :param term: Optional index corresponding to a term in the :class:`Formula` of the mean, in
+            which case only the subset of coefficients associated with that term is returned.
+            Defaults to ``None``.
         :return: Model coefficients and scale parameter that were estimated
         :rtype: (np.ndarray,float) or (None, None)
         """
-        return self.coef, self.scale
+
+        coef = super().get_pars(par=0, term=term)
+        return coef, self.scale
 
     def get_mmat(self, use_terms: list[int] | None = None) -> scp.sparse.csc_array:
         """

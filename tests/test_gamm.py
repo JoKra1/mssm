@@ -50,6 +50,22 @@ class Test_expected_ratio_acceleration:
     def test_iter(self):
         assert self.iter2 < self.iter1
 
+    def test_coef_extract1(self):
+        np.testing.assert_allclose(
+            self.gamma_model2.get_pars()[0],
+            self.gamma_model2.coef,
+            atol=0,
+            rtol=0,
+        )
+
+    def test_coef_extract2(self):
+        np.testing.assert_allclose(
+            self.gamma_model2.get_pars(term=1)[0],
+            self.gamma_model2.coef[1:10],
+            atol=0,
+            rtol=0,
+        )
+
 
 class Test_BIG_GAMM_Discretize:
     dat = pd.read_csv(
