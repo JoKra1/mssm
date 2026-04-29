@@ -272,6 +272,83 @@ class GSMM:
         """
         return self.coef
 
+    def get_ys(
+        self,
+        drop_NA: bool = True,
+        par: int | None = None,
+    ) -> list[np.ndarray | None] | np.ndarray:
+        """Get a list containing the vectors of the response variables (i.e., what is specified as
+        ``var`` for the :class:`lhs` passed to each :class:`Formula`) used for fitting (as long as
+        you specify the same value for ``drop_NA`` they are identical) as numpy arrays.
+
+        **Note** that the returned list will contain ``None`` at indices > 0 if the corresponding
+        response vector is a duplicate of the one at index 0 (only if no transforming function,
+        specified via :class:`lhs`, is to be applied to either of the response vectors).
+        Optionally, the response vector associated with a specific parameter of the log-likelihood
+        can be obtained by setting ``par`` to the desired index, instead of ``None``.
+
+        :param drop_NA: Whether rows corresponding to NAs should be dropped, defaults to True
+        :type drop_NA: bool, optional
+        :param par: The index corresponding to the parameter of the log-likelihood for which to
+            obtain the response vector. Setting this to ``None`` means all vectors are returned in
+            a list, defaults to None.
+        :type par: int or None, optional
+        :return: A list of response vectors or a single one for a specific parameter.
+        :rtype: list[np.ndarray] | np.ndarray
+        """
+
+        # Check for valid index
+        if par is not None and par >= len(self.formulas):
+            raise ValueError(
+                (
+                    f"Model has only {len(self.formulas)} formulas "
+                    f"but ``par`` was set to index {par}."
+                )
+            )
+
+        # Get iterator over indices
+        iterator = (
+            [par] if par is not None else [fidx for fidx in range(len(self.formulas))]
+        )
+
+        # Get ys
+        ys = []
+        for fi in iterator:
+
+            # Extract formula for current index
+            form = self.formulas[fi]
+
+            # Repeated y-variable - don't have to pass all of them (if par is None)
+            if (
+                fi > 0
+                and par is None
+                and form.get_lhs().variable == self.formulas[0].get_lhs().variable
+                and form.get_lhs().f is None
+                and self.formulas[0].get_lhs().f is None
+            ):
+                ys.append(None)
+                continue
+
+            # New y-variable
+            if drop_NA:
+                y = form.y_flat[form.NOT_NA_flat]
+            else:
+                y = form.y_flat
+
+            # Optionally apply function to dep. var. before fitting. Not sure why that would be
+            # desirable for this model class...
+            if not form.get_lhs().f is None:
+                y = form.get_lhs().f(y)
+
+            # And collect
+            ys.append(y)
+
+        # Return desired vector / list of vectors
+        if par is not None:
+            return ys[0]
+        else:
+            return ys
+
     def get_mmat(
         self,
         use_terms: list[int] | None = None,
@@ -279,9 +356,9 @@ class GSMM:
         par: int | None = None,
     ) -> list[scp.sparse.csc_array] | scp.sparse.csc_array:
         """
-        By default, returns a list containing exactly the model matrices used for fitting as a
-        ``scipy.sparse.csc_array``. Will raise an error when fitting was not completed before
-        calling this function.
+        By default, returns a list containing exactly (as long as you specify the same value for
+        ``drop_NA``) the model matrices used for fitting as a ``scipy.sparse.csc_array``. Will raise
+        an error when fitting was not completed before calling this function.
 
         Optionally, the model matrix associated with a specific parameter of the log-likelihood can
         be obtained by setting ``par`` to the desired index, instead of ``None``.
@@ -306,6 +383,16 @@ class GSMM:
         :rtype: [scp.sparse.csc_array] or scp.sparse.csc_array
         """
 
+        # Check for valid index
+        if par is not None and par >= len(self.formulas):
+            raise ValueError(
+                (
+                    f"Model has only {len(self.formulas)} formulas "
+                    f"but ``par`` was set to index {par}."
+                )
+            )
+
+        # Get iterator over indices
         iterator = (
             [par] if par is not None else [fidx for fidx in range(len(self.formulas))]
         )
@@ -396,31 +483,8 @@ class GSMM:
             pen = 0.5 * self.penalty
         if self.coef is not None:
 
-            ys = []
-            for fi, form in enumerate(self.formulas):
-
-                # Repeated y-variable - don't have to pass all of them
-                if (
-                    fi > 0
-                    and form.get_lhs().variable == self.formulas[0].get_lhs().variable
-                ):
-                    ys.append(None)
-                    continue
-
-                # New y-variable
-                if drop_NA:
-                    y = form.y_flat[form.NOT_NA_flat]
-                else:
-                    y = form.y_flat
-
-                # Optionally apply function to dep. var.
-                if not form.get_lhs().f is None:
-                    y = form.get_lhs().f(y)
-
-                # And collect
-                ys.append(y)
-
-            # Build model matrices for all formulas
+            # Build model matrices and response vectors for all formulas
+            ys = self.get_ys(drop_NA=drop_NA)
             Xs = self.get_mmat(drop_NA=drop_NA)
 
             return self.family.llk(self.coef, self.coef_split_idx, ys, Xs) - pen
@@ -505,32 +569,8 @@ class GSMM:
                 "Model needs to be estimated before evaluating the residuals. Call model.fit()"
             )
 
-        # Get observation vectors
-        ys = []
-        for fi, form in enumerate(self.formulas):
-
-            # Repeated y-variable - don't have to pass all of them
-            if (
-                fi > 0
-                and form.get_lhs().variable == self.formulas[0].get_lhs().variable
-            ):
-                ys.append(None)
-                continue
-
-            # New y-variable
-            if drop_NA:
-                y = form.y_flat[form.NOT_NA_flat]
-            else:
-                y = form.y_flat
-
-            # Optionally apply function to dep. var.
-            if not form.get_lhs().f is None:
-                y = form.get_lhs().f(y)
-
-            # And collect
-            ys.append(y)
-
-        # Get model matrices
+        # Build model matrices and response vectors for all formulas
+        ys = self.get_ys(drop_NA=drop_NA)
         Xs = self.get_mmat(drop_NA=drop_NA)
 
         return self.family.get_resid(self.coef, self.coef_split_idx, ys, Xs, **kwargs)
@@ -556,7 +596,7 @@ class GSMM:
             Second Edition (2nd ed.).
 
         :raises NotImplementedError: Will throw an error when called for a model for which the model
-            matrix was never former completely.
+            matrix was never been formed completely.
         """
 
         for formi, _ in enumerate(self.formulas):
@@ -868,30 +908,7 @@ class GSMM:
             extend_lambda = False
 
         # Get ys
-        ys = []
-        for fi, form in enumerate(self.formulas):
-
-            # Repeated y-variable - don't have to pass all of them
-            if (
-                fi > 0
-                and form.get_lhs().variable == self.formulas[0].get_lhs().variable
-            ):
-                ys.append(None)
-                continue
-
-            # New y-variable
-            if drop_NA:
-                y = form.y_flat[form.NOT_NA_flat]
-            else:
-                y = form.y_flat
-
-            # Optionally apply function to dep. var. before fitting. Not sure why that would be
-            # desirable for this model class...
-            if not form.get_lhs().f is None:
-                y = form.get_lhs().f(y)
-
-            # And collect
-            ys.append(y)
+        ys = self.get_ys(drop_NA=drop_NA)
 
         # Build penalties and model matrices for all formulas
         Xs = []
@@ -1157,6 +1174,15 @@ class GSMM:
         :rtype: np.ndarray
         """
 
+        # Check for valid index
+        if par >= len(self.formulas):
+            raise ValueError(
+                (
+                    f"Model has only {len(self.formulas)} formulas "
+                    f"but ``par`` was set to index {par}."
+                )
+            )
+
         # Extract coef and cols of lvi associated with par
         if len(self.formulas) > 1 or self.has_extra_coef:
             split_coef = np.split(self.coef, self.coef_split_idx)
@@ -1247,6 +1273,15 @@ class GSMM:
             ``alpha = 2 * (1 - scp.stats.norm.cdf(1))``.
         :rtype: (np.ndarray,scp.sparse.csc_array,np.ndarray or None)
         """
+
+        # Check for valid index
+        if par >= len(self.formulas):
+            raise ValueError(
+                (
+                    f"Model has only {len(self.formulas)} formulas "
+                    f"but ``par`` was set to index {par}."
+                )
+            )
 
         # Extract desired formula and perform some checks
         form = self.formulas[par]
@@ -1405,6 +1440,15 @@ class GSMM:
         :rtype: (np.ndarray,np.ndarray)
         """
 
+        # Check for valid index
+        if par >= len(self.formulas):
+            raise ValueError(
+                (
+                    f"Model has only {len(self.formulas)} formulas "
+                    f"but ``par`` was set to index {par}."
+                )
+            )
+
         _, pmat1, _ = self.predict(use_terms, dat1, par=par)
         _, pmat2, _ = self.predict(use_terms, dat2, par=par)
 
@@ -1555,18 +1599,17 @@ class GAMMLSS(GSMM):
 
     #################################### Getters #####################################  # noqa: E266
 
-    def get_pars(self) -> np.ndarray:
-        """
-        Returns a list containing all coefficients estimated for the model. Use
-        ``self.coef_split_idx`` to split the vector into separate subsets per distribution
-        parameter.
+    def get_ys(
+        self,
+    ) -> np.ndarray:
+        """Get the vector of the response variables (i.e., what is specified as ``var`` for the
+        :class:`lhs` passed to the first :class:`Formula` of the model) used for fitting as a numpy
+        array.
 
-        Will return None if called before fitting was completed.
-
-        :return: Model coefficients - before splitting!
-        :rtype: [float] or None
+        :return: The response vector used for fitting after dropping rows that are ``nan``.
+        :rtype: list[np.ndarray] | np.ndarray
         """
-        return super.get_pars()
+        return super().get_ys(drop_NA=True, par=0)
 
     def get_mmat(
         self, use_terms: list[int] | None = None, par: int | None = None
@@ -1620,9 +1663,8 @@ class GAMMLSS(GSMM):
                 for lidx in range(self.family.n_par)
             ]
 
-            y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
-            if not self.formulas[0].get_lhs().f is None:
-                y = self.formulas[0].get_lhs().f(y)
+            # Get response vector
+            y = self.get_ys()
 
             return self.family.llk(y, *mus) - pen
 
@@ -1708,66 +1750,10 @@ class GAMMLSS(GSMM):
                 "Residual computation for Multinomial model is not currently supported."
             )
 
-        # Extract y
-        y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
-
-        if not self.formulas[0].get_lhs().f is None:
-            y = self.formulas[0].get_lhs().f(y)
+        # Get response vector
+        y = self.get_ys()
 
         return self.family.get_resid(y, *self.mus, **kwargs)
-
-    ##################################### Summary ####################################  # noqa: E266
-
-    def print_parametric_terms(self):
-        """Prints summary output for linear/parametric terms in the model, separately for each
-        parameter of the family's distribution.
-
-        For each coefficient, the named identifier and estimated value are returned. In addition,
-        for each coefficient a p-value is returned, testing the null-hypothesis that the
-        corresponding coefficient :math:`\\beta=0`. Under the assumption that this is true,
-        the Null distribution follows approximately a standardized normal distribution.
-        The corresponding z-statistic and the p-value are printed. See Wood (2017) section 6.12 and
-        1.3.3 for more details.
-
-        Note that, un-penalized coefficients that are part of a smooth function are not covered by
-        this function.
-
-        References:
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
-            (2nd ed.).
-
-        :raises NotImplementedError: Will throw an error when called for a model for which the model
-            matrix was never former completely.
-        """
-        super().print_parametric_terms()
-
-    def print_smooth_terms(
-        self, pen_cutoff: float = 0.2, p_values: bool = False, edf1: bool = True
-    ):
-        """Prints the name of the smooth terms included in the model. After fitting, the estimated
-        degrees of freedom per term are printed as well. Smooth terms with edf. < ``pen_cutoff``
-        will be highlighted. This only makes sense when extra Kernel penalties are placed on smooth
-        terms to enable penalizing them to a constant zero. In that case edf. < ``pen_cutoff`` can
-        then be taken as evidence that the smooth has all but notationally disappeared
-        from the model, i.e., it does not contribute meaningfully to the model fit. This can be
-        used as an alternative form of model selection - see Marra & Wood (2011).
-
-        References:
-
-         - Marra & Wood (2011). Practical variable selection for generalized additive models.
-
-        :param pen_cutoff: At which edf. cut-off smooth terms should be marked as
-            "effectively removed", defaults to None
-        :type pen_cutoff: float, optional
-        :param p_values: Whether approximate p-values should be printed for the smooth terms,
-            defaults to False
-        :type p_values: bool, optional
-        :param edf1: Whether or not the estimated degrees of freedom should be corrected for
-            smoothnes bias. Doing so results in more accurate p-values but can be expensive for
-            large models for which the difference is anyway likely to be marginal, defaults to False
-        :type edf1: bool, optional
-        """
-        super().print_smooth_terms(pen_cutoff, p_values, edf1)
 
     ##################################### Fitting ####################################  # noqa: E266
 
@@ -1912,13 +1898,8 @@ class GAMMLSS(GSMM):
                 "Penalties were not initialized. ``Restart`` must be set to False."
             )
 
-        # Get y
-        y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
-
-        if not self.formulas[0].get_lhs().f is None:
-            # Optionally apply function to dep. var. before fitting. Not sure why that would be
-            # desirable for this model class...
-            y = self.formulas[0].get_lhs().f(y)
+        # Get response vector
+        y = self.get_ys()
 
         # Build penalties and model matrices for all formulas
         Xs = []
@@ -2621,10 +2602,7 @@ class GAMM(GAMMLSS):
             ):
                 mu = self.family.link.fi(self.preds[0])
 
-            y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
-
-            if not self.formulas[0].get_lhs().f is None:
-                y = self.formulas[0].get_lhs().f(y)
+            y = self.get_ys()
 
             if self.rho is not None:
                 # Need to correct for the "weights" of the covariance matrix of the ar1 model,
@@ -2776,10 +2754,7 @@ class GAMM(GAMMLSS):
             # Deviance residual requires computing quantity D_i, which is the amount each
             # data-point contributes to overall deviance. Implemented by the family members.
             mu = self.preds[0]
-            y = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
-
-            if not self.formulas[0].get_lhs().f is None:
-                y = self.formulas[0].get_lhs().f(y)
+            y = self.get_ys()
 
             if (
                 isinstance(self.family, Gaussian) is False
@@ -2788,68 +2763,6 @@ class GAMM(GAMMLSS):
                 mu = self.family.link.fi(mu)
 
             return np.sign(y - mu) * np.sqrt(self.family.D(y, mu))
-
-    ##################################### Summary ####################################  # noqa: E266
-
-    def print_parametric_terms(self):
-        """Prints summary output for linear/parametric terms in the model, not unlike the one
-        returned in R when using the ``summary`` function for ``mgcv`` models.
-
-        For each coefficient, the named identifier and estimated value are returned. In addition,
-        for each coefficient a p-value is returned, testing the null-hypothesis that the
-        corresponding coefficient :math:`\\beta=0`. Under the assumption that this is true,
-        the Null distribution follows a t-distribution for models in which an additional scale
-        parameter was estimated (e.g., Gaussian, Gamma) and a standardized normal distribution for
-        models in which the scale parameter is known or was fixed (e.g., Binomial). For the former
-        case, the t-statistic, Degrees of freedom of the Null distribution (DoF.), and the p-value
-        are printed as well. For the latter case, only the z-statistic and the p-value are printed.
-        See Wood (2017) section 6.12 and 1.3.3 for more details.
-
-        Note that, un-penalized coefficients that are part of a smooth function are not covered by
-        this function.
-
-        References:
-         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second Edition \
-            (2nd ed.).
-
-        :raises NotImplementedError: Will throw an error when called for a model for which the model
-            matrix was never former completely.
-        """
-        print_parametric_terms(self)
-
-    def print_smooth_terms(
-        self, pen_cutoff: float = 0.2, p_values: bool = False, edf1: bool = True
-    ):
-        """Prints the name of the smooth terms included in the model. After fitting, the estimated
-        degrees of freedom per term are printed as well. Smooth terms with edf. < ``pen_cutoff``
-        will be highlighted. This only makes sense when extra Kernel penalties are placed on smooth
-        terms to enable penalizing them to a constant zero. In that case edf. < ``pen_cutoff`` can
-        then be taken as evidence that the smooth has all but notationally disappeared
-        from the model, i.e., it does not contribute meaningfully to the model fit. This can be used
-        as an alternative form of model selection - see Marra & Wood (2011).
-
-        References:
-
-         - Marra & Wood (2011). Practical variable selection for generalized additive models.
-
-        :param pen_cutoff: At which edf. cut-off smooth terms should be marked as
-            "effectively removed", defaults to None
-        :type pen_cutoff: float, optional
-        :param p_values: Whether approximate p-values should be printed for the smooth terms,
-            defaults to False
-        :type p_values: bool, optional
-        :param edf1: Whether or not the estimated degrees of freedom should be corrected for
-            smoothnes bias. Doing so results in more accurate p-values but can be expensive for
-            large models for which the difference is anyway likely to be marginal, defaults
-            to True
-        :type edf1: bool, optional
-        """
-        ps = None
-        Trs = None
-        if p_values:
-            ps, Trs = approx_smooth_p_values(self, edf1=edf1)
-
-        print_smooth_terms(self, pen_cutoff=pen_cutoff, ps=ps, Trs=Trs)
 
     ##################################### Fitting ####################################  # noqa: E266
 
@@ -3129,7 +3042,8 @@ class GAMM(GAMMLSS):
             else:
                 cov = None
 
-            y_flat = self.formulas[0].y_flat[self.formulas[0].NOT_NA_flat]
+            # Get response vector
+            y_flat = self.get_ys()
 
             # Offset handling - for strictly additive model just subtract from y and then
             # pass zero via self.offset (default initialization)
@@ -3146,10 +3060,6 @@ class GAMM(GAMMLSS):
                     self.offset = offset
                 else:
                     y_flat -= offset
-
-            if not self.formulas[0].get_lhs().f is None:
-                # Optionally apply function to dep. var. before fitting.
-                y_flat = self.formulas[0].get_lhs().f(y_flat)
 
             if y_flat.shape[0] != self.formulas[0].y_flat.shape[0] and progress_bar:
                 print("NAs were excluded for fitting.")
@@ -3525,6 +3435,10 @@ class GAMM(GAMMLSS):
         :param seed: Can be used to provide a seed for the posterior sampling step in case the
             point-wise CI is adjusted to behave like a whole-function interval CI.
         :type seed: int or None, optional
+        :param par: The index corresponding to the parameter of the distribution for which to
+            make the prediction, defaults to 0 and must stay at 0 since for GAMMs only a single
+            parameter is parameterized as an additive model.
+        :type par: int, optional
         :return: A tuple with 3 entries. The first entry is the prediction ``pred`` based on the
             new data ``n_dat``. The second entry is the model matrix built for ``n_dat`` that was
             post-multiplied with the model coefficients to obtain ``pred``. The third entry is
@@ -3627,6 +3541,10 @@ class GAMM(GAMMLSS):
         :param seed: Can be used to provide a seed for the posterior sampling step in case the
             point-wise CI is adjusted to behave like a whole-function interval CI.
         :type seed: int or None, optional
+        :param par: The index corresponding to the parameter of the distribution for which to
+            make the prediction, defaults to 0 and must stay at 0 since for GAMMs only a single
+            parameter is parameterized as an additive model.
+        :type par: int, optional
         :return: A tuple with 2 entries. The first entry is the predicted difference
             (between the two data sets ``dat1`` & ``dat2``) ``diff``. The second entry is the
             standard error ``se`` of the predicted difference multiplied by the critical value
