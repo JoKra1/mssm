@@ -609,7 +609,7 @@ class GSMM:
         min_inner: int | None = None,
         conv_tol: float = 1e-7,
         extend_lambda: bool = False,
-        extension_method_lam: str = "nesterov2",
+        extension_method_lam: str = "expected_ratio",
         control_lambda: int | None = None,
         restart: bool = False,
         optimizer: str = "Newton",
@@ -665,7 +665,7 @@ class GSMM:
             functions. Disabled by default.
         :type extend_lambda: bool,optional
         :param extension_method_lam: **Experimental - do not change!** Which method to use to extend
-            lambda proposals. Set to 'nesterov2' by default.
+            lambda proposals. Set to 'expected_ratio' by default.
         :type extension_method_lam: str,optional
         :param control_lambda: Whether lambda proposals should be checked (and if necessary
             decreased) for whether or not they (approxiately) increase the Laplace approximate
@@ -1778,7 +1778,7 @@ class GAMMLSS(GSMM):
         min_inner: int | None = None,
         conv_tol: float = 1e-7,
         extend_lambda: bool = False,
-        extension_method_lam: str = "nesterov2",
+        extension_method_lam: str = "expected_ratio",
         control_lambda: int = 2,
         restart: bool = False,
         method: str = "QR/Chol",
@@ -1848,7 +1848,7 @@ class GAMMLSS(GSMM):
             penalized functions. Disabled by default.
         :type extend_lambda: bool,optional
         :param extension_method_lam: **Experimental - do not change!** Which method to use to extend
-            lambda proposals. Set to 'nesterov2' by default.
+            lambda proposals. Set to 'expected_ratio' by default.
         :type extension_method_lam: str,optional
         :param control_lambda: Whether lambda proposals should be checked (and if necessary
             decreased) for whether or not they (approxiately) increase the Laplace approximate
@@ -2861,7 +2861,7 @@ class GAMM(GAMMLSS):
         extend_lambda: bool = False,
         control_lambda: int = 2,
         exclude_lambda: bool = False,
-        extension_method_lam: str = "nesterov",
+        extension_method_lam: str = "expected_ratio",
         restart: bool = False,
         method: str = "QR",
         check_cond: int = 1,
@@ -2988,7 +2988,7 @@ class GAMM(GAMMLSS):
             Kernel penalties on terms. Thus, disabled by default.
         :type exclude_lambda: bool, optional
         :param extension_method_lam: **Experimental - do not change!** Which method to use to extend
-            lambda proposals. Set to 'nesterov' by default.
+            lambda proposals. Set to 'expected_ratio' by default.
         :type extension_method_lam: str,optional
         :param restart: Whether fitting should be resumed. Only possible if the same model has
             previously completed at least one fitting iteration.

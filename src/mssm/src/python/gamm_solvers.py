@@ -1843,11 +1843,10 @@ def initialize_extension(method: str, penalties: list[LambdaTerm]) -> dict:
     :rtype: dict
     """
 
-    if method == "nesterov" or method == "nesterov2":
-        extend_by = {
-            "prev_lam": [lterm.lam for lterm in penalties],
-            "acc": [0 for _ in penalties],
-        }
+    extend_by = {
+        "prev_lam": [lterm.lam for lterm in penalties],
+        "acc": [0 for _ in penalties],
+    }
 
     return extend_by
 
@@ -1858,6 +1857,7 @@ def extend_lambda_step(
     dLam: float,
     extend_by: dict,
     was_extended: list[bool],
+    iter: int,
     method: str,
 ) -> tuple[float, dict, list[bool]]:
     """Internal function. Performs an update to the lambda parameter, ideally extending the step
@@ -1873,55 +1873,100 @@ def extend_lambda_step(
     :type extend_by: dict
     :param was_extended: List holding indication per lambda parameter whether it was extended or not
     :type was_extended: list[bool]
+    :param iter: Current iteration of the outer algorithm updating :math:`\\lambda`.
+    :type iter: int
     :param method: Extension method to use.
     :type method: str
     :raises ValueError: If requested method is not implemented
     :return: Updated values for dLam, extend_by, was_extended
     :rtype: tuple[float,dict,list[bool]]
     """
+    # Actual diff in lambda over previous outer iteration
+    diff_lam = lam - extend_by["prev_lam"][lti]
 
-    if method == "nesterov" or method == "nesterov2":
+    # Keep track of new accepted lam (after check)
+    extend_by["prev_lam"][lti] = lam
+
+    acc = 0
+    if method == "expected_ratio":
+        # Maintains an expectation for the dLam/diff_lam ratio and pulls
+        # the ratio towards the expected one by computing pull factor:
+        # pull = np.sign(dLam) * (actual_abs_dLam + expected_abs_dLam) / 2
+        # with expected_abs_dLam = expected_ratio * |diff_lam| should
+        # expected_abs_dLam >= actual_abs_dLam
+
+        if np.sign(dLam) == np.sign(diff_lam):
+            # Target ratio of dLam/diff_lam increases with iter
+            # slowly in the beginning but more quickly later on
+            expo = 0.375
+            if iter > 50:
+                expo = min(0.9, expo * np.power(1.0025, iter - 50))
+
+            target = 2 - (2 / np.power(iter + 1, expo))
+
+            # Computed expected vs. actual magnitude of dLam
+            expected_abs_dLam = target * np.abs(diff_lam)
+            actual_abs_dLam = np.abs(dLam)
+
+            if actual_abs_dLam < expected_abs_dLam:
+                # Pull actual to expected
+                pull = np.sign(dLam) * (actual_abs_dLam + expected_abs_dLam) / 2
+                acc = pull - dLam
+            else:
+                # Well on track, no acceleration needed
+                acc = 0
+        else:
+            # Update direction reversal, accelleration makes little sense
+            acc = 0
+
+    elif method == "nesterov" or method == "nesterov2":
         # The idea for the correction is based on the derivations in the supplementary materials
         # of Sutskever et al. (2013) - but adapted to use efs_step**2 / |lam_t - lam_{t-1}| for
         # the correction to lambda. So that the next efs update will be calculated from
-        # lam_t + efs_step + (efs_step**2 / |lam_t - lam_{t-1}|) instead of just lam_t + efs_step.
+        # lam_t + efs_step + sign(efs_step) * (efs_step**2 / |lam_t - lam_{t-1}|) instead of just
+        # lam_t + efs_step.
 
         # Essentially, until corrected increase in lambda reaches unit size a fraction of the
         # quadratic efs_step is added. At unit size the quadratic efs_step is added in its entirety.
         # As corrected update step-length decreases further the extension will become increasingly
         # larger than just the quadratic of the efs_step.
 
-        diff_lam = lam - extend_by["prev_lam"][lti]
+        if np.sign(dLam) == np.sign(diff_lam):
 
-        if method == "nesterov2":
-            acc = dLam * min(
-                0.99, abs(dLam) / max(sys.float_info.epsilon, 2 * abs(diff_lam))
-            )
+            if dLam > 1 and diff_lam < 1:
+                # Well on track, no acceleration needed
+                acc = 0
+            else:
 
+                if method == "nesterov2":
+                    acc = dLam * min(
+                        0.99, abs(dLam) / max(sys.float_info.epsilon, 2 * abs(diff_lam))
+                    )
+
+                else:
+                    # More aggressive extensions compared to version 2
+                    acc = np.sign(dLam) * (
+                        dLam**2 / max(sys.float_info.epsilon, abs(diff_lam))
+                    )
         else:
-            acc = np.sign(dLam) * (dLam**2 / max(sys.float_info.epsilon, abs(diff_lam)))
-
-        extend_by["prev_lam"][lti] = lam
-
-        if dLam > 1 and diff_lam < 1:
+            # Update direction reversal, accelleration makes little sense
             acc = 0
-
-        extend_by["acc"][lti] = acc
-
-        extension = lam + dLam + acc
-
-        if (
-            extension < 1e7
-            and extension > 1e-7
-            and np.sign(diff_lam) == np.sign(dLam)
-            and abs(acc) > 0
-        ):
-            dLam += acc
-            was_extended[lti] = True
-        else:
-            was_extended[lti] = False
     else:
         raise ValueError(f"Lambda extension method '{method}' is not implemented.")
+
+    # Compute lambda step under update and acceleration factor
+    extension = lam + dLam + acc
+
+    if extension < 1e7 and extension > 1e-7 and abs(acc) > 0:
+        dLam += acc
+        was_extended[lti] = True
+
+    else:
+        was_extended[lti] = False
+        acc = 0
+
+    # Keep track of acceleration factor
+    extend_by["acc"][lti] = acc
 
     return dLam, extend_by, was_extended
 
@@ -1933,7 +1978,6 @@ def undo_extension_lambda_step(
     extend_by: dict,
     was_extended: list[bool],
     method: str,
-    family: Family | None,
 ) -> tuple[float, float]:
     """Internal function. Deals with resetting any extension terms.
 
@@ -1949,22 +1993,16 @@ def undo_extension_lambda_step(
     :type was_extended: bool
     :param method: Extension method to use.
     :type method: str
-    :param family: Deprecated. model family
-    :type family: Family | None
     :raises ValueError: If requested method is not implemented
     :return: Updated values for lam and dlam
     :rtype: tuple[float,float]
     """
-    if method == "nesterov" or method == "nesterov2":
-        # We can simply reset lam by the extension factor computed earlier. If we repeatedly have
-        # to half we can fall back to the strategy by Wood & Fasiolo (2016) to just half the step.
-        dLam -= extend_by["acc"][lti]
-        lam -= extend_by["acc"][lti]
-        extend_by["acc"][lti] = 0
-        was_extended[lti] = False
 
-    else:
-        raise ValueError(f"Lambda extension method '{method}' is not implemented.")
+    # Simply reset lam by the extension factor computed earlier.
+    dLam -= extend_by["acc"][lti]
+    lam -= extend_by["acc"][lti]
+    extend_by["acc"][lti] = 0
+    was_extended[lti] = False
 
     return lam, dLam
 
@@ -2096,7 +2134,7 @@ def correct_lambda_step(
         Kernel penalties on terms. Thus, disabled by default.
     :type exclude_lambda: bool
     :param extension_method_lam: **Experimental - do not change!** Which method to use to extend
-        lambda proposals. Set to 'nesterov' by default.
+        lambda proposals. Set to 'expected_ratio' by default.
     :type extension_method_lam: str
     :param formula: (Optionally) Formula of model
     :type formula: Formula | None
@@ -2372,7 +2410,6 @@ def correct_lambda_step(
                         extend_by,
                         was_extended,
                         extension_method_lam,
-                        family,
                     )
                     lTerm.lam = lam
                     lam_delta[lti][0] = dLam
@@ -2444,6 +2481,7 @@ def correct_lambda_step(
                             dLam,
                             extend_by,
                             was_extended,
+                            o_iter,
                             extension_method_lam,
                         )
 
@@ -2587,7 +2625,7 @@ def solve_gamm_sparse(
     extend_lambda: bool = False,
     control_lambda: int = 1,
     exclude_lambda: bool = False,
-    extension_method_lam: str = "nesterov",
+    extension_method_lam: str = "expected_ratio",
     form_Linv: bool = True,
     method: str = "Chol",
     check_cond: int = 2,
@@ -2665,7 +2703,7 @@ def solve_gamm_sparse(
         updates. Can make each iteration a bit cheaper but is problematic when using additional
         Kernel penalties on terms. Thus, disabled by default.
     :type exclude_lambda: bool
-    :param extension_method_lam: _description_, defaults to "nesterov"
+    :param extension_method_lam: _description_, defaults to "expected_ratio"
     :type extension_method_lam: str, optional
     :param form_Linv: Whether to form the inverse of the cholesky of the negative penalzied hessian
         or not, defaults to True
@@ -3777,7 +3815,7 @@ def solve_gamm_sparse2(
     extend_lambda: bool = False,
     control_lambda: int = 1,
     exclude_lambda: bool = False,
-    extension_method_lam: str = "nesterov",
+    extension_method_lam: str = "expected_ratio",
     form_Linv: bool = True,
     progress_bar: bool = False,
     n_c: int = 10,
@@ -3849,7 +3887,7 @@ def solve_gamm_sparse2(
         Kernel penalties on terms. Thus, disabled by default.
     :type exclude_lambda: bool
     :param extension_method_lam: Which method to use to extend lambda proposals., defaults to
-        "nesterov"
+        "expected_ratio"
     :type extension_method_lam: str, optional
     :param form_Linv: Whether to form the inverse of the cholesky of the negative penalzied
         hessian or not, defaults to True
@@ -3915,10 +3953,6 @@ def solve_gamm_sparse2(
     colsX = XX.shape[1]
     coef = None
     n_coef = None
-
-    # Extension factor for lambda update for the Fellner Schall method by Wood & Fasiolo (2016)
-    extend_by = 1
-    was_extended = [False for _ in enumerate(penalties)]
 
     # mu and eta (start estimates in case the family is not Gaussian)
     y = np.array(y_flat)
@@ -5772,7 +5806,6 @@ def correct_lambda_step_gamlss(
                         extend_by,
                         was_extended,
                         extension_method_lam,
-                        None,
                     )
 
                     lTerm.lam = lam
@@ -5825,37 +5858,27 @@ def correct_lambda_step_gamlss(
             dLam = 0 if lTerm.lam + dLam < 0 else dLam
 
         if extend_lambda and lTerm.frozen is False:
+            # Extend step taken
             dLam, extend_by, was_extended = extend_lambda_step(
-                lti, lTerm.lam, dLam, extend_by, was_extended, extension_method_lam
+                lti,
+                lTerm.lam,
+                dLam,
+                extend_by,
+                was_extended,
+                outer,
+                extension_method_lam,
             )
-            if (
-                ((outer > 100 and step_norm < 5e-3) or outer > 250)
-                or (max(eps, fit_info.eps) > 0 and outer > 50)
-            ) and was_extended[lti]:
-                if max(eps, fit_info.eps) > 0 and outer > 50:
-                    damp = 1 * np.power(0.9, outer - 50)
-                elif step_norm < 5e-3 and outer <= 250 and max(eps, fit_info.eps) <= 0:
-                    damp = 1 * np.power(0.9, outer - 100)
-                elif outer > 250 and max(eps, fit_info.eps) <= 0:
-                    damp = 1 * np.power(0.9, outer - 250)
-
-                extend_by["acc"][lti] *= damp
 
         # Dampen steps taken if Hessian continues to be modified to prevent erratic jumps or if
         # progress is slow
-        if (
-            (outer > 100 and step_norm < 5e-3)
-            or outer > 250
-            or (max(eps, fit_info.eps) > 0 and outer > 50)
+        if (outer > 100 and step_norm < 5e-3) or (
+            max(eps, fit_info.eps) > 0 and outer > 50
         ):
-            if max(eps, fit_info.eps) > 0 and outer > 50:
-                damp = 1 * np.power(0.9, outer - 50)
-            elif step_norm < 5e-3 and outer <= 250 and max(eps, fit_info.eps) <= 0:
-                damp = 1 * np.power(0.9, outer - 100)
-            elif outer > 250 and max(eps, fit_info.eps) <= 0:
-                damp = 1 * np.power(0.9, outer - 250)
-            # print(damp,1*np.power(0.9,outer-50))
+            damp = 1 * np.power(0.9, outer - 50)
             dLam = damp * dLam
+
+            if was_extended[lti]:
+                extend_by["acc"][lti] *= damp
 
         lam_delta.append(dLam)
 
@@ -5912,7 +5935,7 @@ def solve_gammlss_sparse(
     min_inner: int = 1,
     conv_tol: float = 1e-7,
     extend_lambda: bool = True,
-    extension_method_lam: str = "nesterov2",
+    extension_method_lam: str = "expected_ratio",
     control_lambda: int = 1,
     method: str = "Chol",
     check_cond: int = 1,
@@ -5977,7 +6000,7 @@ def solve_gammlss_sparse(
         number of new smoothing penalty proposals necessary, defaults to True
     :type extend_lambda: bool, optional
     :param extension_method_lam: Which method to use to extend lambda proposals, defaults to
-        "nesterov2"
+        "expected_ratio"
     :type extension_method_lam: str, optional
     :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased)
         for whether or not they (approxiately) increase the Laplace approximate restricted maximum
@@ -8228,7 +8251,6 @@ def correct_lambda_step_gen_smooth(
                         extend_by,
                         was_extended,
                         extension_method_lam,
-                        None,
                     )
 
                     lTerm.lam = lam
@@ -8320,40 +8342,27 @@ def correct_lambda_step_gen_smooth(
             dLam = 0 if lTerm.lam + dLam < 0 else dLam
 
         if extend_lambda and lTerm.frozen is False:
+            # Extend step taken
             dLam, extend_by, was_extended = extend_lambda_step(
-                lti, lTerm.lam, dLam, extend_by, was_extended, extension_method_lam
+                lti,
+                lTerm.lam,
+                dLam,
+                extend_by,
+                was_extended,
+                outer,
+                extension_method_lam,
             )
-            if method != "qEFS" and (
-                (
-                    (outer > 100 and step_norm < 5e-3)
-                    or outer > 250
-                    or (max(eps, fit_info.eps) > 0 and outer > 50)
-                )
-                and was_extended[lti]
-            ):
-                if max(eps, fit_info.eps) > 0 and outer > 50:
-                    damp = 1 * np.power(0.9, outer - 50)
-                elif step_norm < 5e-3 and outer <= 250 and max(eps, fit_info.eps) <= 0:
-                    damp = 1 * np.power(0.9, outer - 100)
-                elif outer > 250 and max(eps, fit_info.eps) <= 0:
-                    damp = 1 * np.power(0.9, outer - 250)
 
-                extend_by["acc"][lti] *= damp
-
-        # Dampen steps taken if Hessian continues to be modified to prevent erratic jumps
-        if method != "qEFS" and (
-            (outer > 100 and step_norm < 5e-3)
-            or outer > 250
-            or (max(eps, fit_info.eps) > 0 and outer > 50)
+        # Dampen steps taken if Hessian continues to be modified to prevent erratic jumps or if
+        # progress is slow
+        if (outer > 100 and step_norm < 5e-3) or (
+            max(eps, fit_info.eps) > 0 and outer > 50
         ):
-            if max(eps, fit_info.eps) > 0 and outer > 50:
-                damp = 1 * np.power(0.9, outer - 50)
-            elif step_norm < 5e-3 and outer <= 250 and max(eps, fit_info.eps) <= 0:
-                damp = 1 * np.power(0.9, outer - 100)
-            elif outer > 250 and max(eps, fit_info.eps) <= 0:
-                damp = 1 * np.power(0.9, outer - 250)
-
+            damp = 1 * np.power(0.9, outer - 50)
             dLam = damp * dLam
+
+            if was_extended[lti]:
+                extend_by["acc"][lti] *= damp
 
         lam_delta.append(dLam)
 
@@ -8452,7 +8461,7 @@ def solve_generalSmooth_sparse(
     min_inner: int = 50,
     conv_tol: float = 1e-7,
     extend_lambda: bool = True,
-    extension_method_lam: str = "nesterov2",
+    extension_method_lam: str = "expected_ratio",
     control_lambda: int = 1,
     optimizer: str = "Newton",
     method: str = "Chol",
@@ -8540,7 +8549,7 @@ def solve_generalSmooth_sparse(
         number of new smoothing penalty proposals necessary, defaults to True
     :type extend_lambda: bool, optional
     :param extension_method_lam: Which method to use to extend lambda proposals, defaults to
-        "nesterov2"
+        "expected_ratio"
     :type extension_method_lam: str, optional
     :param control_lambda: Whether lambda proposals should be checked (and if necessary decreased)
         for whether or not they (approxiately) increase the Laplace approximate restricted maximum

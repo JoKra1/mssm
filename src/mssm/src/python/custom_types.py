@@ -142,7 +142,7 @@ class Fit_info:
     :ivar float eps: The fraction added to the last estimate of the negative Hessian of the
         penalized likelihood during GAMMLSS or GSMM estimation. If this is not 0 - the model should
         not be considered as converged, irrespective of what ``code`` indicates. This most likely
-        implies that the model is not identifiable. Initialized with ``None`` and ignored for GAMM
+        implies that the model is not identifiable. Initialized with 0 and ignored for GAMM
         estimation.
     :ivar float K2: An estimate for the condition number of matrix ``A``, where ``A.T@A=H`` and
         ``H`` is the final estimate of the negative Hessian of the penalized likelihood.
@@ -156,7 +156,7 @@ class Fit_info:
     lambda_updates: int = 0
     iter: int = 0
     code: int = 1
-    eps: float | None = None
+    eps: float = 0
     K2: float | None = None
     dropped: np.typing.NDArray[np.int_] | None = None
 
