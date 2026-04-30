@@ -1710,6 +1710,7 @@ class Test_mvn:
     test_kwargs["bfgs_options"] = bfgs_options
 
     model = GSMM(formulas, MultiGauss(3, [Identity() for _ in range(3)]))
+    pre_pars = model.get_pars()
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         model.fit(**test_kwargs)
@@ -1731,6 +1732,30 @@ class Test_mvn:
 
     # Check qEFS correct_VP/Vp code
     Vs = correct_VB(model, grid_type="JJJ3", method="qEFS", n_c=1)
+
+    def test_coef_extract1(self):
+        assert self.pre_pars is None
+
+    def test_coef_extract2(self):
+        # Check all coef
+        np.testing.assert_allclose(
+            self.model.get_pars(), self.model.coef, atol=0, rtol=0
+        )
+
+    def test_coef_extract3(self):
+        # Check extra coef
+        np.testing.assert_allclose(
+            self.model.get_pars(par=3),
+            np.split(self.model.coef, self.model.coef_split_idx)[-1],
+            atol=0,
+            rtol=0,
+        )
+
+    def test_coef_extract4(self):
+        # Check coef of smooth term 1 in second formula
+        np.testing.assert_allclose(
+            self.model.get_pars(par=1, term=1), self.model.coef[11:20], atol=0, rtol=0
+        )
 
     def test_GAMedf(self):
         np.testing.assert_allclose(

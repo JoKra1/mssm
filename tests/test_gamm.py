@@ -50,6 +50,22 @@ class Test_expected_ratio_acceleration:
     def test_iter(self):
         assert self.iter2 < self.iter1
 
+    def test_coef_extract1(self):
+        np.testing.assert_allclose(
+            self.gamma_model2.get_pars()[0],
+            self.gamma_model2.coef,
+            atol=0,
+            rtol=0,
+        )
+
+    def test_coef_extract2(self):
+        np.testing.assert_allclose(
+            self.gamma_model2.get_pars(term=1)[0],
+            self.gamma_model2.coef[1:10],
+            atol=0,
+            rtol=0,
+        )
+
 
 class Test_BIG_GAMM_Discretize:
     dat = pd.read_csv(
@@ -2100,7 +2116,7 @@ class Test_te_rs_fact:
             self.model.print_smooth_terms()
         capture = capture.getvalue()
 
-        comp = "f(['time', 'x']); edf: 16.131\nrs(['fact', 'sub']); edf: 38.089\nrs(['x', 'sub'],by=fact):fact_1; edf: 12.887\nrs(['x', 'sub'],by=fact):fact_2; edf: 14.136\nrs(['x', 'sub'],by=fact):fact_3; edf: 10.358\n"
+        comp = "\nDistribution parameter: 1\n\nf(['time', 'x']); edf: 16.131\nrs(['fact', 'sub']); edf: 38.089\nrs(['x', 'sub'],by=fact):fact_1; edf: 12.887\nrs(['x', 'sub'],by=fact):fact_2; edf: 14.136\nrs(['x', 'sub'],by=fact):fact_3; edf: 10.358\n"
         assert comp == capture
 
 
@@ -2347,7 +2363,7 @@ class Test_print_parametric:
             self.model.print_parametric_terms()
         capture = capture.getvalue()
 
-        comp = "Intercept: 4.992, t: 2.609, DoF.: 9409, P(|T| > |t|): 0.00911 **\nfact_fact_2: -13.855, t: -5.263, DoF.: 9409, P(|T| > |t|): 1.445e-07 ***\nfact_fact_3: -6.252, t: -2.395, DoF.: 9409, P(|T| > |t|): 0.01664 *\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: .\n"
+        comp = "\nDistribution parameter: 1\n\nIntercept: 4.992, t: 2.609, DoF.: 9409, P(|T| > |t|): 0.00911 **\nfact_fact_2: -13.855, t: -5.263, DoF.: 9409, P(|T| > |t|): 1.445e-07 ***\nfact_fact_3: -6.252, t: -2.395, DoF.: 9409, P(|T| > |t|): 0.01664 *\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: .\n"
         assert comp == capture
 
 
@@ -2658,7 +2674,7 @@ class Test_print_smooth_by_factor_p:
             self.model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
-        comp = "f(['time'],by=fact): fact_1; edf: 9.43 f: 60.057 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.607 f: 16.831 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_3; edf: 4.839 f: 10.948 P(F > f) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        comp = "\nDistribution parameter: 1\n\nf(['time'],by=fact): fact_1; edf: 9.43 f: 60.057 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.607 f: 16.831 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_3; edf: 4.839 f: 10.948 P(F > f) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         assert comp == capture
 
 
@@ -2687,7 +2703,7 @@ class Test_print_smooth_by_factor_fs_p:
             self.model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
-        comp = "f(['time'],by=fact): fact_1; edf: 9.493 f: 34.404 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.866 f: 8.889 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_3; edf: 5.295 f: 3.238 P(F > f) = 0.00449 **\nf(['time'],by=sub); edf: 94.041\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        comp = "\nDistribution parameter: 1\n\nf(['time'],by=fact): fact_1; edf: 9.493 f: 34.404 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.866 f: 8.889 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_3; edf: 5.295 f: 3.238 P(F > f) = 0.00449 **\nf(['time'],by=sub); edf: 94.041\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         assert comp == capture
 
 
@@ -2713,7 +2729,7 @@ class Test_print_smooth_binomial:
             self.model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
-        comp = "f(['x0']); edf: 2.856 chi^2: 18.417 P(Chi^2 > chi^2) = 7.220e-04 ***\nf(['x1']); edf: 1.962 chi^2: 59.723 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x2']); edf: 6.243 chi^2: 168.267 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x3']); edf: 1.407 chi^2: 2.731 P(Chi^2 > chi^2) = 0.29779\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        comp = "\nDistribution parameter: 1\n\nf(['x0']); edf: 2.856 chi^2: 18.417 P(Chi^2 > chi^2) = 7.220e-04 ***\nf(['x1']); edf: 1.962 chi^2: 59.723 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x2']); edf: 6.243 chi^2: 168.267 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x3']); edf: 1.407 chi^2: 2.731 P(Chi^2 > chi^2) = 0.29779\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         assert comp == capture
 
 

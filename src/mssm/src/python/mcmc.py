@@ -590,11 +590,7 @@ def sample_mssm(
 
     # Now get ys and Xs
     if isinstance(family, Family):
-        y = formulas[0].y_flat[formulas[0].NOT_NA_flat]
-
-        if not formulas[0].get_lhs().f is None:
-            # Optionally apply function to dep. var. before fitting.
-            y = formulas[0].get_lhs().f(y)
+        y = model.get_ys()
 
         ys = [y]
         Xs = [model.get_mmat()]
@@ -612,12 +608,7 @@ def sample_mssm(
 
     else:
         if isinstance(family, GAMLSSFamily):
-            y = formulas[0].y_flat[formulas[0].NOT_NA_flat]
-
-            if not formulas[0].get_lhs().f is None:
-                # Optionally apply function to dep. var. before fitting. Not sure why that would be
-                # desirable for this model class...
-                y = formulas[0].get_lhs().f(y)
+            y = model.get_ys()
 
             ys = [y]
             for _ in range(1, family.n_par):
@@ -626,29 +617,8 @@ def sample_mssm(
 
             deriv_fam = GAMLSSGSMMFamily(family.n_par, family)
 
-        else:  # Need all y vectors in y, i.e., y is actually ys
-            ys = []
-            for fi, form in enumerate(formulas):
-
-                # Repeated y-variable - don't have to pass all of them
-                if fi > 0 and form.get_lhs().variable == formulas[0].get_lhs().variable:
-                    ys.append(None)
-                    continue
-
-                # New y-variable
-                if drop_NA:
-                    y = form.y_flat[form.NOT_NA_flat]
-                else:
-                    y = form.y_flat
-
-                # Optionally apply function to dep. var. before fitting. Not sure why that would be
-                # desirable for this model class...
-                if not form.get_lhs().f is None:
-                    y = form.get_lhs().f(y)
-
-                # And collect
-                ys.append(y)
-
+        else:
+            ys = model.get_ys(drop_NA=drop_NA)
             Xs = model.get_mmat(drop_NA=drop_NA)
             deriv_fam = family
 
