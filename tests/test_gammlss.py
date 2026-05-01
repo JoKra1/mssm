@@ -330,6 +330,20 @@ class Test_mulnom:
     model2 = GSMM(formulas, GAMLSSGSMMFamily(4, family))
     model2.fit(**default_gsmm_test_kwargs)
 
+    def test_pmf(self):
+        pmf = np.zeros((1000, 5))
+        for ki, k in enumerate([1, 2, 3, 4, 0]):
+            pmf[:, ki] = np.exp(
+                model.family.lp(np.zeros(1000).reshape(-1, 1) + k, *model.mus)
+            )[:, 0]
+
+        np.testing.assert_allclose(
+            np.sum(pmf, axis=1),
+            np.ones(1000),
+            atol=min(max_atol, 1e7),
+            rtol=min(max_rtol, 1e7),
+        )
+
     def test_cdf1(self):
         # probs cannot drop below 0
         cdf = np.zeros((1000, 5))
