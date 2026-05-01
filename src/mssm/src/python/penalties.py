@@ -3,6 +3,7 @@ import scipy as scp
 from .custom_types import Constraint, ConstType, LambdaTerm, PenType
 from .matrix_solvers import translate_sparse
 from collections.abc import Callable
+from abc import ABC, abstractmethod
 import sys
 
 ################################## Penalty functions ################################## # noqa: E266
@@ -448,7 +449,7 @@ def embed_shared_penalties(
     return shared_penalties
 
 
-class Penalty:
+class Penalty(ABC):
     """Penalty base-class. Generates penalty matrices for smooth terms.
 
     :param pen_type: Type of the penalty matrix
@@ -459,13 +460,17 @@ class Penalty:
     def __init__(self, pen_type: PenType) -> None:
         self.type = pen_type
 
+    @abstractmethod
     def constructor(
-        self, n: int, constraint: Constraint | None, *args, **kwargs
+        self, n: int, constraint: Constraint | None
     ) -> tuple[
         list[float], list[int], list[int], list[float], list[int], list[int], int
     ]:
         """Creates penalty matrix + root of the penalty and returns both in list form (data, row
         indices, col indices).
+
+        Additionall arguments required to construct specific implementations must be passed along
+        via extra keyword arguments with default values.
 
         :param n: Dimension of square penalty matrix
         :type n: int

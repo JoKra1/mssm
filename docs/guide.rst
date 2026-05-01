@@ -104,7 +104,8 @@ The implementation of the :class:`mssm.src.python.penalties.Penalty` class is qu
         def __init__(self,pen_type:PenType) -> None:
             self.type = pen_type
         
-        def constructor(self,n:int,constraint:Constraint|None,*args,**kwargs) -> tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]:
+        @abstractmethod
+        def constructor(self,n:int,constraint:Constraint|None) -> tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]:
             pass
 
 The ``__init__`` method receives only a single argument, a :class:`mssm.src.python.custom_types.PenType` (see the documentation for supported values). For example, the ``pen_type`` of the  :class:`mssm.src.python.penalties.DifferencePenalty` is simply set
@@ -115,7 +116,7 @@ The actual construction of the penalty matrix is then handled by the ``construct
 - ``n``: An integer, corresponding to the dimension of the the square penalty matrix
 - ``constraint``: Any constraint to absorb by the penalty or ``None`` if no constraint is required. If this argument is not ``None``, it will be an instance of the :class:`mssm.src.python.custom_types.Constraint` class, which holds all the information you need to absorb the constraint into the penalty (see the documentation).
 
-Your ``constructor`` method can also accept additional arguments and key-word arguments. For example, the method header of the ``constructor`` method of the :class:`mssm.src.python.penalties.DifferencePenalty` class looks like this::
+Your ``constructor`` method can also accept additional key-word arguments. For example, the method header of the ``constructor`` method of the :class:`mssm.src.python.penalties.DifferencePenalty` class looks like this::
 
     constructor(self, n:int, constraint:Constraint|None, m:int=2) -> tuple[list[float],list[int],list[int],list[float],list[int],list[int],int]:
 

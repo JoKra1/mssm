@@ -46,6 +46,7 @@ from ..python.exp_fam import (
     Identity,
     GAMLSSFamily,
     GSMMFamily,
+    DerivOrder,
 )
 from ..python.formula import Formula, LambdaTerm
 from ..python.penalties import split_shared_penalties, combine_shared_penalties
@@ -180,8 +181,9 @@ class GAMLSSGSMMFamily(GSMMFamily):
         ``family``, this must instead be set to ``family.n_par``.
     :type pars: int
     :param gammlss_family: Any implemented member of the :class:`GAMLSSFamily` or :class:`Family`
-        class. Available in ``self.llkargs[0]``.
+        class.
     :type gammlss_family: GAMLSSFamily | Family
+    :ivar GAMLSSFamily | Family gammlss_family: Family passed for ``gammlss_family``.
     """
 
     def __init__(self, pars: int, gammlss_family: GAMLSSFamily | Family) -> None:
@@ -192,8 +194,8 @@ class GAMLSSGSMMFamily(GSMMFamily):
                 if isinstance(gammlss_family, Family)
                 else gammlss_family.links
             ),
-            gammlss_family,
         )
+        self.gammlss_family = gammlss_family
         if isinstance(gammlss_family, Family):
             if isinstance(gammlss_family, ExtendedFamily):
                 self.extra_coef = len(gammlss_family.theta)  # Theta
@@ -209,7 +211,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
         :return: A numpy array of shape (-1,1), holding initial values for all model coefficients.
         :rtype: np.ndarray
         """
-        gammlss_family = self.llkargs[0]
+        gammlss_family = self.gammlss_family
 
         if isinstance(gammlss_family, Family):
             m = models[0]
@@ -260,7 +262,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
         :rtype: float
         """
         y = ys[0]
-        gammlss_family = self.llkargs[0]
+        gammlss_family = self.gammlss_family
 
         if isinstance(gammlss_family, Family):
             # Handle GAMMs
@@ -326,7 +328,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
         """
         y = ys[0]
         # Get the Gamlss family
-        gammlss_family = self.llkargs[0]
+        gammlss_family = self.gammlss_family
 
         if isinstance(gammlss_family, Family):
             # Handle GAMMs
@@ -367,9 +369,18 @@ class GAMLSSGSMMFamily(GSMMFamily):
 
                 d1eta, d2eta, d2meta = deriv_transform_mu_eta(y, mus, gammlss_family)
             else:
-                d1eta = [fd1(y, *mus) for fd1 in gammlss_family.d1]
-                d2eta = [fd2(y, *mus) for fd2 in gammlss_family.d2]
-                d2meta = [fd2m(y, *mus) for fd2m in gammlss_family.d2m]
+                d1eta = [
+                    gammlss_family.dpars(y, *mus, index=d1i, order=DerivOrder.d1)
+                    for d1i in range(gammlss_family.n_par)
+                ]
+                d2eta = [
+                    gammlss_family.dpars(y, *mus, index=d2i, order=DerivOrder.d2)
+                    for d2i in range(gammlss_family.n_par)
+                ]
+                d2meta = [
+                    gammlss_family.dpars(y, *mus, index=d2mi, order=DerivOrder.d2m)
+                    for d2mi in range(gammlss_family.n_d2m)
+                ]
 
             # Get gradient
             grad, _ = deriv_transform_eta_beta(d1eta, d2eta, d2meta, Xs, only_grad=True)
@@ -408,7 +419,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
         """
         y = ys[0]
         # Get the Gamlss family
-        gammlss_family = self.llkargs[0]
+        gammlss_family = self.gammlss_family
 
         if isinstance(gammlss_family, Family):
             # Fall back to finite differencing for now...
@@ -422,14 +433,84 @@ class GAMLSSGSMMFamily(GSMMFamily):
 
             d1eta, d2eta, d2meta = deriv_transform_mu_eta(y, mus, gammlss_family)
         else:
-            d1eta = [fd1(y, *mus) for fd1 in gammlss_family.d1]
-            d2eta = [fd2(y, *mus) for fd2 in gammlss_family.d2]
-            d2meta = [fd2m(y, *mus) for fd2m in gammlss_family.d2m]
+            d1eta = [
+                gammlss_family.dpars(y, *mus, index=d1i, order=DerivOrder.d1)
+                for d1i in range(gammlss_family.n_par)
+            ]
+            d2eta = [
+                gammlss_family.dpars(y, *mus, index=d2i, order=DerivOrder.d2)
+                for d2i in range(gammlss_family.n_par)
+            ]
+            d2meta = [
+                gammlss_family.dpars(y, *mus, index=d2mi, order=DerivOrder.d2m)
+                for d2mi in range(gammlss_family.n_d2m)
+            ]
 
         # Get Hessian
         _, H = deriv_transform_eta_beta(d1eta, d2eta, d2meta, Xs, only_grad=False)
 
         return H
+
+    def get_resid(self, coef, coef_split_idx, ys, Xs, **kwargs):
+        """
+        Function to compute residuals of GAMM(LSS) model when estimated via GSMM.
+
+        For GAMMs this just returns Deviance residuals. Any extra arguments required for GAMMLSS
+        models can be passed via ``kwargs``.
+
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must
+            not be flattened!).
+        :type coef: np.ndarray
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each paramter of the llk.
+        :type coef_split_idx: [int]
+        :param ys: List containing the vectors of observations passed as ``lhs.variable`` to the
+            formulas. **Note**: by convention ``mssm`` expectes that the actual observed data is
+            passed along via the first formula (so it is stored in ``ys[0]``). If multiple formulas
+            have the same ``lhs.variable`` as this first formula, then ``ys`` contains ``None`` at
+            their indices to save memory.
+        :type ys: [np.ndarray or None]
+        :param Xs: A list of sparse model matrices per likelihood parameter.
+        :type Xs: [scp.sparse.csc_array]
+        :return: The Hessian of the log-likelihood evaluated at ``coef``.
+        :rtype: scp.sparse.csc_array
+        """
+
+        y = ys[0]
+        # Get the Gamlss family
+        gammlss_family = self.gammlss_family
+
+        if isinstance(gammlss_family, Family):
+            # Handle GAMMs
+
+            if isinstance(gammlss_family, ExtendedFamily):
+                n_theta = self.extra_coef
+                mu = gammlss_family.link.fi(Xs[0] @ coef[:-n_theta])
+                theta = coef[-n_theta:]
+                D = gammlss_family.D(y, mu, theta=theta)
+
+            else:
+                if self.extra_coef is not None:
+                    # Two-par case - remember, scale coef is log of scale
+                    mu = gammlss_family.link.fi(Xs[0] @ coef[:-1])
+
+                else:
+                    # Single parameter case
+                    mu = gammlss_family.link.fi(Xs[0] @ coef)
+
+                D = gammlss_family.D(y, mu)
+
+            # Just return deviance residuals for GAMMs
+            res = np.sign(y - mu) * np.sqrt(D)
+        else:
+            # Handle GAMMLSS
+            split_coef = np.split(coef, coef_split_idx)
+            etas = [Xs[ei] @ split_coef[ei] for ei in range(len(Xs))]
+            mus = [self.links[ei].fi(etas[ei]) for ei in range(len(Xs))]
+
+            res = gammlss_family.get_resid(y, *mus, **kwargs)
+
+        return res
 
 
 def sample_MVN(
@@ -4394,9 +4475,18 @@ def correct_VB(
                     if family.d_eta is False:
                         d1eta, d2eta, d2meta = deriv_transform_mu_eta(y, mus, family)
                     else:
-                        d1eta = [fd1(y, *mus) for fd1 in family.d1]
-                        d2eta = [fd2(y, *mus) for fd2 in family.d2]
-                        d2meta = [fd2m(y, *mus) for fd2m in family.d2m]
+                        d1eta = [
+                            family.dpars(y, *mus, index=d1i, order=DerivOrder.d1)
+                            for d1i in range(family.n_par)
+                        ]
+                        d2eta = [
+                            family.dpars(y, *mus, index=d2i, order=DerivOrder.d2)
+                            for d2i in range(family.n_par)
+                        ]
+                        d2meta = [
+                            family.dpars(y, *mus, index=d2mi, order=DerivOrder.d2m)
+                            for d2mi in range(family.n_d2m)
+                        ]
 
                     # Get derivatives with respect to coef
                     _, H = deriv_transform_eta_beta(

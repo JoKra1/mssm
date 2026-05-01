@@ -2440,7 +2440,7 @@ def build_penalties(formula) -> list[LambdaTerm]:
         rterm = terms[rti]
 
         penalties, cur_pen_idx = rterm.build_penalty(
-            rti, penalties, cur_pen_idx, factor_levels, col_S
+            rti, penalties, cur_pen_idx, 0, factor_levels, col_S
         )
 
     if cur_pen_idx != col_S:

@@ -45,6 +45,16 @@ class TermType(Enum):
     RANDSLOPE = 5
 
 
+class DerivOrder(Enum):
+    """Custom partial derivative order type. ``d1`` is first-order, ``d2`` is pure second
+    derivatives, ``d2m`` is mixed second derivatives.
+    """
+
+    d1 = 1
+    d2 = 2
+    d2m = 3
+
+
 ####################################### Data-classes ####################################### # noqa
 
 

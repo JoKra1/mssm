@@ -1786,11 +1786,6 @@ class GAMMLSS(GSMM):
                 "Model needs to be estimated before evaluating the residuals. Call model.fit()"
             )
 
-        if isinstance(self.family, MULNOMLSS):
-            raise NotImplementedError(
-                "Residual computation for Multinomial model is not currently supported."
-            )
-
         # Get response vector
         y = self.get_ys()
 

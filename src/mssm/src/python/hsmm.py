@@ -9,6 +9,7 @@ from .exp_fam import (
     MultiGauss,
     MULNOMLSS,
     Link,
+    DerivOrder,
 )
 
 HAS_MP = True
@@ -1206,6 +1207,10 @@ class HSMMFamily(GSMMFamily):
         super().__init__(
             pars,
             links,
+        )
+
+        # Store all the arguments for later access.
+        self.llkargs = [
             n_S,
             obs_fams,
             d_fams,
@@ -1226,7 +1231,7 @@ class HSMMFamily(GSMMFamily):
             scale,
             event_template,
             hmp_fam,
-        )
+        ]
 
         self.extra_coef = 0
         self.is_hmp = event_template is not None
@@ -3329,7 +3334,12 @@ class HSMMFamily(GSMMFamily):
                                     yJM, musbjm, jmbFam
                                 )
                             else:
-                                d1eta = [fd1(yJM, *musbjm) for fd1 in jmbFam.d1]
+                                d1eta = [
+                                    jmbFam.dpars(
+                                        yJM, *musbjm, index=d1i, order=DerivOrder.d1
+                                    )
+                                    for d1i in range(jmbFam.n_par)
+                                ]
 
                         # 2) Get derivatives of log-likelihood of each observation with respect to
                         # coef
@@ -3565,11 +3575,25 @@ class HSMMFamily(GSMMFamily):
                             d1eta = []
                             for d in d_val:
                                 d1etad = [
-                                    fd1(d.reshape(-1, 1), *musdj) for fd1 in jdFam.d1
+                                    jdFam.dpars(
+                                        d.reshape(-1, 1),
+                                        *musdj,
+                                        index=d1i,
+                                        order=DerivOrder.d1,
+                                    )
+                                    for d1i in range(jdFam.n_par)
                                 ]
                                 d1eta.append(d1etad)
                         else:
-                            d1eta = [fd1(d_val, *musdj) for fd1 in jdFam.d1]
+                            d1eta = [
+                                jdFam.dpars(
+                                    d_val,
+                                    *musdj,
+                                    index=d1i,
+                                    order=DerivOrder.d1,
+                                )
+                                for d1i in range(jdFam.n_par)
+                            ]
 
                     # 2) Get derivatives of log-likelihood of each observation with respect to coef
 
@@ -3733,18 +3757,28 @@ class HSMMFamily(GSMMFamily):
                             d1eta = []
                             for tr in state_vals:
                                 d1etaT = [
-                                    fd1(
+                                    jtFam.dpars(
                                         np.array([tr for _ in range(n_T)]).reshape(
                                             -1, 1
                                         ),
                                         *mustj,
+                                        index=d1i,
+                                        order=DerivOrder.d1,
                                     )
-                                    for fd1 in jtFam.d1
+                                    for d1i in range(jtFam.n_par)
                                 ]
                                 # print(d1etaT[0].shape)
                                 d1eta.append(d1etaT)
                         else:
-                            d1eta = [fd1(state_vals, *mustj) for fd1 in jtFam.d1]
+                            d1eta = [
+                                jtFam.dpars(
+                                    state_vals,
+                                    *mustj,
+                                    index=d1i,
+                                    order=DerivOrder.d1,
+                                )
+                                for d1i in range(jtFam.n_par)
+                            ]
 
                         for par in range(jtFam.n_par):
                             # (n_S-1) * Xsj[par].shape[1] matrix. Each row holds partial
@@ -3850,7 +3884,15 @@ class HSMMFamily(GSMMFamily):
                 # print(pi_vals,muspi)
 
                 # 1) Get partial first derivatives with respect to eta
-                d1eta = [fd1(pi_vals, *muspi) for fd1 in pi_fam.d1]
+                d1eta = [
+                    pi_fam.dpars(
+                        pi_vals,
+                        *muspi,
+                        index=d1i,
+                        order=DerivOrder.d1,
+                    )
+                    for d1i in range(pi_fam.n_par)
+                ]
 
                 for par in range(pi_fam.n_par):
                     # n_S * Xsj[par].shape[1] matrix. Each row holds partial derivative of

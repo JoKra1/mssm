@@ -1,6 +1,7 @@
 # flake8: noqa
 import mssm
 from mssm.models import *
+from mssm.src.python.utils import GAMLSSGSMMFamily
 import numpy as np
 import os
 import copy
@@ -10,11 +11,14 @@ from contextlib import redirect_stdout
 from .defaults import (
     default_gamm_test_kwargs,
     default_gammlss_test_kwargs,
+    default_gsmm_test_kwargs,
     max_atol,
     max_rtol,
     init_coef_gaumlss_tests,
     init_coef_gammals_tests,
     init_penalties_tests_gammlss,
+    init_penalties_tests_gsmm,
+    init_coef_gsmmgammlss,
 )
 
 mssm.src.python.exp_fam.GAUMLSS.init_coef = init_coef_gaumlss_tests
@@ -22,6 +26,8 @@ mssm.src.python.exp_fam.GAMMALS.init_coef = init_coef_gammals_tests
 mssm.src.python.exp_fam.GAUMLSS.init_lambda = init_penalties_tests_gammlss
 mssm.src.python.exp_fam.GAMMALS.init_lambda = init_penalties_tests_gammlss
 mssm.src.python.exp_fam.MULNOMLSS.init_lambda = init_penalties_tests_gammlss
+mssm.src.python.utils.GAMLSSGSMMFamily.init_lambda = init_penalties_tests_gsmm
+mssm.src.python.utils.GAMLSSGSMMFamily.init_coef = init_coef_gsmmgammlss
 
 ################################################################## Tests ##################################################################
 
@@ -319,6 +325,59 @@ class Test_mulnom:
     test_kwargs["should_keep_drop"] = False
 
     model.fit(**test_kwargs)
+
+    # Fit GSMM as well
+    model2 = GSMM(formulas, GAMLSSGSMMFamily(4, family))
+    model2.fit(**default_gsmm_test_kwargs)
+
+    def test_cdf1(self):
+        # probs cannot drop below 0
+        cdf = np.zeros((1000, 5))
+        for ki, k in enumerate([1, 2, 3, 4, 0]):
+            cdf[:, ki] = np.exp(
+                self.model.family.lcp(
+                    np.zeros(1000).reshape(-1, 1) + k, *self.model.mus
+                )
+            )[:, 0]
+
+        assert np.min(cdf[:, 0]) >= 0
+
+    def test_cdf2(self):
+        # Must be monotonically non-decreasing
+        cdf = np.zeros((1000, 5))
+        for ki, k in enumerate([1, 2, 3, 4, 0]):
+            cdf[:, ki] = np.exp(
+                self.model.family.lcp(
+                    np.zeros(1000).reshape(-1, 1) + k, *self.model.mus
+                )
+            )[:, 0]
+
+        assert np.min(cdf[:, 1:] - cdf[:, 0:-1]) >= 0
+
+    def test_rvs(self):
+        assert (
+            self.model.family.rvs(*self.model.mus, size=10000).T - self.model.get_ys()
+        ).mean() < 1e-3
+
+    def test_resid1(self):
+        np.testing.assert_allclose(
+            self.model.get_resid(),
+            self.model.family.get_resid(self.model.get_ys(), *self.model.mus),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0),
+        )
+
+    def test_resid2(self):
+        assert np.mean(self.model.get_resid()) < 0.1
+
+    def test_resid3(self):
+        # Differences only due to different aglrotithms used for fitting.
+        np.testing.assert_allclose(
+            self.model.get_resid(),
+            self.model2.get_resid(),
+            atol=1e-4,
+            rtol=min(max_rtol, 1e-2),
+        )
 
     def test_GAMedf(self):
         assert round(self.model.edf, ndigits=3) == 15.114
