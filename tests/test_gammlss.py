@@ -334,7 +334,7 @@ class Test_mulnom:
         pmf = np.zeros((1000, 5))
         for ki, k in enumerate([1, 2, 3, 4, 0]):
             pmf[:, ki] = np.exp(
-                model.family.lp(np.zeros(1000).reshape(-1, 1) + k, *model.mus)
+                self.model.family.lp(np.zeros(1000).reshape(-1, 1) + k, *self.model.mus)
             )[:, 0]
 
         np.testing.assert_allclose(
