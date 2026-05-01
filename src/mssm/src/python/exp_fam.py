@@ -2625,7 +2625,7 @@ class GAMLSSFamily(ABC):
          - if ``order == DerivOrder.d2``, ``dpars(y,*mus,i,order)`` returns pure partial second\
             derivative of the log-likelihood with respect to parameter ``mus[i]`` for every\
             observation in ``y``.
-         
+
         If ``order == DerivOrder.d2m``, ``dpars(y,*mus,i,order)`` returns up to
         ``n_par*(n_par-1)/2`` mixed partial second derivatives as follows
          - ``i=0`` = :math:`\\partial l/\\partial \\mu_1 \\partial \\mu_2`,
