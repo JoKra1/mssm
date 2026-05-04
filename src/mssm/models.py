@@ -1079,6 +1079,9 @@ class GSMM:
             # Make sure fcols are in order and unique
             fcols = np.unique(fcols)
 
+            if len(fcols) == 0:
+                fcols = None
+
         # Init BFGS options last since we need some idea of problem dimension.
         if bfgs_options is None:
             bfgs_options = {
