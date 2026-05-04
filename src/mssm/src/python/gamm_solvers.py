@@ -31,7 +31,7 @@ from .compact_rep import (
 )
 from .repara import reparam_model
 from functools import reduce
-from .custom_types import Fit_info, LambdaTerm
+from .custom_types import Fit_info, LambdaTerm, DerivOrder
 from .terms import GammTerm
 from .matrix_solvers import *  # noqa: F403
 from collections.abc import Callable
@@ -4226,9 +4226,18 @@ def deriv_transform_mu_eta(
     ):  # Catch warnings associated with derivative evaluation, we handle those below
         warnings.simplefilter("ignore")
 
-        d1 = [fd1(y, *means) for fd1 in family.d1]
-        d2 = [fd2(y, *means) for fd2 in family.d2]
-        d2m = [fd2m(y, *means) for fd2m in family.d2m]
+        d1 = [
+            family.dpars(y, *means, index=d1i, order=DerivOrder.d1)
+            for d1i in range(family.n_par)
+        ]
+        d2 = [
+            family.dpars(y, *means, index=d2i, order=DerivOrder.d2)
+            for d2i in range(family.n_par)
+        ]
+        d2m = [
+            family.dpars(y, *means, index=d2mi, order=DerivOrder.d2m)
+            for d2mi in range(family.n_d2m)
+        ]
 
         # Link derivatives
         ld1 = [family.links[mui].dy1(means[mui]) for mui in range(len(means))]
@@ -5311,9 +5320,18 @@ def update_coef_gammlss(
         if family.d_eta is False:
             d1eta, d2eta, d2meta = deriv_transform_mu_eta(y, mus, family)
         else:
-            d1eta = [fd1(y, *mus) for fd1 in family.d1]
-            d2eta = [fd2(y, *mus) for fd2 in family.d2]
-            d2meta = [fd2m(y, *mus) for fd2m in family.d2m]
+            d1eta = [
+                family.dpars(y, *mus, index=d1i, order=DerivOrder.d1)
+                for d1i in range(family.n_par)
+            ]
+            d2eta = [
+                family.dpars(y, *mus, index=d2i, order=DerivOrder.d2)
+                for d2i in range(family.n_par)
+            ]
+            d2meta = [
+                family.dpars(y, *mus, index=d2mi, order=DerivOrder.d2m)
+                for d2mi in range(family.n_d2m)
+            ]
 
         # Get derivatives with respect to coef
         grad, H = deriv_transform_eta_beta(

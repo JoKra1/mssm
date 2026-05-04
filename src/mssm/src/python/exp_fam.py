@@ -4,6 +4,8 @@ import math
 import warnings
 import copy
 from collections.abc import Callable
+from .custom_types import DerivOrder
+from abc import ABC, abstractmethod
 
 HAS_MP = True
 try:
@@ -12,7 +14,7 @@ except ImportError:
     HAS_MP = False
 
 
-class Link:
+class Link(ABC):
     """
     Link function base class. To be implemented by any link functiion used for GAMMs and GAMMLSS
     models. Only links used by ``GAMLSS`` models require implementing the dy2 function. Note, that
@@ -20,6 +22,7 @@ class Link:
     element may be ``numpy.nan`` or ``numpy.inf``.
     """
 
+    @abstractmethod
     def f(self, mu: np.ndarray) -> np.ndarray:
         """
         Link function :math:`f()` mapping mean :math:`\\boldsymbol{\\mu}` of an exponential family
@@ -38,6 +41,7 @@ class Link:
         """
         pass
 
+    @abstractmethod
     def fi(self, eta: np.ndarray) -> np.ndarray:
         """
         Inverse of the link function mapping :math:`\\boldsymbol{\\eta} = f(\\boldsymbol{\\mu})` to
@@ -54,6 +58,7 @@ class Link:
         """
         pass
 
+    @abstractmethod
     def dy1(self, mu: np.ndarray) -> np.ndarray:
         """
         First derivative of :math:`f(\\boldsymbol{\\mu})` with respect to
@@ -70,6 +75,7 @@ class Link:
         """
         pass
 
+    @abstractmethod
     def dy2(self, mu: np.ndarray) -> np.ndarray:
         """
         Second derivative of :math:`f(\\boldsymbol{\\mu})` with respect to
@@ -462,9 +468,10 @@ def est_scale(res: np.ndarray, rows_X: int, total_edf: float) -> float:
     return sigma
 
 
-class Family:
+class Family(ABC):
     """
-    Base class to be implemented by Exp. family member.
+    Base class to be implemented by Exp. family member with (optional) scale parameter
+    :math:`\\phi`.
 
     :param link: The link function to be used by the model of the mean of this family.
     :type link: Link
@@ -475,19 +482,21 @@ class Family:
     :param scale: Known/fixed scale parameter for this family. Setting this to None means
         the parameter has to be estimated. **Must be set to 1 if the family has no scale
         parameter** (i.e., when ``twopar = False``)
-    :type scale: float or None, optional
+    :type scale: float | None, optional
     """
 
-    def __init__(self, link: Link, twopar: bool, scale: float = None) -> None:
+    def __init__(self, link: Link, twopar: bool, scale: float | None = None) -> None:
         self.link = link
         self.twopar = twopar
         self.scale = scale  # Known scale parameter!
         self.is_canonical = False  # Canonical link for generalized model?
 
-    def init_mu(self, y: np.ndarray) -> np.ndarray | None:
+    def init_mu(self, y: np.ndarray) -> np.ndarray:
         """
         Convenience function to compute an initial :math:`\\boldsymbol{\\mu}` estimate
         passed to the GAMM/PIRLS estimation routine.
+
+        Returns ``y`` by default.
 
         :param y: A numpy array of shape (-1,1) containing each observation.
         :type y: np.ndarray
@@ -496,6 +505,7 @@ class Family:
         """
         return y
 
+    @abstractmethod
     def V(self, mu: np.ndarray) -> np.ndarray:
         """
         The variance function (of the mean; see Wood, 2017, 3.1.2). Different exponential
@@ -515,6 +525,7 @@ class Family:
         """
         pass
 
+    @abstractmethod
     def dVy1(self, mu: np.ndarray) -> np.ndarray:
         """
         The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with
@@ -533,14 +544,15 @@ class Family:
         """
         pass
 
-    def llk(self, y: np.ndarray, mu: np.ndarray, **kwargs) -> float:
+    @abstractmethod
+    def llk(self, y: np.ndarray, mu: np.ndarray) -> float:
         """
         log-probability of :math:`\\mathbf{y}` under this family with
         mean = :math:`\\boldsymbol{\\mu}`. Essentially sum over all elements in the vector returned
         by the :func:`lp` method.
 
         Families with more than one parameter that needs to be estimated in order to evaluate the
-        model's log-likelihood (i.e., ``two_par=True``) must pass as key-word argument a ``scale``
+        model's log-likelihood (i.e., ``two_par=True``) must add as key-word argument a ``scale``
         parameter with a default value, e.g.,::
 
            def llk(self, y, mu, scale=1):
@@ -562,13 +574,14 @@ class Family:
         """
         pass
 
-    def lp(self, y: np.ndarray, mu: np.ndarray, **kwargs) -> np.ndarray:
+    @abstractmethod
+    def lp(self, y: np.ndarray, mu: np.ndarray) -> np.ndarray:
         """
         Log-probability of observing every value in :math:`\\mathbf{y}` under this family with
         mean = :math:`\\boldsymbol{\\mu}`.
 
         Families with more than one parameter that needs to be estimated in order to evaluate the
-        model's log-likelihood (i.e., ``two_par=True``) must pass as key-word argument a ``scale``
+        model's log-likelihood (i.e., ``two_par=True``) must add as key-word argument a ``scale``
         parameter with a default value, e.g.,::
 
            def lp(self, y, mu, scale=1):
@@ -591,6 +604,7 @@ class Family:
         """
         pass
 
+    @abstractmethod
     def deviance(self, y: np.ndarray, mu: np.ndarray) -> float:
         """
         Deviance of the model under this family: 2 * (llk_max - llk_c) * scale
@@ -610,6 +624,7 @@ class Family:
         """
         pass
 
+    @abstractmethod
     def D(self, y: np.ndarray, mu: np.ndarray) -> np.ndarray:
         """
         Contribution of each observation to model Deviance (Wood, 2017; Faraway, 2016)
@@ -967,7 +982,7 @@ class Gaussian(Family):
     :type scale: float or None, optional
     """
 
-    def __init__(self, link: Link = Identity(), scale: float = None) -> None:
+    def __init__(self, link: Link = Identity(), scale: float | None = None) -> None:
         super().__init__(link, True, scale)
         self.is_canonical: bool = isinstance(link, Identity)
 
@@ -1114,7 +1129,7 @@ class Gamma(Family):
     :type scale: float or None, optional
     """
 
-    def __init__(self, link: Link = LOG(), scale: float = None) -> None:
+    def __init__(self, link: Link = LOG(), scale: float | None = None) -> None:
         super().__init__(link, True, scale)
         self.is_canonical: bool = False  # Inverse link not implemented..
 
@@ -1590,12 +1605,11 @@ class ExtendedFamily(Family):
     :param theta: Any additional parameters of the likelihood (**inculding any required scale
         parameter**). Array needs to be of shape (-1,1). Setting this to None means the parameters
         have to be estimated.
-    :type theta: float or np.ndarray, optional
-    :ivar None | np.ndarray theta: The (estimated) extra parameters of the log-likelihood.
+    :type theta | None: np.ndarray, optional
+    :ivar np.ndarray theta: The (estimated) extra parameters of the log-likelihood.
         Each implementation of this class must initalize these if not provided (i.e., by
         implementing the ``init_theta`` method) and calls to :func:`GAMM.fit` will overwrite this
         attribute if the initial value for ``theta`` passed to the constructor was None.
-        Defaults to None
     """
 
     def __init__(
@@ -1610,6 +1624,12 @@ class ExtendedFamily(Family):
         if self.theta is None:
             self.theta = self.init_theta()
 
+        if self.theta is None:
+            raise ValueError(
+                "self.theta must be initialized to a np.array of shape (-1,1)."
+            )
+
+    @abstractmethod
     def init_theta(self) -> np.ndarray:
         """Function to initialize ``theta``, the extra parameters of the log-likelihood, if no value
         (i.e., ``None``) was passed to the constructor.
@@ -1622,9 +1642,11 @@ class ExtendedFamily(Family):
         """
         pass
 
+    @abstractmethod
     def V(self, mu: np.ndarray, theta: None | np.ndarray = None) -> np.ndarray:
         """
-        The variance function (of the mean; see Wood, 2017, 3.1.2) for an extended family.
+        The variance function (of the mean; see Wood, 2017, 3.1.2) for an extended family evaluated
+        at ``theta``.
 
         Take a look at the :class:`ScaledT` implementation as an example.
 
@@ -1644,12 +1666,13 @@ class ExtendedFamily(Family):
         """
         pass
 
+    @abstractmethod
     def dVy1(
         self, mu: np.ndarray, theta: None | np.ndarray = None
     ) -> np.ndarray | None:
         """
         The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with
-        respect ot the mean. Optional function that might simply return None
+        respect ot the mean evaluated at ``theta``.
 
         References:
          - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
@@ -1662,11 +1685,12 @@ class ExtendedFamily(Family):
             (-1,1). When this is set to None, ``self.theta`` should be used.
         :type theta: None | np.ndarray, optional
         :return: a N-dimensional vector of shape (-1,1) containing the first derivative of
-            the variance function with respect to each mean or None
-        :rtype: np.ndarray | None
+            the variance function with respect to each mean
+        :rtype: np.ndarray
         """
-        return None
+        pass
 
+    @abstractmethod
     def llk(
         self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
     ) -> float:
@@ -1694,6 +1718,7 @@ class ExtendedFamily(Family):
         """
         pass
 
+    @abstractmethod
     def lp(
         self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
     ) -> np.ndarray:
@@ -1721,11 +1746,12 @@ class ExtendedFamily(Family):
         """
         pass
 
+    @abstractmethod
     def deviance(
         self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
     ) -> float:
         """
-        Deviance of the model under this family: 2 * (llk_max - llk_c) * scale
+        Deviance of the model under this family: 2 * (llk_max - llk_c)
         (Wood, 2017; Faraway, 2016).
 
         Take a look at the :class:`ScaledT` implementation as an example.
@@ -1747,6 +1773,7 @@ class ExtendedFamily(Family):
         """
         pass
 
+    @abstractmethod
     def D(
         self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
     ) -> np.ndarray:
@@ -1773,6 +1800,7 @@ class ExtendedFamily(Family):
         """
         pass
 
+    @abstractmethod
     def dDdmu(
         self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
     ) -> np.ndarray:
@@ -1802,13 +1830,14 @@ class ExtendedFamily(Family):
         """
         pass
 
+    @abstractmethod
     def d2Ddmu(
         self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
     ) -> np.ndarray:
         """
         Computes second derivative of the deviance **or twice the negative log-likelihood** with
-        respect to ``mu``. This function is by default used directly during fitting, but can be
-        overwritten by implementing the ``Ed2Ddmu`` method. In that case, this function is only
+        respect to ``mu``. This function is by default used as fallback during fitting, but this can
+        be overwritten by implementing the ``Ed2Ddmu`` method. In that case, this function is only
         called after estimation has been completed to get the observed hessian at the final
         coefficient estimate.
 
@@ -1864,11 +1893,12 @@ class ExtendedFamily(Family):
         """
         return self.d2Ddmu(y, mu, theta)
 
+    @abstractmethod
     def gradientLTheta(
-        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+        self, y: np.ndarray, mu: np.ndarray, theta: np.ndarray
     ) -> np.ndarray:
         """
-        Computes gradient of the log-likelihood with respect to ``self.theta``, given ``mu``.
+        Computes gradient of the log-likelihood with respect to ``theta``, given ``mu``.
 
         Take a look at the :class:`ScaledT` implementation as an example.
 
@@ -1884,19 +1914,20 @@ class ExtendedFamily(Family):
             distribution corresponding to each observation.
         :type mu: np.ndarray
         :param theta: Any additional parameters of the likelihood. Array needs to be of shape
-            (-1,1). When this is set to None, ``self.theta`` should be used.
-        :type theta: None | np.ndarray, optional
+            (-1,1).
+        :type theta: np.ndarray
         :return: a N-dimensional vector of shape ``(len(self.theta),1)`` containing the gradient of
             the log-likelihood with respect to theta.
         :rtype: np.ndarray
         """
         pass
 
+    @abstractmethod
     def hessianLTheta(
-        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+        self, y: np.ndarray, mu: np.ndarray, theta: np.ndarray
     ) -> np.ndarray:
         """
-        Computes (expected) hessian of the log-likelihood with respect to ``self.theta``, given
+        Computes (expected) hessian of the log-likelihood with respect to ``theta``, given
         ``mu``.
 
         Take a look at the :class:`ScaledT` implementation as an example.
@@ -1913,8 +1944,8 @@ class ExtendedFamily(Family):
             distribution corresponding to each observation.
         :type mu: np.ndarray
         :param theta: Any additional parameters of the likelihood. Array needs to be of shape
-            (-1,1). When this is set to None, ``self.theta`` should be used.
-        :type theta: None | np.ndarray, optional
+            (-1,1).
+        :type theta: np.ndarray
         :return: a N-dimensional vector of shape ``(len(self.theta),len(self.theta))`` containing
             the hessian of the log-likelihood with respect to theta.
         :rtype: np.ndarray
@@ -1960,8 +1991,9 @@ class ScaledT(ExtendedFamily):
      - ``scat`` Family implemented in ``mgcv`` by Natalya Pya, see: \
         https://github.com/cran/mgcv/blob/master/R/efam.r#L2195
 
-    :param link: The link function to be used by the model of the mean of this family.
-    :type link: Link
+    :param link: The link function to be used by the model of the mean of this family. Defaults to
+        class:`Identity`.
+    :type link: Link, optional
     :param theta: An optional array containing an estimate of the log of the scale parameter and
         an estimate of the log of :math:`\\nu`. Setting this to None means both parameters
         have to be estimated.
@@ -1972,7 +2004,7 @@ class ScaledT(ExtendedFamily):
         is passed to the constructor for ``theta``.
     """
 
-    def __init__(self, link, theta=None, min_df=3):
+    def __init__(self, link=Identity(), theta=None, min_df=3):
         super().__init__(link, theta)
         self.min_df = min_df
 
@@ -2018,6 +2050,28 @@ class ScaledT(ExtendedFamily):
 
         return np.ones_like(mu) * (np.power(phi, 2) * nu / (nu - 2))
 
+    def dVy1(self, mu: np.ndarray, theta: None | np.ndarray = None) -> np.ndarray:
+        """
+        The first derivative of the variance function (of the mean; see Wood, 2017, 3.1.2) with
+        respect ot the mean evaluated at ``theta``.
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param mu: A numpy array of shape (-1,1) containing the predicted mean for the
+            response distribution corresponding to each observation.
+        :type mu: np.ndarray
+        :param theta: Optionally, the latest estimate of ``theta``, containing an estimate of
+            the log of the scale parameter and the log of the degrees of freedom parameter.
+            Array needs to be of shape (-1,1). When this is set to None, ``self.theta`` is used.
+        :type theta: None | np.ndarray, optional
+        :return: a N-dimensional vector of shape (-1,1) containing the first derivative of
+            the variance function with respect to each mean
+        :rtype: np.ndarray
+        """
+        return np.zeros_like(mu)
+
     def lp(
         self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
     ) -> np.ndarray:
@@ -2049,6 +2103,7 @@ class ScaledT(ExtendedFamily):
             each data-point under the current model.
         :rtype: np.ndarray
         """
+
         # Get theta
         if theta is None:
             theta = self.theta
@@ -2145,7 +2200,7 @@ class ScaledT(ExtendedFamily):
         self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
     ) -> float:
         """
-        Deviance of the model under this family: 2 * (llk_max - llk_c) * scale
+        Deviance of the model under this family: 2 * (llk_max - llk_c)
         (Wood, 2017; Faraway, 2016).
 
         Deviance is computed as in the ``scat`` implementation available in ``mgcv`` by
@@ -2310,10 +2365,10 @@ class ScaledT(ExtendedFamily):
         return 2 * Ed2Ddmu
 
     def gradientLTheta(
-        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+        self, y: np.ndarray, mu: np.ndarray, theta: np.ndarray
     ) -> np.ndarray:
         """
-        Computes gradient of the log-likelihood with respect to ``self.theta``, given ``mu``.
+        Computes gradient of the log-likelihood with respect to ``theta``, given ``mu``.
 
         Gradient is based on the derivatives of the deviance and saturated log-likelihood with
         respect to theta. The latter are computed as in the ``scat`` implementation available in
@@ -2332,18 +2387,14 @@ class ScaledT(ExtendedFamily):
         :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
             distribution corresponding to each observation.
         :type mu: np.ndarray
-        :param theta: Optionally, the latest estimate of ``theta``, containing an estimate of
+        :param theta: Estimate of ``theta``, containing an estimate of
             the log of the scale parameter and the log of the degrees of freedom parameter.
-            Array needs to be of shape (-1,1). When this is set to None, ``self.theta`` is used.
-        :type theta: None | np.ndarray, optional
+            Array needs to be of shape (-1,1).
+        :type theta: np.ndarray
         :return: a N-dimensional vector of shape ``(len(self.theta),1)`` containing the gradient of
             the log-likelihood with respect to theta.
         :rtype: np.ndarray
         """
-
-        # Get theta
-        if theta is None:
-            theta = self.theta
 
         # Transform to DoF parameter nu and scale parameter phi
         phi = np.exp(theta[0, 0])
@@ -2377,10 +2428,10 @@ class ScaledT(ExtendedFamily):
         return -1 * grad
 
     def hessianLTheta(
-        self, y: np.ndarray, mu: np.ndarray, theta: None | np.ndarray = None
+        self, y: np.ndarray, mu: np.ndarray, theta: np.ndarray
     ) -> np.ndarray:
         """
-        Computes hessian of the log-likelihood with respect to ``self.theta``, given
+        Computes hessian of the log-likelihood with respect to ``theta``, given
         ``mu``.
 
         Hessian is based on the derivatives of the deviance and saturated log-likelihood with
@@ -2400,18 +2451,14 @@ class ScaledT(ExtendedFamily):
         :param mu: A numpy array of shape (-1,1) containing the predicted mean for the response
             distribution corresponding to each observation.
         :type mu: np.ndarray
-        :param theta: Optionally, the latest estimate of ``theta``, containing an estimate of
+        :param theta: Estimate of ``theta``, containing an estimate of
             the log of the scale parameter and the log of the degrees of freedom parameter.
-            Array needs to be of shape (-1,1). When this is set to None, ``self.theta`` is used.
-        :type theta: None | np.ndarray, optional
+            Array needs to be of shape (-1,1).
+        :type theta: np.ndarray
         :return: a N-dimensional vector of shape ``(len(self.theta),len(self.theta))`` containing
             the hessian of the log-likelihood with respect to theta.
         :rtype: np.ndarray
         """
-
-        # Get theta
-        if theta is None:
-            theta = self.theta
 
         # Transform to DoF parameter nu and scale parameter phi
         phi = np.exp(theta[0, 0])
@@ -2464,19 +2511,9 @@ class ScaledT(ExtendedFamily):
         return -1 * H
 
 
-class GAMLSSFamily:
+class GAMLSSFamily(ABC):
     """Base-class to be implemented by families of Generalized Additive Mixed Models of Location,
     Scale, and Shape (GAMMLSS; Rigby & Stasinopoulos, 2005).
-
-    Apart from the required methods, three mandatory attributes need to be defined by the
-    :func:`__init__` constructor of implementations of this class. These are required
-    to evaluate the first and second (pure & mixed) derivative of the log-likelihood with respect to
-    any of the log-likelihood's parameters (alternatively the linear predictors of the parameters -
-    see the description of the ``d_eta`` instance variable.). See the variables below.
-
-    Optionally, a ``mean_init_fam`` attribute can be defined - specfiying a :class:`Family` member
-    that is fitted to the data to get an initial estimate of the mean parameter of the assumed
-    distribution.
 
     References:
      - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for Location, \
@@ -2489,23 +2526,12 @@ class GAMLSSFamily:
     :type pars: int
     :param links: Link functions for each of the parameters of the distribution.
     :type links: [Link]
+    :ivar int n_par: Value passed for ``pars``.
+    :ivar list[Link] links: List passed for ``links``.
     :ivar bool d_eta: A boolean indicating whether partial derivatives of llk are provided with
         respect to the linear predictor instead of parameters (i.e., the mean), defaults to False
         (derivatives are provided with respect to parameters)
-    :ivar [Callable] d1: A list holding ``n_par`` functions to evaluate the first partial
-        derivatives of llk with respect to each parameter of the llk. Needs to be initialized when
-        calling :func:`__init__`.
-    :ivar [Callable] d2: A list holding ``n_par`` functions to evaluate the second (pure) partial
-        derivatives of llk with respect to each parameter of the llk. Needs to be initialized when
-        calling :func:`__init__`.
-    :ivar [Callable] d2m: A list holding ``n_par*(n_par-1)/2`` functions to evaluate the second
-        mixed partial derivatives of llk with respect to each parameter of the llk in **order**:
-        ``d2m[0]`` = :math:`\\partial l/\\partial \\mu_1 \\partial \\mu_2`,
-        ``d2m[1]`` = :math:`\\partial l/\\partial \\mu_1 \\partial \\mu_3`, ...,
-        ``d2m[n_par-1]`` = :math:`\\partial l/\\partial \\mu_1 \\partial \\mu_{n_{par}}`,
-        ``d2m[n_par]`` = :math:`\\partial l/\\partial \\mu_2 \\partial \\mu_3`,
-        ``d2m[n_par+1]`` = :math:`\\partial l/\\partial \\mu_2 \\partial \\mu_4`, ... .
-        Needs to be initialized when calling :func:`__init__`.
+    :ivar int n_d2m: How many mixed partial second derivatives are defined for this family.
     """
 
     def __init__(self, pars: int, links: list[Link]) -> None:
@@ -2515,17 +2541,11 @@ class GAMLSSFamily:
         # instead of parameters (i.e., the mean), defaults to False (derivatives are provided with
         # respect to parameters)
         self.d_eta: bool = False
-        # list with functions to evaluate derivative of llk with respect to corresponding mean
-        self.d1: list[Callable] = []
-        # list with function to evaluate pure second derivative of llk with respect to
-        # corresponding mean
-        self.d2: list[Callable] = []
-        # list with functions to evaluate mixed second derivative of llk. Order is
-        # 12,13,1k,23,24,...
-        self.d2m: list[Callable] = []
-        self.mean_init_fam: Family | None = None
+        # How many mixed derivs?
+        self.n_d2m = int(pars * (pars - 1) / 2)
 
-    def llk(self, y: np.ndarray, *mus: list[np.ndarray]) -> float:
+    @abstractmethod
+    def llk(self, y: np.ndarray, *mus: np.ndarray) -> float:
         """log-probability of data under given model. Essentially sum over all elements in the
         vector returned by the :func:`lp` method.
 
@@ -2535,16 +2555,17 @@ class GAMLSSFamily:
 
         :param y: A numpy array of shape (-1,1) containing each observation.
         :type y: np.ndarray
-        :param mus: A list including `self.n_par` lists - one for each parameter of the
-            distribution. Each of those lists contains a numpy array of shape (-1,1) holding the
+        :param mus: `self.n_par` np arrays - one for each parameter of the
+            distribution. Each numpy array is of shape (-1,1), holding the
             expected value for a particular parmeter for each of the N observations.
-        :type mus: [np.ndarray]
+        :type mus: np.ndarray
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
         pass
 
-    def lp(self, y: np.ndarray, *mus: list[np.ndarray]) -> np.ndarray:
+    @abstractmethod
+    def lp(self, y: np.ndarray, *mus: np.ndarray) -> np.ndarray:
         """Log-probability of observing every element in :math:`\\mathbf{y}` under their respective
         distribution parameterized by ``mus``.
 
@@ -2554,17 +2575,18 @@ class GAMLSSFamily:
 
         :param y: A numpy array of shape (-1,1) containing each observed value.
         :type y: np.ndarray
-        :param mus: A list including `self.n_par` lists - one for each parameter of the
-            distribution. Each of those lists contains a numpy array of shape (-1,1) holding the
+        :param mus: `self.n_par` np arrays - one for each parameter of the
+            distribution. Each numpy array is of shape (-1,1), holding the
             expected value for a particular parmeter for each of the N observations.
-        :type mus: [np.ndarray]
+        :type mus: np.ndarray
         :return: a N-dimensional vector of shape (-1,1) containing the log-probability of observing
             each data-point under the current model.
         :rtype: np.ndarray
         """
         pass
 
-    def lcp(self, y: np.ndarray, *mus: list[np.ndarray]) -> np.ndarray | None:
+    @abstractmethod
+    def lcp(self, y: np.ndarray, *mus: np.ndarray) -> np.ndarray | None:
         """Log of the cumulative probability of observing a value as extreme or less extreme for
         every element in :math:`\\mathbf{y}` under their respective distribution parameterized by
         ``mus``.
@@ -2577,10 +2599,10 @@ class GAMLSSFamily:
 
         :param y: A numpy array of shape (-1,1) containing each observed value.
         :type y: np.ndarray
-        :param mus: A list including `self.n_par` lists - one for each parameter of the
-            distribution. Each of those lists contains a numpy array of shape (-1,1) holding the
+        :param mus: `self.n_par` np arrays - one for each parameter of the
+            distribution. Each numpy array is of shape (-1,1), holding the
             expected value for a particular parmeter for each of the N observations.
-        :type mus: [np.ndarray]
+        :type mus: np.ndarray
         :return: a N-dimensional vector of shape (-1,1) containing the log cumulative probability
             of observing a value as extreme or less extreme for every data-point under the current
             model or None if this function is not implemented by the specific family.
@@ -2588,8 +2610,51 @@ class GAMLSSFamily:
         """
         return None
 
+    @abstractmethod
+    def dpars(
+        self, y: np.ndarray, *mus: np.ndarray, index: int, order: DerivOrder
+    ) -> np.ndarray:
+        """Returns partial derivatives of the log-likelihood with respect to a specific ``mu``
+        (combination) or the linear predictor of that ``mu`` (if self.d_eta is True) indexed by
+        ``index`` of ``order`` (first order, pure second, mixed second).
+
+        Explanation for index:
+         - if ``order == DerivOrder.d1``, ``dpars(y,*mus,i,order)`` returns first partial\
+            derivative of the log-likelihood with respect to parameter ``mus[i]`` for every\
+            observation in ``y``.
+         - if ``order == DerivOrder.d2``, ``dpars(y,*mus,i,order)`` returns pure partial second\
+            derivative of the log-likelihood with respect to parameter ``mus[i]`` for every\
+            observation in ``y``.
+
+        If ``order == DerivOrder.d2m``, ``dpars(y,*mus,i,order)`` returns up to
+        ``n_par*(n_par-1)/2`` mixed partial second derivatives as follows
+         - ``i=0`` = :math:`\\partial l/\\partial \\mu_1 \\partial \\mu_2`,
+         - ``i=1`` = :math:`\\partial l/\\partial \\mu_1 \\partial \\mu_3`,
+         - ...
+         - ``i=n_par-1`` = :math:`\\partial l/\\partial \\mu_1 \\partial \\mu_{n_{par}}`,
+         - ``i=n_par`` = :math:`\\partial l/\\partial \\mu_2 \\partial \\mu_3`,
+         - ``i=n_par+1`` = :math:`\\partial l/\\partial \\mu_2 \\partial \\mu_4`, ... .
+         - ...
+
+        :param y: A numpy array of shape (-1,1) containing each observed value.
+        :type y: np.ndarray
+        :param mus: `self.n_par` np arrays - one for each parameter of the
+            distribution. Each numpy array is of shape (-1,1), holding the
+            expected value for a particular parmeter for each of the N observations.
+        :type mus: np.ndarray
+        :param index: Index for specific derivative vector to return.
+        :type index: int
+        :param order: Order of partial derivative.
+        :type order: DerivOrder
+        :return: a N-dimensional vector of shape (-1,1) containing the desired derivative evaluated
+            for every observation in ``y``.
+        :rtype: np.ndarray
+        """
+        pass
+
+    @abstractmethod
     def rvs(
-        self, *mus: list[np.ndarray], size: int = 1, seed: int | None = 0
+        self, *mus: np.ndarray, size: int = 1, seed: int | None = 0
     ) -> np.ndarray | None:
         """Returns ``size`` random samples for each of the distributions parameterized by ``mus``.
 
@@ -2603,10 +2668,10 @@ class GAMLSSFamily:
          - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
             Edition (2nd ed.).
 
-        :param mus: A list including `self.n_par` lists - one for each parameter of the
-            distribution. Each of those lists contains a numpy array of shape (-1,1) holding the
+        :param mus: `self.n_par` np arrays - one for each parameter of the
+            distribution. Each numpy array is of shape (-1,1), holding the
             expected value for a particular parmeter for each of the N observations.
-        :type mus: [np.ndarray]
+        :type mus: np.ndarray
         :param size: Number of random samples to return per distribution. Defaults to 1.
         :type size: int, optional
         :param seed: Seed to use for random number generation. Defaults to 0.
@@ -2618,14 +2683,14 @@ class GAMLSSFamily:
         """
         return None
 
-    def get_resid(
-        self, y: np.ndarray, *mus: list[np.ndarray], **kwargs
-    ) -> np.ndarray | None:
+    @abstractmethod
+    def get_resid(self, y: np.ndarray, *mus: np.ndarray) -> np.ndarray | None:
         """Get standardized residuals for a GAMMLSS model (Rigby & Stasinopoulos, 2005).
 
         Any implementation of this function should return a vector that looks like what could be
         expected from taking ``len(y)`` independent draws from :math:`N(0,1)`. Any additional
-        arguments required by a specific implementation can be passed along via ``kwargs``.
+        arguments required by a specific implementation need to be passed along as keyword arguments
+        with default values.
 
         **Note**: Families for which no residuals are available can return None.
 
@@ -2637,10 +2702,10 @@ class GAMLSSFamily:
 
         :param y: A numpy array of shape (-1,1) containing each observed value.
         :type y: np.ndarray
-        :param mus: A list including `self.n_par` lists - one for each parameter of the
-            distribution. Each of those lists contains a numpy array of shape (-1,1) holding the
+        :param mus: `self.n_par` np arrays - one for each parameter of the
+            distribution. Each numpy array is of shape (-1,1), holding the
             expected value for a particular parmeter for each of the N observations.
-        :type mus: [np.ndarray]
+        :type mus: np.ndarray
         :return: a vector of shape (-1,1) containing standardized residuals under the current model
             or None in case residuals are not readily available.
         :rtype: np.ndarray | None
@@ -2694,39 +2759,16 @@ class GAUMLSS(GAMLSSFamily):
      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
         Smooth Models.
 
-    :param links: Link functions for the mean and standard deviation. Standard would be
-        ``links=[Identity(),LOG()]``.
+    :param links: Link functions for the mean and standard deviation. Defaults to
+        ``links=[Identity(),LOGb(-0.0001)]``.
     :type links: [Link]
+    :ivar list[Link] links: List passed for ``links``.
     """
 
-    def __init__(self, links: list[Link]) -> None:
+    def __init__(self, links: list[Link] = [Identity(), LOGb(-0.0001)]) -> None:
         super().__init__(2, links)
 
-        # All derivatives taken from gamlss.dist: https://github.com/gamlss-dev/gamlss.dist
-        # see also: Rigby, R. A., & Stasinopoulos, D. M. (2005).
-        def d11(y, mu, sigma):
-            return (1 / np.power(sigma, 2)) * (y - mu)
-
-        def d12(y, mu, sigma):
-            return (np.power(y - mu, 2) - np.power(sigma, 2)) / (np.power(sigma, 3))
-
-        self.d1: list[Callable] = [d11, d12]
-
-        def d21(y, mu, sigma):
-            return -(1 / np.power(sigma, 2))
-
-        def d22(y, mu, sigma):
-            return -(2 / np.power(sigma, 2))
-
-        self.d2: list[Callable] = [d21, d22]
-
-        def dm21(y, mu, sigma):
-            return np.zeros_like(y)
-
-        self.d2m: list[Callable] = [dm21]
-        self.mean_init_fam: Family = Gaussian(link=links[0])
-
-    def lp(self, y: np.ndarray, mu: np.ndarray, sigma: np.ndarray) -> np.ndarray:
+    def lp(self, y: np.ndarray, *mus: np.ndarray) -> np.ndarray:
         """Log-probability of observing every value in y under their respective Normal with
         observation-specific mean and standard deviation.
 
@@ -2736,19 +2778,19 @@ class GAUMLSS(GAMLSSFamily):
 
         :param y: A numpy array containing each observed value.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution
-            corresponding to each observation.
-        :type mu: np.ndarray
-        :param sigma: A numpy array containing the predicted stdandard deviation for the response
-            distribution corresponding to each observation.
-        :type sigma: np.ndarray
+        :param mus: 2 np arrays - one for the mean and one for the standard deviation for the
+            response distribution corresponding to each of N observations. Each numpy array is of
+            shape (N,1).
+        :type mus: np.ndarray
         :return: a N-dimensional vector containing the log-probability of observing each data-point
             under the current model.
         :rtype: np.ndarray
         """
+        mu = mus[0]
+        sigma = mus[1]
         return scp.stats.norm.logpdf(y, loc=mu, scale=sigma)
 
-    def lcp(self, y: np.ndarray, mu: np.ndarray, sigma: np.ndarray) -> np.ndarray:
+    def lcp(self, y: np.ndarray, *mus: np.ndarray) -> np.ndarray:
         """Log of the cumulative probability of observing every value in y under their respective
         Normal with observation-specific mean and standard deviation.
 
@@ -2758,19 +2800,19 @@ class GAUMLSS(GAMLSSFamily):
 
         :param y: A numpy array containing each observed value.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution
-            corresponding to each observation.
-        :type mu: np.ndarray
-        :param sigma: A numpy array containing the predicted stdandard deviation for the response
-            distribution corresponding to each observation.
-        :type sigma: np.ndarray
+        :param mus: 2 np arrays - one for the mean and one for the standard deviation for the
+            response distribution corresponding to each of N observations. Each numpy array is of
+            shape (N,1).
+        :type mus: np.ndarray
         :return: a N-dimensional vector containing the log of the cumulative probability of
             observing each data-point under the current model.
         :rtype: np.ndarray
         """
+        mu = mus[0]
+        sigma = mus[1]
         return scp.stats.norm.logcdf(y, loc=mu, scale=sigma)
 
-    def llk(self, y: np.ndarray, mu: np.ndarray, sigma: np.ndarray) -> float:
+    def llk(self, y: np.ndarray, *mus: np.ndarray) -> float:
         """log-probability of data under given model. Essentially sum over all elements in the
         vector returned by the :func:`lp` method.
 
@@ -2780,20 +2822,73 @@ class GAUMLSS(GAMLSSFamily):
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution
-            corresponding to each observation.
-        :type mu: np.ndarray
-        :param sigma: A numpy array containing the predicted stdandard deviation for the response
-            distribution corresponding to each observation.
-        :type sigma: np.ndarray
+        :param mus: 2 np arrays - one for the mean and one for the standard deviation for the
+            response distribution corresponding to each of N observations. Each numpy array is of
+            shape (N,1).
+        :type mus: np.ndarray
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
+        mu = mus[0]
+        sigma = mus[1]
         return np.sum(self.lp(y, mu, sigma))
 
-    def rvs(
-        self, mu: np.ndarray, sigma: np.ndarray, size: int = 1, seed: int | None = 0
+    def dpars(
+        self, y: np.ndarray, *mus: np.ndarray, index: int, order: DerivOrder
     ) -> np.ndarray:
+        """Returns partial derivatives of the log-likelihood with respect to the mean and standard
+        deviation or a combination indexed by ``index`` of ``order`` (first order, pure second,
+        mixed second).
+
+        All derivatives taken from gamlss.dist: https://github.com/gamlss-dev/gamlss.dist see
+        also: Rigby, R. A., & Stasinopoulos, D. M. (2005).
+
+        References:
+         - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for \
+            Location, Scale and Shape.
+
+        :param y: A numpy array of shape (-1,1) containing each observed value.
+        :type y: np.ndarray
+        :param mus: 2 np arrays - one for the mean and one for the standard deviation for the
+            response distribution corresponding to each of N observations. Each numpy array is of
+            shape (N,1).
+        :type mus: np.ndarray
+        :param index: Index for specific derivative vector to return.
+        :type index: int
+        :param order: Order of partial derivative.
+        :type order: DerivOrder
+        :return: a N-dimensional vector of shape (-1,1) containing the desired derivative evaluated
+            for every observation in ``y``.
+        :rtype: np.ndarray
+        """
+        mu = mus[0]
+        sigma = mus[1]
+        if order == DerivOrder.d1:
+            if index == 0:
+                return (1 / np.power(sigma, 2)) * (y - mu)
+            elif index == 1:
+                return (np.power(y - mu, 2) - np.power(sigma, 2)) / (np.power(sigma, 3))
+            else:
+                raise ValueError("No Derivative of order d1 exists at index > 1.")
+
+        elif order == DerivOrder.d2:
+            if index == 0:
+                return -(1 / np.power(sigma, 2))
+            elif index == 1:
+                return -(2 / np.power(sigma, 2))
+            else:
+                raise ValueError("No Derivative of order d2 exists at index > 1.")
+
+        elif order == DerivOrder.d2m:
+            if index == 0:
+                return np.zeros_like(y)
+            else:
+                raise ValueError("No Derivative of order d2m exists at index > 0.")
+
+        else:
+            raise ValueError("No Derivative > order d2m exists.")
+
+    def rvs(self, *mus: np.ndarray, size: int = 1, seed: int | None = 0) -> np.ndarray:
         """Returns ``size`` random samples for each of the distributions parameterized by ``mu``
         and ``sigma``.
 
@@ -2801,19 +2896,20 @@ class GAUMLSS(GAMLSSFamily):
          - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
             Edition (2nd ed.).
 
-        :param mu: A numpy array containing the predicted mean for each response distribution.
-        :type mu: np.ndarray
-        :param sigma: A numpy array containing the predicted stdandard deviation for each response
-            distribution.
-        :type sigma: np.ndarray
+       :param mus: 2 np arrays - one for the mean and one for the standard deviation for the
+            response distribution corresponding to each of N observations. Each numpy array is of
+            shape (N,1).
+        :type mus: np.ndarray
         :param size: Number of random samples to return per distribution. Defaults to 1.
         :type size: int, optional
         :param seed: Seed to use for random number generation. Defaults to 0.
         :type seed: int, optional
-        :return: a numpy array of shape ``(size, mu[0].shape[0])`` containing random
+        :return: a numpy array of shape ``(size, mus[0].shape[0])`` containing random
             samples from every distribution parameterized by ``mu`` and ``sigma``.
         :rtype: np.ndarray
         """
+        mu = mus[0]
+        sigma = mus[1]
         return scp.stats.norm.rvs(
             size=(size, mu.shape[0]),
             loc=mu.flatten(),
@@ -2821,7 +2917,7 @@ class GAUMLSS(GAMLSSFamily):
             random_state=seed,
         )
 
-    def get_resid(self, y: np.ndarray, mu: np.ndarray, sigma: np.ndarray) -> float:
+    def get_resid(self, y: np.ndarray, *mus: np.ndarray) -> float:
         """Get standardized residuals for a Normal GAMMLSS model (Rigby & Stasinopoulos, 2005).
 
         Essentially, each residual should reflect a realization of a normal with mean zero and
@@ -2832,15 +2928,15 @@ class GAUMLSS(GAMLSSFamily):
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution
-            corresponding to each observation.
-        :type mu: np.ndarray
-        :param sigma: A numpy array containing the predicted stdandard deviation for the response
-            distribution corresponding to each observation.
-        :type sigma: np.ndarray
+        :param mus: 2 np arrays - one for the mean and one for the standard deviation for the
+            response distribution corresponding to each of N observations. Each numpy array is of
+            shape (N,1).
+        :type mus: np.ndarray
         :return: A list of standardized residuals that should be ~ N(0,1) if the model is correct.
         :rtype: np.ndarray
         """
+        mu = mus[0]
+        sigma = mus[1]
         res = y - mu
         res /= sigma
         return res
@@ -2896,51 +2992,21 @@ class MULNOMLSS(GAMLSSFamily):
 
     :param pars: K-1, i.e., 1- Number of classes or the number of linear predictors.
     :type pars: int
+    :ivar int n_par: Value passed for ``pars``.
     """
 
     def __init__(self, pars: int) -> None:
         super().__init__(pars, [LOG() for _ in range(pars)])
 
-        # All derivatives taken from gamlss.r in mgcv:
-        # https://github.com/cran/mgcv/blob/master/R/gamlss.r#L1224 and have been adapted to work
-        # in Python code see also: Rigby, R. A., & Stasinopoulos, D. M. (2005).
-        # Derivatives below are implemented with respect to linear predictor.
+        # Derivatives are with respect to linear predictor
         self.d_eta: bool = True
+        self.__dpairs: list[tuple[int, int]] = []  # Deriv pairs at given index
+        for i in range(self.n_par):
+            for j in range(i + 1, self.n_par):
+                self.__dpairs.append((i, j))
 
-        self.d1: list[Callable] = []
-        for ii in range(self.n_par):
-
-            def d1(y, *mus, i=ii):
-                dy1 = -(mus[i] / (np.sum(mus, axis=0) + 1))
-                dy1[y == (i + 1)] += 1
-                return dy1
-
-            self.d1.append(d1)
-
-        self.d2: list[Callable] = []
-        for ii in range(self.n_par):
-
-            def d2(y, *mus, i=ii):
-                norm = np.sum(mus, axis=0) + 1
-                dy1 = -(mus[i] / norm)
-                dy2 = dy1 + np.power(mus[i], 2) / np.power(norm, 2)
-                return dy2
-
-            self.d2.append(d2)
-
-        self.d2m: list[Callable] = []
-        for ii in range(self.n_par):
-            for jj in range(ii + 1, self.n_par):
-
-                def d2m(y, *mus, i=ii, j=jj):
-                    norm = np.sum(mus, axis=0) + 1
-                    dy2m = (mus[i] * mus[j]) / np.power(norm, 2)
-                    return dy2m
-
-                self.d2m.append(d2m)
-
-    def lp(self, y: np.ndarray, *mus: list[np.ndarray]) -> np.ndarray:
-        """Log-probability of observing class k under current model.
+    def lp(self, y: np.ndarray, *mus: np.ndarray) -> np.ndarray:
+        """Log-probability of observing classes in ``y`` under current model.
 
         Our DV consists of K classes but we essentially enforce a sum-to zero constraint on the DV
         so that we end up modeling only K-1 (non-normalized) probabilities of observing class k
@@ -2967,12 +3033,12 @@ class MULNOMLSS(GAMLSSFamily):
          - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for \
             Location, Scale and Shape.
 
-        :param y: A numpy array containing each observed class, every element must be larger than
-            or equal to 0 and smaller than `self.n_par + 1`.
+        :param y: A numpy array of shape (-1,1) containing each observed class, every element must
+            be larger than or equal to 0 and smaller than `self.n_par + 1`.
         :type y: np.ndarray
-        :param mus: A list containing K-1 (`self.n_par`) lists, each containing the non-normalized
-            probabilities of observing class k for every observation.
-        :type mus: [np.ndarray]
+        :param mus: K-1 (`self.n_par`) numpy arrays of shape (-1,1), each containing the
+            non-normalized probabilities of observing class k for every observation.
+        :type mus: np.ndarray
         :return: a N-dimensional vector containing the log-probability of observing each data-point
             under the current model.
         :rtype: np.ndarray
@@ -2986,7 +3052,43 @@ class MULNOMLSS(GAMLSSFamily):
 
         return lp
 
-    def llk(self, y: np.ndarray, *mus: list[np.ndarray]):
+    def lcp(self, y: np.ndarray, *mus: np.ndarray) -> np.ndarray:
+        """Cumulative log-probability of observing classes in ``y`` under current model.
+
+        References:
+         - Wikipedia. https://en.wikipedia.org/wiki/Multinomial_logistic_regression
+         - gamlss.dist on Github (see Rigby & Stasinopoulos, 2005). \
+            https://github.com/gamlss-dev/gamlss.dist/blob/main/R/MN4.R
+         - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for \
+            Location, Scale and Shape.
+
+        :param y: A numpy array of shape (-1,1) containing each observed class, every element must
+            be larger than or equal to 0 and smaller than `self.n_par + 1`.
+        :type y: np.ndarray
+        :param mus: K-1 (`self.n_par`) numpy arrays of shape (-1,1), each containing the
+            non-normalized probabilities of observing class k for every observation.
+        :type mus: np.ndarray
+        :return: a N-dimensional vector containing the cumulatiove log-probability of observing each
+            data-point under the current model.
+        :rtype: np.ndarray
+        """
+        # Note, log(1) = 0, so we can simply initialize to -log(1 + \\sum_j^{K-1} mu_j)
+        # and then add for the K-1 probs we actually modeled.
+        lcp = np.zeros_like(mus[0])
+
+        for pi in range(self.n_par):
+            lcp[y > pi] += mus[pi][y > pi]
+
+        # Normalize for all but class 0
+        lcp[y > 0] = np.log(lcp[y > 0])
+        lcp -= np.log(np.sum(mus, axis=0) + 1)
+
+        # Fix cum log prob for class zero which is log(1) = 0
+        lcp[y == 0] = 0
+
+        return lcp
+
+    def llk(self, y: np.ndarray, *mus: np.ndarray) -> float:
         """log-probability of data under given model. Essentially sum over all elements in the
         vector returned by the :func:`lp` method.
 
@@ -2994,32 +3096,197 @@ class MULNOMLSS(GAMLSSFamily):
          - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
             Edition (2nd ed.).
 
-        :param y: A numpy array containing each observed class, every element must be larger than
-            or equal to 0 and smaller than `self.n_par + 1`.
+        :param y: A numpy array of shape (-1,1) containing each observed class, every element must
+            be larger than or equal to 0 and smaller than `self.n_par + 1`.
         :type y: np.ndarray
-        :param mus: A list containing K-1 (`self.n_par`) lists, each containing the non-normalized
-            probabilities of observing class k for every observation.
-        :type mus: [np.ndarray]
+        :param mus: K-1 (`self.n_par`) numpy arrays of shape (-1,1), each containing the
+            non-normalized probabilities of observing class k for every observation.
+        :type mus: np.ndarray
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
         return np.sum(self.lp(y, *mus))
 
-    def get_resid(self, y: np.ndarray, *mus: list[np.ndarray]) -> None:
-        """Placeholder function for residuals of a Multinomial model - yet to be implemented.
+    def dpars(
+        self, y: np.ndarray, *mus: np.ndarray, index: int, order: DerivOrder
+    ) -> np.ndarray:
+        """Returns partial derivatives of the log-likelihood with respect to the linear predictor
+        of a specifc ``mu``.
+        deviation or a combination indexed by ``index`` of ``order`` (first order, pure second,
+        mixed second).
 
-        :param y: A numpy array containing each observed class, every element must be larger than
-            or equal to 0 and smaller than `self.n_par + 1`.
+        All derivatives taken from gamlss.r in mgcv:
+        https://github.com/cran/mgcv/blob/master/R/gamlss.r#L1224 and have been adapted to work
+        in Python code see also: Rigby, R. A., & Stasinopoulos, D. M. (2005). Derivatives are
+        implemented with respect to linear predictor.
+
+        References:
+         - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for \
+            Location, Scale and Shape.
+
+        :param y: A numpy array of shape (-1,1) containing each observed class, every element must
+            be larger than or equal to 0 and smaller than `self.n_par + 1`.
         :type y: np.ndarray
-        :param mus: A list containing K-1 (`self.n_par`) lists, each containing the non-normalized
-            probabilities of observing class k for every observation.
-        :type mus: [np.ndarray]
-        :return: Currently None - since no residuals are implemented
+        :param mus: K-1 (`self.n_par`) numpy arrays of shape (-1,1), each containing the
+            non-normalized probabilities of observing class k for every observation.
+        :type mus: np.ndarray
+        :param index: Index for specific derivative vector to return.
+        :type index: int
+        :param order: Order of partial derivative.
+        :type order: DerivOrder
+        :return: a N-dimensional vector of shape (-1,1) containing the desried derivative evaluated
+            for every observation in ``y``.
+        :rtype: np.ndarray
         """
-        warnings.warn(
-            "Getting residuals for multinomial model are currently not supported."
+
+        if order == DerivOrder.d1:
+            if index < self.n_par:
+                dy1 = -(mus[index] / (np.sum(mus, axis=0) + 1))
+                dy1[y == (index + 1)] += 1
+                return dy1
+            else:
+                raise ValueError(f"No derivative of order d1 exists for index {index}")
+
+        elif order == DerivOrder.d2:
+            if index < self.n_par:
+                norm = np.sum(mus, axis=0) + 1
+                dy1 = -(mus[index] / norm)
+                dy2 = dy1 + np.power(mus[index], 2) / np.power(norm, 2)
+                return dy2
+            else:
+                raise ValueError(f"No derivative of order d2 exists for index {index}")
+
+        elif order == DerivOrder.d2m:
+            if index < len(self.__dpairs):
+                # Get pair for specified index
+                didx = self.__dpairs[index]
+                i = didx[0]
+                j = didx[1]
+                norm = np.sum(mus, axis=0) + 1
+                dy2m = (mus[i] * mus[j]) / np.power(norm, 2)
+                return dy2m
+            else:
+                raise ValueError(f"No derivative of order d2m exists for index {index}")
+
+        raise ValueError("No Derivative > order d2m exists.")
+
+    def rvs(self, *mus: np.ndarray, size: int = 1, seed: int | None = 0) -> np.ndarray:
+        """Returns ``size`` random samples from the Multinomial distribution assumed for every
+        observation parameterized by a row of ``mus``.
+
+        References:
+         - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
+            Edition (2nd ed.).
+
+        :param mus: K-1 (`self.n_par`) numpy arrays of shape (-1,1), each containing the
+            non-normalized probabilities of observing class k for every observation.
+        :type mus: np.ndarray
+        :param size: Number of random samples to return per distribution. Defaults to 1.
+        :type size: int, optional
+        :param seed: Seed to use for random number generation. Defaults to 0.
+        :type seed: int, optional
+        :return: a numpy array of shape ``(size, mus[0].shape[0])`` containing random
+            samples from every Multinomial distribution.
+        :rtype: np.ndarray
+        """
+        np_gen = np.random.default_rng(seed)
+        y_dim = len(mus[0])
+        support = np.zeros((y_dim, self.n_par + 1))
+        K = np.arange(self.n_par + 1)
+
+        for k in K:
+            support[:, k] = self.lp(np.zeros_like(mus[0]) + k, *mus)[:, 0]
+
+        samples = np.zeros((size, y_dim))
+        for i in range(y_dim):
+            samples[:, i] = np_gen.choice(a=K, size=size, p=np.exp(support[i, :]))
+
+        return samples
+
+    def get_resid(
+        self, y: np.ndarray, *mus: np.ndarray, seed: int | None = 0
+    ) -> np.ndarray:
+        """Returns randomized quantile residuals of a Multinomial model as defined
+        by Dunn & Smyth (1996). See also Rigby, R. A., & Stasinopoulos, D. M. (2005)
+
+        References:
+         - Dunn, P. K., & Smyth, G. K. (1996). Randomized Quantile Residuals. \
+            https://doi.org/10.2307/1390802
+         - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for \
+            Location, Scale and Shape.
+
+        :param y: A numpy array of shape (-1,1) containing each observed class, every element must
+            be larger than or equal to 0 and smaller than `self.n_par + 1`.
+        :type y: np.ndarray
+        :param mus: K-1 (`self.n_par`) numpy arrays of shape (-1,1), each containing the
+            non-normalized probabilities of observing class k for every observation.
+        :type mus: np.ndarray
+        :param seed: Seed to use for the random part of the residual calculation. Residual vector
+            should be replicated for multiple values. Defaults to 0.
+        :type seed: int | None, optional
+        :return: Array of shape (-1,1) holding randomized quantil residuals.
+        """
+        np_gen = np.random.default_rng(seed)
+        res = np.zeros_like(y, dtype=np.float64)
+
+        # Determine boundaries for intervals for randomized quantile
+        # residuals as defined by Dunn and Smyth (1996)
+        intervals = np.zeros((len(y), 2))
+
+        # Order of comparison: class 0 > class n_par > class n_par -1, ... > class 1
+        comp = [0, *np.arange(self.n_par, 0, -1)]
+        for yi in range(len(comp) - 1):
+
+            yeval = np.zeros_like(y)[y == comp[yi]]
+
+            for ii, yval in enumerate([comp[yi + 1], comp[yi]]):
+
+                # Set y to correct value
+                yeval[:] = yval
+
+                intervals[y.flatten() == comp[yi], ii] = np.exp(
+                    self.lcp(yeval, *[mu[y == comp[yi]] for mu in mus])
+                )
+
+        # First class
+        intervals[y.flatten() == 1, 1] = np.exp(
+            self.lcp(y[y == 1], *[mu[y == 1] for mu in mus])
         )
-        return None
+
+        for i in range(len(y)):
+            u = scp.stats.uniform.rvs(
+                size=1,
+                loc=intervals[i, 0],
+                scale=intervals[i, 1] - intervals[i, 0],
+                random_state=np_gen,
+            )
+
+            # Uniform residual
+            res[i, 0] = u[0]
+
+        # Inverse cdf transform
+        res = scp.stats.norm.ppf(res)
+
+        return res
+
+    def get_probs(self, *mus: np.ndarray) -> np.ndarray:
+        """Get the probability of being in each of the K classes for every row of ``mus``.
+
+        :param mus: K-1 (`self.n_par`) numpy arrays of shape (-1,1), each containing the
+            non-normalized probabilities of observing class k for every observation.
+        :type mus: np.ndarray
+        :return: Array of size ``(len(mus[0]),self.n_par+1)`` holding for each observation the
+            probability of being in each of the ``K=self.n_par+1`` classes.
+        :rtype: np.ndarray
+        """
+        probs = np.zeros((len(mus[0]), self.n_par + 1))
+
+        # Iterate over classes
+        K = np.arange(self.n_par + 1)
+        for k in K:
+            probs[:, k] = np.exp(self.lp(np.zeros_like(mus[0]) + k, *mus))[:, 0]
+
+        return probs
 
 
 class GAMMALS(GAMLSSFamily):
@@ -3040,48 +3307,16 @@ class GAMMALS(GAMLSSFamily):
      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
         Smooth Models.
 
-    :param links: Link functions for the mean and standard deviation. Standard would be
-        ``links=[LOG(),LOG()]``.
+    :param links: Link functions for the mean and standard deviation. Default is
+        ``links=[LOG(),LOGb(-0.0001)]``.
     :type links: [Link]
+    :ivar list[Link] links: List passed for ``links``.
     """
 
-    def __init__(self, links: list[Link]) -> None:
+    def __init__(self, links: list[Link] = [LOG(), LOGb(-0.0001)]) -> None:
         super().__init__(2, links)
-        # All derivatives based on gamlss.dist:
-        # https://github.com/gamlss-dev/gamlss.dist, but adjusted so that \\phi is \\sigma^2.
-        # see also: Rigby, R. A., & Stasinopoulos, D. M. (2005).
 
-        def d11(y, mu, scale):
-            return (y - mu) / (scale * np.power(mu, 2))
-
-        def d12(y, mu, scale):
-            return (1 / np.power(scale, 2)) * (
-                (y / mu)
-                - np.log(y)
-                + np.log(mu)
-                + np.log(scale)
-                - 1
-                + scp.special.digamma(1 / (scale))
-            )
-
-        self.d1: list[Callable] = [d11, d12]
-
-        def d21(y, mu, scale):
-            return -1 / (scale * np.power(mu, 2))
-
-        def d22(y, mu, scale):
-            return (1 / np.power(scale, 3)) - (
-                1 / np.power(scale, 4)
-            ) * scp.special.polygamma(1, 1 / scale)
-
-        self.d2: list[Callable] = [d21, d22]
-
-        def dm21(y, mu, scale):
-            return np.zeros_like(y)
-
-        self.d2m: list[Callable] = [dm21]
-
-    def lp(self, y: np.ndarray, mu: np.ndarray, scale: np.ndarray) -> np.ndarray:
+    def lp(self, y: np.ndarray, *mus: np.ndarray) -> np.ndarray:
         """Log-probability of observing every proportion in :math:`\\mathbf{y}` under their
         respective Gamma with mean = :math:`\\boldsymbol{\\mu}` and
         scale = :math:`\\boldsymbol{\\phi}`.
@@ -3092,12 +3327,10 @@ class GAMMALS(GAMLSSFamily):
 
         :param y: A numpy array containing each observed value.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution
-            corresponding to each observation.
-        :type mu: np.ndarray
-        :param scale: A numpy array containing the predicted scale parameter for the response
-            distribution corresponding to each observation.
-        :type scale: np.ndarray
+        :param mus: 2 np arrays - one for the mean and one for the scale for the
+            response distribution corresponding to each of N observations. Each numpy array is of
+            shape (N,1).
+        :type mus: np.ndarray
         :return: a N-dimensional vector containing the log-probability of observing each data-point
             under the current model.
         :rtype: np.ndarray
@@ -3112,11 +3345,13 @@ class GAMMALS(GAMLSSFamily):
         # \beta = 1/\\phi/\\mu
         # scipy docs, say to set scale to 1/\beta.
         # see: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.gamma.html
+        mu = mus[0]
+        scale = mus[1]
         alpha = 1 / scale
         beta = alpha / mu
         return scp.stats.gamma.logpdf(y, a=alpha, scale=(1 / beta))
 
-    def lcp(self, y: np.ndarray, mu: np.ndarray, scale: np.ndarray) -> np.ndarray:
+    def lcp(self, y: np.ndarray, *mus: np.ndarray) -> np.ndarray:
         """Log of the cumulative probability of observing every value in y under their respective
         Gamma with mean = :math:`\\boldsymbol{\\mu}` and scale = :math:`\\boldsymbol{\\phi}`.
 
@@ -3126,21 +3361,21 @@ class GAMMALS(GAMLSSFamily):
 
         :param y: A numpy array containing each observed value.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution
-            corresponding to each observation.
-        :type mu: np.ndarray
-        :param scale: A numpy array containing the predicted scale parameter for the response
-            distribution corresponding to each observation.
-        :type scale: np.ndarray
+        :param mus: 2 np arrays - one for the mean and one for the scale for the
+            response distribution corresponding to each of N observations. Each numpy array is of
+            shape (N,1).
+        :type mus: np.ndarray
         :return: a N-dimensional vector containing the log of the cumulative probability of
             observing each data-point under the current model.
         :rtype: np.ndarray
         """
+        mu = mus[0]
+        scale = mus[1]
         alpha = 1 / scale
         beta = alpha / mu
         return scp.stats.gamma.logcdf(y, a=alpha, scale=(1 / beta))
 
-    def llk(self, y: np.ndarray, mu: np.ndarray, scale: np.ndarray) -> float:
+    def llk(self, y: np.ndarray, *mus: np.ndarray) -> float:
         """log-probability of data under given model. Essentially sum over all elements in the
         vector returned by the :func:`lp` method.
 
@@ -3150,20 +3385,82 @@ class GAMMALS(GAMLSSFamily):
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution
-            corresponding to each observation.
-        :type mu: np.ndarray
-        :param scale: A numpy array containing the predicted scale parameter for the response
-            distribution corresponding to each observation.
-        :type scale: np.ndarray
+        :param mus: 2 np arrays - one for the mean and one for the scale for the
+            response distribution corresponding to each of N observations. Each numpy array is of
+            shape (N,1).
+        :type mus: np.ndarray
         :return: The log-probability of observing all data under the current model.
         :rtype: float
         """
+        mu = mus[0]
+        scale = mus[1]
         return np.sum(self.lp(y, mu, scale))
 
-    def rvs(
-        self, mu: np.ndarray, scale: np.ndarray, size: int = 1, seed: int | None = 0
+    def dpars(
+        self, y: np.ndarray, *mus: np.ndarray, index: int, order: DerivOrder
     ) -> np.ndarray:
+        """Returns partial derivatives of the log-likelihood with respect to the mean and scale
+        or a combination indexed by ``index`` of ``order`` (first order, pure second,
+        mixed second).
+
+        All derivatives taken from gamlss.dist: https://github.com/gamlss-dev/gamlss.dist see
+        also: Rigby, R. A., & Stasinopoulos, D. M. (2005).
+
+        References:
+         - Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized Additive Models for \
+            Location, Scale and Shape.
+
+        :param y: A numpy array of shape (-1,1) containing each observed value.
+        :type y: np.ndarray
+        :param mus: 2 np arrays - one for the mean and one for the scale for the
+            response distribution corresponding to each of N observations. Each numpy array is of
+            shape (N,1).
+        :param index: Index for specific derivative vector to return.
+        :type index: int
+        :param order: Order of partial derivative.
+        :type order: DerivOrder
+        :return: a N-dimensional vector of shape (-1,1) containing the desired derivative evaluated
+            for every observation in ``y``.
+        :rtype: np.ndarray
+        """
+        mu = mus[0]
+        scale = mus[1]
+
+        if order == DerivOrder.d1:
+            if index == 0:
+                return (y - mu) / (scale * np.power(mu, 2))
+            elif index == 1:
+                return (1 / np.power(scale, 2)) * (
+                    (y / mu)
+                    - np.log(y)
+                    + np.log(mu)
+                    + np.log(scale)
+                    - 1
+                    + scp.special.digamma(1 / (scale))
+                )
+            else:
+                raise ValueError("No Derivative of order d1 exists at index > 1.")
+
+        elif order == DerivOrder.d2:
+            if index == 0:
+                return -1 / (scale * np.power(mu, 2))
+            elif index == 1:
+                return (1 / np.power(scale, 3)) - (
+                    1 / np.power(scale, 4)
+                ) * scp.special.polygamma(1, 1 / scale)
+            else:
+                raise ValueError("No Derivative of order d2 exists at index > 1.")
+
+        elif order == DerivOrder.d2m:
+            if index == 0:
+                return np.zeros_like(y)
+            else:
+                raise ValueError("No Derivative of order d2m exists at index > 0.")
+
+        else:
+            raise ValueError("No Derivative > order d2m exists.")
+
+    def rvs(self, *mus: np.ndarray, size: int = 1, seed: int | None = 0) -> np.ndarray:
         """Returns ``size`` random samples for each of the distributions parameterized by ``mu``
         and ``scale``.
 
@@ -3171,19 +3468,20 @@ class GAMMALS(GAMLSSFamily):
          - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
             Edition (2nd ed.).
 
-        :param mu: A numpy array containing the predicted mean for each response distribution.
-        :type mu: np.ndarray
-        :param scale: A numpy array containing the predicted stdandard deviation for each response
-            distribution.
-        :type scale: np.ndarray
+        :param mus: 2 np arrays - one for the mean and one for the scale for the
+            response distribution corresponding to each of N observations. Each numpy array is of
+            shape (N,1).
+        :type mus: np.ndarray
         :param size: Number of random samples to return per distribution. Defaults to 1.
         :type size: int, optional
         :param seed: Seed to use for random number generation. Defaults to 0.
         :type seed: int, optional
-        :return: a numpy array of shape ``(size, mu[0].shape[0])`` containing random
+        :return: a numpy array of shape ``(size, mus[0].shape[0])`` containing random
             samples from every distribution parameterized by ``mu`` and ``scale``.
         :rtype: np.ndarray
         """
+        mu = mus[0]
+        scale = mus[1]
         alpha = 1 / scale
         beta = alpha / mu
         return scp.stats.gamma.rvs(
@@ -3193,7 +3491,7 @@ class GAMMALS(GAMLSSFamily):
             random_state=seed,
         )
 
-    def get_resid(self, y: np.ndarray, mu: np.ndarray, scale: np.ndarray) -> np.ndarray:
+    def get_resid(self, y: np.ndarray, *mus: np.ndarray) -> np.ndarray:
         """Get standardized residuals for a Gamma GAMMLSS model (Rigby & Stasinopoulos, 2005).
 
         Essentially, to get a standaridzed residual vector we first have to account for the
@@ -3211,15 +3509,15 @@ class GAMMALS(GAMLSSFamily):
 
         :param y: A numpy array containing each observation.
         :type y: np.ndarray
-        :param mu: A numpy array containing the predicted mean for the response distribution
-            corresponding to each observation.
-        :type mu: np.ndarray
-        :param scale: A numpy array containing the predicted scale parameter for the response
-            distribution corresponding to each observation.
-        :type scale: np.ndarray
+        :param mus: 2 np arrays - one for the mean and one for the scale for the
+            response distribution corresponding to each of N observations. Each numpy array is of
+            shape (N,1).
+        :type mus: np.ndarray
         :return: A list of standardized residuals that should be ~ N(0,1) if the model is correct.
         :rtype: np.ndarray
         """
+        mu = mus[0]
+        scale = mus[1]
         res = np.sign(y - mu) * np.sqrt(Gamma().D(y, mu) / scale)
         return res
 
@@ -3249,7 +3547,7 @@ class GAMMALS(GAMLSSFamily):
         return coef
 
 
-class GSMMFamily:
+class GSMMFamily(ABC):
     """Base-class for General Smooth "families" as discussed by Wood, Pya, & Säfken (2016).
     For estimation of :class:`mssm.models.GSMM` models via ``L-qEFS`` (Krause et al., submitted) it
     is sufficient to implement :func:`llk`. :func:`gradient` and :func:`hessian` can then simply
@@ -3258,7 +3556,7 @@ class GSMMFamily:
     respectively.
 
     Additional parameters needed for likelihood, gradient, or hessian evaluation can be passed
-    along via the ``llkargs``. They are then made available in ``self.llkargs``.
+    along via the ``init`` of a specific implementation.
 
     References:
      - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
@@ -3276,6 +3574,8 @@ class GSMMFamily:
     :param links: List of Link functions for each parameter of the likelihood,
         e.g., `links=[Identity(),LOG()]`.
     :type links: [Link]
+    :ivar int n_par: Value passed for ``pars``.
+    :ivar list[Link] links: List passed for ``links``.
     :ivar int, optional extra_coef: Number of extra coefficients required by specific family for
         parameters of the log-likelihood that are constant (i.e., not a function of predictor
         variables) or ``None``. If this is not set to ``None``, ``mssm`` will automatically append
@@ -3283,18 +3583,15 @@ class GSMMFamily:
         methods of this family. Additionally, ``coef_split_idx`` will be modified, so that the last
         list of the split holds the ``extra_coef``. By default set to ``None`` and changed to
         ``int`` by specific families requiring this.
-    :ivar list[any] llkargs: A list holding any extra arguments passed to the constructor via
-        ``llkargs``.
 
     """
 
-    def __init__(self, pars: int, links: list[Link], *llkargs) -> None:
+    def __init__(self, pars: int, links: list[Link]) -> None:
         self.n_par: int = pars
         self.links: list[Link] = links
-        # Any arguments that need to be passed to evaluate the likelihood/gradiant/hessian
-        self.llkargs = llkargs
         self.extra_coef: int | None = None
 
+    @abstractmethod
     def llk(
         self,
         coef: np.ndarray,
@@ -3377,10 +3674,10 @@ class GSMMFamily:
         :rtype: np.ndarray
         """
 
-        def llk_warp(x: np.ndarray) -> float:
+        def llk_wrap(x: np.ndarray) -> float:
             return self.llk(x.reshape(-1, 1), coef_split_idx, ys, Xs)
 
-        grad = scp.optimize.approx_fprime(coef.flatten(), llk_warp)
+        grad = scp.optimize.approx_fprime(coef.flatten(), llk_wrap)
         return grad.reshape(-1, 1)
 
     def jhessian(
@@ -3550,19 +3847,20 @@ class GSMMFamily:
         """
         return self.jhessian(np.arange(len(coef)), coef, coef_split_idx, ys, Xs)
 
+    @abstractmethod
     def get_resid(
         self,
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
         Xs: list[scp.sparse.csc_array | None],
-        **kwargs,
     ) -> np.ndarray | None:
         """Get standardized residuals for a GSMM model.
 
         Any implementation of this function should return a vector that looks like what could be
         expected from taking independent draws from :math:`N(0,1)`. Any additional arguments
-        required by a specific implementation can be passed along via ``kwargs``.
+        required by a specific implementation need to be passed along via additional
+        keyword arguments with default values.
 
         **Note**: Families for which no residuals are available can return None.
 
@@ -3676,11 +3974,15 @@ class PropHaz(GSMMFamily):
     :param r: Index vector as described by WPS (2016), holding for each data-point
         (i.e., for each row in ``Xs[0``]) the index to it's corresponding event time in ``ut``.
     :type r: np.ndarray
+    :ivar np.ndarray ut: Array passed for ``ut``.
+    :ivar np.ndarray r: Array passed for ``r``.
 
     """
 
     def __init__(self, ut: np.ndarray, r: np.ndarray):
-        super().__init__(1, [Identity()], ut, r)
+        super().__init__(1, [Identity()])
+        self.ut = ut
+        self.r = r
         self.__hs = None
         self.__qs = None
         self.__avs = None
@@ -3716,8 +4018,8 @@ class PropHaz(GSMMFamily):
 
         # Extract and define all variables defined by WPS (2016)
         delta = ys[0]
-        ut = self.llkargs[0]
-        r = self.llkargs[1]
+        ut = self.ut
+        r = self.r
         nt = len(ut)
         X = Xs[0]
         eta = X @ coef
@@ -3778,8 +4080,8 @@ class PropHaz(GSMMFamily):
 
         # Extract and define all variables defined by WPS (2016)
         delta = ys[0]
-        ut = self.llkargs[0]
-        r = self.llkargs[1]
+        ut = self.ut
+        r = self.r
         nt = len(ut)
         X = Xs[0]
         eta = X @ coef
@@ -3847,8 +4149,8 @@ class PropHaz(GSMMFamily):
 
         # Extract and define all variables defined by WPS (2016)
         delta = ys[0]
-        ut = self.llkargs[0]
-        r = self.llkargs[1]
+        ut = self.ut
+        r = self.r
         nt = len(ut)
         X = Xs[0]
         eta = X @ coef
@@ -3933,8 +4235,8 @@ class PropHaz(GSMMFamily):
 
         # Extract all quantities needed to evaluate residuals
         delta = ys[0]
-        ut = self.llkargs[0]
-        r = self.llkargs[1]
+        ut = self.ut
+        r = self.r
         X = Xs[0]
 
         # Following based on derivation by Wood, Pya, and Säfken (2016)
@@ -3986,8 +4288,8 @@ class PropHaz(GSMMFamily):
         :type Xs: [scp.sparse.csc_array]
         """
         # Extract and define all variables defined by WPS (2016)
-        ut = self.llkargs[0]
-        r = self.llkargs[1]
+        ut = self.ut
+        r = self.r
         nt = len(ut)
         X = Xs[0]
         eta = X @ coef
@@ -4255,7 +4557,7 @@ class PropHaz(GSMMFamily):
             self.__prepare_predictions(coef, delta, Xs)
 
         # Extract and define all variables defined by WPS (2016)
-        ut = self.llkargs[0]
+        ut = self.ut
         eta = x @ coef
         # print(eta)
 
@@ -4351,6 +4653,9 @@ class MultiGauss(GSMMFamily):
     :param links: List of link functions for the models of the means. For example
         ``[Identity() for _ in range(pars)]``.
     :type links: list[Link]
+    :ivar int n_par: Value passed for ``pars``.
+    :ivar list[Link] links: List passed for ``links``.
+    :ivar int extra_coef: Number of extra coef. required by this family.
     """
 
     def __init__(self, pars: int, links: list[Link]):

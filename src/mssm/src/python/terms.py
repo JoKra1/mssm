@@ -61,7 +61,13 @@ class GammTerm:
         self.name = None
 
     def build_penalty(
-        self, penalties: list[LambdaTerm], cur_pen_idx: int, *args, **kwargs
+        self,
+        ti: int,
+        penalties: list[LambdaTerm],
+        cur_pen_idx: int,
+        penid: int,
+        factor_levels: dict,
+        col_S: int,
     ) -> tuple[list[LambdaTerm], int]:
         """Builds a penalty matrix associated with this term and returns an updated ``penalties``
         list including it.
@@ -71,34 +77,28 @@ class GammTerm:
         implemented as a :class:`LambdaTerm` and the updated ``cur_pen_idx``.
         The latter simply needs to be incremented for every penalty added to ``penalties``.
 
+        :param ti: Index corresponding to the position the current term (i.e., self) takes on in
+            the list of terms of the Formula.
+        :type ti: int
         :param penalties: List of previosly created penalties.
         :type penalties: [LambdaTerm]
         :param cur_pen_idx: Index of the last element in ``penalties``.
         :type cur_pen_idx: int
-        :return: Updated ``penalties`` list including the new penalty implemented as a
+        :param penid: If a term is subjected to multipe penalties, then ``penid`` indexes which of
+            those penalties is currently implemented. Otherwise can be set to zero.
+        :type penid: int
+        :param factor_levels: Factor levels dictionary. Keys are factor variables in the data,
+            values are np.arrays holding the unique levels (as str) of the corresponding factor.
+        :type factor_levels: dict
+        :param n_coef: Number of coefficients associated with this term.
+        :type n_coef: int
+        :param col_S: Number of columns of the total penalty matrix.
+        :type col_S: int
+        :return: Updated ``penalties`` list including the new penalties implemented as a
             :class:`LambdaTerm` and the updated ``cur_pen_idx``
         :rtype: tuple[list[LambdaTerm],int]
         """
         return penalties, cur_pen_idx
-
-    def build_matrix(self, *args, **kwargs):
-        """Builds the design/term/model matrix associated with this term and returns it represented
-        as a list of values, a list of row indices, and a list of column indices. Also returns
-        an update to the column index (i.e., how many columns this matrix adds).
-
-        This method is implemented by every implementation of the :class:`GammTerm` class.
-        The returned lists can then be used to create a sparse matrix for this term.
-        """
-        pass
-
-    def get_coef_info(self, *args, **kwargs):
-        """Returns the total number of coefficients associated with this term, the number of
-        unpenalized coefficients associated with this term, and a list with names for each of the
-        coefficients associated with this term.
-
-        This method is implemented by every implementation of the :class:`GammTerm` class.
-        """
-        pass
 
 
 class i(GammTerm):
@@ -1120,7 +1120,7 @@ class f(GammTerm):
         var_mins: dict,
         var_maxs: dict,
         factor_levels: dict,
-        ridx: list[int],
+        ridx: np.ndarray,
         cov_flat: np.ndarray,
         use_only: list[int],
         tol: int = 0,
@@ -2365,6 +2365,7 @@ class ri(GammTerm):
         ti: int,
         penalties: list[LambdaTerm],
         cur_pen_idx: int,
+        penid: int,
         factor_levels: dict,
         col_S: int,
     ) -> tuple[list[LambdaTerm], int]:
@@ -2383,6 +2384,9 @@ class ri(GammTerm):
         :type penalties: [LambdaTerm]
         :param cur_pen_idx: Index of the last element in ``penalties``.
         :type cur_pen_idx: int
+        :param penid: If a term is subjected to multipe penalties, then ``penid`` indexes which of
+            those penalties is currently implemented. Set to zero for random intercepts.
+        :type penid: int
         :param factor_levels: Factor levels dictionary. Keys are factor variables in the data,
             values are np.arrays holding the unique levels (as str) of the corresponding factor.
         :type factor_levels: dict
@@ -2392,6 +2396,9 @@ class ri(GammTerm):
             :class:`LambdaTerm` and the updated ``cur_pen_idx``
         :rtype: tuple[list[LambdaTerm],int]
         """
+
+        assert penid == 0
+
         vars = self.variables
         idk = len(factor_levels[vars[0]])
 
@@ -2770,6 +2777,7 @@ class rs(GammTerm):
         ti: int,
         penalties: list[LambdaTerm],
         cur_pen_idx: int,
+        penid: int,
         factor_levels: dict,
         col_S: int,
     ) -> tuple[list[LambdaTerm], int]:
@@ -2788,6 +2796,9 @@ class rs(GammTerm):
         :type penalties: [LambdaTerm]
         :param cur_pen_idx: Index of the last element in ``penalties``.
         :type cur_pen_idx: int
+        :param penid: If a term is subjected to multipe penalties, then ``penid`` indexes which of
+            those penalties is currently implemented. Set to zero for random slopes.
+        :type penid: int
         :param factor_levels: Factor levels dictionary. Keys are factor variables in the data,
             values are np.arrays holding the unique levels (as str) of the corresponding factor.
         :type factor_levels: dict
@@ -2797,6 +2808,8 @@ class rs(GammTerm):
             :class:`LambdaTerm` and the updated ``cur_pen_idx``
         :rtype: tuple[list[LambdaTerm],int]
         """
+
+        assert penid == 0
 
         if self.var_coef is None:
             raise ValueError(
