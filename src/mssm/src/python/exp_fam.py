@@ -3,6 +3,7 @@ import scipy as scp
 import math
 import warnings
 import copy
+from itertools import repeat
 from collections.abc import Callable
 from .custom_types import DerivOrder
 from abc import ABC, abstractmethod
@@ -3680,6 +3681,59 @@ class GSMMFamily(ABC):
         grad = scp.optimize.approx_fprime(coef.flatten(), llk_wrap)
         return grad.reshape(-1, 1)
 
+    def jcolhessian(
+        self,
+        j: int,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray | None],
+        Xs: list[scp.sparse.csc_array | None],
+    ) -> np.ndarray:
+        """(Optional) method to compute only column ``j`` of the Hessian of the log-likelihood.
+
+        By default the method relies on a finite difference approximation to evaluate the
+        column of the Hessian of the llk. Result is returned as a np.array.
+
+        :param j: Index of the column to approximate.
+        :type jcols: int
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
+        :type coef: np.ndarray
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each paramter of the llk.
+        :type coef_split_idx: [int]
+        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
+            ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the
+            actual observed data is passed along via the first formula (so it is stored in
+            ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula,
+            then ``ys`` contains ``None`` at their indices to save memory.
+        :type ys: list[np.ndarray | None]
+        :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None``
+            at indices for matrices which were flagged as "do not build" via the ``build_mat``
+            argument of the :func:`mssm.models.GSMM.fit` method.
+        :type Xs: list[scp.sparse.csc_array | None]
+        :return: Finite difference approximation of column ``j`` of the Hessian of the llk as an
+            array of shape (-1,1)
+        :rtype: np.ndarray
+        """
+
+        def __d2llkj(r):
+            # Function to evaluate Hessian column via finite difference approximation
+            n_coef = copy.deepcopy(coef)
+            n_coef[j] = r
+
+            n_grad = self.gradient(n_coef, coef_split_idx, ys, Xs)
+
+            return n_grad.flatten()
+
+        def vectorized_d2(r):
+            return np.apply_along_axis(__d2llkj, axis=0, arr=r)
+
+        # Column j of the hessian
+        Hsk = scp.differentiate.jacobian(vectorized_d2, coef[j], order=2)
+
+        return Hsk.df
+
     def jhessian(
         self,
         jcols: np.ndarray,
@@ -3732,52 +3786,26 @@ class GSMMFamily(ABC):
 
         if HAS_MP and n_c > 1:
             # Compute columns in parallel
-            def __d2llk(j):
-
-                def __d2llkj(r):
-                    # Function to evaluate Hessian column via finite difference approximation
-                    n_coef = copy.deepcopy(coef)
-                    n_coef[j] = r
-
-                    n_grad = self.gradient(n_coef, coef_split_idx, ys, Xs)
-
-                    return n_grad.flatten()
-
-                def vectorized_d2(r):
-                    return np.apply_along_axis(__d2llkj, axis=0, arr=r)
-
-                Hsk = scp.differentiate.jacobian(vectorized_d2, coef[j], order=2)
-
-                # Entire column j of negative hessian
-                Hj = Hsk.df.flatten()
-                return Hj
+            args = zip(
+                jcols,
+                repeat(coef),
+                repeat(coef_split_idx),
+                repeat(ys),
+                repeat(Xs),
+            )
 
             with mp.Pool(processes=n_c) as pool:
-                Hjs = pool.map(__d2llk, jcols)
+                Hjs = pool.starmap(self.jcolhessian, args)
 
         for ji, j in enumerate(jcols):
 
             if HAS_MP and n_c > 1:
                 # Simply extract
-                Hj = Hjs[ji]
+                Hj = Hjs[ji].flatten()
             else:
 
-                def __d2llkj(r):
-                    # Function to evaluate Hessian column via finite difference approximation
-                    n_coef = copy.deepcopy(coef)
-                    n_coef[j] = r
-
-                    n_grad = self.gradient(n_coef, coef_split_idx, ys, Xs)
-
-                    return n_grad.flatten()
-
-                def vectorized_d2(r):
-                    return np.apply_along_axis(__d2llkj, axis=0, arr=r)
-
-                Hsk = scp.differentiate.jacobian(vectorized_d2, coef[j], order=2)
-
                 # Entire column j of negative hessian
-                Hj = Hsk.df.flatten()
+                Hj = self.jcolhessian(j, coef, coef_split_idx, ys, Xs).flatten()
 
             # Take out elements previously computed
             Hjrows = np.arange(Hdim)
@@ -4664,6 +4692,11 @@ class MultiGauss(GSMMFamily):
         # Elements of cholesky of precision matrix of multivariate Gaussian
         self.extra_coef = int(pars * (pars + 1) / 2)
 
+        self.__thet_idx: list[tuple[int, int]] = []  # Cell indices in R
+        for i in range(self.n_par):
+            for j in range(i, self.n_par):
+                self.__thet_idx.append([i, j])
+
     def getR(self, theta: np.ndarray) -> tuple[np.ndarray, float]:
         """Returns transpose of Cholesky of precision matrix of multivariate Gaussian.
 
@@ -4872,6 +4905,136 @@ class MultiGauss(GSMMFamily):
                 total_idx += 1
 
         return grad.reshape(-1, 1)
+
+    def jcolhessian(self, j, coef, coef_split_idx, ys, Xs) -> np.ndarray:
+        """Method to compute column ``j`` of the Hessian of the log-likelihood.
+
+        Result is returned as a np.array.
+
+        References:
+         - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for \
+            General Smooth Models.
+
+        :param j: Index of the column to approximate.
+        :type jcols: int
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
+        :type coef: np.ndarray
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each paramter of the llk.
+        :type coef_split_idx: [int]
+        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
+            ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the
+            actual observed data is passed along via the first formula (so it is stored in
+            ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula,
+            then ``ys`` contains ``None`` at their indices to save memory.
+        :type ys: list[np.ndarray | None]
+        :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None``
+            at indices for matrices which were flagged as "do not build" via the ``build_mat``
+            argument of the :func:`mssm.models.GSMM.fit` method.
+        :type Xs: list[scp.sparse.csc_array | None]
+        :return: Column ``j`` of the Hessian of the llk as an array of shape (-1,1)
+        :rtype: np.ndarray
+        """
+
+        # Extract extra info and fix model matrices, then compute mu and theta
+        Xfix = [X if X is not None else Xs[0] for X in Xs]
+        y = np.concatenate(ys, axis=1)
+        split_coef = np.split(coef, coef_split_idx)
+        mus = np.concatenate(
+            [
+                self.links[mui].fi(Xfix[mui] @ split_coef[mui].reshape(-1, 1))
+                for mui in range(self.n_par)
+            ],
+            axis=1,
+        )
+        theta = split_coef[-1].flatten()
+
+        # Need some info about number of coefs and indices
+        n_coef = len(coef) - len(theta)
+        n_obs = mus.shape[0]
+        par_n_coef = []
+
+        checked_idx = 0
+        for mui in range(self.n_par):
+            checked_idx += len(split_coef[mui])
+            par_n_coef.append(checked_idx)
+
+        # Get transpose of Cholesky of precision
+        R, logdet = self.getR(theta)
+        Rdiag = R.diagonal()
+
+        # ymu is of shape (n * m)
+        ymu = y - mus
+        # RR is of shape m * m
+        RR = R.T @ R
+
+        # Compute column j of the hessian
+        Hj = []
+
+        # First figure out to which parameter j belongs
+        is_coef = j < n_coef
+
+        if is_coef:
+            parj_idx = 0
+            for mui in range(self.n_par):
+                if j < par_n_coef[mui]:
+                    break
+                parj_idx += 1
+
+            coef_j_idx = j if parj_idx == 0 else j - par_n_coef[parj_idx - 1]
+            xbarj = scp.sparse.csc_array(
+                (
+                    Xfix[parj_idx][:, coef_j_idx].toarray(),
+                    (np.tile(parj_idx, n_obs), np.arange(n_obs)),
+                ),
+                shape=(self.n_par, n_obs),
+            )
+            # xbarj[parj_idx, :] = Xfix[parj_idx][:, coef_j_idx]
+            RRxbarj = RR @ xbarj
+        else:
+            parj_idx = j - n_coef  # only imagine + self.n_par
+            theta_idx = self.__thet_idx[parj_idx]
+            is_diag = theta_idx[0] == theta_idx[1]
+            # partial of transpose of cholesky
+            Rpj = np.zeros((self.n_par, self.n_par))
+            Rpj[theta_idx[0], theta_idx[1]] = Rdiag[theta_idx[0]] if is_diag else 1
+            RJRpRRJ = Rpj.T @ R + R.T @ Rpj
+            RJRpRRJy = RJRpRRJ @ ymu.T
+
+        # Now iterate over means
+        for mui in range(self.n_par):
+            if is_coef:
+                RRxbarjmui = RRxbarj[mui, :]
+                d2 = -np.sum(Xfix[mui] * RRxbarjmui[:, None], axis=0)
+            else:
+                RJRpRRJymui = RJRpRRJy[mui, :]
+                d2 = (Xfix[mui] * RJRpRRJymui[:, None]).sum(axis=0)
+            Hj.extend(d2)
+
+        # And theta:
+        Rpi = np.zeros((self.n_par, self.n_par))
+        for mr in range(self.n_par):
+            for mc in range(mr, self.n_par):
+
+                Rpi[mr, mc] = Rdiag[mr] if mr == mc else 1
+
+                if is_coef:
+                    RiRpRRi = Rpi.T @ R + R.T @ Rpi
+                    RiRpRRiy = RiRpRRi @ ymu.T
+                    RiRpRRiymui = RiRpRRiy[parj_idx, :]
+                    xbarjmui = xbarj[parj_idx, :]
+                    d2 = np.sum(xbarjmui * RiRpRRiymui)
+                else:
+                    d2 = (ymu @ Rpj.T) * (ymu @ Rpi.T)
+                    if (mr == theta_idx[0]) and (mc == theta_idx[1]):
+                        d2 += (ymu @ R.T) * (ymu @ Rpj.T)
+                    d2 = -np.sum(d2)
+
+                Rpi[mr, mc] = 0
+                Hj.append(d2)
+
+        return np.array(Hj).reshape(-1, 1)
 
     def get_resid(
         self,
