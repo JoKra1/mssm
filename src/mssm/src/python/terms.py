@@ -283,8 +283,9 @@ class f(GammTerm):
         when relying on the ``qEFS`` update to estimate smoothing penalty parameters, performance
         drops drastically for tensor smooth terms when **not** relying on the parameterization by
         Wood (2006). Hence, it is reccomended that you set ``rp=2`` for tensor smooths when relying
-        on this update. Defaults to 0, meaning no re-parameterization.
-    :type rp: int, optional
+        on this update. Defaults to ``None`` which means it will be set to 0 for univariate smooth
+        terms (meaning no re-parameterization) and 2 for tensor smooths.
+    :type rp: int | None, optional
     :param constraint: What kind of identifiability constraints should be absorbed by the terms (if
         they are to be identifiable). Either QR-based constraints (default, well-behaved), by means
         of column-dropping (no infill, not so well-behaved), or by means of difference re-coding
@@ -298,7 +299,7 @@ class f(GammTerm):
     :param scale_te: Whether or not the penalty matrices of marginal smooths should be scaled
         by their largest eigenvalue. This can improve numerical stability and is thus reccomended
         when relying on the ``qEFS`` update to estimate smoothing penalty parameters.
-        Set to False by default.
+        Set to True by default.
     :type scale_te: bool, optional
     :param basis: The basis functions to use to construct the spline matrix. By default a B-spline
         basis (Eilers & Marx, 2010) implemented in :func:`mssm.src.smooths.B_spline_basis`.
@@ -336,10 +337,10 @@ class f(GammTerm):
         id: int | None = None,
         nk: int | list[int] = None,
         te: bool = False,
-        rp: int = 0,
+        rp: int | None = None,
         constraint: ConstType = ConstType.QR,
         identifiable: bool = True,
-        scale_te: bool = False,
+        scale_te: bool = True,
         basis: Callable = smooths.B_spline_basis,
         basis_kwargs: dict = {},
         is_penalized: bool = True,
@@ -358,6 +359,13 @@ class f(GammTerm):
                     "``variables``."
                 )
             )
+
+        # Handle default re-parameterization assignment.
+        if rp is None:
+            if len(variables) == 1:
+                rp = 0
+            else:
+                rp = 2
 
         if rp != 0 and penalty is not None and (len(penalty) > len(variables)):
             raise ValueError(

@@ -86,7 +86,7 @@ class Test_GAM_TE:
         terms=[
             i(),  # The intercept, a
             l(["cond"]),  # Offset for cond='b'
-            f(["time", "x"], by="cond", te=True, nk=9),
+            f(["time", "x"], by="cond", te=True, nk=9, rp=0, scale_te=False),
         ],  # one smooth surface over time and x - f(time,x) - per level of cond: three-way interaction!
         data=dat,
         print_warn=False,
@@ -149,9 +149,9 @@ class Test_GAM_TE_BINARY:
         terms=[
             i(),  # The intercept, a
             f(
-                ["time", "x"], te=True, nk=9
+                ["time", "x"], te=True, nk=9, rp=0, scale_te=False
             ),  # one smooth surface over time and x - f(time,x) - for the reference level = cond == b
-            f(["time", "x"], te=True, binary=["cond", "a"], nk=9),
+            f(["time", "x"], te=True, binary=["cond", "a"], nk=9, rp=0, scale_te=False),
         ],  # another smooth surface over time and x - f(time,x) - representing the difference from the other surface when cond==a
         data=dat,
         print_warn=False,
@@ -375,7 +375,12 @@ class Test_GAMM:
                 ["x"], by="cond", constraint=ConstType.QR
             ),  # to-way interaction between x and cond; one smooth over x per cond level
             f(
-                ["time", "x"], by="cond", constraint=ConstType.QR, nk=9
+                ["time", "x"],
+                by="cond",
+                constraint=ConstType.QR,
+                nk=9,
+                rp=0,
+                scale_te=False,
             ),  # three-way interaction
             fs(["time"], rf="sub"),
         ],  # Random non-linear effect of time - one smooth per level of factor sub
@@ -1332,8 +1337,6 @@ class Test_te_scaling_qefs:
                 te=True,
                 penalty=[DifferencePenalty()],
                 pen_kwargs=[{"m": 2}],
-                rp=2,
-                scale_te=True,
             ),
         ],
         data=sim_dat,
