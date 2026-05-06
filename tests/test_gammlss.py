@@ -559,7 +559,9 @@ class Test_te_p_values:
     sim_dat = sim3(n=500, scale=2, c=0, seed=20)
 
     formula_m = Formula(
-        lhs("y"), [i(), f(["x0", "x3"], te=True, nk=9), f(["x1"])], data=sim_dat
+        lhs("y"),
+        [i(), f(["x0", "x3"], te=True, nk=9, rp=0, scale_te=False), f(["x1"])],
+        data=sim_dat,
     )
 
     formula_sd = Formula(lhs("y"), [i(), f(["x0"]), f(["x2"])], data=sim_dat)

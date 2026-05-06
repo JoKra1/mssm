@@ -94,7 +94,9 @@ class Test_BIG_GAMM_Discretize:
             f(
                 ["x"], by="cond"
             ),  # to-way interaction between x and cond; one smooth over x per cond level
-            f(["time", "x"], by="cond", nk=9),  # three-way interaction
+            f(
+                ["time", "x"], by="cond", nk=9, rp=0, scale_te=False
+            ),  # three-way interaction
             fs(["time"], rf="series", nk=20, approx_deriv=discretize),
         ],  # Random non-linear effect of time - one smooth per level of factor series
         data=dat,
@@ -147,6 +149,8 @@ class Test_NUll_penalty_reparam:
                 constraint=ConstType.QR,
                 penalize_null=True,
                 nk=9,
+                rp=0,
+                scale_te=False,
             ),  # three-way interaction
             fs(["time"], rf="sub"),
         ],  # Random non-linear effect of time - one smooth per level of factor sub
@@ -258,6 +262,8 @@ class Test_NUll_1:
                 constraint=ConstType.QR,
                 penalize_null=True,
                 nk=9,
+                rp=0,
+                scale_te=False,
             ),  # three-way interaction
             fs(["time"], rf="sub"),
         ],  # Random non-linear effect of time - one smooth per level of factor sub
@@ -313,6 +319,8 @@ class Test_NUll_2:
                 penalize_null=True,
                 id=1,
                 nk=9,
+                rp=0,
+                scale_te=False,
             ),  # three-way interaction
             fs(["time"], rf="sub"),
         ],  # Random non-linear effect of time - one smooth per level of factor sub
@@ -387,6 +395,8 @@ class Test_NUll_3:
                 constraint=ConstType.QR,
                 penalize_null=True,
                 nk=9,
+                rp=0,
+                scale_te=False,
             ),  # three-way interaction
             fs(["time"], rf="sub"),
         ],  # Random non-linear effect of time - one smooth per level of factor sub
@@ -462,6 +472,8 @@ class Test_NUll_4:
                 penalize_null=True,
                 id=1,
                 nk=9,
+                rp=0,
+                scale_te=False,
             ),  # three-way interaction
             fs(["time"], rf="sub"),
         ],  # Random non-linear effect of time - one smooth per level of factor sub
@@ -505,7 +517,12 @@ class Test_ar1_Gaussian:
             l(["cond"]),
             f(["time"], by="cond"),
             f(["x"], by="cond"),
-            f(["time", "x"], by="cond"),
+            f(
+                ["time", "x"],
+                by="cond",
+                rp=0,
+                scale_te=False,
+            ),
         ],
         data=dat,
         print_warn=False,
@@ -1508,7 +1525,12 @@ class Test_BIG_GAMM:
                 ["x"], by="cond", constraint=ConstType.QR
             ),  # to-way interaction between x and cond; one smooth over x per cond level
             f(
-                ["time", "x"], by="cond", constraint=ConstType.QR, nk=9
+                ["time", "x"],
+                by="cond",
+                constraint=ConstType.QR,
+                nk=9,
+                rp=0,
+                scale_te=False,
             ),  # three-way interaction
             fs(["time"], rf="sub"),
         ],  # Random non-linear effect of time - one smooth per level of factor sub
@@ -1573,7 +1595,12 @@ class Test_BIG_GAMM_keep_cov:
                 ["x"], by="cond", constraint=ConstType.QR
             ),  # to-way interaction between x and cond; one smooth over x per cond level
             f(
-                ["time", "x"], by="cond", constraint=ConstType.QR, nk=9
+                ["time", "x"],
+                by="cond",
+                constraint=ConstType.QR,
+                nk=9,
+                rp=0,
+                scale_te=False,
             ),  # three-way interaction
             fs(["time"], rf="sub"),
         ],  # Random non-linear effect of time - one smooth per level of factor sub
@@ -1909,7 +1936,7 @@ class Test_te_rs_fact:
         lhs("y"),
         [
             i(),
-            f(["time", "x"], te=True, nk=5),
+            f(["time", "x"], te=True, nk=5, rp=0, scale_te=False),
             rs(["fact", "sub"]),
             rs(["x", "sub"], by="fact"),
         ],
@@ -2129,7 +2156,7 @@ class Test_te_rs_fact_QR:
         lhs("y"),
         [
             i(),
-            f(["time", "x"], te=True, nk=5),
+            f(["time", "x"], te=True, nk=5, rp=0, scale_te=False),
             rs(["fact", "sub"]),
             rs(["x", "sub"], by="fact"),
         ],
@@ -2342,7 +2369,7 @@ class Test_print_parametric:
         [
             i(),
             l(["fact"]),
-            f(["time", "x"], te=True, nk=5),
+            f(["time", "x"], te=True, nk=5, rp=0, scale_te=False),
             rs(["fact", "sub"]),
             rs(["x", "sub"], by="fact"),
         ],
@@ -2378,7 +2405,7 @@ class Test_ti_rs_fact:
             i(),
             f(["x"]),
             f(["time"]),
-            f(["time", "x"], te=False, nk=5),
+            f(["time", "x"], te=False, nk=5, rp=0, scale_te=False),
             rs(["fact", "sub"]),
             rs(["x", "sub"], by="fact"),
         ],
@@ -2771,7 +2798,12 @@ class Test_te_p_values:
 
     formula = Formula(
         lhs("y"),
-        [i(), f(["x0", "x3"], te=True, nk=9), f(["x1"]), f(["x2"])],
+        [
+            i(),
+            f(["x0", "x3"], te=True, nk=9, rp=0, scale_te=False),
+            f(["x1"]),
+            f(["x2"]),
+        ],
         data=sim_dat,
     )
     model = GAMM(formula, Gaussian())
