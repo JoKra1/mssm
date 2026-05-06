@@ -4523,7 +4523,8 @@ def newton_coef_smooth(
             if eps == 0:
                 eps += 1e-14
             else:
-                eps *= 2
+                # Don't just increase barely, to ensure code=0 is actually good.
+                eps *= 100
             continue
 
         LVp = compute_Linv(Lp, 10)  # noqa: F405
@@ -6563,6 +6564,10 @@ def check_drop_valid_gensmooth(
     # ... from Xs...
     rXs, rcoef_split_idx = drop_terms_X(Xs, keep)
 
+    # Deal with any extra coefficients when checking for the drop
+    if family.extra_coef is not None:
+        rcoef_split_idx.append(rXs[-1].shape[1] + rcoef_split_idx[-1])
+
     # ... and from S_emb
     rS_emb = S_emb[keep, :]
     rS_emb = rS_emb[:, keep]
@@ -7797,6 +7802,21 @@ def update_coef_gen_smooth(
                     break
                 else:
                     # Found drop, but need to check whether it is safe
+
+                    # First check whether an extra coef is to be dropped, exclude these!
+                    if family.extra_coef is not None:
+                        valid_drop_idx = len(coef) - family.extra_coef
+                        drop = np.sort([dp for dp in drop if dp < valid_drop_idx])
+                        keep = np.sort(
+                            [cidx for cidx in range(len(coef)) if cidx not in drop]
+                        )
+
+                        if len(drop) == 0:
+                            keep = None
+                            drop = None
+                            break
+
+                    # Now check likelihood
                     drop_valid, drop_pen_llk = check_drop_valid_gensmooth(
                         ys, coef, Xs, S_emb, keep, family
                     )

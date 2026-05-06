@@ -29,6 +29,125 @@ mssm.src.python.utils.GAMLSSGSMMFamily.init_coef = init_coef_gsmmgammlss
 ################################################################## Tests ##################################################################
 
 
+class Test_repara_skip:
+    # Multi Gauss case
+    sim_dat = sim16(500, c=1, seed=0, correlate=False)
+
+    # Leave first two linear predictors un-penalized
+    sim_formulas = [
+        Formula(lhs("y0"), [i()], data=sim_dat),
+        Formula(lhs("y1"), [i()], data=sim_dat),
+        Formula(lhs("y2"), [i(), f(["x3"])], data=sim_dat),
+    ]
+
+    test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
+    test_kwargs["method"] = "QR/Chol"
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["control_lambda"] = 2
+    test_kwargs["max_outer"] = 200
+    test_kwargs["max_inner"] = 500
+    test_kwargs["min_inner"] = 500
+    test_kwargs["seed"] = 0
+    test_kwargs["repara"] = True
+    test_kwargs["prefit_grad"] = True
+
+    model = GSMM(sim_formulas, MultiGauss(3, [Identity() for _ in range(3)]))
+    model.fit(**test_kwargs)
+
+    def test_GAMedf(self):
+        np.testing.assert_allclose(
+            self.model.edf,
+            10.143423613146284,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_GAMcoef(self):
+        coef = self.model.coef
+        np.testing.assert_allclose(
+            coef,
+            np.array(
+                [
+                    [1.24500178],
+                    [6.29907951],
+                    [0.02619955],
+                    [0.05053842],
+                    [0.00130505],
+                    [-0.02862036],
+                    [-0.04703432],
+                    [-0.06035648],
+                    [-0.06955159],
+                    [-0.07668717],
+                    [-0.06803442],
+                    [-0.05359891],
+                    [-0.36512963],
+                    [-0.02009365],
+                    [0.15042102],
+                    [-1.21896805],
+                    [-0.00507425],
+                    [-0.37565432],
+                ]
+            ),
+            atol=min(max_atol, 10),
+            rtol=min(max_rtol, 10),
+        )
+
+    def test_GAMlam(self):
+        lam = np.array([p.lam for p in self.model.overall_penalties])
+        np.testing.assert_allclose(
+            lam,
+            np.array([1231.1931630229676]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 2.5),
+        )
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        np.testing.assert_allclose(
+            reml, -1756.634350155022, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+        )
+
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        np.testing.assert_allclose(
+            llk, -1729.8759979948577, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+        )
+
+    def test_edf1(self):
+        compute_bias_corrected_edf(self.model, overwrite=False)
+        edf1 = np.array([edf1 for edf1 in self.model.term_edf1])
+        np.testing.assert_allclose(
+            edf1,
+            np.array([1.2716437793312583]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
+        )
+
+    def test_ps(self):
+        ps = []
+        for par in range(len(self.model.formulas)):
+            pps, _ = approx_smooth_p_values(self.model, par=par)
+            ps.extend(pps)
+        np.testing.assert_allclose(
+            ps,
+            np.array([0.5852398802652816]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
+        )
+
+    def test_TRs(self):
+        Trs = []
+        for par in range(len(self.model.formulas)):
+            _, pTrs = approx_smooth_p_values(self.model, par=par)
+            Trs.extend(pTrs)
+        np.testing.assert_allclose(
+            Trs,
+            np.array([0.5167373537113078]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
+        )
+
+
 class Test_GAUMLSSGEN_hard:
 
     # Simulate 500 data points

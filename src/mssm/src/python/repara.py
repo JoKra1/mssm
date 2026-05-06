@@ -812,7 +812,7 @@ def reparam_model(
     S_norm_rp = None
     Q_emb = None
 
-    dist_idx = Sj_reps[0].dist_param
+    dist_idx = 0
     Qs = []
 
     # Create transformation matrix for first dist. parameter/linear predictor and overall
@@ -834,8 +834,9 @@ def reparam_model(
 
     for Si, (S_rep, S_coef) in enumerate(zip(S_reps, S_coefs)):
 
-        # Create new Q if we move to a new parameter
-        if Sj_reps[SJ_term_idx[Si][0]].dist_param != dist_idx:
+        # Create new Qs if we move to a new parameter. Check for any parameters skipped
+        # along the way due to lack of penalties.
+        while Sj_reps[SJ_term_idx[Si][0]].dist_param > dist_idx:
             dist_idx += 1
             Qs.append(Qd_emb)
 
