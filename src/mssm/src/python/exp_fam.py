@@ -7,6 +7,7 @@ from itertools import repeat
 from collections.abc import Callable
 from .custom_types import DerivOrder
 from abc import ABC, abstractmethod
+import hazard
 
 HAS_MP = True
 try:
@@ -4015,6 +4016,12 @@ class PropHaz(GSMMFamily):
         self.__qs = None
         self.__avs = None
 
+        # Create index vectors ri for ut and r
+        idx = np.arange(len(self.r), dtype=np.int64)
+        self.__ris = []
+        for j in range(len(self.ut)):
+            self.__ris.append(idx[self.r == j])
+
     def llk(
         self,
         coef: np.ndarray,
@@ -4047,32 +4054,18 @@ class PropHaz(GSMMFamily):
         # Extract and define all variables defined by WPS (2016)
         delta = ys[0]
         ut = self.ut
-        r = self.r
         nt = len(ut)
-        X = Xs[0]
+        X = Xs[0].toarray()
         eta = X @ coef
 
-        with warnings.catch_warnings():  # Overflow
+        with warnings.catch_warnings():  # Overflow, etc.
             warnings.simplefilter("ignore")
             gamma = np.exp(eta)
 
-        # Now compute first sum
-        llk = np.sum(delta * eta)
-
-        # and second sum
-        gamma_p = 0
-        for j in range(nt):
-            ri = r == j
-            dj = np.sum(delta[ri])
-            with warnings.catch_warnings():  # Overflow
-                warnings.simplefilter("ignore")
-                gamma_p += np.sum(gamma[ri])
-
-            with warnings.catch_warnings():  # Divide by zero
-                warnings.simplefilter("ignore")
-                log_gamma_p = np.log(gamma_p)
-
-            llk -= dj * log_gamma_p
+            # Now compute first sum here and second sum in c
+            llk = np.sum(delta * eta) + hazard.llk2(
+                nt, gamma.flatten(), delta.flatten(), self.__ris
+            )
 
         return llk
 
@@ -4109,42 +4102,20 @@ class PropHaz(GSMMFamily):
         # Extract and define all variables defined by WPS (2016)
         delta = ys[0]
         ut = self.ut
-        r = self.r
         nt = len(ut)
-        X = Xs[0]
+        X = Xs[0].toarray()
         eta = X @ coef
 
-        with warnings.catch_warnings():  # Overflow
+        with warnings.catch_warnings():  # Overflow, etc.
             warnings.simplefilter("ignore")
             gamma = np.exp(eta)
-        gamma = gamma.reshape(-1, 1)
 
-        # Now compute first sum
-        g = delta.T @ X
+            # Now compute first sum here and second in c
+            g = (delta.T @ X).T + hazard.grad2(
+                nt, gamma.flatten(), delta.flatten(), self.__ris, X
+            ).reshape(-1, 1)
 
-        # and second sum
-        b_p = np.zeros_like(g)
-
-        gamma_p = 0
-        for j in range(nt):
-            ri = r == j
-            dj = np.sum(delta[ri])
-            gamma_i = (gamma[ri, 0]).reshape(-1, 1)
-            with warnings.catch_warnings():  # Overflow
-                warnings.simplefilter("ignore")
-                gamma_p += np.sum(gamma_i)
-
-            X_i = X[ri, :]
-            bi = gamma_i.T @ X_i
-            b_p += bi
-
-            with warnings.catch_warnings():  # Divide by zero
-                warnings.simplefilter("ignore")
-                bpg = b_p / gamma_p
-
-            g -= dj * bpg
-
-        return g.reshape(-1, 1)
+        return g
 
     def hessian(
         self,
@@ -4178,40 +4149,16 @@ class PropHaz(GSMMFamily):
         # Extract and define all variables defined by WPS (2016)
         delta = ys[0]
         ut = self.ut
-        r = self.r
         nt = len(ut)
-        X = Xs[0]
+        X = Xs[0].toarray()
         eta = X @ coef
 
         with warnings.catch_warnings():  # Overflow
             warnings.simplefilter("ignore")
             gamma = np.exp(eta)
-        gamma = gamma.reshape(-1, 1)
 
-        # Only sum over nt
-        b_p = np.zeros((1, X.shape[1]))
-
-        gamma_p = 0
-        A_p = scp.sparse.csc_array((X.shape[1], X.shape[1]))
-        H = scp.sparse.csc_array((X.shape[1], X.shape[1]))
-        for j in range(nt):
-            ri = r == j
-            dj = np.sum(delta[ri])
-            gamma_i = (gamma[ri, 0]).reshape(-1, 1)
-            gamma_p += np.sum(gamma_i)
-
-            X_i = X[ri, :]
-            bi = gamma_i.T @ X_i
-            b_p += bi
-
-            A_i = (gamma_i * X_i).T @ X_i
-            A_p += A_i
-
-            with warnings.catch_warnings():  # Divide by zero or overflow
-                warnings.simplefilter("ignore")
-                Hj = dj * b_p.T @ b_p / np.power(gamma_p, 2) - dj * A_p / gamma_p
-
-            H += Hj
+            # Compute hessian in cpp
+            H = hazard.hessian(nt, gamma.flatten(), delta.flatten(), self.__ris, X)
 
         return scp.sparse.csc_array(H)
 
@@ -4337,7 +4284,7 @@ class PropHaz(GSMMFamily):
         gamma_p = 0
         b_p = np.zeros((1, X.shape[1]))
         for j in range(nt):
-            ri = r == j
+            ri = self.__ris[j]
 
             # Get dj
             dj = np.sum(delta[ri])

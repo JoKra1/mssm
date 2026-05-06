@@ -75,4 +75,11 @@ ext5 = Pybind11Extension(
     cxx_std=14,
 )
 
-setup(ext_modules=[ext1, ext2, ext3, ext4, ext5])
+ext6 = Pybind11Extension(
+    name="hazard",
+    sources=["src/mssm/src/cpp/hazard.cpp"],
+    include_dirs=[get_eigen_include()],
+    cxx_std=14,
+)
+
+setup(ext_modules=[ext1, ext2, ext3, ext4, ext5, ext6])
