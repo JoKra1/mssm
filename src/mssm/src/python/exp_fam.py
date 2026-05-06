@@ -4264,7 +4264,6 @@ class PropHaz(GSMMFamily):
         """
         # Extract and define all variables defined by WPS (2016)
         ut = self.ut
-        r = self.r
         nt = len(ut)
         X = Xs[0]
         eta = X @ coef
