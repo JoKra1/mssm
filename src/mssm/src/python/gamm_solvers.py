@@ -4523,8 +4523,7 @@ def newton_coef_smooth(
             if eps == 0:
                 eps += 1e-14
             else:
-                # Don't just increase barely, to ensure code=0 is actually good.
-                eps *= 100
+                eps *= 2
             continue
 
         LVp = compute_Linv(Lp, 10)  # noqa: F405
@@ -7753,6 +7752,9 @@ def update_coef_gen_smooth(
         # Prepare to check convergence
         prev_llk_cur_pen = c_llk - 0.5 * coef.T @ S_emb @ coef
 
+        # Compute next llk before step length control to check for nan/inf on early iters
+        next_llk = family.llk(next_coef, coef_split_idx, ys, Xs)
+
         # Perform step length control.
         coef, c_llk, c_pen_llk, a = correct_coef_step_gen_smooth(
             family, ys, Xs, coef, next_coef, coef_split_idx, c_llk, S_emb, a
@@ -7760,10 +7762,10 @@ def update_coef_gen_smooth(
 
         # Very poor start estimate, restart
         if (
-            grad_only
-            and outer == 0
-            and inner <= 20
+            inner <= 20
             and np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol * np.abs(c_pen_llk)
+        ) and (  # Pre-fit GD stuck or invalid (Q)-Newton step at early convergence
+            (grad_only and outer == 0) or (np.isnan(next_llk) or np.isinf(next_llk))
         ):
             coef, _, _ = restart_coef(
                 coef,
