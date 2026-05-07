@@ -6563,6 +6563,10 @@ def check_drop_valid_gensmooth(
     # ... from Xs...
     rXs, rcoef_split_idx = drop_terms_X(Xs, keep)
 
+    # Deal with any extra coefficients when checking for the drop
+    if family.extra_coef is not None:
+        rcoef_split_idx.append(rXs[-1].shape[1] + rcoef_split_idx[-1])
+
     # ... and from S_emb
     rS_emb = S_emb[keep, :]
     rS_emb = rS_emb[:, keep]
@@ -7748,6 +7752,9 @@ def update_coef_gen_smooth(
         # Prepare to check convergence
         prev_llk_cur_pen = c_llk - 0.5 * coef.T @ S_emb @ coef
 
+        # Compute next llk before step length control to check for nan/inf on early iters
+        next_llk = family.llk(next_coef, coef_split_idx, ys, Xs)
+
         # Perform step length control.
         coef, c_llk, c_pen_llk, a = correct_coef_step_gen_smooth(
             family, ys, Xs, coef, next_coef, coef_split_idx, c_llk, S_emb, a
@@ -7755,10 +7762,10 @@ def update_coef_gen_smooth(
 
         # Very poor start estimate, restart
         if (
-            grad_only
-            and outer == 0
-            and inner <= 20
+            inner <= 20
             and np.abs(c_pen_llk - prev_llk_cur_pen) < conv_tol * np.abs(c_pen_llk)
+        ) and (  # Pre-fit GD stuck or invalid (Q)-Newton step at early convergence
+            (grad_only and outer == 0) or (np.isnan(next_llk) or np.isinf(next_llk))
         ):
             coef, _, _ = restart_coef(
                 coef,
@@ -7797,6 +7804,21 @@ def update_coef_gen_smooth(
                     break
                 else:
                     # Found drop, but need to check whether it is safe
+
+                    # First check whether an extra coef is to be dropped, exclude these!
+                    if family.extra_coef is not None:
+                        valid_drop_idx = len(coef) - family.extra_coef
+                        drop = np.sort([dp for dp in drop if dp < valid_drop_idx])
+                        keep = np.sort(
+                            [cidx for cidx in range(len(coef)) if cidx not in drop]
+                        )
+
+                        if len(drop) == 0:
+                            keep = None
+                            drop = None
+                            break
+
+                    # Now check likelihood
                     drop_valid, drop_pen_llk = check_drop_valid_gensmooth(
                         ys, coef, Xs, S_emb, keep, family
                     )

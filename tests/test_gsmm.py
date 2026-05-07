@@ -29,6 +29,125 @@ mssm.src.python.utils.GAMLSSGSMMFamily.init_coef = init_coef_gsmmgammlss
 ################################################################## Tests ##################################################################
 
 
+class Test_repara_skip:
+    # Multi Gauss case
+    sim_dat = sim16(500, c=1, seed=0, correlate=False)
+
+    # Leave first two linear predictors un-penalized
+    sim_formulas = [
+        Formula(lhs("y0"), [i()], data=sim_dat),
+        Formula(lhs("y1"), [i()], data=sim_dat),
+        Formula(lhs("y2"), [i(), f(["x3"])], data=sim_dat),
+    ]
+
+    test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
+    test_kwargs["method"] = "QR/Chol"
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["control_lambda"] = 2
+    test_kwargs["max_outer"] = 200
+    test_kwargs["max_inner"] = 500
+    test_kwargs["min_inner"] = 500
+    test_kwargs["seed"] = 0
+    test_kwargs["repara"] = True
+    test_kwargs["prefit_grad"] = True
+
+    model = GSMM(sim_formulas, MultiGauss(3, [Identity() for _ in range(3)]))
+    model.fit(**test_kwargs)
+
+    def test_GAMedf(self):
+        np.testing.assert_allclose(
+            self.model.edf,
+            10.143423613146284,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_GAMcoef(self):
+        coef = np.round(self.model.coef, decimals=6)
+        np.testing.assert_allclose(
+            coef,
+            np.array(
+                [
+                    [1.245002e00],
+                    [6.299080e00],
+                    [2.620000e-02],
+                    [5.053800e-02],
+                    [1.305000e-03],
+                    [-2.862000e-02],
+                    [-4.703400e-02],
+                    [-6.035600e-02],
+                    [-6.955200e-02],
+                    [-7.668700e-02],
+                    [-6.803400e-02],
+                    [-5.359900e-02],
+                    [-3.651300e-01],
+                    [-2.009400e-02],
+                    [1.504210e-01],
+                    [-1.218968e00],
+                    [-5.074000e-03],
+                    [-3.756540e-01],
+                ]
+            ),
+            atol=min(max_atol, 10),
+            rtol=min(max_rtol, 10),
+        )
+
+    def test_GAMlam(self):
+        lam = np.array([p.lam for p in self.model.overall_penalties])
+        np.testing.assert_allclose(
+            lam,
+            np.array([1231.1931630229676]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 2.5),
+        )
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        np.testing.assert_allclose(
+            reml, -1756.634350155022, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+        )
+
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        np.testing.assert_allclose(
+            llk, -1729.8759979948577, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+        )
+
+    def test_edf1(self):
+        compute_bias_corrected_edf(self.model, overwrite=False)
+        edf1 = np.array([edf1 for edf1 in self.model.term_edf1])
+        np.testing.assert_allclose(
+            edf1,
+            np.array([1.2716437793312583]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
+        )
+
+    def test_ps(self):
+        ps = []
+        for par in range(len(self.model.formulas)):
+            pps, _ = approx_smooth_p_values(self.model, par=par)
+            ps.extend(pps)
+        np.testing.assert_allclose(
+            ps,
+            np.array([0.5852398802652816]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
+        )
+
+    def test_TRs(self):
+        Trs = []
+        for par in range(len(self.model.formulas)):
+            _, pTrs = approx_smooth_p_values(self.model, par=par)
+            Trs.extend(pTrs)
+        np.testing.assert_allclose(
+            Trs,
+            np.array([0.5167373537113078]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
+        )
+
+
 class Test_GAUMLSSGEN_hard:
 
     # Simulate 500 data points
