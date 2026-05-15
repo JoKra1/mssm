@@ -347,6 +347,7 @@ class Test_MultivariateHSMM_hard:
         ends_in_last=False,
         n_cores=1,
         build_mat_idx=build_mat_idx,
+        tvdtpi=True,
     )
 
     # Fixed pi and T

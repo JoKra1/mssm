@@ -1173,6 +1173,11 @@ class HSMMFamily(GSMMFamily):
     :param hmp_fam: Distribution to assume for HMP residuals, must be 'Gaussian' or 'Exponential'.
         Defaults to 'Exponential'.
     :type hmp_fam: str, optional
+    :param tvdtpi: Whether the latent process model should be time-varying or not. If set to True,
+        then formulas for the state transition probabilities, initial state transition probabilities
+        , and state durations must be specified for data having the same number of rows as the data
+        used by the formulas of the observation models. Defaults to False
+    :type tvdtpi: bool, optional
     :raises ValueError: if either ``T`` or ``pi`` have a value other than None but not both.
     :raises ValueError: if ``starts_with_first is False`` and the model is HMP-like (i.e.,
         ``event_template is not None``).
@@ -1202,6 +1207,7 @@ class HSMMFamily(GSMMFamily):
         scale: float | None = None,
         event_template: np.ndarray | None = None,
         hmp_fam: str = "Exponential",
+        tvdtpi: bool = False,
     ) -> None:
 
         super().__init__(
@@ -1253,13 +1259,7 @@ class HSMMFamily(GSMMFamily):
                 self.extra_coef += state_obs[0].extra_coef
 
         # Check for time-varying duration, state transition, initial state models
-        self.tvdtpi = False
-        if tid is None and len(sid) > 1:
-            self.tvdtpi = True
-        elif tid is not None and len(tid) == len(sid) and len(sid) > 1:
-            stiddiff = [(sid[idx] - tid[idx]) > 0 for idx in range(len(sid))]
-            if not np.any(stiddiff):
-                self.tvdtpi = True
+        self.tvdtpi = tvdtpi
 
     def compute_od_probs(
         self,
@@ -3705,7 +3705,7 @@ class HSMMFamily(GSMMFamily):
 
                     if np.any(np.isnan(ds[:, j, :]) | np.isinf(ds[:, j, :])):
                         # print("problem with ds",j)
-                        ds[(np.isnan(ds[:, j, :]) | np.isinf(ds[:, j, :])), j] = 0
+                        ds[:, j, :][(np.isnan(ds[:, j, :]) | np.isinf(ds[:, j, :]))] = 0
 
                 else:
                     ds[:, j] = np.exp(lpd.flatten())
@@ -3856,7 +3856,7 @@ class HSMMFamily(GSMMFamily):
                     if tvdtpi:
                         Ts = np.stack([Ts for _ in range(n_T)], axis=2)
 
-                    T_grad = np.ones(1)
+                    T_grad = np.ones(1).reshape(-1, 1)
 
                 # Now initial state probabilities #
                 pi_fam = MULNOMLSS(n_S - 1)
