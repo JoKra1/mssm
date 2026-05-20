@@ -636,15 +636,16 @@ def computetrVS3(
 
     The idea is that ``V``, the Bayesian covariance matrix of the coefficients, is represented
     implicitly as ``V0 - U1`` (in the unstructured case) or ``V0 - U1 - U2 - U3`` (in the
-    structured case). Each matrix update ``UX`` is of the form ``A@B@C``, where the dimensions of
-    the inner matrix ``B`` are much smaller than the outer dimensions of the outer matrices.
+    structured case). Each matrix ``UX``  is of the form ``A@B@C``, where the dimensions of the
+    inner update matrix ``B`` are much smaller than the outer dimensions of the outer update
+    matrices. For example: ``U1 = t1@t2@t3``.
 
     For the unstructured update, only ``t1``, ``t2``, and ``t3`` are used and defined as in equation
     3.13 in Byrd, Nocdeal & Schnabel (1992). However, ``t2`` has been adapted to ensure positive
     semi-definitiness required by EFS update.
 
     See :func:`computeSH` and :func:`computeSVPS` for details on the structured case, requiring
-    all nine terms to compute the update matrices.
+    all nine terms to compute ``V``.
 
     References:
      - Byrd, R. H., Nocedal, J., & Schnabel, R. B. (1994). Representations of quasi-Newton \
@@ -704,6 +705,215 @@ def computetrVS3(
         tr += VS_c[0, 0]
 
     return tr
+
+
+def getImplicitV(
+    linopH: scp.sparse.linalg.LinearOperator,
+    colsH: int,
+    S_emb: scp.sparse.csc_array,
+    n_c: int = 10,
+) -> tuple[
+    scp.sparse.csc_array,
+    scp.sparse.csc_array | np.ndarray | None,
+    np.ndarray | None,
+    scp.sparse.csr_array | np.ndarray | None,
+    scp.sparse.csc_array | np.ndarray | None,
+    np.ndarray | None,
+    scp.sparse.csr_array | np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
+]:
+    """Function returns current implicit representation of ``V``, the quasi Newton
+    approximation to the Bayesian covariance matrix of the coefficients.
+
+    The idea is that ``V`` is represented implicitly as ``V0 - U1`` (in the unstructured case) or
+    ``V0 - U1 - U2 - U3`` (in the structured case). Each matrix ``UX`` is of the form ``A@B@C``,
+    where the dimensions of the inner update matrix ``B`` are much smaller than the outer dimensions
+    of the outer update matrices. For example: ``U1 = t1@t2@t3``.
+
+    Function returns ``V0, t1, t2, t3, t4, t5, t6, t7, t8, t9`` so that in general::
+
+     V = V0 - (t1 @ t2 @ t3) - (t4 @ t5 @ t6) - (t7 @ t8 @ t9)
+
+    **Note**: ``t4, t5, t6, t7, t8, t9`` will be ``None`` in the unstructured case and if no
+    quasi-Newton update has been performed yet, ``t1, t2, t3`` will also be ``None``.
+
+    :param linopH: Storage holding current quasi-newton approximation of the negative Hessian
+        of the llk. Storage needs to be of the form returned by :func:`init_qEFS_storage`.
+    :type linopH: scp.sparse.linalg.LinearOperator
+    :param colsH: Number of columns of the negative Hessian
+    :type colsH: int
+    :param S_emb: Total penalty matrix
+    :type S_emb: scp.sparse.csc_array
+    :param n_c: Number of cores to use for computations. Defaults to 10
+    :type n_c: int, optional
+    :return: Implicit representation of ``V``.
+    :rtype: tuple[scp.sparse.csc_array,scp.sparse.csc_array | np.ndarray | None, np.ndarray | None,
+        scp.sparse.csr_array | np.ndarray | None, scp.sparse.csc_array | np.ndarray | None,
+        np.ndarray | None, scp.sparse.csr_array | np.ndarray | None, np.ndarray | None,
+        np.ndarray | None, np.ndarray | None]
+    """
+
+    # Extract info to determine which strategy was used to approximate H
+    sample_hessian = linopH.sample_hessian
+    form = linopH.form
+    fcols = linopH.fcols
+
+    # Get all the update vectors
+    s, y, rho, m = linopH.sk, linopH.yk, linopH.rho, linopH.n_corrs
+
+    if fcols is None or m == 0:
+
+        # Then form initial matrices H0/V0. See Nocedal & Wright, 2004 for sacling factor
+        # computed below.
+        if len(y) > 0:
+            omega = compute_omega(
+                y,
+                s,
+                method="mean" if sample_hessian else "NoWr",
+            )
+        else:
+            omega = 1
+
+        # And initial approximation for the hessian...
+        H0 = (scp.sparse.identity(colsH, format="csc") * omega) + S_emb
+        Lp, Pr, _ = cpp_cholP(H0)  # noqa: F405
+
+        # ... and the corresponding inverse.
+        LVp0 = compute_Linv(Lp, n_c)  # noqa: F405
+        LV0 = apply_eigen_perm(Pr, LVp0)  # noqa: F405
+        V0 = LV0.T @ LV0
+
+        # Reset H0 to just scaled identity
+        H0 = scp.sparse.identity(colsH, format="csc") * omega
+
+        if m == 0:  # L-BFGS routine converged after first step
+
+            t1 = None
+            t2 = None
+            t3 = None
+
+        else:
+
+            # Now compute compact representation of V.
+            # Below we get int2, with the shifted Eigenvalues so that
+            # H = H0 + nt1 @ int2 @ nt3 - where H0 = I*omega + S_emb and
+            # I*omega + nt1 @ int2 @ nt3 is PSD.
+            # Now, using the Woodbury identity:
+            # V = (H)^-1 = V0 - V0@nt1@ (int2^-1 + nt3@V0@nt1)^-1 @ nt3@V0
+            #
+            # since nt3=nt1.T, and int2^-1 = nt2 we have:
+            #
+            # V = V0 - V0@nt1@ (nt2 + nt1.T@V0@nt1)^-1 @ nt1.t@V0
+            #
+
+            # Compute inverse:
+            if form != "SR1":
+                nt1, nt2, int2, nt3 = computeH(s, y, rho, H0, explicit=False)
+
+                invt2 = nt2 + nt3 @ V0 @ nt1
+
+                U, sv_invt2, VT = scp.linalg.svd(invt2, lapack_driver="gesvd")
+
+                # Nowe we can compute all parts for the Woodbury identy to obtain V
+                t2 = VT.T @ np.diag(1 / sv_invt2) @ U.T
+
+                t1 = V0 @ nt1
+                t3 = nt3 @ V0
+            else:
+                nt1, int2, nt3 = computeHSR1(
+                    s, y, rho, H0, omega, make_psd=True, explicit=False
+                )
+
+                # When using SR1 int2 is potentially singular, so we need a modified Woodbury
+                # that accounts for that. This is given by eq. 23 in Henderson & Searle (1981):
+                invt2 = np.identity(int2.shape[1]) + int2 @ nt3 @ V0 @ nt1
+
+                U, sv_invt2, VT = scp.linalg.svd(invt2, lapack_driver="gesvd")
+
+                # Nowe we can again compute all parts for the modified Woodbury identy to
+                # obtain V
+                t2 = VT.T @ np.diag(1 / sv_invt2) @ U.T
+
+                t1 = V0 @ nt1
+                t3 = int2 @ nt3 @ V0
+
+            # We now have: V = V0 - V0@nt1@t2@nt3@V0, but don't have to form that explcitly!
+            # V3 = V0 - V0@nt1@t2@nt3@V0
+            # LVPT, P, code = cpp_cholP(scp.sparse.csc_array(V3))
+            # LVT = apply_eigen_perm(P,LVPT)
+            # LV = LVT.T
+        t4 = None
+        t5 = None
+        t6 = None
+        t7 = None
+        t8 = None
+        t9 = None
+    else:
+        # Structured qEFS update. Bit more work necessary.
+        acols = linopH.acols
+        nHfd = linopH.nHfd
+        IonHBB = linopH.IonHBB
+        dampen_HBb = (
+            linopH.sqEFS_options["dampen_HBb"]
+            if "dampen_HBb" in linopH.sqEFS_options
+            else 1
+        )
+        dampen_HBB = (
+            linopH.sqEFS_options["dampen_HBB"]
+            if "dampen_HBB" in linopH.sqEFS_options
+            else 1
+        )
+        pre_cond = (
+            linopH.sqEFS_options["pre_cond"]
+            if "pre_cond" in linopH.sqEFS_options
+            else True
+        )
+
+        nH1, nH2t1, nH2t2, nH2t3, nH3t1, nH3t3, nH4t1, nH4t2, nH4t3 = computeSH(
+            y,
+            s,
+            nHfd,
+            IonHBB,
+            fcols,
+            acols,
+            sample_hessian,
+            dampen_HBb <= 0,
+            dampen_HBB,
+            explicit=False,
+            form=form,
+        )
+
+        (
+            V0,
+            t1,
+            t2,
+            t3,
+            t4,
+            t5,
+            t6,
+            t7,
+            t8,
+            t9,
+        ) = computeSVPS(
+            nH1,
+            nH2t1,
+            nH2t2,
+            nH2t3,
+            nH3t1,
+            nH3t3,
+            nH4t1,
+            nH4t2,
+            nH4t3,
+            S_emb,
+            dampen_HBb <= 0,
+            explicit=False,
+            pre_cond=pre_cond,
+            n_c=n_c,
+        )
+
+    return V0, t1, t2, t3, t4, t5, t6, t7, t8, t9
 
 
 def calculate_edf(
@@ -775,163 +985,9 @@ def calculate_edf(
     ):
         # Following prepares trace computation via equation 3.13 in Byrd, Nocdeal & Schnabel (1992).
         # First get m (number of implicit hessian updates), yk, sk, and rho from V
-
-        sample_hessian = InvCholXXS.sample_hessian
-        form = InvCholXXS.form
-        fcols = InvCholXXS.fcols
-
-        # Get all the update vectors
-        s, y, rho, m = InvCholXXS.sk, InvCholXXS.yk, InvCholXXS.rho, InvCholXXS.n_corrs
-
-        if fcols is None or m == 0:
-
-            # Then form initial matrices H0/V0. See Nocedal & Wright, 2004 for sacling factor
-            # computed below.
-            if len(y) > 0:
-                omega = compute_omega(
-                    y,
-                    s,
-                    method="mean" if sample_hessian else "NoWr",
-                )
-            else:
-                omega = 1
-
-            # And initial approximation for the hessian...
-            H0 = (scp.sparse.identity(colsX, format="csc") * omega) + S_emb
-            Lp, Pr, _ = cpp_cholP(H0)  # noqa: F405
-
-            # ... and the corresponding inverse.
-            LVp0 = compute_Linv(Lp, n_c)  # noqa: F405
-            LV0 = apply_eigen_perm(Pr, LVp0)  # noqa: F405
-            V0 = LV0.T @ LV0
-
-            # Reset H0 to just scaled identity
-            H0 = scp.sparse.identity(colsX, format="csc") * omega
-
-            if m == 0:  # L-BFGS routine converged after first step
-
-                t1 = None
-                t2 = None
-                t3 = None
-
-            else:
-
-                # Now compute compact representation of V.
-                # Below we get int2, with the shifted Eigenvalues so that
-                # H = H0 + nt1 @ int2 @ nt3 - where H0 = I*omega + S_emb and
-                # I*omega + nt1 @ int2 @ nt3 is PSD.
-                # Now, using the Woodbury identity:
-                # V = (H)^-1 = V0 - V0@nt1@ (int2^-1 + nt3@V0@nt1)^-1 @ nt3@V0
-                #
-                # since nt3=nt1.T, and int2^-1 = nt2 we have:
-                #
-                # V = V0 - V0@nt1@ (nt2 + nt1.T@V0@nt1)^-1 @ nt1.t@V0
-                #
-
-                # Compute inverse:
-                if form != "SR1":
-                    nt1, nt2, int2, nt3 = computeH(s, y, rho, H0, explicit=False)
-
-                    invt2 = nt2 + nt3 @ V0 @ nt1
-
-                    U, sv_invt2, VT = scp.linalg.svd(invt2, lapack_driver="gesvd")
-
-                    # Nowe we can compute all parts for the Woodbury identy to obtain V
-                    t2 = VT.T @ np.diag(1 / sv_invt2) @ U.T
-
-                    t1 = V0 @ nt1
-                    t3 = nt3 @ V0
-                else:
-                    nt1, int2, nt3 = computeHSR1(
-                        s, y, rho, H0, omega, make_psd=True, explicit=False
-                    )
-
-                    # When using SR1 int2 is potentially singular, so we need a modified Woodbury
-                    # that accounts for that. This is given by eq. 23 in Henderson & Searle (1981):
-                    invt2 = np.identity(int2.shape[1]) + int2 @ nt3 @ V0 @ nt1
-
-                    U, sv_invt2, VT = scp.linalg.svd(invt2, lapack_driver="gesvd")
-
-                    # Nowe we can again compute all parts for the modified Woodbury identy to
-                    # obtain V
-                    t2 = VT.T @ np.diag(1 / sv_invt2) @ U.T
-
-                    t1 = V0 @ nt1
-                    t3 = int2 @ nt3 @ V0
-
-                # We now have: V = V0 - V0@nt1@t2@nt3@V0, but don't have to form that explcitly!
-                # V3 = V0 - V0@nt1@t2@nt3@V0
-                # LVPT, P, code = cpp_cholP(scp.sparse.csc_array(V3))
-                # LVT = apply_eigen_perm(P,LVPT)
-                # LV = LVT.T
-            t4 = None
-            t5 = None
-            t6 = None
-            t7 = None
-            t8 = None
-            t9 = None
-        else:
-            # Structured qEFS update. Bit more work necessary.
-            acols = InvCholXXS.acols
-            nHfd = InvCholXXS.nHfd
-            IonHBB = InvCholXXS.IonHBB
-            dampen_HBb = (
-                InvCholXXS.sqEFS_options["dampen_HBb"]
-                if "dampen_HBb" in InvCholXXS.sqEFS_options
-                else 1
-            )
-            dampen_HBB = (
-                InvCholXXS.sqEFS_options["dampen_HBB"]
-                if "dampen_HBB" in InvCholXXS.sqEFS_options
-                else 1
-            )
-            pre_cond = (
-                InvCholXXS.sqEFS_options["pre_cond"]
-                if "pre_cond" in InvCholXXS.sqEFS_options
-                else True
-            )
-
-            nH1, nH2t1, nH2t2, nH2t3, nH3t1, nH3t3, nH4t1, nH4t2, nH4t3 = computeSH(
-                y,
-                s,
-                nHfd,
-                IonHBB,
-                fcols,
-                acols,
-                sample_hessian,
-                dampen_HBb <= 0,
-                dampen_HBB,
-                explicit=False,
-                form=form,
-            )
-
-            (
-                V0,
-                t1,
-                t2,
-                t3,
-                t4,
-                t5,
-                t6,
-                t7,
-                t8,
-                t9,
-            ) = computeSVPS(
-                nH1,
-                nH2t1,
-                nH2t2,
-                nH2t3,
-                nH3t1,
-                nH3t3,
-                nH4t1,
-                nH4t2,
-                nH4t3,
-                S_emb,
-                dampen_HBb <= 0,
-                explicit=False,
-                pre_cond=pre_cond,
-                n_c=n_c,
-            )
+        V0, t1, t2, t3, t4, t5, t6, t7, t8, t9 = getImplicitV(
+            InvCholXXS, colsX, S_emb, n_c=n_c
+        )
 
     for lti, lTerm in enumerate(penalties):
         if InvCholXXS is not None:
