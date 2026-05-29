@@ -7216,7 +7216,11 @@ def sample_ys_qefs(
 
 
 def makepdd_fd2llk(
-    nHfd: scp.sparse.csc_array, fcols: np.ndarray, acols: np.ndarray, dampen_HBb: float
+    nHfd: scp.sparse.csc_array,
+    fcols: np.ndarray,
+    acols: np.ndarray,
+    dampen_HBb: float,
+    make_PD: bool,
 ) -> tuple[scp.sparse.csc_array, np.ndarray, np.ndarray, np.ndarray]:
     """Transforms ``nHfd``, which is symmetric sparse matrix with ``fcols`` rows and columns set
     to finite difference approximation of columns of negative Hessian of llk, so that column
@@ -7238,6 +7242,9 @@ def makepdd_fd2llk(
     :param dampen_HBb: Float that is used to scale the top right and lower left rectangular blocks
         of ``nHfd`` (should be between [0,1]).
     :type dampen_HBb: float
+    :param make_PD: Whether to enforce positive-definiteness or only semi-definiteness of top-left
+        block.
+    :type make_PD: bool
     :return: The updated finite difference approximation matrix, the updated ordered top left block,
         the inverse of the updated ordered top left block, and the scaled ordered top right
         (lower left is transpose) block
@@ -7273,14 +7280,25 @@ def makepdd_fd2llk(
     # Need an ev decomp of onHBB to check for pd and subsequently invert
     eigonHBB, U = scp.linalg.eigh(onHBB.toarray())
 
-    # Enforce PD
-    eps = np.power(np.finfo(float).eps, 0.5)
-    thresh = eps * np.max(np.abs(eigonHBB))
-    eigonHBB[eigonHBB <= thresh] = thresh
+    if make_PD:
+        # Enforce PD
+        eps = np.power(np.finfo(float).eps, 0.5)
+        thresh = eps * np.max(np.abs(eigonHBB))
+        eigonHBB[eigonHBB <= thresh] = thresh
+        ire = 1 / eigonHBB
+    else:
+        # Enforce PSD only
+        ire = np.zeros_like(eigonHBB)
+        eigonHBB[eigonHBB <= 0] = 0
+        ire[eigonHBB > 0] = 1 / eigonHBB[eigonHBB > 0]
 
     # Re-compute onHBB as PD and invert
     onHBB = U @ np.diag(eigonHBB) @ U.T
-    IonHBB = U @ np.diag(1 / eigonHBB) @ U.T
+    IonHBB = U @ np.diag(ire) @ U.T
+
+    if make_PD is False:
+        # Project HBb onto range of onHBB
+        onHBb = onHBB @ IonHBB @ onHBb
 
     # Replace blocks in noHfd with PD and dampened versions
     with warnings.catch_warnings():  # Sparsity efficiency warning
@@ -7326,15 +7344,19 @@ def init_qEFS_storage(
     :param fcols: For structured qEFS update this will be an array holding indices of columns of
         negative Hessian to be approximated via finite differencing. Otherwise this will be None
     :type fcols: np.ndarray
-    :param sqEFS_options: Optional key-word arguments determining behavior of the structured qEFS
-        method. Currently only ``"dampen_HBB"``, ``"dampen_HBb"`` and ``"pre_cond"`` are supported.
-        ``"dampen_HBB"`` takes float values > 0, with values < 1 leading to more wiggly estimates of
-        smooths approximated via quasi Newton approximation. Values > 1 are possible but not really
-        a good idea. ``"dampen_HBb"`` takes float values >= 0 and <= 1 and is used to scale the
-        off-diagonal blocks of the approximation of the negative Hessian, holding mixed derivatives
-        of terms approximated via finite differencing with respect to those approximated via quasi
-        Newton. ``"pre_cond"`` is a bool, indicating whether a diagonal pre-conditioner should be
-        applied to the negative Hessian before inverting it.
+    :param sqEFS_options:  Optional key-word arguments determining behavior of the structured
+        qEFS method (``structured_qefs is True``). Currently only ``"dampen_HBB"``,
+        ``"dampen_HBb"``, ``"pre_cond"``, and ``"PD_HBB"`` are supported. ``"dampen_HBB"`` takes
+        float values > 0, with values < 1 leading to more wiggly estimates of smooths
+        approximated via quasi Newton update vectors. Values > 1 are possible but usually a good
+        idea. ``"dampen_HBb"`` takes float values >= 0 and <= 1 and is used to scale
+        the off-diagonal blocks of the approximation of the negative Hessian, holding mixed
+        derivatives of terms approximated via finite differencing with respect to those
+        approximated via quasi Newton. ``"pre_cond"`` is a bool, indicating
+        whether a diagonal pre-conditioner should be applied to the negative Hessian before
+        inverting it. ``"PD_HBB"`` is another bool, indicating whether the
+        top-left block of the Hessian approximation (holding the finidite difference
+        approximated/exact part) should be enforced to be PD rather than PSD.
     :type sqEFS_options: dict
     :return: ``scp.optimize.LbfgsInvHessProduct`` to store Hessian approximations
     :rtype: scp.optimize.LbfgsInvHessProduct
@@ -7541,6 +7563,11 @@ def update_coef_gen_smooth(
             if "dampen_HBb" in opt_raw.sqEFS_options
             else 1
         )
+        PD_HBB = (
+            opt_raw.sqEFS_options["PD_HBB"]
+            if "PD_HBB" in opt_raw.sqEFS_options
+            else True
+        )
 
         H = None
         L = None
@@ -7651,7 +7678,7 @@ def update_coef_gen_smooth(
 
                 # Make PD and dampen
                 nHfdk, _, IonHBBk, onHBb = makepdd_fd2llk(
-                    nHfdk, fcols, acols, dampen_HBb
+                    nHfdk, fcols, acols, dampen_HBb, PD_HBB
                 )
 
                 # And correct for fd hessian approximation
@@ -7673,7 +7700,9 @@ def update_coef_gen_smooth(
                 )
 
                 # Make PD again
-                nHfd, _, IonHBB, _ = makepdd_fd2llk(nHfd, fcols, acols, dampen_HBb)
+                nHfd, _, IonHBB, _ = makepdd_fd2llk(
+                    nHfd, fcols, acols, dampen_HBb, PD_HBB
+                )
 
         # Pad with previous update vectors - if available.
         if sks.shape[0] < maxcor and opt_raw.init and sample_hessian is False:
@@ -7702,7 +7731,7 @@ def update_coef_gen_smooth(
                 )
 
                 nHfd, onHBB, IonHBB, onHBb = makepdd_fd2llk(
-                    nHfd, fcols, acols, dampen_HBb
+                    nHfd, fcols, acols, dampen_HBb, PD_HBB
                 )
 
                 if outer > 0 and len(opt_raw.yk) > 0:
@@ -8734,15 +8763,19 @@ def solve_generalSmooth_sparse(
     :param fcols: For structured qEFS update this will be an array holding indices of columns of
         negative Hessian to be approximated via finite differencing. Otherwise this will be None
     :type fcols: np.ndarray, optional
-    :param sqEFS_options: Optional key-word arguments determining behavior of the structured qEFS
-        method.  Currently only ``"dampen_HBB"``, ``"dampen_HBb"`` and ``"pre_cond"`` are supported.
-        ``"dampen_HBB"`` takes float values > 0, with values < 1 leading to more wiggly estimates of
-        smooths approximated via quasi Newton approximation. Values > 1 are possible but not really
-        a good idea. ``"dampen_HBb"`` takes float values >= 0 and <= 1 and is used to scale the
-        off-diagonal blocks of the approximation of the negative Hessian, holding mixed derivatives
-        of terms approximated via finite differencing with respect to those approximated via quasi
-        Newton. ``"pre_cond"`` is a bool, indicating whether a diagonal pre-conditioner should be
-        applied to the negative Hessian before inverting it. Defaults to ``{}``
+    :param sqEFS_options: Optional key-word arguments determining behavior of the structured
+        qEFS method (``structured_qefs is True``). Currently only ``"dampen_HBB"``,
+        ``"dampen_HBb"``, ``"pre_cond"``, and ``"PD_HBB"`` are supported. ``"dampen_HBB"`` takes
+        float values > 0, with values < 1 leading to more wiggly estimates of smooths
+        approximated via quasi Newton update vectors. Values > 1 are possible but usually a good
+        idea. ``"dampen_HBb"`` takes float values >= 0 and <= 1 and is used to scale
+        the off-diagonal blocks of the approximation of the negative Hessian, holding mixed
+        derivatives of terms approximated via finite differencing with respect to those
+        approximated via quasi Newton. ``"pre_cond"`` is a bool, indicating
+        whether a diagonal pre-conditioner should be applied to the negative Hessian before
+        inverting it. ``"PD_HBB"`` is another bool, indicating whether the
+        top-left block of the Hessian approximation (holding the finidite difference
+        approximated/exact part) should be enforced to be PD rather than PSD. Defaults to ``{}``
     :type sqEFS_options: dict, optional
     :return: coef estimate, the negative hessian of the log-likelihood, inverse of cholesky of
         negative hessian of the penalized log-likelihood, if ``method=='qEFS'`` an instance of
@@ -9119,7 +9152,7 @@ def solve_generalSmooth_sparse(
                 )
 
                 nHfd, onHBB, IonHBB, onHBb = makepdd_fd2llk(
-                    nHfd, LV.fcols, LV.acols, dampen_HBb
+                    nHfd, LV.fcols, LV.acols, dampen_HBb, True
                 )
 
                 if len(LV.yk) > 0:
