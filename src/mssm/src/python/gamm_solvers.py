@@ -9124,13 +9124,6 @@ def solve_generalSmooth_sparse(
     # Total penalty
     penalty = coef.T @ S_emb @ coef
 
-    # Calculate actual term-specific edf
-    if len(smooth_pen) > 0:
-        term_edfs = calculate_term_edf(smooth_pen, term_edfs)
-    else:
-        term_edfs = None
-        total_edf = n_coef
-
     LV_linop = None
     if method == "qEFS":
 
@@ -9218,6 +9211,19 @@ def solve_generalSmooth_sparse(
                 LV.rho = rhos
                 sample_hessian = True
 
+                # Recompute edf
+                total_edf, term_edfs, _ = calculate_edf(
+                    None,
+                    None,
+                    LV,
+                    smooth_pen,
+                    None,
+                    n_coef,
+                    n_c,
+                    None,
+                    S_emb,
+                )
+
         LV_linop = LV
 
         # Optionally form last V + Chol explicitly during last iteration
@@ -9290,6 +9296,13 @@ def solve_generalSmooth_sparse(
         else:
             LV = None
             H = None  # Do not approximate H.
+
+    # Calculate actual term-specific edf
+    if len(smooth_pen) > 0:
+        term_edfs = calculate_term_edf(smooth_pen, term_edfs)
+    else:
+        term_edfs = None
+        total_edf = n_coef
 
     # H, L, and LV do not have sorted indices after undoing repara transform - need to take care of
     # that here.
