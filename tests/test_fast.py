@@ -1193,7 +1193,7 @@ class Test_gsmm_qefs:
     def test_GAMedf(self):
         np.testing.assert_allclose(
             self.model.edf,
-            22.58944095293522,
+            21.09857934525646,
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.1),
         )

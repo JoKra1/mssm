@@ -7059,6 +7059,8 @@ def sample_ys_qefs(
     if method == 0:
 
         init_r = sample_kwargs["init_r"] if "init_r" in sample_kwargs else 10
+        adapt_r = sample_kwargs["adapt_r"] if "adapt_r" in sample_kwargs else True
+        add_pen = sample_kwargs["add_pen"] if "add_pen" in sample_kwargs else True
         T = sample_kwargs["T"] if "T" in sample_kwargs else 1
         Madapt = sample_kwargs["Madapt"] if "Madapt" in sample_kwargs else 100
         delta = sample_kwargs["delta"] if "delta" in sample_kwargs else 0.8
@@ -7070,7 +7072,7 @@ def sample_ys_qefs(
         c_pen_llk = c_llk - 0.5 * coef.T @ S_emb @ coef
 
         # Build diagonal approximation to penalized hessian used for sampling
-        Lp, Pr, code = cpp_cholP(H0 + S_emb)  # noqa: F405
+        Lp, Pr, code = cpp_cholP((H0 + S_emb) if add_pen else H0)  # noqa: F405
 
         if code == 0:
             LVp = compute_Linv(Lp, 10)  # noqa: F405
@@ -7078,51 +7080,52 @@ def sample_ys_qefs(
         else:
             LV = scp.sparse.identity(S_emb.shape[1], format="csc")
 
-        # Find good value for r via dual averaging of Hoffman and Gelman (2014)
+        # Optionally find good value for r via dual averaging of Hoffman and Gelman (2014)
         r = init_r
-        rbar = 1
-        mu = np.log(10 * r)
-        t0 = 10
-        gamma = 0.05
-        Hbar = 0.0
-        kappa = 0.75
+        if adapt_r:
+            rbar = 1
+            mu = np.log(10 * r)
+            t0 = 10
+            gamma = 0.05
+            Hbar = 0.0
+            kappa = 0.75
 
-        for t in range(1, Madapt + 1):
+            for t in range(1, Madapt + 1):
 
-            # Sample random pertubation
-            # step0 = scp.stats.norm.rvs(size=len(coef), random_state=np_gen).reshape(
-            #    -1, 1
-            # )
+                # Sample random pertubation
+                # step0 = scp.stats.norm.rvs(size=len(coef), random_state=np_gen).reshape(
+                #    -1, 1
+                # )
 
-            step0 = LV.T @ scp.stats.norm.rvs(
-                size=len(coef), random_state=np_gen
-            ).reshape(-1, 1)
+                step0 = LV.T @ scp.stats.norm.rvs(
+                    size=len(coef), random_state=np_gen
+                ).reshape(-1, 1)
 
-            # Compute step length
-            sk = r * step0
+                # Compute step length
+                sk = r * step0
 
-            # Make sure to subtract step from coef to get n_coef, so that n_coef + sk = coef.
-            n_coef = coef - sk
+                # Make sure to subtract step from coef to get n_coef, so that n_coef + sk = coef.
+                n_coef = coef - sk
 
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                n_llk = family.llk(n_coef, coef_split_idx, ys, Xs)
-                n_pen_llk = n_llk - 0.5 * n_coef.T @ S_emb @ n_coef
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    n_llk = family.llk(n_coef, coef_split_idx, ys, Xs)
+                    n_pen_llk = n_llk - 0.5 * n_coef.T @ S_emb @ n_coef
 
-                # Compute Metropolis acceptance
-                acc = min(1, np.exp((n_pen_llk - c_pen_llk) / T))
+                    # Compute Metropolis acceptance
+                    acc = min(1, np.exp((n_pen_llk - c_pen_llk) / T))
 
-            Hbar += delta - acc
+                Hbar += delta - acc
 
-            # Now update r and rbar
-            etat = np.power(t, -kappa)
-            logr = mu - (np.sqrt(t) / gamma) * (1 / (t + t0)) * Hbar
-            r = np.exp(logr)
+                # Now update r and rbar
+                etat = np.power(t, -kappa)
+                logr = mu - (np.sqrt(t) / gamma) * (1 / (t + t0)) * Hbar
+                r = np.exp(logr)
 
-            rbar = np.exp(etat * logr + (1 - etat) * np.log(rbar))
+                rbar = np.exp(etat * logr + (1 - etat) * np.log(rbar))
 
-        # Set final radius
-        r = rbar
+            # Set final radius
+            r = rbar
 
         for _ in range(maxcor):
 
@@ -7220,6 +7223,7 @@ def makepdd_fd2llk(
     fcols: np.ndarray,
     acols: np.ndarray,
     dampen_HBb: float,
+    make_PSD: bool,
     make_PD: bool,
 ) -> tuple[scp.sparse.csc_array, np.ndarray, np.ndarray, np.ndarray]:
     """Transforms ``nHfd``, which is symmetric sparse matrix with ``fcols`` rows and columns set
@@ -7242,8 +7246,10 @@ def makepdd_fd2llk(
     :param dampen_HBb: Float that is used to scale the top right and lower left rectangular blocks
         of ``nHfd`` (should be between [0,1]).
     :type dampen_HBb: float
-    :param make_PD: Whether to enforce positive-definiteness or only semi-definiteness of top-left
-        block.
+     :param make_PSD: Whether to enforce positive-semi-definiteness of top-left block.
+    :type make_PSD: bool
+    :param make_PD: Whether to enforce positive-definiteness of top-left block
+        (only used when ``makePSD is True``).
     :type make_PD: bool
     :return: The updated finite difference approximation matrix, the updated ordered top left block,
         the inverse of the updated ordered top left block, and the scaled ordered top right
@@ -7280,16 +7286,17 @@ def makepdd_fd2llk(
     # Need an ev decomp of onHBB to check for pd and subsequently invert
     eigonHBB, U = scp.linalg.eigh(onHBB.toarray())
 
-    if make_PD:
+    if make_PD and make_PSD:
         # Enforce PD
         eps = np.power(np.finfo(float).eps, 0.5)
         thresh = eps * np.max(np.abs(eigonHBB))
         eigonHBB[eigonHBB <= thresh] = thresh
         ire = 1 / eigonHBB
     else:
-        # Enforce PSD only
+        # Enforce maximum of PSD only - can also keep indefinite
         ire = np.zeros_like(eigonHBB)
-        eigonHBB[eigonHBB <= 0] = 0
+        if make_PSD:
+            eigonHBB[eigonHBB <= 0] = 0
         ire[eigonHBB > 0] = 1 / eigonHBB[eigonHBB > 0]
 
     # Re-compute onHBB as PD and invert
@@ -7415,6 +7422,282 @@ def init_qEFS_storage(
             shape=(nT, nA),
         )
     return opt_storage
+
+
+def getExplicitnH(
+    linopH: scp.sparse.linalg.LinearOperator,
+    n_coef: int,
+    make_psd: bool = True,
+    make_pd: bool = True,
+) -> scp.sparse.csc_array:
+    """Get explicit limited-memory quasi-Newton approximation to the negative hessian defined
+    implicitly via ``linopH``.
+
+    :param linopH: Storage holding current quasi-newton approximation of the negative Hessian
+        of the llk. Storage needs to be of the form returned by :func:`init_qEFS_storage`.
+    :type linopH: scp.sparse.linalg.LinearOperator
+    :param n_coef: Number of coefficients
+    :type n_coef: int
+    :param make_psd: Whether to enforce the Hessian approximation to be PSD, defaults to True
+    :type make_psd: bool, optional
+    :param make_pd: Whether to enforce the Hessian approximation to be PD (only enforced when
+        ``make_psd is True``), defaults to True
+    :type make_pd: bool, optional
+    :return: Explicit quasi-Newton approximation as a sparse csc matrix.
+    :rtype: scp.sparse.csc_array
+    """
+
+    sample_hessian = linopH.sample_hessian
+    fcols = linopH.fcols
+
+    if fcols is None:
+        if len(linopH.yk) > 0:
+            omega = compute_omega(
+                linopH.yk, linopH.sk, method="mean" if sample_hessian else "NoWr"
+            )
+        else:
+            omega = 1
+
+        # Get an approximation of the Hessian of the likelihood
+        if linopH.form == "SR1":
+            nH = computeHSR1(
+                linopH.sk,
+                linopH.yk,
+                linopH.rho,
+                scp.sparse.identity(n_coef, format="csc") * omega,
+                omega=omega,
+                make_psd=make_psd,
+                make_pd=make_pd,
+            )
+        else:
+            nH = computeH(
+                linopH.sk,
+                linopH.yk,
+                linopH.rho,
+                scp.sparse.identity(n_coef, format="csc") * omega,
+            )
+    else:
+        dampen_HBb = (
+            linopH.sqEFS_options["dampen_HBb"]
+            if "dampen_HBb" in linopH.sqEFS_options
+            else 1
+        )
+
+        dampen_HBB = (
+            linopH.sqEFS_options["dampen_HBB"]
+            if "dampen_HBB" in linopH.sqEFS_options
+            else 1
+        )
+
+        nH = computeSH(
+            linopH.yk,
+            linopH.sk,
+            linopH.nHfd,
+            linopH.IonHBB,
+            linopH.fcols,
+            linopH.acols,
+            sample_hessian,
+            dampen_HBb <= 0,
+            dampen_HBB,
+            make_psd=make_psd,
+            make_pd=make_pd,
+            form=linopH.form,
+        )
+
+    return scp.sparse.csc_array(nH)
+
+
+def sampleHcoef(
+    linopH: scp.sparse.linalg.LinearOperator,
+    family: GSMMFamily,
+    ys: list[np.ndarray | None],
+    Xs: list[scp.sparse.csc_array | None],
+    coef: np.ndarray,
+    coef_split_idx: list[int],
+    smooth_pen: list[LambdaTerm],
+    S_emb: scp.sparse.csc_array | None = None,
+    H0: scp.sparse.csc_array | None = None,
+    make_psd: bool = True,
+    make_pd: bool = True,
+    force_min_updates: int = 0,
+    n_c: int = 10,
+    seed: int | None = 0,
+) -> tuple[scp.sparse.linalg.LinearOperator, int, float | None, list[float] | None]:
+    """Wrapper around the :func:`sample_ys_qefs` function to update the limited-memory quasi-Newton
+    approximation to the negative hessian at estimate ``coef``, based on Berahas et al. (2021).
+    Also re-computes the necessary 2nd derivative blocks for the structured update as well as
+    updates for the overall and term-wise edf.
+
+    **Note** the returned ``linopH`` is only updated if the sampling procedure produces more than
+    0 ``updates`` (the second argument returned).
+
+    :param linopH: Storage holding current quasi-newton approximation of the negative Hessian
+        of the llk. Storage needs to be of the form returned by :func:`init_qEFS_storage`.
+    :type linopH: scp.sparse.linalg.LinearOperator
+    :param family: Model family
+    :type family: GSMMFamily
+    :param ys: List of observation vectors
+    :type ys: list[np.ndarray | None]
+    :param Xs: List of model matrices
+    :type Xs: list[scp.sparse.csc_array | None]
+    :param coef: Coefficient estimate
+    :type coef: np.ndarray
+    :param coef_split_idx: The indices at which to split the overall coefficient vector into
+        separate lists - one per parameter of llk.
+    :type coef_split_idx: list[int]
+    :param smooth_pen: List of penalties
+    :type smooth_pen: list[LambdaTerm]
+    :param S_emb: Optionally the total penalty matrix - if None is provided, then it is re-computed
+        from ``smooth_pen``.
+    :type S_emb: scp.sparse.csc_array | None, optional
+    :param H0: Optional covariance matrix from which to sample the update vectors, defaults to None
+        in which case an appropriate choice is determined automatically
+    :type H0: scp.sparse.csc_array | None, optional
+    :param make_psd: Whether to enforce the top left block of the Hessian approximation (holding
+        the exact/fd approximation part) to be PSD, defaults to True
+    :type make_psd: bool, optional
+    :param make_pd: Whether to enforce the Hessian approximation (holding
+        the exact/fd approximation part) to be PD (only enforced when ``make_psd is True``),
+        defaults to True
+    :type make_pd: bool, optional
+    :param force_min_updates: Number of minimum updates to enforce. Note, that the function gives
+        up after trying to reach this limit 30 times and then just returns results for the final
+        number of updates sampled (which could be zero). Defaults to 0
+    :type force_min_updates: int, optional
+    :param n_c: Number of cores to use, defaults to 10
+    :type n_c: int, optional
+    :param seed: Number of seed to use for the random sampling, defaults to 0
+    :type seed: int | None, optional
+    :return: (Updated) ``linopH``, number of update vectors successfully sampled, new overall
+        edf, and term-wise edf. Note that the last two can be ``None`` when ``updates==0``.
+    :rtype: tuple[scp.sparse.linalg.LinearOperator, int, float, list[float]]
+    """
+
+    # Determine whether linopH was sampled
+    sample_hessian = linopH.sample_hessian
+    sample_hessian_method = linopH.sample_hessian_method
+    sample_hessian_options = linopH.sample_hessian_options
+    fcols = linopH.fcols
+    n_coef = coef.shape[0]
+
+    term_edfs = None
+    total_edf = None
+
+    # Build total penalty matrix
+    if S_emb is None:
+        if len(smooth_pen) > 0:
+            S_emb, _, _, _ = compute_S_emb_pinv_det(n_coef, smooth_pen, "svd")
+
+        else:
+            # Un-penalized case
+            S_emb = scp.sparse.csc_array(([], ([], [])), shape=(n_coef, n_coef))
+            total_edf = n_coef
+
+    if fcols is not None:
+        nHfd = -1 * family.jhessian(fcols, coef, coef_split_idx, ys, Xs, n_c=n_c)
+
+        dampen_HBb = (
+            linopH.sqEFS_options["dampen_HBb"]
+            if "dampen_HBb" in linopH.sqEFS_options
+            else 1
+        )
+
+        nHfd, onHBB, IonHBB, onHBb = makepdd_fd2llk(
+            nHfd,
+            fcols,
+            linopH.acols,
+            dampen_HBb,
+            make_PSD=make_psd,
+            make_PD=make_pd,
+        )
+
+        if H0 is None:
+            if len(linopH.yk) > 0:
+                omega0 = compute_omega(
+                    linopH.yk[:, linopH.acols],
+                    linopH.sk[:, linopH.acols],
+                    method="mean" if sample_hessian else "NoWr",
+                )
+            else:
+                omega0 = 1
+
+            H0 = (
+                linopH.P1
+                @ scp.sparse.block_array(
+                    [
+                        [scp.sparse.csc_array(onHBB), None],
+                        [
+                            None,
+                            omega0
+                            * scp.sparse.identity(len(linopH.acols), format="csc"),
+                        ],
+                    ],
+                    format="csc",
+                )
+                @ linopH.P1.T
+            )
+
+    elif H0 is None:
+        H0 = compute_omega(
+            linopH.yk, linopH.sk, method="mean" if sample_hessian else "NoWr"
+        ) * scp.sparse.identity(S_emb.shape[1], format="csc")
+
+    updates = -1
+    attempts = 0
+    while (updates < force_min_updates) and (attempts < 30):
+        yks, sks, rhos, _, updates = sample_ys_qefs(
+            family,
+            ys,
+            Xs,
+            coef,
+            coef_split_idx,
+            S_emb,
+            linopH.form,
+            linopH.bfgs_options["maxcor"],
+            sample_hessian_method,
+            seed,
+            H0,
+            sample_hessian_options,
+        )
+        seed += 1
+        attempts += 1
+
+    if updates > 0:
+        if fcols is not None:
+            # Again correct for structured information available
+            # beyond S_emb
+            yks -= (nHfd @ sks.T).T
+            yks -= (linopH.P2 @ onHBb.T @ (IonHBB @ (onHBb @ (linopH.P2.T @ sks.T)))).T
+
+            # and re-compute rhos
+            rhos = 1 / np.einsum("ij,ij->i", sks, yks)
+
+            linopH.nHfd = nHfd
+            linopH.IonHBB = IonHBB
+
+        linopH.sk = sks
+        linopH.yk = yks
+        linopH.rho = rhos
+        linopH.sample_hessian = True  # Now have definitely sampled
+
+        # Recompute edf
+        if len(smooth_pen) > 0:
+
+            total_edf, term_edfs, _ = calculate_edf(
+                None,
+                None,
+                linopH,
+                smooth_pen,
+                None,
+                n_coef,
+                n_c,
+                None,
+                S_emb,
+            )
+
+            term_edfs = calculate_term_edf(smooth_pen, term_edfs)
+
+    return linopH, updates, total_edf, term_edfs
 
 
 def update_coef_gen_smooth(
@@ -7678,7 +7961,7 @@ def update_coef_gen_smooth(
 
                 # Make PD and dampen
                 nHfdk, _, IonHBBk, onHBb = makepdd_fd2llk(
-                    nHfdk, fcols, acols, dampen_HBb, PD_HBB
+                    nHfdk, fcols, acols, dampen_HBb, True, PD_HBB
                 )
 
                 # And correct for fd hessian approximation
@@ -7701,7 +7984,7 @@ def update_coef_gen_smooth(
 
                 # Make PD again
                 nHfd, _, IonHBB, _ = makepdd_fd2llk(
-                    nHfd, fcols, acols, dampen_HBb, PD_HBB
+                    nHfd, fcols, acols, dampen_HBb, True, PD_HBB
                 )
 
         # Pad with previous update vectors - if available.
@@ -7731,7 +8014,7 @@ def update_coef_gen_smooth(
                 )
 
                 nHfd, onHBB, IonHBB, onHBb = makepdd_fd2llk(
-                    nHfd, fcols, acols, dampen_HBb, PD_HBB
+                    nHfd, fcols, acols, dampen_HBb, True, PD_HBB
                 )
 
                 if outer > 0 and len(opt_raw.yk) > 0:
@@ -9124,105 +9407,36 @@ def solve_generalSmooth_sparse(
     # Total penalty
     penalty = coef.T @ S_emb @ coef
 
+    # Calculate actual term-specific edf
+    if len(smooth_pen) > 0:
+        term_edfs = calculate_term_edf(smooth_pen, term_edfs)
+    else:
+        term_edfs = None
+        total_edf = n_coef
+
     LV_linop = None
     if method == "qEFS":
-
-        sample_hessian = LV.sample_hessian
 
         # For CIs it's best if final hessian approximation is taken at final
         # coefficient estimate. So sample below for checks 1 & 3
         if control_lambda in [1, 3] and outer > 0:
-
-            if fcols is not None:
-                nHfd = -1 * family.jhessian(
-                    fcols, coef, coef_split_idx, ys, Xs, n_c=n_c
-                )
-
-                dampen_HBb = (
-                    LV.sqEFS_options["dampen_HBb"]
-                    if "dampen_HBb" in LV.sqEFS_options
-                    else 1
-                )
-
-                nHfd, onHBB, IonHBB, onHBb = makepdd_fd2llk(
-                    nHfd, LV.fcols, LV.acols, dampen_HBb, True
-                )
-
-                if len(LV.yk) > 0:
-                    omega0 = compute_omega(
-                        LV.yk[:, LV.acols],
-                        LV.sk[:, LV.acols],
-                        method="mean" if sample_hessian else "NoWr",
-                    )
-                else:
-                    omega0 = 1
-
-                H0 = (
-                    LV.P1
-                    @ scp.sparse.block_array(
-                        [
-                            [scp.sparse.csc_array(onHBB), None],
-                            [
-                                None,
-                                omega0
-                                * scp.sparse.identity(len(LV.acols), format="csc"),
-                            ],
-                        ],
-                        format="csc",
-                    )
-                    @ LV.P1.T
-                )
-
-            else:
-                H0 = compute_omega(
-                    LV.yk, LV.sk, method="mean" if sample_hessian else "NoWr"
-                ) * scp.sparse.identity(S_emb.shape[1], format="csc")
-
-            yks, sks, rhos, _, updates = sample_ys_qefs(
+            LV, updates, total_edf2, term_edfs2 = sampleHcoef(
+                LV,
                 family,
                 ys,
                 Xs,
                 coef,
                 coef_split_idx,
-                S_emb,
-                qEFSH,
-                LV.bfgs_options["maxcor"],
-                sample_hessian_method,
-                outer,
-                H0,
-                sample_hessian_options,
+                smooth_pen,
+                S_emb=S_emb,
+                n_c=n_c,
+                seed=outer,
             )
 
+            # Collect new edf
             if updates > 0:
-                if fcols is not None:
-                    # Again correct for structured information available
-                    # beyond S_emb
-                    yks -= (nHfd @ sks.T).T
-                    yks -= (LV.P2 @ onHBb.T @ (IonHBB @ (onHBb @ (LV.P2.T @ sks.T)))).T
-
-                    # and re-compute rhos
-                    rhos = 1 / np.einsum("ij,ij->i", sks, yks)
-
-                    LV.nHfd = nHfd
-                    LV.IonHBB = IonHBB
-
-                LV.sk = sks
-                LV.yk = yks
-                LV.rho = rhos
-                sample_hessian = True
-
-                # Recompute edf
-                total_edf, term_edfs, _ = calculate_edf(
-                    None,
-                    None,
-                    LV,
-                    smooth_pen,
-                    None,
-                    n_coef,
-                    n_c,
-                    None,
-                    S_emb,
-                )
+                total_edf = total_edf2
+                term_edfs = term_edfs2
 
         LV_linop = LV
 
@@ -9230,60 +9444,7 @@ def solve_generalSmooth_sparse(
         # when working with qEFS update
         if form_VH:
 
-            if fcols is None:
-                if len(LV.yk) > 0:
-                    omega = compute_omega(
-                        LV.yk, LV.sk, method="mean" if sample_hessian else "NoWr"
-                    )
-                else:
-                    omega = 1
-
-                # Get an approximation of the Hessian of the likelihood
-                if LV.form == "SR1":
-                    nH = computeHSR1(
-                        LV.sk,
-                        LV.yk,
-                        LV.rho,
-                        scp.sparse.identity(len(coef), format="csc") * omega,
-                        omega=omega,
-                        make_psd=True,
-                        make_pd=True,
-                    )
-                else:
-                    nH = computeH(
-                        LV.sk,
-                        LV.yk,
-                        LV.rho,
-                        scp.sparse.identity(len(coef), format="csc") * omega,
-                    )
-            else:
-                dampen_HBb = (
-                    LV.sqEFS_options["dampen_HBb"]
-                    if "dampen_HBb" in LV.sqEFS_options
-                    else 1
-                )
-
-                dampen_HBB = (
-                    LV.sqEFS_options["dampen_HBB"]
-                    if "dampen_HBB" in LV.sqEFS_options
-                    else 1
-                )
-
-                nH = computeSH(
-                    LV.yk,
-                    LV.sk,
-                    LV.nHfd,
-                    LV.IonHBB,
-                    LV.fcols,
-                    LV.acols,
-                    sample_hessian,
-                    dampen_HBb <= 0,
-                    dampen_HBB,
-                    make_pd=True,
-                    form=LV.form,
-                )
-
-            H = -1 * scp.sparse.csc_array(nH)
+            H = -1 * getExplicitnH(LV, len(coef), True, True)
 
             # Get Cholesky factor of inverse of penalized hessian (needed for CIs)
             pH = scp.sparse.csc_array((-1 * H) + S_emb)
@@ -9296,13 +9457,6 @@ def solve_generalSmooth_sparse(
         else:
             LV = None
             H = None  # Do not approximate H.
-
-    # Calculate actual term-specific edf
-    if len(smooth_pen) > 0:
-        term_edfs = calculate_term_edf(smooth_pen, term_edfs)
-    else:
-        term_edfs = None
-        total_edf = n_coef
 
     # H, L, and LV do not have sorted indices after undoing repara transform - need to take care of
     # that here.

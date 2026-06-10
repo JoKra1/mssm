@@ -558,6 +558,7 @@ def computeSH(
     sample_hessian: bool = True,
     fully_dampened_HBb: bool = False,
     dampen_HBB: float = 1,
+    make_psd: bool = True,
     make_pd: bool = False,
     explicit: bool = True,
     form: str = "SR1",
@@ -723,6 +724,8 @@ def computeSH(
     :param dampen_HBB: Scaling factor by which to scale the initialidentity matrix used to
         approximate the quasi Newton block, defaults to 1
     :type dampen_HBB: float, optional
+    :param make_psd: Whether to enforce positive semi-definiteness, defaults to True.
+    :type make_psd: bool, optional
     :param make_pd: Whether to enforce numeric positive definiteness, not just PSD, defaults to
         False.
     :type make_pd: bool, optional
@@ -794,7 +797,14 @@ def computeSH(
     # Implicit representation of Schur complement SonHbbqa
     if form == "SR1":
         qat1, qat2, qat3 = computeHSR1(
-            sks, yks, rhos, H0, omega, make_psd=True, explicit=False, make_pd=make_pd
+            sks,
+            yks,
+            rhos,
+            H0,
+            omega,
+            make_psd=make_psd,
+            explicit=False,
+            make_pd=make_pd,
         )
     else:
         qat1, qat2, qat3 = computeH(sks, yks, rhos, H0, explicit=False)
