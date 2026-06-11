@@ -7065,6 +7065,13 @@ def sample_ys_qefs(
         Madapt = sample_kwargs["Madapt"] if "Madapt" in sample_kwargs else 100
         delta = sample_kwargs["delta"] if "delta" in sample_kwargs else 0.8
 
+        # Optionally overwrite from externals
+        if "n_samples" in sample_kwargs:
+            maxcor = sample_kwargs["n_samples"]
+
+        if "H0" in sample_kwargs:
+            H0 = sample_kwargs["H0"]
+
         # Get gradient and pen. llk at maximizer. This will always be the end-point of
         # the random steps!
         grad = family.gradient(coef, coef_split_idx, ys, Xs)
@@ -7297,13 +7304,13 @@ def makepdd_fd2llk(
         ire = np.zeros_like(eigonHBB)
         if make_PSD:
             eigonHBB[eigonHBB <= 0] = 0
-        ire[eigonHBB > 0] = 1 / eigonHBB[eigonHBB > 0]
+        ire[eigonHBB != 0] = 1 / eigonHBB[eigonHBB != 0]
 
     # Re-compute onHBB as PD and invert
     onHBB = U @ np.diag(eigonHBB) @ U.T
     IonHBB = U @ np.diag(ire) @ U.T
 
-    if make_PD is False:
+    if make_PD is False and make_PSD:
         # Project HBb onto range of onHBB
         onHBb = onHBB @ IonHBB @ onHBb
 
@@ -7569,7 +7576,8 @@ def sampleHcoef(
     :param seed: Number of seed to use for the random sampling, defaults to 0
     :type seed: int | None, optional
     :return: (Updated) ``linopH``, number of update vectors successfully sampled, new overall
-        edf, and term-wise edf. Note that the last two can be ``None`` when ``updates==0``.
+        edf, and term-wise edf. Note that the last two can be ``None`` when ``updates==0`` or when
+        ``make_psd is False``.
     :rtype: tuple[scp.sparse.linalg.LinearOperator, int, float, list[float]]
     """
 
@@ -7680,8 +7688,8 @@ def sampleHcoef(
         linopH.rho = rhos
         linopH.sample_hessian = True  # Now have definitely sampled
 
-        # Recompute edf
-        if len(smooth_pen) > 0:
+        # Recompute edf - only makes sense if we enforce at least psd
+        if len(smooth_pen) > 0 and make_psd:
 
             total_edf, term_edfs, _ = calculate_edf(
                 None,
