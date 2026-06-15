@@ -786,9 +786,9 @@ class Binomial(Family):
     If we have multiple independent draws from the binomial per observation (i.e., row in our
     data-frame), then :math:`n` will usually differ between observations/rows in our data-frame
     (i.e., we observe :math:`k_i` counts of success out of :math:`n_i` draws - so that
-    :math:`y_i=k_i/n_i`). In that case, the `Binomial()` family accepts a vector for argument
+    :math:`y_i=k_i/n_i`). In that case, the `Binomial()` family accepts a numpy array for argument
     :math:`\\mathbf{n}` (which is simply set to 1 by default, assuming binary data), containing
-    :math:`n_i` for every observation :math:`y_i`.
+    :math:`n_i` for every observation :math:`y_i`. The array needs to be of shape (-1,1).
 
     In this implementation, the scale parameter is kept fixed/known at 1.
 
@@ -800,13 +800,14 @@ class Binomial(Family):
         set to the canonical logit link.
     :type link: Link
     :param n: Number of independent draws from a Binomial per observation/row of data-frame. For
-        binary data this can simply be set to 1, which is the default.
-    :type n: int or [int], optional
+        binary data this can simply be set to 1, which is the default. Alternatively, this can
+        be a numpy array of shaoe (-1, 1).
+    :type n: int | np.ndarray, optional
     """
 
-    def __init__(self, link: Link = Logit(), n: int | list[int] = 1) -> None:
+    def __init__(self, link: Link = Logit(), n: int | np.ndarray = 1) -> None:
         super().__init__(link, False, 1)
-        self.n: int | list[int] = n  # Number of independent samples from Binomial!
+        self.n: int | np.ndarray = n  # Number of independent samples from Binomial!
         self.__max_llk: float | None = None  # Needed for Deviance calculation.
         self.is_canonical: bool = isinstance(link, Logit)
 

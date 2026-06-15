@@ -22,6 +22,36 @@ from mssm.src.python.mcmc import sample_mssm
 ################################################################## Tests ##################################################################
 
 
+class Test_Binomial_ng1:
+    Binomdat = sim4(500, 2, family=Binomial(), seed=20, binom_offset=-5)
+
+    formula = Formula(lhs("y"), [i(), ri("x4")], data=Binomdat)
+
+    # By default, the Binomial family assumes binary data and uses the logit link.
+    model = GAMM(formula, Binomial())
+    model.fit()
+
+    # Now binomial -> aggregate over subs
+    Binomdat2 = Binomdat.copy()
+    Binomdat2 = Binomdat2.groupby("x4").sum("y").reset_index()
+    Binomdat2["n"] = Binomdat["x4"].value_counts()[Binomdat2["x4"].values].values
+    Binomdat2["y"] = Binomdat2["y"].values / Binomdat2["n"].values
+
+    # Refit:
+    formula2 = Formula(lhs("y"), [i(), ri("x4")], data=Binomdat2)
+
+    # Need to pass n values.
+    model2 = GAMM(formula2, Binomial(n=Binomdat2["n"].values.reshape(-1, 1)))
+    model2.fit()
+
+    np.testing.assert_allclose(
+        np.round(np.abs(model.coef / model2.coef), decimals=5),
+        np.ones_like(model.coef),
+        atol=min(max_atol, 0),
+        rtol=min(max_rtol, 0.1),
+    )
+
+
 class Test_expected_ratio_acceleration:
     # We simulate some data including a random smooth - but then dont include it in the model:
     sim_dat = sim11(5000, 2, c=0, seed=20, family=Gamma(), n_ranef=20, binom_offset=0)
