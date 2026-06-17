@@ -709,7 +709,7 @@ class GSMM:
         qEFSH: str = "SR1",
         max_restarts: int = 0,
         prefit_grad: bool = True,
-        repara: bool = None,
+        repara: bool = True,
         extra_penalties: list[LambdaTerm] | None = None,
         callback: Callable | None = None,
         bfgs_options: dict | None = None,
@@ -850,7 +850,7 @@ class GSMM:
         :param repara: Whether to re-parameterize the model (for every proposed update to the
             regularization parameters) via the steps outlined in Appendix B of Wood (2011) and
             suggested by Wood et al., (2016). This greatly increases the stability of the fitting
-            iteration. Defaults to True if ``method != 'qEFS'`` else False.
+            iteration. Defaults to True
         :type repara: bool,optional
         :param extra_penalties: **Experimental**. An optional list of extra penalties to be placed
             on the coefficients. **Important:** mssm does not (currently) support partially

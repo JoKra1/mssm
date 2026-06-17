@@ -24,7 +24,6 @@ from .file_loading import setup_cache, clear_cache
 from .compact_rep import (
     computeH,
     computeHSR1,
-    computeVSR1,
     compute_omega,
     computeSH,
     computeSVPS,
