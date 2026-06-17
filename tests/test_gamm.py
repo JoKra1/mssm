@@ -22,14 +22,27 @@ from mssm.src.python.mcmc import sample_mssm
 ################################################################## Tests ##################################################################
 
 
-class Test_Binomial_ng1:
+class Test_Binomial_covariate_nan:
     Binomdat = sim4(500, 2, family=Binomial(), seed=20, binom_offset=-5)
 
-    formula = Formula(lhs("y"), [i(), ri("x4")], data=Binomdat)
+    # Test NANs in continuous predictors
+    Binomdat.loc[:10, "x0"] = np.nan
+
+    formula = Formula(lhs("y"), [i(), f(["x0"])], data=Binomdat)
 
     # By default, the Binomial family assumes binary data and uses the logit link.
     model = GAMM(formula, Binomial())
-    model.fit()
+    model.fit(**default_gamm_test_kwargs)
+
+    def test_na_drop(self):
+        assert np.sum(~self.formula.NOT_NA_flat) == 11
+
+    def test_na_min(self):
+        assert ~np.isnan(self.formula.var_mins["x0"])
+
+
+class Test_Binomial_ng1:
+    Binomdat = sim4(500, 2, family=Binomial(), seed=20, binom_offset=-5)
 
     # Now binomial -> aggregate over subs
     Binomdat2 = Binomdat.copy()
@@ -37,19 +50,32 @@ class Test_Binomial_ng1:
     Binomdat2["n"] = Binomdat["x4"].value_counts()[Binomdat2["x4"].values].values
     Binomdat2["y"] = Binomdat2["y"].values / Binomdat2["n"].values
 
+    # Test NANs in categorical predictors
+    Binomdat.loc[Binomdat["x4"].values == "f_27", "x4"] = np.nan
+    Binomdat2.loc[Binomdat2["x4"].values == "f_27", "x4"] = np.nan
+
+    formula = Formula(lhs("y"), [i(), ri("x4")], data=Binomdat)
+
+    # By default, the Binomial family assumes binary data and uses the logit link.
+    model = GAMM(formula, Binomial())
+    model.fit(**default_gamm_test_kwargs)
+
     # Refit:
     formula2 = Formula(lhs("y"), [i(), ri("x4")], data=Binomdat2)
 
     # Need to pass n values.
-    model2 = GAMM(formula2, Binomial(n=Binomdat2["n"].values.reshape(-1, 1)))
-    model2.fit()
-
-    np.testing.assert_allclose(
-        np.round(np.abs(model.coef / model2.coef), decimals=5),
-        np.ones_like(model.coef),
-        atol=min(max_atol, 0),
-        rtol=min(max_rtol, 0.1),
+    model2 = GAMM(
+        formula2, Binomial(n=Binomdat2["n"].values[formula2.NOT_NA_flat].reshape(-1, 1))
     )
+    model2.fit(**default_gamm_test_kwargs)
+
+    def test_binom_eq(self):
+        np.testing.assert_allclose(
+            np.round(np.abs(self.model.coef / self.model2.coef), decimals=4),
+            np.ones_like(self.model.coef),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
 
 
 class Test_expected_ratio_acceleration:

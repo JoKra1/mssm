@@ -701,8 +701,8 @@ class Formula:
                 # ToDo: these can be properties of the formula.
                 self.var_types[var] = VarType.NUMERIC
                 if len(self.file_paths) == 0:
-                    self.var_mins[var] = np.min(self.data[var])
-                    self.var_maxs[var] = np.max(self.data[var])
+                    self.var_mins[var] = np.nanmin(self.data[var])
+                    self.var_maxs[var] = np.nanmax(self.data[var])
                 else:
                     unique_var = read_unique(
                         var,
@@ -720,13 +720,12 @@ class Formula:
                 # Code factor variables into integers for easy dummy coding
                 if len(self.file_paths) == 0:
                     if by_subgroup is None:
-                        levels = np.unique(self.data[var])
+                        dat_var = self.data[var]
                     else:
-                        levels = np.unique(
-                            self.data.loc[
-                                self.data[by_subgroup[0]] == by_subgroup[1], _org_var
-                            ]
-                        )
+                        dat_var = self.data.loc[
+                            self.data[by_subgroup[0]] == by_subgroup[1], _org_var
+                        ]
+                    levels = np.unique(dat_var[~pd.isnull(dat_var)])
                 else:
                     if by_subgroup is None:
                         levels = read_unique(
@@ -906,6 +905,8 @@ class Formula:
             list[np.ndarray]|None, list[np.ndarray]|None, np.ndarray|None)
         """
         # Build NA index
+        var_map = self.get_var_map()
+        var_keys = var_map.keys()
         if prediction:
             NAs = None
             NAs_flat = None
@@ -918,10 +919,26 @@ class Formula:
                     self.file_loading_nc,
                     self.file_loading_kwargs,
                 )
-                NAs_flat = np.isnan(y_flat) == False  # noqa: E712
+                NAs_flat = ~np.isnan(y_flat)
             else:
-                NAs_flat = (
-                    np.isnan(data[self.lhs.variable].values) == False  # noqa: E712
+                NAs_flat = ~(
+                    data.loc[
+                        :,
+                        [
+                            self.lhs.variable,
+                            *[
+                                (
+                                    c
+                                    if c not in self.subgroup_variables
+                                    else c.split(":")[0]
+                                )
+                                for c in var_keys
+                            ],
+                        ],
+                    ]
+                    .isna()
+                    .any(axis=1)
+                    .values
                 )
 
         if data is not None:
@@ -956,9 +973,7 @@ class Formula:
             else:
                 id_col = np.array(data[self.series_id])
 
-        var_map = self.get_var_map()
         n_var = len(var_map)
-        var_keys = var_map.keys()
         var_types = self.var_types
         factor_coding = self.factor_codings
 
@@ -1021,7 +1036,9 @@ class Formula:
                     # Set level to -1 which will be ignored later when building the factor smooth.
                     c_code = [c_coding[cr] if cr in c_coding else -1 for cr in c_raw]
                 else:
-                    c_code = [c_coding[cr] for cr in c_raw]
+                    c_code = [
+                        c_coding[cr] if cr in c_coding else np.nan for cr in c_raw
+                    ]
 
                 cov_flat[:, var_map[c]] = c_code
 
