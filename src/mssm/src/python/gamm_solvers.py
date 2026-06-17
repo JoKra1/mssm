@@ -6714,7 +6714,7 @@ def test_SR1(
     yks: np.ndarray,
     rhos: np.ndarray,
 ) -> bool:
-    """Test whether SR1 update is well-defined for both V and H.
+    """Test whether SR1 update is well-defined for H.
 
     Relies on steps discussed by Byrd, Nocdeal & Schnabel (1992).
 
@@ -6735,7 +6735,7 @@ def test_SR1(
     :type yks: np.ndarray
     :param rhos: Previous rhos
     :type rhos: np.ndarray
-    :return: Check whether SR1 update is well-defined for both V and H.
+    :return: Check whether SR1 update is well-defined for H.
     :rtype: bool
     """
     # Conditionally accept sk, yk, and rho
@@ -6754,21 +6754,15 @@ def test_SR1(
     else:
         omega = 1
 
-    # Update H0/V0 (rather H0(k)/V0(k))
+    # Update H0 (rather H0(k))
     H0 = scp.sparse.identity(sk.shape[0], format="csc") * omega
-    V0 = scp.sparse.identity(sk.shape[0], format="csc") * (1 / omega)
 
-    # Now try both SR1 updates
+    # Now try SR1 update
     Fail = False
     try:
         _, _, _ = computeHSR1(
             sks, yks, rhos, H0, omega=omega, make_psd=False, explicit=False
         )
-        _, _, _ = computeVSR1(
-            sks, yks, rhos, V0, omega=1 / omega, make_psd=False, explicit=False
-        )
-        # t12,t22,t32 = computeHSR1(yks,sks,rhos,V0,omega=1/omega,make_psd=False,explicit=False)
-        # print(np.max(np.abs((t11@t21@t31)-(t12@t22@t32))))
     except:  # noqa: E722
         Fail = True
 
@@ -8061,20 +8055,24 @@ def update_coef_gen_smooth(
                 H0 = omega0 * scp.sparse.identity(S_emb.shape[1], format="csc")
 
             # Now sample update vectors
-            yks, sks, rhos, omega, updates = sample_ys_qefs(
-                family,
-                ys,
-                Xs,
-                coef,
-                coef_split_idx,
-                S_emb,
-                form,
-                maxcor,
-                sample_hessian_method,
-                outer,
-                H0,
-                sample_hessian_options,
-            )
+            updates = 0
+            attempts = 0
+            while (updates <= 0) and (attempts < 30):
+                yks, sks, rhos, omega, updates = sample_ys_qefs(
+                    family,
+                    ys,
+                    Xs,
+                    coef,
+                    coef_split_idx,
+                    S_emb,
+                    form,
+                    maxcor,
+                    sample_hessian_method,
+                    outer + attempts,
+                    H0,
+                    sample_hessian_options,
+                )
+                attempts += 1
 
             if updates == 0:
                 warnings.warn("Failed to sample any update vectors for the Hessian!")

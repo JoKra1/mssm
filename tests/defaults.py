@@ -106,6 +106,7 @@ default_gsmm_test_kwargs = {
         "pre_cond": True,
         "PD_HBB": True,
     },
+    "qEFS_memory_usage": 1,
 }
 
 

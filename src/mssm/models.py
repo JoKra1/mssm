@@ -716,15 +716,16 @@ class GSMM:
         global_opt_qefs: bool = False,
         sample_hessian: bool = True,
         sample_hessian_method: int = 0,
-        sample_hessian_options: dict = {},
+        sample_hessian_options: dict | None = None,
         structured_qefs: bool = True,
         structured_qefs_budget: int | list[int] = 100,
         sqEFS_options: dict = {
-            "dampen_HBB": 0.1,
+            "dampen_HBB": 1e-7,
             "dampen_HBb": 1,
             "pre_cond": True,
-            "PD_HBB": True,
+            "PD_HBB": False,
         },
+        qEFS_memory_usage: float = 1,
     ):
         """
         Fit the specified model.
@@ -884,7 +885,8 @@ class GSMM:
         :type sample_hessian_method: int, optional
         :param sample_hessian_options: Optional key-word arguments determining behavior of hessian
             sampling step. See :func:`mssm.src.python.gamm_solvers.sample_ys_qefs` docstring for
-            details. Defaults to ``{}``
+            details. Defaults to None, which means that appropriate default values are selected
+            depending on the model. See also the ``qEFS_memory_usage`` argument.
         :type sample_hessian_options: dict, optional
         :param structured_qefs: Whether or not to perform a structured qEFS update in which a subset
             of columns/rows of the Hessian of the log-likelihood is computed analytically (or
@@ -907,16 +909,26 @@ class GSMM:
             ``"dampen_HBb"``, ``"pre_cond"``, and ``"PD_HBB"`` are supported. ``"dampen_HBB"`` takes
             float values > 0, with values < 1 leading to more wiggly estimates of smooths
             approximated via quasi Newton update vectors. Values > 1 are possible but usually a good
-            idea. Defaults to 0.1 since 1 seems to produce smooths more in line with ML rather than
+            idea. Defaults to 1e-7 since 1 seems to produce smooths more in line with ML rather than
             REML estimates. ``"dampen_HBb"`` takes float values >= 0 and <= 1 and is used to scale
             the off-diagonal blocks of the approximation of the negative Hessian, holding mixed
             derivatives of terms approximated via finite differencing with respect to those
             approximated via quasi Newton. Defaults to 1. ``"pre_cond"`` is a bool, indicating
             whether a diagonal pre-conditioner should be applied to the negative Hessian before
-            inverting it. Defaults to True ``"PD_HBB"`` is another bool, indicating whether the
+            inverting it. Defaults to True. ``"PD_HBB"`` is another bool, indicating whether the
             top-left block of the Hessian approximation (holding the finidite difference
-            approximated/exact part) should be enforced to be PD rather than PSD. Defaults to True.
+            approximated/exact part) should be enforced to be PD rather than PSD. Defaults to False.
         :type sqEFS_options: dict, optional
+        :param qEFS_memory_usage: Percentage of update vectors to retain for the hessian
+            approximation when using the sampling strategy (``sample_hessian is True``) of the
+            qEFS update. Only has an effect when ``sample_hessian_options is None``. Otherwise,
+            users need to manually define the ``'n_samples'`` key of ``sample_hessian_options``.
+            By default ``n_coef`` update vectors are used (or ``n_coef - structured_qefs_budget``
+            in case ``structured_qefs is True``). This will be too expensive for large models, in
+            which case this parameter can be changed to a float value < 1 indicating the percentage
+            of the default case to retain (note that doing so will reduce the accuracy of the
+            approximations). Defaults to 1
+        :type qEFS_memory_usage: float, optional
         :raises ValueError: Will throw an error when ``optimizer`` is not 'Newton'.
         """
 
@@ -1089,7 +1101,7 @@ class GSMM:
             if len(fcols) == 0:
                 fcols = None
 
-        # Init BFGS options last since we need some idea of problem dimension.
+        # Init BFGS options and sampling options last since we need some idea of problem dimension.
         if bfgs_options is None:
             bfgs_options = {
                 "gtol": 0,
@@ -1098,6 +1110,21 @@ class GSMM:
                 "maxls": 100,
                 "maxfun": 5000,
             }
+
+        if sample_hessian_options is None:
+            N_b = len(coef) if fcols is None else len(coef) - len(fcols)
+            N_u = max(
+                1,
+                int(qEFS_memory_usage * N_b),
+            )
+
+            sample_hessian_options = {"n_samples": N_u, "delta": 0.99}
+
+            if N_u == N_b:
+                sample_hessian_options["add_pen"] = False
+                sample_hessian_options["H0"] = scp.sparse.eye_array(
+                    len(coef), format="csc"
+                )
 
         # Now fit model
         coef, H, LV, LV_linop, total_edf, term_edfs, penalty, smooth_pen, fit_info = (

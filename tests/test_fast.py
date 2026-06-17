@@ -1193,7 +1193,7 @@ class Test_gsmm_qefs:
     def test_GAMedf(self):
         np.testing.assert_allclose(
             self.model.edf,
-            21.09857934525646,
+            20.85251537810421,
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.1),
         )
@@ -1267,7 +1267,7 @@ class Test_gsmm_qefs:
     def test_GAMreml(self):
         reml = self.model.get_reml()
         np.testing.assert_allclose(
-            reml, -4521.673328018024, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            reml, -4520.980093081802, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_GAMllk(self):
@@ -1283,10 +1283,10 @@ class Test_gsmm_qefs:
             edf1,
             np.array(
                 [
-                    5.311253981580591,
-                    4.652209312093517,
-                    8.960247554537844,
-                    2.7976487413272664,
+                    5.195148269080212,
+                    4.558838163911264,
+                    8.95388492454793,
+                    2.696485963729619,
                 ]
             ),
             atol=min(max_atol, 0),
@@ -1300,7 +1300,7 @@ class Test_gsmm_qefs:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.13657735941771293]),
+            np.array([0.0, 0.0, 0.0, 0.13002696798264923]),
             atol=min(max_atol, 0.5),
             rtol=min(max_rtol, 0.5),
         )
@@ -1314,10 +1314,10 @@ class Test_gsmm_qefs:
             Trs,
             np.array(
                 [
-                    71.24561771756302,
-                    578.1763160247193,
-                    2190.6704333306475,
-                    5.470723388720386,
+                    68.72355080459747,
+                    574.28012368234,
+                    2145.996640463478,
+                    5.50577524293684,
                 ]
             ),
             atol=min(max_atol, 0),
