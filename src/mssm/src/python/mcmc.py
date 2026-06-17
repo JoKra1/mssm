@@ -639,7 +639,7 @@ def sample_mssm(
     # Can now start building Minv and MLT so that MLT.T@MLT = inv(Minv)
     Minv = (model.lvi.T @ model.lvi).tocsc() * orig_scale
     Lp, Pr, _ = cpp_cholP(Minv)
-    Lpinv = compute_Linv(Lp)
+    Lpinv = compute_Linv(Lp, n_c=n_chains)
 
     # M = MLT.T@MLT
     MLT = apply_eigen_perm(Pr, Lpinv)
@@ -711,7 +711,7 @@ def sample_mssm(
 
     # Approximate covariance matrix for log lambda parameters
     if sample_rho:
-        Vp, Vpreg, Vpr, Vpregr, ep, _ = estimateVp(model)
+        Vp, Vpreg, Vpr, Vpregr, ep, _ = estimateVp(model, n_c=n_chains)
 
         # Correct for scaling for GAMMs
         if isinstance(family, Family) and family.twopar is True:
@@ -947,7 +947,7 @@ def sample_mssm(
 
         # Re-parameterize as shown in Wood (2011) to enable stable computation of log(|S_\\lambda|+)
         Sj_reps, _, _, _, S_reps, SJ_term_idx, S_idx, S_coefs, Q_reps, Mp = reparam(
-            None, r_pen, None, option=4
+            None, r_pen, None, option=4, n_c=1
         )
 
         # Now we need to compute log(|S_\\lambda|+), Wood shows that after the re-parameterization
