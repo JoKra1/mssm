@@ -807,6 +807,7 @@ def reparam_model(
         option=4,
         form_inverse=int(form_inverse),
         form_root=form_root,
+        n_c=n_c,
     )
 
     S_norm_rp = None

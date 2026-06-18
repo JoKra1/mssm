@@ -2103,6 +2103,7 @@ def compute_REML_candidate_GSMM(
                     conv_tol,
                     method,
                     None,
+                    n_c,
                     keep_drop,
                 )
             )
@@ -2575,6 +2576,7 @@ def estimateVp(
                 model.overall_penalties,
                 model.coef,
                 scale=orig_scale if isinstance(family, Family) else 1,
+                n_c=n_c,
             )
 
             # print(eig,1/eig)
@@ -2587,6 +2589,7 @@ def estimateVp(
                 model.overall_penalties,
                 model.coef,
                 scale=orig_scale if isinstance(family, Family) else 1,
+                n_c=n_c,
             )
 
         if grid_type == "JJJ1":
@@ -3104,6 +3107,7 @@ def compute_Vp_WPS(
     penalties: list[LambdaTerm],
     coef: np.ndarray,
     scale: float = 1,
+    n_c: int = 10,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Computes the inverse of what is approximately the negative Hessian of the Laplace
     approximate REML criterion with respect to the log smoothing penalties.
@@ -3140,6 +3144,8 @@ def compute_Vp_WPS(
     :param scale: Any scale parameter estimated as part of the model. Can be omitted for more
         generic models beyond GAMMs. Defaults to 1.
     :type scale: float
+    :param n_c: Number of cores to use, defaults to 10
+    :type n_c: int, optional
     :return: Generalized inverse of negative hessian of approximate REML criterion, regularized
         version of the former, root of generalized inverse, root of regularized generalized inverse,
         hessian of approximate REML criterion, np.array of shape ((len(coef),len(penalties)))
@@ -3173,7 +3179,7 @@ def compute_Vp_WPS(
             raise ArithmeticError(
                 "Could not compute Cholesky of reparameterized S_rep."
             )
-        LSinv = compute_Linv(LS)
+        LSinv = compute_Linv(LS, n_c=n_c)
         S_inv_rep = LSinv.T @ LSinv
         S_inv_reps.append(S_inv_rep)
 
@@ -3944,6 +3950,7 @@ def correct_VB(
                 model.overall_penalties,
                 model.coef,
                 scale=orig_scale if isinstance(family, Family) else 1,
+                n_c=n_c,
             )
 
         # Compute approximate WPS (2016) correction

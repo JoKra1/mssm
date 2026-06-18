@@ -4496,6 +4496,7 @@ def newton_coef_smooth(
     grad: np.ndarray,
     H: scp.sparse.csc_array,
     S_emb: scp.sparse.csc_array,
+    n_c: int = 10,
 ) -> tuple[np.ndarray, scp.sparse.csc_array, scp.sparse.csc_array, float]:
     """Follows sections 3.1.2 and 3.14 in Wood, Pya, & Säfken (2016) to update the coefficients of
     a GAMLSS/GSMM model via a newton step.
@@ -4518,6 +4519,8 @@ def newton_coef_smooth(
     :type H: scp.sparse.csc_array
     :param S_emb: Total penalty matrix
     :type S_emb: scp.sparse.csc_array
+    :param n_c: Number of cores to use, defaults to 10
+    :type n_c: int, optional
     :return: A tuple containing an estimate of the coefficients, the un-pivoted cholesky of the
         penalized negative hessian, the inverse of the former, the multiple (float) added to the
         diagonal of the negative penalized hessian to make it invertible
@@ -4581,7 +4584,7 @@ def newton_coef_smooth(
                 eps *= 2
             continue
 
-        LVp = compute_Linv(Lp, 10)  # noqa: F405
+        LVp = compute_Linv(Lp, n_c)  # noqa: F405
         LV = apply_eigen_perm(Pr, LVp)  # noqa: F405
         V = LV.T @ LV
 
@@ -4759,7 +4762,10 @@ def correct_coef_step_gammlss(
 
 
 def identify_drop(
-    H: scp.sparse.csc_array, S_scaled: scp.sparse.csc_array, method: str = "QR"
+    H: scp.sparse.csc_array,
+    S_scaled: scp.sparse.csc_array,
+    method: str = "QR",
+    n_c: int = 10,
 ) -> tuple[np.typing.NDArray[np.int_], np.typing.NDArray[np.int_]]:
     """
     Routine to (approximately) identify the rank of the scaled negative hessian of the penalized
@@ -4795,6 +4801,8 @@ def identify_drop(
     :type S_scaled: scp.sparse.csc_array
     :param method: Which method to use to check for rank deficiency, defaults to 'QR'
     :type method: str, optional
+    :param n_c: Number of cores to use, defaults to 10
+    :type n_c: int, optional
     :return: A tuple containing arrays of the coefficients to keep and to drop. The latter will be
         empty if no coefficients need to be dropped.
     :rtype: tuple[np.typing.NDArray[np.int_],np.typing.NDArray[np.int_]]
@@ -4838,7 +4846,7 @@ def identify_drop(
     if code == 0:
         # Check condition number
         P = compute_eigen_perm(Pr)  # noqa: F405
-        LVp = compute_Linv(Lp, 10)  # noqa: F405
+        LVp = compute_Linv(Lp, n_c)  # noqa: F405
         LV = apply_eigen_perm(Pr, LVp)  # noqa: F405
 
         # Undo conditioning.
@@ -4931,7 +4939,7 @@ def identify_drop(
         if code == 0:
             # Check condition number
             P2 = compute_eigen_perm(Pr2)  # noqa: F405
-            LVp = compute_Linv(Lp, 10)  # noqa: F405
+            LVp = compute_Linv(Lp, n_c)  # noqa: F405
             LV = apply_eigen_perm(Pr2, LVp)  # noqa: F405
 
             # Undo conditioning.
@@ -5260,6 +5268,7 @@ def update_coef_gammlss(
     conv_tol: float,
     method: str,
     piv_tol: float,
+    n_c: int,
     keep_drop: tuple[np.typing.NDArray[np.int_], np.typing.NDArray[np.int_]] | None,
 ) -> tuple[
     np.ndarray,
@@ -5326,6 +5335,8 @@ def update_coef_gammlss(
     :type method: str
     :param piv_tol: Deprecated
     :type piv_tol: float
+    :param n_c: Number of cores to use
+    :type n_c: int
     :param keep_drop: Set of previously kept and dropped coeeficients or None
     :type keep_drop: tuple[np.typing.NDArray[np.int_],np.typing.NDArray[np.int_]] | None
     :return: A tuple containing an estimate of all coefficients, a split version of the former,
@@ -5397,7 +5408,7 @@ def update_coef_gammlss(
         if grad_only:
             next_coef = gd_coef_smooth(coef, grad, S_emb, a)
         else:
-            next_coef, L, LV, eps = newton_coef_smooth(coef, grad, H, S_emb)
+            next_coef, L, LV, eps = newton_coef_smooth(coef, grad, H, S_emb, n_c=n_c)
 
         # Prepare to check convergence
         prev_llk_cur_pen = c_llk - 0.5 * coef.T @ S_emb @ coef
@@ -5441,7 +5452,7 @@ def update_coef_gammlss(
                 and (checked_identifiable is False)
                 and (method in ["QR/Chol", "LU/Chol", "Direct/Chol"])
             ):
-                keep, drop = identify_drop(H, S_norm, method.split("/")[0])
+                keep, drop = identify_drop(H, S_norm, method.split("/")[0], n_c=n_c)
 
                 # No drop necessary -> converged
                 if len(drop) == 0:
@@ -5531,7 +5542,7 @@ def update_coef_gammlss(
 
         # Re-compute ldetHS
         _, _, ldetHSs = calculate_edf(
-            None, None, LV, gammlss_penalties, lgdetDs, len(full_coef), 10, None, None
+            None, None, LV, gammlss_penalties, lgdetDs, len(full_coef), n_c, None, None
         )
 
         # And check whether Theorem 1 now holds
@@ -5549,6 +5560,7 @@ def update_coef_gammlss(
                 grad,
                 H - eps * scp.sparse.identity(H.shape[1], format="csc"),
                 S_emb,
+                n_c=n_c,
             )
 
             # Pad new LV in case of drop again:
@@ -5810,6 +5822,7 @@ def correct_lambda_step_gamlss(
             conv_tol,
             method,
             piv_tol,
+            n_c,
             keep_drop,
         )
 
@@ -6202,6 +6215,7 @@ def solve_gammlss_sparse(
                 conv_tol,
                 "Grad",
                 piv_tol,
+                n_c,
                 None,
             )
         )
@@ -6256,6 +6270,7 @@ def solve_gammlss_sparse(
             conv_tol,
             method,
             piv_tol,
+            n_c,
             keep_drop,
         )
         fit_info.code = 0
@@ -6969,6 +6984,7 @@ def sample_ys_qefs(
     seed: int,
     H0: scp.sparse.csc_array,
     sample_kwargs: dict,
+    n_c: int = 10,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, int]:
     """Function to sample the limited-memory quasi-Newton approximation at estimate ``coef``,
     based on Berahas et al. (2021).
@@ -7035,6 +7051,8 @@ def sample_ys_qefs(
         ``scp.differentiate.jacobian``, which is used to approximate the Hessian vector product.
         You can check the scipy documentation to see which keyword arguments are supported.
     :type sample_kwargs: dict
+    :param n_c: Number of cores to use, defaults to 10
+    :type n_c: int, optional
     :return: Updated values for the update vectors and rho variables ``yks``, ``sks``, ``rhos``,
         as well as ``omega`` (latest estimate of eigenvalue of hessian) and ``updates`` (number of
         accepted samples).
@@ -7075,7 +7093,7 @@ def sample_ys_qefs(
         Lp, Pr, code = cpp_cholP((H0 + S_emb) if add_pen else H0)  # noqa: F405
 
         if code == 0:
-            LVp = compute_Linv(Lp, 10)  # noqa: F405
+            LVp = compute_Linv(Lp, n_c)  # noqa: F405
             LV = apply_eigen_perm(Pr, LVp)  # noqa: F405
         else:
             LV = scp.sparse.identity(S_emb.shape[1], format="csc")
@@ -7659,6 +7677,7 @@ def sampleHcoef(
             seed,
             H0,
             sample_hessian_options,
+            n_c=n_c,
         )
         seed += 1
         attempts += 1
@@ -8120,7 +8139,7 @@ def update_coef_gen_smooth(
         if grad_only:
             next_coef = gd_coef_smooth(coef, grad, S_emb, a)
         else:
-            next_coef, L, LV, eps = newton_coef_smooth(coef, grad, H, S_emb)
+            next_coef, L, LV, eps = newton_coef_smooth(coef, grad, H, S_emb, n_c=n_c)
 
         # Prepare to check convergence
         prev_llk_cur_pen = c_llk - 0.5 * coef.T @ S_emb @ coef
@@ -8168,7 +8187,7 @@ def update_coef_gen_smooth(
                 and (checked_identifiable is False)
                 and (method in ["QR/Chol", "LU/Chol", "Direct/Chol"])
             ):
-                keep, drop = identify_drop(H, S_norm, method.split("/")[0])
+                keep, drop = identify_drop(H, S_norm, method.split("/")[0], n_c=n_c)
 
                 # No drop necessary -> converged
                 if len(drop) == 0:
@@ -8287,7 +8306,7 @@ def update_coef_gen_smooth(
 
             # Re-compute ldetHS
             _, _, ldetHSs = calculate_edf(
-                None, None, LV, smooth_pen, lgdetDs, len(full_coef), 10, None, None
+                None, None, LV, smooth_pen, lgdetDs, len(full_coef), n_c, None, None
             )
 
             # And check whether Theorem 1 now holds
@@ -8305,6 +8324,7 @@ def update_coef_gen_smooth(
                     grad,
                     H - eps * scp.sparse.identity(H.shape[1], format="csc"),
                     S_emb,
+                    n_c=n_c,
                 )
 
                 # Pad new LV in case of drop again:
@@ -9476,7 +9496,7 @@ def solve_generalSmooth_sparse(
             pH = scp.sparse.csc_array((-1 * H) + S_emb)
             Lp, Pr, _ = cpp_cholP(pH)  # noqa: F405
             P = compute_eigen_perm(Pr)  # noqa: F405
-            LVp0 = compute_Linv(Lp, 10)  # noqa: F405
+            LVp0 = compute_Linv(Lp, n_c)  # noqa: F405
             LV = apply_eigen_perm(Pr, LVp0)  # noqa: F405
             L = P.T @ Lp
 
