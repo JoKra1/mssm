@@ -42,7 +42,7 @@ class Test_qefs_final_budget:
     test_kwargs["extend_lambda"] = False
     test_kwargs["max_outer"] = 200
     test_kwargs["max_inner"] = 500
-    test_kwargs["method"] = "Chol"
+    test_kwargs["method"] = "qEFS"
     test_kwargs["repara"] = True
     test_kwargs["prefit_grad"] = True
     test_kwargs["structured_qefs"] = False
