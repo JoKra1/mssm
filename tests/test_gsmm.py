@@ -29,6 +29,37 @@ mssm.src.python.utils.GAMLSSGSMMFamily.init_coef = init_coef_gsmmgammlss
 ################################################################## Tests ##################################################################
 
 
+class Test_qefs_final_budget:
+    sim_dat = sim4(500, 2, family=Gamma(), seed=0)
+
+    # We again need to model the mean: \mu_i = \alpha + f(x0) + f(x1) + f_{x4}(x0)
+    sim_formula_m = Formula(
+        lhs("y"), [i(), f(["x0"]), f(["x1"]), f(["x2"]), f(["x3"])], data=sim_dat
+    )
+
+    test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
+    test_kwargs["control_lambda"] = 1
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["max_outer"] = 200
+    test_kwargs["max_inner"] = 500
+    test_kwargs["method"] = "Chol"
+    test_kwargs["repara"] = True
+    test_kwargs["prefit_grad"] = True
+    test_kwargs["structured_qefs"] = False
+    test_kwargs["sample_hessian_options"] = None
+    test_kwargs["qEFS_final_memory_usage"] = 1
+
+    # Now define the model and fit!
+    gsmm_fam = GAMLSSGSMMFamily(2, Gamma())
+    model = GSMM([sim_formula_m], gsmm_fam)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model.fit(**test_kwargs)
+
+    def test_sksize(self):
+        assert self.model.lvi_linop.sk.shape[0] == self.model.lvi_linop.sk.shape[1]
+
+
 class Test_repara_skip:
     # Multi Gauss case
     sim_dat = sim16(500, c=1, seed=0, correlate=False)

@@ -726,6 +726,7 @@ class GSMM:
             "PD_HBB": False,
         },
         qEFS_memory_usage: float = 1,
+        qEFS_final_memory_usage: float | None = 1,
     ):
         """
         Fit the specified model.
@@ -929,6 +930,14 @@ class GSMM:
             of the default case to retain (note that doing so will reduce the accuracy of the
             approximations). Defaults to 1
         :type qEFS_memory_usage: float, optional
+        :param qEFS_final_memory_usage: Percentage of update vectors to retain for a final hessian
+            approximation of the qEFS update. **Note**, that setting this to a non-zero float
+            instead of None will force the hessian matrix to be re-sampled with ``n_samples``
+            determined by retaining ``qEFS_final_memory_usage`` percentage of the default case
+            described for the ``qEFS_memory_usage`` argument. Defaults to 1, meaning a maximally
+            accurate hessian matrix will be re-sampled after fitting has concluded independent of
+            the value passed for ``sample_hessian``.
+        :type qEFS_final_memory_usage: float | None, optional
         :raises ValueError: Will throw an error when ``optimizer`` is not 'Newton'.
         """
 
@@ -1064,7 +1073,7 @@ class GSMM:
                 # User provided columns of hessian to be approximated via fd
                 fcols = structured_qefs_budget
 
-            else:
+            elif structured_qefs_budget > 0:
                 # Collect columns of hessian associated with "fixed" effects
                 fcols = []
                 start_idx = 0
@@ -1095,11 +1104,12 @@ class GSMM:
                         fcols, size=structured_qefs_budget, replace=False
                     )
 
-            # Make sure fcols are in order and unique
-            fcols = np.unique(fcols)
+                if len(fcols) == 0:
+                    fcols = None
 
-            if len(fcols) == 0:
-                fcols = None
+            # Make sure fcols are in order and unique
+            if fcols is not None:
+                fcols = np.unique(fcols)
 
         # Init BFGS options and sampling options last since we need some idea of problem dimension.
         if bfgs_options is None:
@@ -1165,6 +1175,7 @@ class GSMM:
                 sample_hessian_options,
                 fcols,
                 sqEFS_options,
+                qEFS_final_memory_usage,
             )
         )
 

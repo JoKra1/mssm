@@ -8903,6 +8903,7 @@ def solve_generalSmooth_sparse(
     sample_hessian_options: dict = {},
     fcols: np.ndarray | None = None,
     sqEFS_options: dict = {},
+    qEFS_final_memory_usage: float | None = None,
 ) -> tuple[
     np.ndarray,
     scp.sparse.csc_array | None,
@@ -9065,6 +9066,13 @@ def solve_generalSmooth_sparse(
         top-left block of the Hessian approximation (holding the finidite difference
         approximated/exact part) should be enforced to be PD rather than PSD. Defaults to ``{}``
     :type sqEFS_options: dict, optional
+    :param qEFS_final_memory_usage: Percentage of update vectors to retain for a final hessian
+        approximation of the qEFS update. **Note**, that setting this to a non-zero float
+        instead of None will force the hessian matrix to be re-sampled with ``n_samples``
+        determined by retaining ``qEFS_final_memory_usage`` percentage of ``len(coef)`` 
+        or, in case ``fcols is not None``, ``len(coef) - len(fcols)`` update
+        vectors. Defaults to None
+    :type qEFS_final_memory_usage: float | None, optional
     :return: coef estimate, the negative hessian of the log-likelihood, inverse of cholesky of
         negative hessian of the penalized log-likelihood, if ``method=='qEFS'`` an instance of
         :class:`scp.sparse.linalg.LinearOperator` representing the new quasi-newton approximation,
@@ -9423,8 +9431,21 @@ def solve_generalSmooth_sparse(
     if method == "qEFS":
 
         # For CIs it's best if final hessian approximation is taken at final
-        # coefficient estimate. So sample below for checks 1 & 3
-        if control_lambda in [1, 3] and outer > 0:
+        # coefficient estimate. So sample below for checks 1 & 3 or if qEFS_final_memory_usage
+        # is specified to force a re-sampling with a larger computational budget
+        if (control_lambda in [1, 3] and outer > 0) or (
+            qEFS_final_memory_usage is not None
+        ):
+
+            if qEFS_final_memory_usage is not None:
+                # Overwrite `n_samples` parameter for final sampling step.
+                N_b = len(coef) if fcols is None else len(coef) - len(fcols)
+                N_u = max(
+                    1,
+                    int(qEFS_final_memory_usage * N_b),
+                )
+                LV.sample_hessian_options["n_samples"] = N_u
+
             LV, updates, total_edf2, term_edfs2 = sampleHcoef(
                 LV,
                 family,
