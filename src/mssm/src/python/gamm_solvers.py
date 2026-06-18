@@ -8089,6 +8089,7 @@ def update_coef_gen_smooth(
                     outer + attempts,
                     H0,
                     sample_hessian_options,
+                    n_c=n_c,
                 )
                 attempts += 1
 
