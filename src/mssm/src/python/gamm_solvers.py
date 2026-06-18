@@ -9069,7 +9069,7 @@ def solve_generalSmooth_sparse(
     :param qEFS_final_memory_usage: Percentage of update vectors to retain for a final hessian
         approximation of the qEFS update. **Note**, that setting this to a non-zero float
         instead of None will force the hessian matrix to be re-sampled with ``n_samples``
-        determined by retaining ``qEFS_final_memory_usage`` percentage of ``len(coef)`` 
+        determined by retaining ``qEFS_final_memory_usage`` percentage of ``len(coef)``
         or, in case ``fcols is not None``, ``len(coef) - len(fcols)`` update
         vectors. Defaults to None
     :type qEFS_final_memory_usage: float | None, optional
