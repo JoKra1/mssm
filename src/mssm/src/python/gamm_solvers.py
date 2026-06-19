@@ -24,7 +24,6 @@ from .file_loading import setup_cache, clear_cache
 from .compact_rep import (
     computeH,
     computeHSR1,
-    computeVSR1,
     compute_omega,
     computeSH,
     computeSVPS,
@@ -6729,7 +6728,7 @@ def test_SR1(
     yks: np.ndarray,
     rhos: np.ndarray,
 ) -> bool:
-    """Test whether SR1 update is well-defined for both V and H.
+    """Test whether SR1 update is well-defined for H.
 
     Relies on steps discussed by Byrd, Nocdeal & Schnabel (1992).
 
@@ -6750,7 +6749,7 @@ def test_SR1(
     :type yks: np.ndarray
     :param rhos: Previous rhos
     :type rhos: np.ndarray
-    :return: Check whether SR1 update is well-defined for both V and H.
+    :return: Check whether SR1 update is well-defined for H.
     :rtype: bool
     """
     # Conditionally accept sk, yk, and rho
@@ -6769,21 +6768,15 @@ def test_SR1(
     else:
         omega = 1
 
-    # Update H0/V0 (rather H0(k)/V0(k))
+    # Update H0 (rather H0(k))
     H0 = scp.sparse.identity(sk.shape[0], format="csc") * omega
-    V0 = scp.sparse.identity(sk.shape[0], format="csc") * (1 / omega)
 
-    # Now try both SR1 updates
+    # Now try SR1 update
     Fail = False
     try:
         _, _, _ = computeHSR1(
             sks, yks, rhos, H0, omega=omega, make_psd=False, explicit=False
         )
-        _, _, _ = computeVSR1(
-            sks, yks, rhos, V0, omega=1 / omega, make_psd=False, explicit=False
-        )
-        # t12,t22,t32 = computeHSR1(yks,sks,rhos,V0,omega=1/omega,make_psd=False,explicit=False)
-        # print(np.max(np.abs((t11@t21@t31)-(t12@t22@t32))))
     except:  # noqa: E722
         Fail = True
 
@@ -8080,21 +8073,25 @@ def update_coef_gen_smooth(
                 H0 = omega0 * scp.sparse.identity(S_emb.shape[1], format="csc")
 
             # Now sample update vectors
-            yks, sks, rhos, omega, updates = sample_ys_qefs(
-                family,
-                ys,
-                Xs,
-                coef,
-                coef_split_idx,
-                S_emb,
-                form,
-                maxcor,
-                sample_hessian_method,
-                outer,
-                H0,
-                sample_hessian_options,
-                n_c=n_c,
-            )
+            updates = 0
+            attempts = 0
+            while (updates <= 0) and (attempts < 30):
+                yks, sks, rhos, omega, updates = sample_ys_qefs(
+                    family,
+                    ys,
+                    Xs,
+                    coef,
+                    coef_split_idx,
+                    S_emb,
+                    form,
+                    maxcor,
+                    sample_hessian_method,
+                    outer + attempts,
+                    H0,
+                    sample_hessian_options,
+                    n_c=n_c,
+                )
+                attempts += 1
 
             if updates == 0:
                 warnings.warn("Failed to sample any update vectors for the Hessian!")
@@ -8927,6 +8924,7 @@ def solve_generalSmooth_sparse(
     sample_hessian_options: dict = {},
     fcols: np.ndarray | None = None,
     sqEFS_options: dict = {},
+    qEFS_final_memory_usage: float | None = None,
 ) -> tuple[
     np.ndarray,
     scp.sparse.csc_array | None,
@@ -9089,6 +9087,13 @@ def solve_generalSmooth_sparse(
         top-left block of the Hessian approximation (holding the finidite difference
         approximated/exact part) should be enforced to be PD rather than PSD. Defaults to ``{}``
     :type sqEFS_options: dict, optional
+    :param qEFS_final_memory_usage: Percentage of update vectors to retain for a final hessian
+        approximation of the qEFS update. **Note**, that setting this to a non-zero float
+        instead of None will force the hessian matrix to be re-sampled with ``n_samples``
+        determined by retaining ``qEFS_final_memory_usage`` percentage of ``len(coef)``
+        or, in case ``fcols is not None``, ``len(coef) - len(fcols)`` update
+        vectors. Defaults to None
+    :type qEFS_final_memory_usage: float | None, optional
     :return: coef estimate, the negative hessian of the log-likelihood, inverse of cholesky of
         negative hessian of the penalized log-likelihood, if ``method=='qEFS'`` an instance of
         :class:`scp.sparse.linalg.LinearOperator` representing the new quasi-newton approximation,
@@ -9447,8 +9452,21 @@ def solve_generalSmooth_sparse(
     if method == "qEFS":
 
         # For CIs it's best if final hessian approximation is taken at final
-        # coefficient estimate. So sample below for checks 1 & 3
-        if control_lambda in [1, 3] and outer > 0:
+        # coefficient estimate. So sample below for checks 1 & 3 or if qEFS_final_memory_usage
+        # is specified to force a re-sampling with a larger computational budget
+        if (control_lambda in [1, 3] and outer > 0) or (
+            qEFS_final_memory_usage is not None
+        ):
+
+            if qEFS_final_memory_usage is not None:
+                # Overwrite `n_samples` parameter for final sampling step.
+                N_b = len(coef) if fcols is None else len(coef) - len(fcols)
+                N_u = max(
+                    1,
+                    int(qEFS_final_memory_usage * N_b),
+                )
+                LV.sample_hessian_options["n_samples"] = N_u
+
             LV, updates, total_edf2, term_edfs2 = sampleHcoef(
                 LV,
                 family,
