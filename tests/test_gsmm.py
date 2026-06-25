@@ -219,6 +219,7 @@ class Test_GAUMLSSGEN_hard:
     test_kwargs["structured_qefs"] = False
     test_kwargs["qEFSH"] = "BFGS"
     test_kwargs["bfgs_options"] = bfgs_opt
+    test_kwargs["sample_hessian_options"] = {"n_samples:": 0}  # Prevent sampling
 
     model.fit(**test_kwargs)
 
