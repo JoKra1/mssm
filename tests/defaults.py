@@ -97,7 +97,7 @@ default_gsmm_test_kwargs = {
     "global_opt_qefs": False,
     "sample_hessian": False,
     "sample_hessian_method": 0,
-    "sample_hessian_options": {},
+    "sample_hessian_options": {"n_samples": 30},
     "structured_qefs": True,
     "structured_qefs_budget": 100,
     "sqEFS_options": {
@@ -106,6 +106,7 @@ default_gsmm_test_kwargs = {
         "pre_cond": True,
         "PD_HBB": True,
     },
+    "sqEFS_options_final": None,
     "qEFS_memory_usage": 1,
     "qEFS_final_memory_usage": None,
 }

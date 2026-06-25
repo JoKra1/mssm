@@ -720,6 +720,12 @@ class GSMM:
         structured_qefs: bool = True,
         structured_qefs_budget: int | list[int] = 100,
         sqEFS_options: dict = {
+            "dampen_HBB": 0.1,
+            "dampen_HBb": 1,
+            "pre_cond": True,
+            "PD_HBB": False,
+        },
+        sqEFS_options_final: dict | None = {
             "dampen_HBB": 1e-7,
             "dampen_HBb": 1,
             "pre_cond": True,
@@ -910,7 +916,7 @@ class GSMM:
             ``"dampen_HBb"``, ``"pre_cond"``, and ``"PD_HBB"`` are supported. ``"dampen_HBB"`` takes
             float values > 0, with values < 1 leading to more wiggly estimates of smooths
             approximated via quasi Newton update vectors. Values > 1 are possible but usually a good
-            idea. Defaults to 1e-7 since 1 seems to produce smooths more in line with ML rather than
+            idea. Defaults to 0.1 since 1 seems to produce smooths more in line with ML rather than
             REML estimates. ``"dampen_HBb"`` takes float values >= 0 and <= 1 and is used to scale
             the off-diagonal blocks of the approximation of the negative Hessian, holding mixed
             derivatives of terms approximated via finite differencing with respect to those
@@ -920,10 +926,14 @@ class GSMM:
             top-left block of the Hessian approximation (holding the finidite difference
             approximated/exact part) should be enforced to be PD rather than PSD. Defaults to False.
         :type sqEFS_options: dict, optional
+        :param sqEFS_options_final: An optional dict like ``sqEFS_options``, but used during the
+            computation of the final hessian approximation of the qEFS update after fitting. Can
+            be set to None, in which case ``sqEFS_options`` will be used.
+        :type sqEFS_options_final: dict | None, optional
         :param qEFS_memory_usage: Percentage of update vectors to retain for the hessian
             approximation when using the sampling strategy (``sample_hessian is True``) of the
-            qEFS update. Only has an effect when ``sample_hessian_options is None``. Otherwise,
-            users need to manually define the ``'n_samples'`` key of ``sample_hessian_options``.
+            qEFS update. Has no effect when users manually define the ``'n_samples'`` key of
+            ``sample_hessian_options``.
             By default ``n_coef`` update vectors are used (or ``n_coef - structured_qefs_budget``
             in case ``structured_qefs is True``). This will be too expensive for large models, in
             which case this parameter can be changed to a float value < 1 indicating the percentage
@@ -935,7 +945,7 @@ class GSMM:
             instead of None will force the hessian matrix to be re-sampled with ``n_samples``
             determined by retaining ``qEFS_final_memory_usage`` percentage of the default case
             described for the ``qEFS_memory_usage`` argument. Defaults to 1, meaning a maximally
-            accurate hessian matrix will be re-sampled after fitting has concluded independent of
+            accurate hessian matrix will be re-sampled after fitting has concluded, independent of
             the value passed for ``sample_hessian``.
         :type qEFS_final_memory_usage: float | None, optional
         :raises ValueError: Will throw an error when ``optimizer`` is not 'Newton'.
@@ -1067,74 +1077,86 @@ class GSMM:
                 coef_split_idx[coef_i] += coef_split_idx[coef_i - 1]
 
         fcols = None
-        if method == "qEFS" and structured_qefs:
+        if method == "qEFS":
 
-            if isinstance(structured_qefs_budget, list):
-                # User provided columns of hessian to be approximated via fd
-                fcols = structured_qefs_budget
+            if structured_qefs:
 
-            elif structured_qefs_budget > 0:
-                # Collect columns of hessian associated with "fixed" effects
-                fcols = []
-                start_idx = 0
-                for form in self.formulas:
-                    lti = form.get_linear_term_idx()
-                    irsti = form.get_ir_smooth_term_idx()
-                    sti = form.get_smooth_term_idx()
+                if isinstance(structured_qefs_budget, list):
+                    # User provided columns of hessian to be approximated via fd
+                    fcols = structured_qefs_budget
 
-                    for tidx in [*lti, *irsti, *sti]:
+                elif structured_qefs_budget > 0:
+                    # Collect columns of hessian associated with "fixed" effects
+                    fcols = []
+                    start_idx = 0
+                    for form in self.formulas:
+                        lti = form.get_linear_term_idx()
+                        irsti = form.get_ir_smooth_term_idx()
+                        sti = form.get_smooth_term_idx()
 
-                        if isinstance(form.terms[tidx], fs):
-                            continue
+                        for tidx in [*lti, *irsti, *sti]:
 
-                        fcols.extend(form.coef_idx_per_term[tidx] + start_idx)
+                            if isinstance(form.terms[tidx], fs):
+                                continue
 
-                    start_idx += form.n_coef
+                            fcols.extend(form.coef_idx_per_term[tidx] + start_idx)
 
-                # Also account for extra coef that are un-penalized
-                if self.has_extra_coef:
-                    fcols.extend(np.arange(self.family.extra_coef) + start_idx)
+                        start_idx += form.n_coef
 
-                np_gen = np.random.default_rng(seed)
-                if len(fcols) == len(coef) and len(fcols) <= structured_qefs_budget:
-                    fcols = np_gen.choice(fcols, size=len(coef) - 1, replace=False)
+                    # Also account for extra coef that are un-penalized
+                    if self.has_extra_coef:
+                        fcols.extend(np.arange(self.family.extra_coef) + start_idx)
 
-                elif len(fcols) > structured_qefs_budget:
-                    fcols = np_gen.choice(
-                        fcols, size=structured_qefs_budget, replace=False
-                    )
+                    np_gen = np.random.default_rng(seed)
+                    if len(fcols) == len(coef) and len(fcols) <= structured_qefs_budget:
+                        fcols = np_gen.choice(fcols, size=len(coef) - 1, replace=False)
 
-                if len(fcols) == 0:
-                    fcols = None
+                    elif len(fcols) > structured_qefs_budget:
+                        fcols = np_gen.choice(
+                            fcols, size=structured_qefs_budget, replace=False
+                        )
 
-            # Make sure fcols are in order and unique
-            if fcols is not None:
-                fcols = np.unique(fcols)
+                    if len(fcols) == 0:
+                        fcols = None
 
-        # Init BFGS options and sampling options last since we need some idea of problem dimension.
-        if bfgs_options is None:
-            bfgs_options = {
-                "gtol": 0,
-                "ftol": conv_tol,
-                "maxcor": max(int(0.25 * len(coef)), 30),
-                "maxls": 100,
-                "maxfun": 5000,
-            }
+                # Make sure fcols are in order and unique
+                if fcols is not None:
+                    fcols = np.unique(fcols)
 
-        if sample_hessian_options is None:
+            if sqEFS_options_final is None:
+                sqEFS_options_final = sqEFS_options
+
+            # Init BFGS options and sampling options last since we need
+            # some idea of problem dimension.
+            if bfgs_options is None:
+                bfgs_options = {
+                    "gtol": 0,
+                    "ftol": conv_tol,
+                    "maxcor": max(int(0.25 * len(coef)), 30),
+                    "maxls": 100,
+                    "maxfun": 5000,
+                }
+
+            # Get dimension of block that needs to be approximated
+            # and select N_u dimnesion based on that
             N_b = len(coef) if fcols is None else len(coef) - len(fcols)
             N_u = max(
                 1,
                 int(qEFS_memory_usage * N_b),
             )
 
-            sample_hessian_options = {"n_samples": N_u, "delta": 0.99}
+            if sample_hessian_options is None:
 
-            if N_u == N_b:
-                sample_hessian_options["add_pen"] = False
-                sample_hessian_options["H0"] = scp.sparse.eye_array(
-                    len(coef), format="csc"
-                )
+                sample_hessian_options = {"delta": 0.99}
+
+                if N_u == N_b:
+                    sample_hessian_options["add_pen"] = False
+                    sample_hessian_options["H0"] = scp.sparse.eye_array(
+                        len(coef), format="csc"
+                    )
+
+            if "n_samples" not in sample_hessian_options:
+                sample_hessian_options["n_samples"] = N_u
 
         # Now fit model
         coef, H, LV, LV_linop, total_edf, term_edfs, penalty, smooth_pen, fit_info = (
@@ -1175,6 +1197,7 @@ class GSMM:
                 sample_hessian_options,
                 fcols,
                 sqEFS_options,
+                sqEFS_options_final,
                 qEFS_final_memory_usage,
             )
         )

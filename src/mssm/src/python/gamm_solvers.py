@@ -8924,6 +8924,7 @@ def solve_generalSmooth_sparse(
     sample_hessian_options: dict = {},
     fcols: np.ndarray | None = None,
     sqEFS_options: dict = {},
+    sqEFS_options_final: dict = {},
     qEFS_final_memory_usage: float | None = None,
 ) -> tuple[
     np.ndarray,
@@ -9087,6 +9088,10 @@ def solve_generalSmooth_sparse(
         top-left block of the Hessian approximation (holding the finidite difference
         approximated/exact part) should be enforced to be PD rather than PSD. Defaults to ``{}``
     :type sqEFS_options: dict, optional
+    :param sqEFS_options_final: Optional dict like ``sqEFS_options``, but used during the
+        computation of the final hessian approximation of the qEFS update after fitting.
+        Defaults to ``{}``
+    :type sqEFS_options_final: dict, optional
     :param qEFS_final_memory_usage: Percentage of update vectors to retain for a final hessian
         approximation of the qEFS update. **Note**, that setting this to a non-zero float
         instead of None will force the hessian matrix to be re-sampled with ``n_samples``
@@ -9457,6 +9462,9 @@ def solve_generalSmooth_sparse(
         if (control_lambda in [1, 3] and outer > 0) or (
             qEFS_final_memory_usage is not None
         ):
+
+            # Pass along choice for sqEFS_options to use for final approximation
+            LV.sqEFS_options = sqEFS_options_final
 
             if qEFS_final_memory_usage is not None:
                 # Overwrite `n_samples` parameter for final sampling step.
