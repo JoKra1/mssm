@@ -1313,9 +1313,11 @@ class Formula:
                     for vari in range(dig_cov_flat.shape[1]):
                         var = col_vars[vari]
 
+                        # fmt: off
                         clust2var = clust[
-                            :, start_idx : (start_idx + dig_cov_unq_counts[vari])
+                            :, start_idx : (start_idx + dig_cov_unq_counts[vari])  # noqa: E203
                         ]
+                        # fmt: on
 
                         if (
                             var in self.discretize[sti]["stat"]
