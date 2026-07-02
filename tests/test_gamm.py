@@ -179,6 +179,61 @@ class Test_BIG_GAMM_Discretize:
         assert round(llk, ndigits=0) == -75232.0
 
 
+class Test_BIG_GAMM_Discretize2:
+    dat = pd.read_csv(
+        "https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat.csv"
+    )
+
+    # mssm requires that the data-type for variables used as factors is 'O'=object
+    dat = dat.astype({"series": "O", "cond": "O", "sub": "O", "series": "O"})
+
+    discretize = {
+        "no_disc": [],
+        "excl": [],
+        "split_by": ["cond"],
+        "restarts": 40,
+        "seed": 20,
+        "stat": {"time": "n", "x": "n_unique"},  # Test different stats
+        "normalize": True,  # And normalization
+    }
+
+    formula = Formula(
+        lhs=lhs("y"),  # The dependent variable - here y!
+        terms=[
+            i(),  # The intercept, a
+            l(["cond"]),  # For cond='b'
+            f(
+                ["time"], by="cond", nk=20
+            ),  # to-way interaction between time and cond; one smooth over time per cond level
+            f(
+                ["x"], by="cond"
+            ),  # to-way interaction between x and cond; one smooth over x per cond level
+            f(
+                ["time", "x"], by="cond", nk=9, rp=0, scale_te=False
+            ),  # three-way interaction
+            fs(["time"], rf="series", nk=20, approx_deriv=discretize),
+        ],  # Random non-linear effect of time - one smooth per level of factor series
+        data=dat,
+        series_id="series",
+    )  # When approximating the computations for a random smooth, the series identifier column needs to be specified!
+
+    model = GAMM(formula, Gaussian())
+
+    model.fit(**default_gamm_test_kwargs)
+
+    def test_GAMedf(self):
+        assert round(self.model.edf, ndigits=0) == 2418.0
+
+    def test_GAMsigma(self):
+        assert round(self.model.scale, ndigits=3) == 10.965
+
+    def test_GAMreml(self):
+        assert round(self.model.get_reml(), ndigits=2) == -84062.1
+
+    def test_GAMllk(self):
+        assert round(self.model.get_llk(False), ndigits=0) == -75230.0
+
+
 class Test_NUll_penalty_reparam:
     dat = pd.read_csv(
         "https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat.csv"
