@@ -637,8 +637,9 @@ class Formula:
                 )
 
             for sti in self.discretize.keys():
+                disc_dat, col_vars = self.__discretize(sti)
                 self.__cluster_discretize(
-                    *self.__split_discretize(self.__discretize(sti), sti), sti
+                    *self.__split_discretize(disc_dat, sti), sti, col_vars
                 )
 
             # if len(self.file_paths) != 0 and self.keep_cov == False:
@@ -1052,13 +1053,14 @@ class Formula:
 
         return y_flat, cov_flat, NAs_flat, y, cov, NAs, sid
 
-    def __discretize(self, sti: int) -> np.ndarray:
+    def __discretize(self, sti: int) -> tuple[np.ndarray, list[str]]:
         """Internal function to discretize covariates.
 
         :param sti: Smooth term index pointing to smooth holding a discretization dict
         :type sti: int
-        :return: np.ndarray holding discretized covariate values of the data set required by
-            ``self.discretize[sti]``.
+        :return: tuple. First index is np.ndarray holding discretized covariate values of the data
+            set required by ``self.discretize[sti]``. Second index is list of names of collected
+            variables matching column order of returned array
         :rtype: np.ndarray
         """
         dig_cov_flat = np.zeros_like(self.cov_flat)
@@ -1066,6 +1068,7 @@ class Formula:
         var_map = self.get_var_map()
 
         collected = []
+        collected_vars = []
 
         for var in var_types.keys():
             # Skip variables that should be ignored all together.
@@ -1087,18 +1090,21 @@ class Formula:
                     self.cov_flat[:, var_map[var]], values
                 )
                 collected.append(var_map[var])
+                collected_vars.append(var)
 
             # Also collect continuous variables that should not be discretized
             else:
                 dig_cov_flat[:, var_map[var]] = self.cov_flat[:, var_map[var]]
                 collected.append(var_map[var])
+                collected_vars.append(var)
 
-        return dig_cov_flat[:, collected]
+        return dig_cov_flat[:, collected], collected_vars
 
     def __split_discretize(
         self, dig_cov_flat_all: np.ndarray, sti: int
     ) -> tuple[list[np.ndarray], list[np.ndarray]]:
-        """Internal function to split dscretized covariate objects.
+        """Internal function to split dscretized covariate objects per unique combination of
+        factor variables in ``self.discretize[sti]["split_by"]``.
 
         :param dig_cov_flat_all: np.ndarray holding discretized covariate values of the data set
             required by ``self.discretize[sti]``.
@@ -1106,7 +1112,8 @@ class Formula:
         :param sti: Smooth term index pointing to smooth holding a discretization dict
         :type sti: int
         :return: tuple holding two lists of np.ndarray. First list has split discretized
-            covariate objects per series, second has series id
+            covariate objects per factor level (i.e., all unique combination of factor
+            variables in ``self.discretize[sti]["split_by"]``), second has series id
         :rtype: tuple[list[np.ndarray],list[np.ndarray]]
         """
         var_map = self.get_var_map()
@@ -1187,19 +1194,25 @@ class Formula:
         return dig_cov_flats, fact_series
 
     def __cluster_discretize(
-        self, dig_cov_flats: list[np.ndarray], fact_series: list[np.ndarray], sti: int
+        self,
+        dig_cov_flats: list[np.ndarray],
+        fact_series: list[np.ndarray],
+        sti: int,
+        col_vars: list[str],
     ) -> None:
         """Internal function that clusters on the discretized covariate objects.
 
         Takes input from :func:`__split_discretize`. Sets ``self.discretize[sti]["clust_series"]``
         and ``self.discretize[sti]["clust_weights"]``.
 
-        :param dig_cov_flats: split discretized covariate objects per series
+        :param dig_cov_flats: split discretized covariate objects per factor split
         :type dig_cov_flats: list[np.ndarray]
-        :param fact_series: series id array per series
+        :param fact_series: series id array per factor split
         :type fact_series: list[np.ndarray]
         :param sti: Smooth term index pointing to smooth holding a discretization dict
         :type sti: int
+        :param col_vars: List of names of collected covariates in ``dig_cov_flats``
+        :type col_vars: list[str]
         """
         best_series = None
         best_weights = None
@@ -1207,6 +1220,10 @@ class Formula:
 
         iterator = range(self.discretize[sti]["restarts"])
         seed = self.discretize[sti]["seed"]
+        has_stat = "stat" in self.discretize[sti]
+        normalize = (
+            "normalize" in self.discretize[sti] and self.discretize[sti]["normalize"]
+        )
 
         if self.print_warn:
             iterator = tqdm(iterator, desc="Clustering", leave=True)
@@ -1226,13 +1243,15 @@ class Formula:
                 dig_cov_flat_unq = np.unique(dig_cov_flat, axis=0)
 
                 # Also compute, for each column, the inverse - telling us for each row in the
-                # discretized data to which unique value on the corresponding **variable** it
+                # discretized data to which bin on the corresponding **variable** it
                 # belongs.
                 dig_cov_flat_unq_memb = np.zeros_like(dig_cov_flat, dtype=int)
 
+                # Number of bins per covariate
                 dig_cov_unq_counts = []
 
                 for vari in range(dig_cov_flat.shape[1]):
+                    var = col_vars[vari]
                     dig_var_flat_unq, dig_var_flat_unq_memb = np.unique(
                         dig_cov_flat[:, vari], return_inverse=True
                     )
@@ -1240,8 +1259,20 @@ class Formula:
                     if vari > 0:
                         dig_var_flat_unq_memb += dig_cov_unq_counts[-1]
 
-                    dig_cov_unq_counts.append(len(dig_var_flat_unq))
-                    dig_cov_flat_unq_memb[:, vari] = dig_var_flat_unq_memb[:]
+                    # Collect number of bins per covariate. This becomes equal to 1 if we
+                    # sum over bins (i.e., collapse a variable to the number of observations).
+                    if (
+                        has_stat
+                        and var in self.discretize[sti]["stat"]
+                        and self.discretize[sti]["stat"][var] == "n"
+                    ):
+                        dig_cov_unq_counts.append(1)
+                        # All values assigned to same bin, so that count is number
+                        # of observations.
+                        dig_cov_flat_unq_memb[:, vari] = np.min(dig_var_flat_unq_memb)
+                    else:
+                        dig_cov_unq_counts.append(len(dig_var_flat_unq))
+                        dig_cov_flat_unq_memb[:, vari] = dig_var_flat_unq_memb[:]
 
                 # Now we prepare the cluster structure:
                 # Every series now gets represented by a row vector with sum(dig_cov_unq_counts)
@@ -1273,6 +1304,44 @@ class Formula:
                 # cluster structure
                 for sidx, (udr, cnts) in enumerate(s_split_unq_cnts):
                     clust[sidx, udr] += cnts
+
+                # Final optional collapsing step - if we want to get the number of unique
+                # discretized covariate values present on a particular series.
+                if has_stat:
+                    clust2 = []
+                    start_idx = 0
+                    for vari in range(dig_cov_flat.shape[1]):
+                        var = col_vars[vari]
+
+                        # fmt: off
+                        clust2var = clust[
+                            :, start_idx : (start_idx + dig_cov_unq_counts[vari])  # noqa: E203
+                        ]
+                        # fmt: on
+
+                        if (
+                            var in self.discretize[sti]["stat"]
+                            and self.discretize[sti]["stat"][var] == "n_unique"
+                        ):
+
+                            clust2var = (
+                                np.sum(clust2var > 0, axis=1)
+                                .reshape(-1, 1)
+                                .astype(np.float64)
+                            )
+
+                        clust2.append(clust2var)
+
+                        start_idx += dig_cov_unq_counts[vari]
+
+                    clust = np.concatenate(clust2, axis=1)
+
+                # And optionally normalize across features, since they can be of vastly different
+                # scale
+                if normalize:
+                    clust_norm = np.linalg.norm(clust, axis=0, keepdims=True, ord=1)
+                    norm_idx = (clust_norm != 0).flatten()
+                    clust[:, norm_idx] /= clust_norm[:, norm_idx]
 
                 # Use heuristic to determine the number of clusters also used to discretize
                 # individual covariates.
