@@ -28,6 +28,7 @@ from .compact_rep import (
     computeSH,
     computeSVPS,
 )
+import dChol
 from .repara import reparam_model
 from functools import reduce
 from .custom_types import Fit_info, LambdaTerm, DerivOrder
@@ -7525,6 +7526,205 @@ def getExplicitnH(
     return scp.sparse.csc_array(nH)
 
 
+def getCholnH(
+    linopH: scp.sparse.linalg.LinearOperator,
+    n_coef: int,
+    S_root: scp.sparse.csc_array,
+    make_pd: bool = True,
+):
+
+    sample_hessian = linopH.sample_hessian
+    fcols = linopH.fcols
+    acols = linopH.acols
+    IonHBB = linopH.IonHBB
+    nHfd = linopH.nHfd
+
+    # Update matrices associated with quasi-Newton block
+    t1 = None
+    t2 = None
+
+    E = [S_root]
+
+    if fcols is None:
+        # Full approximation
+        if len(linopH.yk) > 0:
+            omega = compute_omega(
+                linopH.yk, linopH.sk, method="mean" if sample_hessian else "NoWr"
+            )
+        else:
+            omega = 1
+
+        t1, t2, _ = computeHSR1(
+            linopH.sk,
+            linopH.yk,
+            linopH.rho,
+            scp.sparse.identity(n_coef, format="csc") * omega,
+            omega=omega,
+            make_psd=True,
+            make_pd=make_pd,
+            explicit=False,
+        )
+
+    else:
+        # Partial approximation
+        dampen_HBb = (
+            linopH.sqEFS_options["dampen_HBb"]
+            if "dampen_HBb" in linopH.sqEFS_options
+            else 1
+        )
+
+        dampen_HBB = (
+            linopH.sqEFS_options["dampen_HBB"]
+            if "dampen_HBB" in linopH.sqEFS_options
+            else 1
+        )
+
+        PD_HBB = (
+            linopH.sqEFS_options["PD_HBB"] if "PD_HBB" in linopH.sqEFS_options else True
+        )
+
+        _, _, _, _, _, _, t1, t2, _ = computeSH(
+            linopH.yk,
+            linopH.sk,
+            nHfd,
+            IonHBB,
+            fcols,
+            acols,
+            sample_hessian,
+            dampen_HBb <= 0,
+            dampen_HBB,
+            make_psd=True,
+            make_pd=make_pd,
+            form=linopH.form,
+            explicit=False,
+        )
+        t1 = t1.toarray()
+
+        # Re-compute omega as done by computeSH
+        if len(linopH.yk) > 0:
+            omega = dampen_HBB * compute_omega(
+                linopH.yk[:, acols],
+                linopH.sk[:, acols],
+                method="mean" if sample_hessian else "NoWr",
+            )
+        else:
+            omega = 1
+
+        # Combined indices in order so that quasi Newton block is bottom right
+        tcols = [*fcols, *acols]
+
+        nF, nA, nT = len(fcols), len(acols), len(tcols)
+
+        # To compute ordered version of hessian we need first permutation matrix P1:
+        # len(tcols) * len(tcols) permutation matrix transforming entire nH into order (onH) so that
+        # fd approximated block is top left and quasi Newton block is bottom right via
+        # onH = P1.T @ nH @ P1
+        P1 = scp.sparse.csc_array(
+            (
+                np.tile(1, nT),
+                (tcols, np.arange(nT)),
+            ),
+            shape=(nT, nT),
+        )
+
+        # Now can compute ordered version of finite difference approximated part of nH and extract
+        # the relevant blocks
+        onHfd = P1.T @ nHfd @ P1
+
+        # Can now extract the block on the diagonal and the off-diagonals holding the mixed derivs
+        # onHBB should be PD
+        # onHBb might have been dampened.
+        onHBB = onHfd[np.ix_(np.arange(nF), np.arange(nF))]
+        onHBb = onHfd[np.ix_(np.arange(nF), np.arange(nF, nT))]
+
+        # Now Eigen-decomposition of onHBB
+        eig, U = scp.linalg.eigh(onHBB.toarray())
+        eig[eig < 0] = 0  # Must be PSD for Chol to make sense
+
+        if PD_HBB:
+            eps = np.power(np.finfo(float).eps, 0.5)
+            thresh = eps * np.max(np.abs(eig))
+            eig[eig < thresh] = thresh
+
+        ieig = np.zeros_like(eig)
+        ieig[eig > 0] = 1 / eig[eig > 0]
+
+        dsqrt = np.zeros_like(eig)
+        idsqrt = np.zeros_like(eig)
+        dsqrt[eig > 0] = np.sqrt(eig[eig > 0])
+        idsqrt[ieig > 0] = np.sqrt(ieig[ieig > 0])
+
+        # Collect first "root"
+        R1 = P1 @ scp.sparse.vstack(
+            [
+                scp.sparse.csc_array(U @ np.diag(dsqrt)),
+                scp.sparse.csc_array(onHBb.T @ U @ np.diag(idsqrt)),
+            ],
+        )
+        E.append(R1)
+
+    # At this point only need to deal with t1 and t2 for both partial and full approximations
+
+    # Need Root of
+    # M = I*\omega + t1@t2@t1^T with M PSD but t2 indefinite
+    # Compute QR = t1 where QR is thin qr decomposition
+    # Now:
+    # M = I*\omega + QR@t2@R^TQ^T
+    Q, R = scp.linalg.qr(t1, mode="economic")
+
+    # Next get ev of R@t2@R^T
+    Rt2R = R @ t2 @ R.T
+    eig2, U2 = scp.linalg.eigh(Rt2R, driver="ev")
+
+    # Now:
+    # M = I*\omega + Q@U2@diag(eig2)@U2^T@Q^T
+
+    # Next split eig2 into eig2+ = [positive | zero] and eig2- = [negative]
+    # Then M = I*\omega + Q@U2@diag(eig2+)@U2^T@Q^T - Q@U2@diag(eig2-)@U2^T@Q^T
+
+    # Roots of first two are simple:
+    if fcols is None:
+        R2 = scp.sparse.eye_array(t1.shape[0], format="csc") * np.sqrt(omega)
+
+    else:
+        R2 = np.zeros(t1.shape[0])
+        R2[acols] = np.sqrt(omega)
+        R2 = scp.sparse.diags_array(R2, format="csc")
+
+    E.append(R2)  # I*\omega
+
+    dsqrt = np.zeros_like(eig2)
+    dsqrt[eig2 > 0] = np.sqrt(eig2[eig2 > 0])
+    dsqrt2 = np.zeros_like(eig2)
+    dsqrt2[eig2 < 0] = np.sqrt(np.abs(eig2[eig2 < 0]))
+
+    R3 = Q @ U2 @ np.diag(dsqrt)
+
+    E.append(scp.sparse.csc_array(R3))  # Q@U2@diag(eig2+)@U2^T@Q^T
+
+    # Form E
+    E = scp.sparse.hstack(E, format="csr")
+
+    # QR decomposition: QR = E^T so E@E^T = npH = R^T@Q^T@Q@R
+    # so R^T is desired Cholesky - **if eig2- is empty**
+
+    R2, P, _, _ = cpp_qrr(E.T)
+    P = compute_eigen_perm(P)
+    L = R2.toarray().T
+
+    # if eig2- is not empty, we still need a couple of downdates
+    neg_idx = np.arange(len(eig2))[eig2 < 0]
+
+    if len(neg_idx) > 0:
+        U3 = P.T @ Q @ U2
+        U3 = U3[:, neg_idx] * np.sqrt(np.abs(eig2[neg_idx]))
+
+        # Downdate
+        dChol.uChol(L, U3, -1)
+
+    return scp.sparse.csc_array(L), P
+
+
 def sampleHcoef(
     linopH: scp.sparse.linalg.LinearOperator,
     family: GSMMFamily,
@@ -9498,16 +9698,17 @@ def solve_generalSmooth_sparse(
         # Optionally form last V + Chol explicitly during last iteration
         # when working with qEFS update
         if form_VH:
+            _, _, S_root, _ = compute_S_emb_pinv_det(
+                len(coef), smooth_pen, "svd", root=True
+            )
 
             H = -1 * getExplicitnH(LV, len(coef), True, True)
 
             # Get Cholesky factor of inverse of penalized hessian (needed for CIs)
-            pH = scp.sparse.csc_array((-1 * H) + S_emb)
-            Lp, Pr, _ = cpp_cholP(pH)  # noqa: F405
-            P = compute_eigen_perm(Pr)  # noqa: F405
-            LVp0 = compute_Linv(Lp, n_c)  # noqa: F405
-            LV = apply_eigen_perm(Pr, LVp0)  # noqa: F405
-            L = P.T @ Lp
+            pL, P = getCholnH(LV, len(coef), S_root, make_pd=True)
+            pLV = compute_Linv(pL, n_c)  # noqa: F405
+            L = P @ pL
+            LV = pLV @ P.T
 
         else:
             LV = None
