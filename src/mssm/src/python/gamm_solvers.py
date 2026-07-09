@@ -7613,7 +7613,7 @@ def getCholnH(
         # Combined indices in order so that quasi Newton block is bottom right
         tcols = [*fcols, *acols]
 
-        nF, nA, nT = len(fcols), len(acols), len(tcols)
+        nF, nT = len(fcols), len(tcols)
 
         # To compute ordered version of hessian we need first permutation matrix P1:
         # len(tcols) * len(tcols) permutation matrix transforming entire nH into order (onH) so that
@@ -7663,13 +7663,42 @@ def getCholnH(
         )
         E.append(R1)
 
-    # At this point only need to deal with t1 and t2 for both partial and full approximations
-
-    # Need Root of
+    # For both approximations, still need Root of
     # M = I*\omega + t1@t2@t1^T with M PSD but t2 indefinite
-    # Compute QR = t1 where QR is thin qr decomposition
-    # Now:
-    # M = I*\omega + QR@t2@R^TQ^T
+
+    # Root of I*\omega is simple:
+    if fcols is None:
+        R2 = scp.sparse.eye_array(t1.shape[0], format="csc") * np.sqrt(omega)
+
+    else:
+        R2 = np.zeros(t1.shape[0])
+        R2[acols] = np.sqrt(omega)
+        R2 = scp.sparse.diags_array(R2, format="csc")
+
+    E.append(R2)  # I*\omega
+
+    # Can now compute Cholesky/root of sum of all terms (i.e., E@E.T) but the quasi-newton
+    # modification.
+    E = scp.sparse.hstack(E, format="csr")
+
+    # Try out Cholesky on E@E.T
+    L, Pr, code = cpp_cholP((E @ E.T).tocsc())  # noqa: F405
+    L = L.toarray()
+    P = compute_eigen_perm(Pr).T  # noqa: F405
+
+    if code:
+        # Fall back to QR if E@E.T is only PSD
+
+        # QR decomposition: QR = E^T so E@E^T = R^T@Q^T@Q@R
+        # so R^T is desired Cholesky
+
+        R2, P, _, _ = cpp_qrr(E.T)  # noqa: F405
+        P = compute_eigen_perm(P)  # noqa: F405
+        L = R2.toarray().T
+
+    # At this point only need to deal with t1 and t2 for both partial and full approximations
+    # Speciifcally, need root of t1@t2@t1^T with M PSD but t2 indefinite.
+    # First Compute QR = t1 where QR is thin qr decomposition so M = I*\omega + QR@t2@R^TQ^T
     Q, R = scp.linalg.qr(t1, mode="economic")
 
     # Next get ev of R@t2@R^T
@@ -7681,36 +7710,17 @@ def getCholnH(
 
     # Next split eig2 into eig2+ = [positive | zero] and eig2- = [negative]
     # Then M = I*\omega + Q@U2@diag(eig2+)@U2^T@Q^T - Q@U2@diag(eig2-)@U2^T@Q^T
+    # Can apply the last two terms via Chol updating/downdating to Chol of E@E.T
 
-    # Roots of first two are simple:
-    if fcols is None:
-        R2 = scp.sparse.eye_array(t1.shape[0], format="csc") * np.sqrt(omega)
+    pos_idx = np.arange(len(eig2))[eig2 > 0]
 
-    else:
-        R2 = np.zeros(t1.shape[0])
-        R2[acols] = np.sqrt(omega)
-        R2 = scp.sparse.diags_array(R2, format="csc")
+    # First start with updating Cholesky from eig2+
+    if len(pos_idx) > 0:
+        U3 = P.T @ Q @ U2
+        U3 = U3[:, pos_idx] * np.sqrt(eig2[pos_idx])
 
-    E.append(R2)  # I*\omega
-
-    dsqrt = np.zeros_like(eig2)
-    dsqrt[eig2 > 0] = np.sqrt(eig2[eig2 > 0])
-    dsqrt2 = np.zeros_like(eig2)
-    dsqrt2[eig2 < 0] = np.sqrt(np.abs(eig2[eig2 < 0]))
-
-    R3 = Q @ U2 @ np.diag(dsqrt)
-
-    E.append(scp.sparse.csc_array(R3))  # Q@U2@diag(eig2+)@U2^T@Q^T
-
-    # Form E
-    E = scp.sparse.hstack(E, format="csr")
-
-    # QR decomposition: QR = E^T so E@E^T = npH = R^T@Q^T@Q@R
-    # so R^T is desired Cholesky - **if eig2- is empty**
-
-    R2, P, _, _ = cpp_qrr(E.T)
-    P = compute_eigen_perm(P)
-    L = R2.toarray().T
+        # Update
+        dChol.uChol(L, U3, 1)
 
     # if eig2- is not empty, we still need a couple of downdates
     neg_idx = np.arange(len(eig2))[eig2 < 0]
@@ -9698,17 +9708,32 @@ def solve_generalSmooth_sparse(
         # Optionally form last V + Chol explicitly during last iteration
         # when working with qEFS update
         if form_VH:
-            _, _, S_root, _ = compute_S_emb_pinv_det(
-                len(coef), smooth_pen, "svd", root=True
-            )
 
             H = -1 * getExplicitnH(LV, len(coef), True, True)
 
             # Get Cholesky factor of inverse of penalized hessian (needed for CIs)
-            pL, P = getCholnH(LV, len(coef), S_root, make_pd=True)
-            pLV = compute_Linv(pL, n_c)  # noqa: F405
-            L = P @ pL
-            LV = pLV @ P.T
+            if len(LV_linop.yk) > (0.3 * len(coef)):
+                # Simply compute full Cholesky
+                pH = scp.sparse.csc_array((-1 * H) + S_emb)
+                Lp, Pr, _ = cpp_cholP(pH)  # noqa: F405
+                P = compute_eigen_perm(Pr).T  # noqa: F405
+            else:
+                # Update Cholesky factor with quasi-Newton block
+
+                # First need root of S_emb:
+                if len(smooth_pen) > 0:
+                    _, _, S_root, _ = compute_S_emb_pinv_det(
+                        len(coef), smooth_pen, "svd", root=True
+                    )
+                else:
+                    S_root = S_norm.copy()
+
+                # Then accumulate Cholesky
+                Lp, P = getCholnH(LV, len(coef), S_root, make_pd=True)
+
+            LVp = compute_Linv(Lp, n_c)  # noqa: F405
+            L = P @ Lp
+            LV = LVp @ P.T
 
         else:
             LV = None

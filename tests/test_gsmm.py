@@ -29,6 +29,111 @@ mssm.src.python.utils.GAMLSSGSMMFamily.init_coef = init_coef_gsmmgammlss
 ################################################################## Tests ##################################################################
 
 
+class Test_Chol_updating:
+    sim_dat = sim12(5000, c=0, seed=0, family=GAMMALS([LOG(), LOG()]), n_ranef=20)
+
+    # We again need to model the mean: \mu_i = \alpha + f(x0) + f(x1) + f_{x4}(x0)
+    sim_formula_m = Formula(
+        lhs("y"), [i(), f(["x0"], id=1), f(["x1"]), fs(["x0"], rf="x4")], data=sim_dat
+    )
+
+    # and the standard deviation as well: log(\sigma_i) = \alpha + f(x2) + f(x3)
+    sim_formula_sd = Formula(lhs("y"), [i(), f(["x2"], id=1), f(["x3"])], data=sim_dat)
+
+    family = GAMMALS([LOG(), LOGb(-0.0001)])
+
+    test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
+    test_kwargs["control_lambda"] = 1
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["max_outer"] = 20
+    test_kwargs["max_inner"] = 500
+    test_kwargs["method"] = "qEFS"
+    test_kwargs["repara"] = True
+    test_kwargs["prefit_grad"] = True
+    test_kwargs["sample_hessian_options"] = {"T": 0.1, "delta": 1}
+    test_kwargs["max_restarts"] = -1
+    test_kwargs["sample_hessian"] = True
+    test_kwargs["structured_qefs"] = True
+    test_kwargs["n_cores"] = 4
+    test_kwargs["sqEFS_options"] = {
+        "dampen_HBB": 0.1,
+        "dampen_HBb": 1,
+        "pre_cond": False,
+        "PD_HBB": False,
+    }
+    test_kwargs["qEFS_memory_usage"] = (
+        0.25  # Low enough memory to trigger Chol updating
+    )
+    test_kwargs["bfgs_options"] = None
+
+    def callback(outer, pen_llk, coef, lam):
+        print(outer, pen_llk, lam)
+
+    # Now define the model and fit!
+    gsmm_fam = GAMLSSGSMMFamily(2, family)
+    model = GSMM([sim_formula_m, sim_formula_sd], gsmm_fam)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model.fit(**test_kwargs, callback=callback)
+
+    def test_GAMedf(self):
+        np.testing.assert_allclose(
+            self.model.edf,
+            107.65988689459013,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_edf1(self):
+        compute_bias_corrected_edf(self.model, overwrite=False)
+        edf1 = np.array([edf1 for edf1 in self.model.term_edf1])
+        np.testing.assert_allclose(
+            edf1,
+            np.array(
+                [
+                    6.822003954437688,
+                    4.85270654666088,
+                    119.85131677237061,
+                    6.926201285757667,
+                    2.211716646272749,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
+        )
+
+    def test_ps(self):
+        ps = []
+        for par in range(len(self.model.formulas)):
+            pps, _ = approx_smooth_p_values(self.model, par=par)
+            ps.extend(pps)
+        np.testing.assert_allclose(
+            ps,
+            np.array([0.0, 0.0, 0.0, 0.10946942004018534]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
+        )
+
+    def test_TRs(self):
+        Trs = []
+        for par in range(len(self.model.formulas)):
+            _, pTrs = approx_smooth_p_values(self.model, par=par)
+            Trs.extend(pTrs)
+        np.testing.assert_allclose(
+            Trs,
+            np.array(
+                [
+                    56.579810558691,
+                    2709.9201524805353,
+                    237.11272829051055,
+                    4.758159728976485,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
+        )
+
+
 class Test_qefs_final_budget:
     sim_dat = sim4(500, 2, family=Gamma(), seed=0)
 
