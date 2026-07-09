@@ -7456,7 +7456,26 @@ def getCholnH(
     n_coef: int,
     S_root: scp.sparse.csc_array,
     make_pd: bool = True,
-):
+) -> tuple[scp.sparse.csc_array, scp.sparse.csc_array]:
+    """Compute Cholesky of the pivoted quasi-Newton approximation to the negative Hessian of the
+    penalized log-likelihood.
+
+    :param linopH: Storage holding current quasi-newton approximation of the negative Hessian
+        of the llk. Storage needs to be of the form returned by :func:`init_qEFS_storage`.
+    :type linopH: scp.sparse.linalg.LinearOperator
+    :param n_coef: Number of coefficients
+    :type n_coef: int
+    :param S_root: Root of the total (weighted) penalty matrix
+    :type S_root: scp.sparse.csc_array
+    :param make_pd: Whether to enforce the Hessian approximation to be PD (otherwise only PSD is
+        enforced), defaults to True
+    :type make_pd: bool, optional
+    :return: Cholesky ``Lp`` of the pivoted quasi-Newton approximation to the negative Hessian of
+        the penalized log-likelihood and the pivot matrix so that ``P@Lp`` gives the unpivoted
+        matrix ``L@L.T=nH`` with ``nH`` for the quasi-Newton approximation to the negative Hessian
+        of the penalized log-likelihood.
+    :rtype: tuple[scp.sparse.csc_array, scp.sparse.csc_array]
+    """
 
     sample_hessian = linopH.sample_hessian
     fcols = linopH.fcols
