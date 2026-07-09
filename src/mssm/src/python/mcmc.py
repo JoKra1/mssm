@@ -378,6 +378,7 @@ def sample_mssm(
     auto_converge: bool = True,
     drop_NA: bool = True,
     sample_rho: bool = False,
+    init_unconditional: bool = False,
     convergence_type: int = 0,
     seed: int = 0,
     progress_bar: bool = True,
@@ -528,6 +529,15 @@ def sample_mssm(
     :param sample_rho: Whether to sample the log regularization parameters as well, defaults to
         False
     :type sample_rho: bool, optional
+    :param init_unconditional: Whether to initialize the covariance matrix of the momentum variables
+        of the NUTS sampler based on the covariance matrix of the normal approximation to the
+        unconditional posterior of the coefficients (if True) or the covariance matrix of the normal
+        approximation to the posterior of the coefficients **given** the estimated smoothing
+        parameters (if False). Only has an effect when ``sample_rho is True``. Setting this to True
+        will generally reduce correlation in the chains but computing the unconditional covariance
+        matrix is relatively expensive for complex models and the resulting covariance matrix will
+        generally be dense, which will also slow down each sampling step. Defaults to False
+    :type init_unconditional: bool, optional
     :param convergence_type: For which parameters to monitor convergence (**also determines which
         parameteters are considered for the** ``auto-convergence`` **feature**). See the
         :func:`check_convergence` function for details, defaults to 0
@@ -638,6 +648,19 @@ def sample_mssm(
 
     # Can now start building Minv and MLT so that MLT.T@MLT = inv(Minv)
     Minv = (model.lvi.T @ model.lvi).tocsc() * orig_scale
+
+    # Approximate covariance matrix for log lambda parameters - might be needed here to
+    # modify covariance matrix for coefficients.
+    if sample_rho:
+        Vp, Vpreg, Vpr, Vpregr, ep, dBetadRhos = estimateVp(model, n_c=n_chains)
+
+        if init_unconditional:
+            # Compute smoothing parameter uncertainty corrected version
+            Vc = Vpr @ dBetadRhos.T
+            Vc = Vc.T @ Vc
+
+            Minv = scp.sparse.csc_array(Vc + Minv)
+
     Lp, Pr, _ = cpp_cholP(Minv)
     Lpinv = compute_Linv(Lp, n_c=n_chains)
 
@@ -709,9 +732,8 @@ def sample_mssm(
         MLT = scp.sparse.block_array([[MLT, None], [None, Re_theta]], format="csc")
         Minv = scp.sparse.block_array([[Minv, None], [None, inH_theta]], format="csc")
 
-    # Approximate covariance matrix for log lambda parameters
+    # Modify covariance matrix to account for log lambda parameters
     if sample_rho:
-        Vp, Vpreg, Vpr, Vpregr, ep, _ = estimateVp(model, n_c=n_chains)
 
         # Correct for scaling for GAMMs
         if isinstance(family, Family) and family.twopar is True:
