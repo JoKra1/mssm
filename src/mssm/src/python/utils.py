@@ -137,7 +137,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
 
         model.fit(init_coef=None,method='qEFS',extend_lambda=False,
                 control_lambda=0,max_outer=200,max_inner=500,min_inner=500,
-                seed=0,qEFSH='SR1',max_restarts=5,overwrite_coef=False,
+                seed=0,max_restarts=5,overwrite_coef=False,
                 qEFS_init_converge=False,prefit_grad=True,
                 progress_bar=True,**bfgs_opt)
 
@@ -166,7 +166,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
 
         model.fit(init_coef=None,method='qEFS',extend_lambda=False,
                 control_lambda=0,max_outer=200,max_inner=500,min_inner=500,
-                seed=0,qEFSH='SR1',max_restarts=0,overwrite_coef=False,
+                seed=0,max_restarts=0,overwrite_coef=False,
                 qEFS_init_converge=False,prefit_grad=True,
                 progress_bar=True,**bfgs_opt)
 
@@ -2011,7 +2011,6 @@ def compute_REML_candidate_GSMM(
                 )
                 __old_opt.init = False
                 __old_opt.method = "qEFS"
-                __old_opt.form = "SR1"
                 __old_opt.bfgs_options = bfgs_options
                 __old_opt.sample_hessian = True
                 __old_opt.sample_hessian_method = 0

@@ -22,12 +22,12 @@ from .formula import (
 )
 from .file_loading import setup_cache, clear_cache
 from .compact_rep import (
-    computeH,
     computeHSR1,
     compute_omega,
     computeSH,
     computeSVPS,
 )
+import dChol
 from .repara import reparam_model
 from functools import reduce
 from .custom_types import Fit_info, LambdaTerm, DerivOrder
@@ -756,7 +756,6 @@ def getImplicitV(
 
     # Extract info to determine which strategy was used to approximate H
     sample_hessian = linopH.sample_hessian
-    form = linopH.form
     fcols = linopH.fcols
 
     # Get all the update vectors
@@ -799,50 +798,24 @@ def getImplicitV(
             # Below we get int2, with the shifted Eigenvalues so that
             # H = H0 + nt1 @ int2 @ nt3 - where H0 = I*omega + S_emb and
             # I*omega + nt1 @ int2 @ nt3 is PSD.
-            # Now, using the Woodbury identity:
-            # V = (H)^-1 = V0 - V0@nt1@ (int2^-1 + nt3@V0@nt1)^-1 @ nt3@V0
-            #
-            # since nt3=nt1.T, and int2^-1 = nt2 we have:
-            #
-            # V = V0 - V0@nt1@ (nt2 + nt1.T@V0@nt1)^-1 @ nt1.t@V0
-            #
+            nt1, int2, nt3 = computeHSR1(
+                s, y, rho, H0, omega, make_psd=True, explicit=False
+            )
 
-            # Compute inverse:
-            if form != "SR1":
-                nt1, nt2, int2, nt3 = computeH(s, y, rho, H0, explicit=False)
+            # When using SR1 int2 is potentially singular, so we need a modified Woodbury
+            # that accounts for that. This is given by eq. 23 in Henderson & Searle (1981):
+            invt2 = np.identity(int2.shape[1]) + int2 @ nt3 @ V0 @ nt1
 
-                invt2 = nt2 + nt3 @ V0 @ nt1
+            U, sv_invt2, VT = scp.linalg.svd(invt2, lapack_driver="gesvd")
 
-                U, sv_invt2, VT = scp.linalg.svd(invt2, lapack_driver="gesvd")
+            # Nowe we can compute all parts for the modified Woodbury identy to
+            # obtain V
+            t2 = VT.T @ np.diag(1 / sv_invt2) @ U.T
+            t1 = V0 @ nt1
+            t3 = int2 @ nt3 @ V0
 
-                # Nowe we can compute all parts for the Woodbury identy to obtain V
-                t2 = VT.T @ np.diag(1 / sv_invt2) @ U.T
+            # We now have: V = V0 - V0@nt1@t2@nt3@V0, but don't have to form that explicitly!
 
-                t1 = V0 @ nt1
-                t3 = nt3 @ V0
-            else:
-                nt1, int2, nt3 = computeHSR1(
-                    s, y, rho, H0, omega, make_psd=True, explicit=False
-                )
-
-                # When using SR1 int2 is potentially singular, so we need a modified Woodbury
-                # that accounts for that. This is given by eq. 23 in Henderson & Searle (1981):
-                invt2 = np.identity(int2.shape[1]) + int2 @ nt3 @ V0 @ nt1
-
-                U, sv_invt2, VT = scp.linalg.svd(invt2, lapack_driver="gesvd")
-
-                # Nowe we can again compute all parts for the modified Woodbury identy to
-                # obtain V
-                t2 = VT.T @ np.diag(1 / sv_invt2) @ U.T
-
-                t1 = V0 @ nt1
-                t3 = int2 @ nt3 @ V0
-
-            # We now have: V = V0 - V0@nt1@t2@nt3@V0, but don't have to form that explcitly!
-            # V3 = V0 - V0@nt1@t2@nt3@V0
-            # LVPT, P, code = cpp_cholP(scp.sparse.csc_array(V3))
-            # LVT = apply_eigen_perm(P,LVPT)
-            # LV = LVT.T
         t4 = None
         t5 = None
         t6 = None
@@ -881,7 +854,6 @@ def getImplicitV(
             dampen_HBb <= 0,
             dampen_HBB,
             explicit=False,
-            form=form,
         )
 
         (
@@ -6853,7 +6825,6 @@ def update_ys_qefs(
     step: np.ndarray | None,
     alpha: float | None,
     skip: bool,
-    form: str,
     maxcor: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, bool]:
     """Determines new update vectors ``yk`` and ``sk`` as well as new values for ``rho`` and
@@ -6889,14 +6860,12 @@ def update_ys_qefs(
     :param skip: Whether to skip accumulating the update vectors based on ``grad_up``, ``step``,
         and ``next_grad_up`` (For example if step search failed).
     :type skip: bool
-    :param form: Which update to use: "SR1" or "LBFGS"
-    :type form: str
     :param maxcor: Maximum number of update vectors to retain as part of the limited memory
         approximations to the hessian/inverse.
     :type maxcor: int
     :return: Updated values for ``yks``, ``sks``, ``rhos``, as well as ``omega`` (latest
         estimate of eigenvalue of hessian) and ``skip`` reflecting the updated decision on whether
-        to collect the update vectors for the "SR1" update (is always the same if ``form='LBFGS'``).
+        to collect the update vectors for the "SR1" update.
     :rtype: tuple[np.ndarray, np.ndarray, np.ndarray, float, bool]
     """
 
@@ -6914,36 +6883,11 @@ def update_ys_qefs(
                 skip = True
 
     if skip is False:
-
-        if form == "SR1":
-            # Check if SR1 update is defined (see Nocedal & Wright, 2004)
-            skip = test_SR1(sk, yk, rhok, sks, yks, rhos)
-        else:
-            # Check curvature condition for BFGS
-            skip = yk.T @ sk > 0
+        # Check if SR1 update is defined (see Nocedal & Wright, 2004)
+        skip = test_SR1(sk, yk, rhok, sks, yks, rhos)
 
     if skip is False:
-        # Wolfe/Armijo met, can collect update vectors
-
-        if form != "SR1" and len(sks) > 0:
-            # But first check for dampen for BFGS update - see Nocedal & Wright (2004):
-
-            # Need previous omega
-            if sks.shape[0] > 0:
-                omega = compute_omega(yks, sks)
-            else:
-                omega = 1
-
-            # Initialize hessian
-            H0 = scp.sparse.identity(len(sk), format="csc") * omega
-
-            Ht1, _, Ht2, Ht3 = computeH(sks, yks, rhos, H0, explicit=False)
-            Bs = H0 @ sk + Ht1 @ Ht2 @ Ht3 @ sk
-            sBs = sk.T @ Bs
-
-            if sk.T @ yk < 0.2 * sBs:
-                theta = (0.8 * sBs) / (sBs - sk.T @ yk)
-                yk = theta * yk + (1 - theta) * Bs
+        # Update defined, can collect update vectors
 
         # Collect
         if len(sks) == 0:
@@ -6978,7 +6922,6 @@ def sample_ys_qefs(
     coef: np.ndarray,
     coef_split_idx: list[int],
     S_emb: scp.sparse.csc_array,
-    form: str,
     maxcor: int,
     method: int,
     seed: int,
@@ -7021,8 +6964,6 @@ def sample_ys_qefs(
     :type coef_split_idx: list[int]
     :param S_emb: Total penalty matrix
     :type S_emb: scp.sparse.csc_array
-    :param form: Which update to use: "SR1" or "LBFGS"
-    :type form: str
     :param maxcor: Maximum number of update vectors to retain as part of the limited memory
         approximations to the hessian/inverse.
     :type maxcor: int
@@ -7178,7 +7119,6 @@ def sample_ys_qefs(
                 step0,
                 r,
                 False,
-                form,
                 maxcor,
             )
 
@@ -7225,7 +7165,6 @@ def sample_ys_qefs(
                 None,
                 None,
                 False,
-                form,
                 maxcor,
             )
 
@@ -7337,7 +7276,6 @@ def makepdd_fd2llk(
 
 def init_qEFS_storage(
     coef: np.ndarray,
-    qEFSH: str,
     bfgs_options: dict,
     sample_hessian: bool,
     sample_hessian_method: int,
@@ -7345,15 +7283,12 @@ def init_qEFS_storage(
     fcols: np.ndarray,
     sqEFS_options: dict,
 ) -> scp.optimize.LbfgsInvHessProduct:
-    """Initializes storage to hold l-qEFS approximations to the negative Hessian.
+    """Initializes storage to hold l-qEFS SR1 approximations to the negative Hessian.
 
     Returns a ``scp.optimize.LbfgsInvHessProduct`` object with extra attributes.
 
     :param coef: Coefficient array
     :type coef: np.ndarray
-    :param qEFSH: Should the hessian approximation use a symmetric rank 1 update (``qEFSH='SR1'``)
-        that is forced to result in positive semi-definiteness of the approximation or the standard
-        bfgs update (``qEFSH='BFGS'``)
     :param bfgs_options: An optional dictionary holding arguments that should be passed on to the
         call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``.
     :type bfgs_options: dict
@@ -7396,7 +7331,6 @@ def init_qEFS_storage(
     opt_storage.init = False
 
     opt_storage.method = "qEFS"
-    opt_storage.form = qEFSH
     opt_storage.bfgs_options = bfgs_options
     opt_storage.sample_hessian = sample_hessian
     opt_storage.sample_hessian_method = sample_hessian_method
@@ -7477,23 +7411,16 @@ def getExplicitnH(
             omega = 1
 
         # Get an approximation of the Hessian of the likelihood
-        if linopH.form == "SR1":
-            nH = computeHSR1(
-                linopH.sk,
-                linopH.yk,
-                linopH.rho,
-                scp.sparse.identity(n_coef, format="csc") * omega,
-                omega=omega,
-                make_psd=make_psd,
-                make_pd=make_pd,
-            )
-        else:
-            nH = computeH(
-                linopH.sk,
-                linopH.yk,
-                linopH.rho,
-                scp.sparse.identity(n_coef, format="csc") * omega,
-            )
+        nH = computeHSR1(
+            linopH.sk,
+            linopH.yk,
+            linopH.rho,
+            scp.sparse.identity(n_coef, format="csc") * omega,
+            omega=omega,
+            make_psd=make_psd,
+            make_pd=make_pd,
+        )
+
     else:
         dampen_HBb = (
             linopH.sqEFS_options["dampen_HBb"]
@@ -7519,10 +7446,236 @@ def getExplicitnH(
             dampen_HBB,
             make_psd=make_psd,
             make_pd=make_pd,
-            form=linopH.form,
         )
 
     return scp.sparse.csc_array(nH)
+
+
+def getCholnH(
+    linopH: scp.sparse.linalg.LinearOperator,
+    n_coef: int,
+    S_root: scp.sparse.csc_array,
+    make_pd: bool = True,
+) -> tuple[scp.sparse.csc_array, scp.sparse.csc_array]:
+    """Compute Cholesky of the pivoted quasi-Newton approximation to the negative Hessian of the
+    penalized log-likelihood.
+
+    :param linopH: Storage holding current quasi-newton approximation of the negative Hessian
+        of the llk. Storage needs to be of the form returned by :func:`init_qEFS_storage`.
+    :type linopH: scp.sparse.linalg.LinearOperator
+    :param n_coef: Number of coefficients
+    :type n_coef: int
+    :param S_root: Root of the total (weighted) penalty matrix
+    :type S_root: scp.sparse.csc_array
+    :param make_pd: Whether to enforce the Hessian approximation to be PD (otherwise only PSD is
+        enforced), defaults to True
+    :type make_pd: bool, optional
+    :return: Cholesky ``Lp`` of the pivoted quasi-Newton approximation to the negative Hessian of
+        the penalized log-likelihood and the pivot matrix so that ``P@Lp`` gives the unpivoted
+        matrix ``L@L.T=nH`` with ``nH`` for the quasi-Newton approximation to the negative Hessian
+        of the penalized log-likelihood.
+    :rtype: tuple[scp.sparse.csc_array, scp.sparse.csc_array]
+    """
+
+    sample_hessian = linopH.sample_hessian
+    fcols = linopH.fcols
+    acols = linopH.acols
+    IonHBB = linopH.IonHBB
+    nHfd = linopH.nHfd
+
+    # Update matrices associated with quasi-Newton block
+    t1 = None
+    t2 = None
+
+    E = [S_root]
+
+    if fcols is None:
+        # Full approximation
+        if len(linopH.yk) > 0:
+            omega = compute_omega(
+                linopH.yk, linopH.sk, method="mean" if sample_hessian else "NoWr"
+            )
+        else:
+            omega = 1
+
+        t1, t2, _ = computeHSR1(
+            linopH.sk,
+            linopH.yk,
+            linopH.rho,
+            scp.sparse.identity(n_coef, format="csc") * omega,
+            omega=omega,
+            make_psd=True,
+            make_pd=make_pd,
+            explicit=False,
+        )
+
+    else:
+        # Partial approximation
+        dampen_HBb = (
+            linopH.sqEFS_options["dampen_HBb"]
+            if "dampen_HBb" in linopH.sqEFS_options
+            else 1
+        )
+
+        dampen_HBB = (
+            linopH.sqEFS_options["dampen_HBB"]
+            if "dampen_HBB" in linopH.sqEFS_options
+            else 1
+        )
+
+        PD_HBB = (
+            linopH.sqEFS_options["PD_HBB"] if "PD_HBB" in linopH.sqEFS_options else True
+        )
+
+        _, _, _, _, _, _, t1, t2, _ = computeSH(
+            linopH.yk,
+            linopH.sk,
+            nHfd,
+            IonHBB,
+            fcols,
+            acols,
+            sample_hessian,
+            dampen_HBb <= 0,
+            dampen_HBB,
+            make_psd=True,
+            make_pd=make_pd,
+            explicit=False,
+        )
+        t1 = t1.toarray()
+
+        # Re-compute omega as done by computeSH
+        if len(linopH.yk) > 0:
+            omega = dampen_HBB * compute_omega(
+                linopH.yk[:, acols],
+                linopH.sk[:, acols],
+                method="mean" if sample_hessian else "NoWr",
+            )
+        else:
+            omega = 1
+
+        # Combined indices in order so that quasi Newton block is bottom right
+        tcols = [*fcols, *acols]
+
+        nF, nT = len(fcols), len(tcols)
+
+        # To compute ordered version of hessian we need first permutation matrix P1:
+        # len(tcols) * len(tcols) permutation matrix transforming entire nH into order (onH) so that
+        # fd approximated block is top left and quasi Newton block is bottom right via
+        # onH = P1.T @ nH @ P1
+        P1 = scp.sparse.csc_array(
+            (
+                np.tile(1, nT),
+                (tcols, np.arange(nT)),
+            ),
+            shape=(nT, nT),
+        )
+
+        # Now can compute ordered version of finite difference approximated part of nH and extract
+        # the relevant blocks
+        onHfd = P1.T @ nHfd @ P1
+
+        # Can now extract the block on the diagonal and the off-diagonals holding the mixed derivs
+        # onHBB should be PD
+        # onHBb might have been dampened.
+        onHBB = onHfd[np.ix_(np.arange(nF), np.arange(nF))]
+        onHBb = onHfd[np.ix_(np.arange(nF), np.arange(nF, nT))]
+
+        # Now Eigen-decomposition of onHBB
+        eig, U = scp.linalg.eigh(onHBB.toarray())
+        eig[eig < 0] = 0  # Must be PSD for Chol to make sense
+
+        if PD_HBB:
+            eps = np.power(np.finfo(float).eps, 0.5)
+            thresh = eps * np.max(np.abs(eig))
+            eig[eig < thresh] = thresh
+
+        ieig = np.zeros_like(eig)
+        ieig[eig > 0] = 1 / eig[eig > 0]
+
+        dsqrt = np.zeros_like(eig)
+        idsqrt = np.zeros_like(eig)
+        dsqrt[eig > 0] = np.sqrt(eig[eig > 0])
+        idsqrt[ieig > 0] = np.sqrt(ieig[ieig > 0])
+
+        # Collect first "root"
+        R1 = P1 @ scp.sparse.vstack(
+            [
+                scp.sparse.csc_array(U @ np.diag(dsqrt)),
+                scp.sparse.csc_array(onHBb.T @ U @ np.diag(idsqrt)),
+            ],
+        )
+        E.append(R1)
+
+    # For both approximations, still need Root of
+    # M = I*\omega + t1@t2@t1^T with M PSD but t2 indefinite
+
+    # Root of I*\omega is simple:
+    if fcols is None:
+        R2 = scp.sparse.eye_array(t1.shape[0], format="csc") * np.sqrt(omega)
+
+    else:
+        R2 = np.zeros(t1.shape[0])
+        R2[acols] = np.sqrt(omega)
+        R2 = scp.sparse.diags_array(R2, format="csc")
+
+    E.append(R2)  # I*\omega
+
+    # Can now compute Cholesky/root of sum of all terms (i.e., E@E.T) but the quasi-newton
+    # modification.
+    E = scp.sparse.hstack(E, format="csr")
+
+    # Try out Cholesky on E@E.T
+    L, Pr, code = cpp_cholP((E @ E.T).tocsc())  # noqa: F405
+    L = L.toarray()
+    P = compute_eigen_perm(Pr).T  # noqa: F405
+
+    if code:
+        # Fall back to QR if E@E.T is only PSD
+
+        # QR decomposition: QR = E^T so E@E^T = R^T@Q^T@Q@R
+        # so R^T is desired Cholesky
+
+        R2, P, _, _ = cpp_qrr(E.T)  # noqa: F405
+        P = compute_eigen_perm(P)  # noqa: F405
+        L = R2.toarray().T
+
+    # At this point only need to deal with t1 and t2 for both partial and full approximations
+    # Speciifcally, need root of t1@t2@t1^T with M PSD but t2 indefinite.
+    # First Compute QR = t1 where QR is thin qr decomposition so M = I*\omega + QR@t2@R^TQ^T
+    Q, R = scp.linalg.qr(t1, mode="economic")
+
+    # Next get ev of R@t2@R^T
+    Rt2R = R @ t2 @ R.T
+    eig2, U2 = scp.linalg.eigh(Rt2R, driver="ev")
+
+    # Now:
+    # M = I*\omega + Q@U2@diag(eig2)@U2^T@Q^T
+
+    # Next split eig2 into eig2+ = [positive | zero] and eig2- = [negative]
+    # Then M = I*\omega + Q@U2@diag(eig2+)@U2^T@Q^T - Q@U2@diag(eig2-)@U2^T@Q^T
+    # Can apply the last two terms via Chol updating/downdating to Chol of E@E.T
+
+    pos_idx = np.arange(len(eig2))[eig2 > 0]
+
+    # First start with updating Cholesky from eig2+
+    if len(pos_idx) > 0:
+        U3 = P.T @ Q @ U2
+        U3 = U3[:, pos_idx] * np.sqrt(eig2[pos_idx])
+
+        # Update
+        dChol.uChol(L, U3, 1)
+
+    # if eig2- is not empty, we still need a couple of downdates
+    neg_idx = np.arange(len(eig2))[eig2 < 0]
+
+    if len(neg_idx) > 0:
+        U3 = P.T @ Q @ U2
+        U3 = U3[:, neg_idx] * np.sqrt(np.abs(eig2[neg_idx]))
+
+        # Downdate
+        dChol.uChol(L, U3, -1)
+
+    return scp.sparse.csc_array(L), P
 
 
 def sampleHcoef(
@@ -7671,7 +7824,6 @@ def sampleHcoef(
             coef,
             coef_split_idx,
             S_emb,
-            linopH.form,
             linopH.bfgs_options["maxcor"],
             sample_hessian_method,
             seed,
@@ -7848,8 +8000,6 @@ def update_coef_gen_smooth(
                 [grad[i] - (S_emb[[i], :] @ coef)[0] for i in range(len(grad))]
             )
             return -1 * pgrad.flatten()
-
-        form = opt_raw.form
 
         # Sampling options
         sample_hessian = opt_raw.sample_hessian
@@ -8083,7 +8233,6 @@ def update_coef_gen_smooth(
                     coef,
                     coef_split_idx,
                     S_emb,
-                    form,
                     maxcor,
                     sample_hessian_method,
                     outer + attempts,
@@ -8252,7 +8401,6 @@ def update_coef_gen_smooth(
         LV = scp.optimize.LbfgsInvHessProduct(sks, yks)
         LV.nit = opt["nit"]
         LV.method = "qEFS"
-        LV.form = form
         LV.sample_hessian = sample_hessian
         LV.sample_hessian_method = sample_hessian_method
         LV.sample_hessian_options = sample_hessian_options
@@ -8905,7 +9053,6 @@ def solve_generalSmooth_sparse(
     should_keep_drop: bool = True,
     form_VH: bool = True,
     gamma: float = 1,
-    qEFSH: str = "SR1",
     max_restarts: int = 0,
     prefit_grad: bool = False,
     progress_bar: bool = True,
@@ -9029,10 +9176,6 @@ def solve_generalSmooth_sparse(
         Setting this to a value smaller than 1 (but must be > 0) promotes smoother models,
         defaults to 1
     :type gamma: float, optional
-    :param qEFSH: Should the hessian approximation use a symmetric rank 1 update (``qEFSH='SR1'``)
-        that is forced to result in positive semi-definiteness of the approximation or the standard
-        bfgs update (``qEFSH='BFGS'``), defaults to 'SR1'
-    :type qEFSH: str, optional
     :param max_restarts: How often to shrink the coefficient estimate back to a random vector when
         convergence is reached and when ``method='qEFS'``. The optimizer might get stuck in local
         minima so it can be helpful to set this to 1-3. What happens is that if we converge, we
@@ -9208,7 +9351,6 @@ def solve_generalSmooth_sparse(
         if method != "qEFS"
         else init_qEFS_storage(
             coef,
-            qEFSH,
             bfgs_options,
             sample_hessian,
             sample_hessian_method,
@@ -9502,12 +9644,28 @@ def solve_generalSmooth_sparse(
             H = -1 * getExplicitnH(LV, len(coef), True, True)
 
             # Get Cholesky factor of inverse of penalized hessian (needed for CIs)
-            pH = scp.sparse.csc_array((-1 * H) + S_emb)
-            Lp, Pr, _ = cpp_cholP(pH)  # noqa: F405
-            P = compute_eigen_perm(Pr)  # noqa: F405
-            LVp0 = compute_Linv(Lp, n_c)  # noqa: F405
-            LV = apply_eigen_perm(Pr, LVp0)  # noqa: F405
-            L = P.T @ Lp
+            if len(LV_linop.yk) > (0.3 * len(coef)):
+                # Simply compute full Cholesky
+                pH = scp.sparse.csc_array((-1 * H) + S_emb)
+                Lp, Pr, _ = cpp_cholP(pH)  # noqa: F405
+                P = compute_eigen_perm(Pr).T  # noqa: F405
+            else:
+                # Update Cholesky factor with quasi-Newton block
+
+                # First need root of S_emb:
+                if len(smooth_pen) > 0:
+                    _, _, S_root, _ = compute_S_emb_pinv_det(
+                        len(coef), smooth_pen, "svd", root=True
+                    )
+                else:
+                    S_root = S_norm.copy()
+
+                # Then accumulate Cholesky
+                Lp, P = getCholnH(LV, len(coef), S_root, make_pd=True)
+
+            LVp = compute_Linv(Lp, n_c)  # noqa: F405
+            L = P @ Lp
+            LV = LVp @ P.T
 
         else:
             LV = None

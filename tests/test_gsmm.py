@@ -29,6 +29,111 @@ mssm.src.python.utils.GAMLSSGSMMFamily.init_coef = init_coef_gsmmgammlss
 ################################################################## Tests ##################################################################
 
 
+class Test_Chol_updating:
+    sim_dat = sim12(5000, c=0, seed=0, family=GAMMALS([LOG(), LOG()]), n_ranef=20)
+
+    # We again need to model the mean: \mu_i = \alpha + f(x0) + f(x1) + f_{x4}(x0)
+    sim_formula_m = Formula(
+        lhs("y"), [i(), f(["x0"], id=1), f(["x1"]), fs(["x0"], rf="x4")], data=sim_dat
+    )
+
+    # and the standard deviation as well: log(\sigma_i) = \alpha + f(x2) + f(x3)
+    sim_formula_sd = Formula(lhs("y"), [i(), f(["x2"], id=1), f(["x3"])], data=sim_dat)
+
+    family = GAMMALS([LOG(), LOGb(-0.0001)])
+
+    test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
+    test_kwargs["control_lambda"] = 1
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["max_outer"] = 20
+    test_kwargs["max_inner"] = 500
+    test_kwargs["method"] = "qEFS"
+    test_kwargs["repara"] = True
+    test_kwargs["prefit_grad"] = True
+    test_kwargs["sample_hessian_options"] = {"T": 0.1, "delta": 1}
+    test_kwargs["max_restarts"] = -1
+    test_kwargs["sample_hessian"] = True
+    test_kwargs["structured_qefs"] = True
+    test_kwargs["n_cores"] = 4
+    test_kwargs["sqEFS_options"] = {
+        "dampen_HBB": 0.1,
+        "dampen_HBb": 1,
+        "pre_cond": False,
+        "PD_HBB": False,
+    }
+    test_kwargs["qEFS_memory_usage"] = (
+        0.25  # Low enough memory to trigger Chol updating
+    )
+    test_kwargs["bfgs_options"] = None
+
+    def callback(outer, pen_llk, coef, lam):
+        print(outer, pen_llk, lam)
+
+    # Now define the model and fit!
+    gsmm_fam = GAMLSSGSMMFamily(2, family)
+    model = GSMM([sim_formula_m, sim_formula_sd], gsmm_fam)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model.fit(**test_kwargs, callback=callback)
+
+    def test_GAMedf(self):
+        np.testing.assert_allclose(
+            self.model.edf,
+            107.65988689459013,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_edf1(self):
+        compute_bias_corrected_edf(self.model, overwrite=False)
+        edf1 = np.array([edf1 for edf1 in self.model.term_edf1])
+        np.testing.assert_allclose(
+            edf1,
+            np.array(
+                [
+                    6.822003954437688,
+                    4.85270654666088,
+                    119.85131677237061,
+                    6.926201285757667,
+                    2.211716646272749,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
+        )
+
+    def test_ps(self):
+        ps = []
+        for par in range(len(self.model.formulas)):
+            pps, _ = approx_smooth_p_values(self.model, par=par)
+            ps.extend(pps)
+        np.testing.assert_allclose(
+            ps,
+            np.array([0.0, 0.0, 0.0, 0.10946942004018534]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
+        )
+
+    def test_TRs(self):
+        Trs = []
+        for par in range(len(self.model.formulas)):
+            _, pTrs = approx_smooth_p_values(self.model, par=par)
+            Trs.extend(pTrs)
+        np.testing.assert_allclose(
+            Trs,
+            np.array(
+                [
+                    56.579810558691,
+                    2709.9201524805353,
+                    237.11272829051055,
+                    4.758159728976485,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
+        )
+
+
 class Test_qefs_final_budget:
     sim_dat = sim4(500, 2, family=Gamma(), seed=0)
 
@@ -174,185 +279,6 @@ class Test_repara_skip:
         np.testing.assert_allclose(
             Trs,
             np.array([0.5167373537113078]),
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 1.5),
-        )
-
-
-class Test_GAUMLSSGEN_hard:
-
-    # Simulate 500 data points
-    sim_dat = sim3(
-        500, 2, c=1, seed=0, family=Gaussian(), binom_offset=0, correlate=False
-    )
-
-    # We need to model the mean: \mu_i
-    formula_m = Formula(
-        lhs("y"), [i(), f(["x0"]), f(["x1"]), f(["x2"]), f(["x3"])], data=sim_dat
-    )
-
-    # And for sd - here constant
-    formula_sd = Formula(lhs("y"), [i()], data=sim_dat)
-
-    # Collect both formulas
-    formulas = [formula_m, formula_sd]
-    links = [Identity(), LOG()]
-
-    # Now define the general family + model and fit!
-    gsmm_fam = GAMLSSGSMMFamily(2, GAUMLSS(links))
-    model = GSMM(formulas=formulas, family=gsmm_fam)
-
-    # fit with BFGS
-    bfgs_opt = {"gtol": 1e-7, "ftol": 1e-7, "maxcor": 30, "maxls": 200, "maxfun": 1e7}
-
-    test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
-    test_kwargs["method"] = "qEFS"
-    test_kwargs["extend_lambda"] = False
-    test_kwargs["control_lambda"] = 1
-    test_kwargs["max_outer"] = 200
-    test_kwargs["max_inner"] = 500
-    test_kwargs["min_inner"] = 500
-    test_kwargs["seed"] = 0
-    test_kwargs["max_restarts"] = 5
-    test_kwargs["prefit_grad"] = True
-    test_kwargs["sample_hessian"] = False
-    test_kwargs["structured_qefs"] = False
-    test_kwargs["qEFSH"] = "BFGS"
-    test_kwargs["bfgs_options"] = bfgs_opt
-    test_kwargs["sample_hessian_options"] = {"n_samples:": 0}  # Prevent sampling
-
-    model.fit(**test_kwargs)
-
-    def test_GAMedf(self):
-        np.testing.assert_allclose(
-            self.model.edf,
-            18.377187361889852,
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.1),
-        )
-
-    def test_GAMcoef(self):
-        coef = self.model.coef
-        np.testing.assert_allclose(
-            coef,
-            np.array(
-                [
-                    [7.64905069],
-                    [-0.86673491],
-                    [-0.90094528],
-                    [0.03276751],
-                    [1.15914006],
-                    [1.65315849],
-                    [0.38976786],
-                    [-0.62349091],
-                    [-0.7531447],
-                    [-0.62543635],
-                    [-1.77827109],
-                    [-1.16369955],
-                    [-0.53206949],
-                    [0.30195526],
-                    [0.94751062],
-                    [1.86610313],
-                    [3.08262143],
-                    [4.13731307],
-                    [5.35515618],
-                    [-7.9746717],
-                    [5.31754213],
-                    [6.43841665],
-                    [-1.39549816],
-                    [0.72747751],
-                    [-0.56335123],
-                    [-2.93264959],
-                    [-3.69271431],
-                    [-1.03991244],
-                    [-0.04562291],
-                    [-0.01165826],
-                    [0.00888674],
-                    [0.02409037],
-                    [0.04134725],
-                    [0.06172081],
-                    [0.08447056],
-                    [0.09714901],
-                    [0.10562989],
-                    [0.66701223],
-                ]
-            ),
-            atol=min(max_atol, 0.3),
-            rtol=min(max_rtol, 0.5),
-        )
-
-    def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.overall_penalties])
-        np.testing.assert_allclose(
-            lam,
-            np.array(
-                [
-                    0.5660081066190392,
-                    3.6344843285366273,
-                    0.009036189964515981,
-                    2111.2780420530066,
-                ]
-            ),
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 3),
-        )
-
-    def test_GAMreml(self):
-        reml = self.model.get_reml()
-        np.testing.assert_allclose(
-            reml, -1073.8484425587437, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
-        )
-
-    def test_GAMllk(self):
-        llk = self.model.get_llk(False)
-        np.testing.assert_allclose(
-            llk, -1043.0223032680815, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
-        )
-
-    def test_edf1(self):
-        compute_bias_corrected_edf(self.model, overwrite=False)
-        edf1 = np.array([edf1 for edf1 in self.model.term_edf1])
-        np.testing.assert_allclose(
-            edf1,
-            np.array(
-                [
-                    5.31951572924431,
-                    3.6329012604530178,
-                    8.634074326598565,
-                    1.0297773848735796,
-                ]
-            ),
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 1.5),
-        )
-
-    def test_ps(self):
-        ps = []
-        for par in range(len(self.model.formulas)):
-            pps, _ = approx_smooth_p_values(self.model, par=par)
-            ps.extend(pps)
-        np.testing.assert_allclose(
-            ps,
-            np.array([0.0047744792490702626, 0.0, 0.0, 0.8676565723545753]),
-            atol=min(max_atol, 0.01),
-            rtol=min(max_rtol, 0.5),
-        )
-
-    def test_TRs(self):
-        Trs = []
-        for par in range(len(self.model.formulas)):
-            _, pTrs = approx_smooth_p_values(self.model, par=par)
-            Trs.extend(pTrs)
-        np.testing.assert_allclose(
-            Trs,
-            np.array(
-                [
-                    17.544251844815605,
-                    97.98996254745872,
-                    346.09962445913857,
-                    0.04502732327983149,
-                ]
-            ),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 1.5),
         )
@@ -1775,11 +1701,11 @@ class Test_shared_qefs:
             edf1,
             np.array(
                 [
-                    6.788467635821958,
-                    4.845035260681829,
-                    119.25933972358285,
-                    6.9067432166190805,
-                    2.209226171258083,
+                    6.78846763582194,
+                    4.845035260681827,
+                    119.25933972358332,
+                    6.906743216619086,
+                    2.2092261712580985,
                 ]
             ),
             atol=min(max_atol, 0),
@@ -1793,7 +1719,7 @@ class Test_shared_qefs:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.1443052734859107]),
+            np.array([0.0, 0.0, 0.0, 0.11668572393893417]),
             atol=min(max_atol, 0.15),
             rtol=min(max_rtol, 0.5),
         )
@@ -1807,10 +1733,10 @@ class Test_shared_qefs:
             Trs,
             np.array(
                 [
-                    53.796589281793814,
-                    2630.3104920856767,
-                    242.58795873779306,
-                    4.620478620568921,
+                    53.796589281794525,
+                    2630.310492085669,
+                    242.58795873779337,
+                    4.620478620568756,
                 ]
             ),
             atol=min(max_atol, 0),
