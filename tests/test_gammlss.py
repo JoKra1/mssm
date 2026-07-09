@@ -20,6 +20,7 @@ from .defaults import (
     init_penalties_tests_gsmm,
     init_coef_gsmmgammlss,
 )
+from mssm.src.python.mcmc import sample_mssm
 
 mssm.src.python.exp_fam.GAUMLSS.init_coef = init_coef_gaumlss_tests
 mssm.src.python.exp_fam.GAMMALS.init_coef = init_coef_gammals_tests
