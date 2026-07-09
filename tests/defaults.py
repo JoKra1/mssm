@@ -90,7 +90,6 @@ default_gsmm_test_kwargs = {
     "should_keep_drop": True,
     "gamma": 1,
     "bfgs_options": None,
-    "qEFSH": "SR1",
     "max_restarts": 0,
     "prefit_grad": False,
     "repara": False,

@@ -706,7 +706,6 @@ class GSMM:
         build_mat: list[bool] | None = None,
         should_keep_drop: bool = True,
         gamma: float = 1,
-        qEFSH: str = "SR1",
         max_restarts: int = 0,
         prefit_grad: bool = True,
         repara: bool = True,
@@ -790,8 +789,8 @@ class GSMM:
             deficiencies and to drop coefficients that cannot be estimated given the current
             smoothing parameter values. This takes substantially longer. If this is set to
             ``'qEFS'``, then the coefficients are estimated via quasi netwon and the smoothing
-            penalties are estimated from the quasi newton approximation to the hessian. This only
-            requieres first derviative information. Defaults to "QR/Chol".
+            penalties are estimated from the quasi newton SR1 approximation to the hessian. This
+            only requieres first derviative information. Defaults to "QR/Chol".
         :type method: str,optional
         :param check_cond: Whether to obtain an estimate of the condition number for the linear
             system that is solved. When ``check_cond=0``, no check will be performed. When
@@ -841,10 +840,6 @@ class GSMM:
             models. Setting this to a value smaller than 1 (but must be > 0) promotes smoother
             models! Defaults to 1.
         :type gamma: float,optional
-        :param qEFSH: Should the hessian approximation use a symmetric rank 1 update
-            (``qEFSH='SR1'``) that is forced to result in positive semi-definiteness of the
-            approximation or the standard bfgs update (``qEFSH='BFGS'``). Defaults to 'SR1'.
-        :type qEFSH: str,optional
         :param max_restarts: How often to shrink the coefficient estimate back to a random vector
             when convergence is reached and when ``method='qEFS'``. The optimizer might get stuck
             in local minima so it can be helpful to set this to 1-3. What happens is that if we
@@ -1184,7 +1179,6 @@ class GSMM:
                 should_keep_drop,
                 form_VH,
                 gamma,
-                qEFSH,
                 max_restarts,
                 prefit_grad,
                 progress_bar,

@@ -22,7 +22,6 @@ from .formula import (
 )
 from .file_loading import setup_cache, clear_cache
 from .compact_rep import (
-    computeH,
     computeHSR1,
     compute_omega,
     computeSH,
@@ -757,7 +756,6 @@ def getImplicitV(
 
     # Extract info to determine which strategy was used to approximate H
     sample_hessian = linopH.sample_hessian
-    form = linopH.form
     fcols = linopH.fcols
 
     # Get all the update vectors
@@ -800,50 +798,24 @@ def getImplicitV(
             # Below we get int2, with the shifted Eigenvalues so that
             # H = H0 + nt1 @ int2 @ nt3 - where H0 = I*omega + S_emb and
             # I*omega + nt1 @ int2 @ nt3 is PSD.
-            # Now, using the Woodbury identity:
-            # V = (H)^-1 = V0 - V0@nt1@ (int2^-1 + nt3@V0@nt1)^-1 @ nt3@V0
-            #
-            # since nt3=nt1.T, and int2^-1 = nt2 we have:
-            #
-            # V = V0 - V0@nt1@ (nt2 + nt1.T@V0@nt1)^-1 @ nt1.t@V0
-            #
+            nt1, int2, nt3 = computeHSR1(
+                s, y, rho, H0, omega, make_psd=True, explicit=False
+            )
 
-            # Compute inverse:
-            if form != "SR1":
-                nt1, nt2, int2, nt3 = computeH(s, y, rho, H0, explicit=False)
+            # When using SR1 int2 is potentially singular, so we need a modified Woodbury
+            # that accounts for that. This is given by eq. 23 in Henderson & Searle (1981):
+            invt2 = np.identity(int2.shape[1]) + int2 @ nt3 @ V0 @ nt1
 
-                invt2 = nt2 + nt3 @ V0 @ nt1
+            U, sv_invt2, VT = scp.linalg.svd(invt2, lapack_driver="gesvd")
 
-                U, sv_invt2, VT = scp.linalg.svd(invt2, lapack_driver="gesvd")
+            # Nowe we can compute all parts for the modified Woodbury identy to
+            # obtain V
+            t2 = VT.T @ np.diag(1 / sv_invt2) @ U.T
+            t1 = V0 @ nt1
+            t3 = int2 @ nt3 @ V0
 
-                # Nowe we can compute all parts for the Woodbury identy to obtain V
-                t2 = VT.T @ np.diag(1 / sv_invt2) @ U.T
+            # We now have: V = V0 - V0@nt1@t2@nt3@V0, but don't have to form that explicitly!
 
-                t1 = V0 @ nt1
-                t3 = nt3 @ V0
-            else:
-                nt1, int2, nt3 = computeHSR1(
-                    s, y, rho, H0, omega, make_psd=True, explicit=False
-                )
-
-                # When using SR1 int2 is potentially singular, so we need a modified Woodbury
-                # that accounts for that. This is given by eq. 23 in Henderson & Searle (1981):
-                invt2 = np.identity(int2.shape[1]) + int2 @ nt3 @ V0 @ nt1
-
-                U, sv_invt2, VT = scp.linalg.svd(invt2, lapack_driver="gesvd")
-
-                # Nowe we can again compute all parts for the modified Woodbury identy to
-                # obtain V
-                t2 = VT.T @ np.diag(1 / sv_invt2) @ U.T
-
-                t1 = V0 @ nt1
-                t3 = int2 @ nt3 @ V0
-
-            # We now have: V = V0 - V0@nt1@t2@nt3@V0, but don't have to form that explcitly!
-            # V3 = V0 - V0@nt1@t2@nt3@V0
-            # LVPT, P, code = cpp_cholP(scp.sparse.csc_array(V3))
-            # LVT = apply_eigen_perm(P,LVPT)
-            # LV = LVT.T
         t4 = None
         t5 = None
         t6 = None
@@ -882,7 +854,6 @@ def getImplicitV(
             dampen_HBb <= 0,
             dampen_HBB,
             explicit=False,
-            form=form,
         )
 
         (
@@ -6854,7 +6825,6 @@ def update_ys_qefs(
     step: np.ndarray | None,
     alpha: float | None,
     skip: bool,
-    form: str,
     maxcor: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, bool]:
     """Determines new update vectors ``yk`` and ``sk`` as well as new values for ``rho`` and
@@ -6890,14 +6860,12 @@ def update_ys_qefs(
     :param skip: Whether to skip accumulating the update vectors based on ``grad_up``, ``step``,
         and ``next_grad_up`` (For example if step search failed).
     :type skip: bool
-    :param form: Which update to use: "SR1" or "LBFGS"
-    :type form: str
     :param maxcor: Maximum number of update vectors to retain as part of the limited memory
         approximations to the hessian/inverse.
     :type maxcor: int
     :return: Updated values for ``yks``, ``sks``, ``rhos``, as well as ``omega`` (latest
         estimate of eigenvalue of hessian) and ``skip`` reflecting the updated decision on whether
-        to collect the update vectors for the "SR1" update (is always the same if ``form='LBFGS'``).
+        to collect the update vectors for the "SR1" update.
     :rtype: tuple[np.ndarray, np.ndarray, np.ndarray, float, bool]
     """
 
@@ -6915,36 +6883,11 @@ def update_ys_qefs(
                 skip = True
 
     if skip is False:
-
-        if form == "SR1":
-            # Check if SR1 update is defined (see Nocedal & Wright, 2004)
-            skip = test_SR1(sk, yk, rhok, sks, yks, rhos)
-        else:
-            # Check curvature condition for BFGS
-            skip = yk.T @ sk > 0
+        # Check if SR1 update is defined (see Nocedal & Wright, 2004)
+        skip = test_SR1(sk, yk, rhok, sks, yks, rhos)
 
     if skip is False:
-        # Wolfe/Armijo met, can collect update vectors
-
-        if form != "SR1" and len(sks) > 0:
-            # But first check for dampen for BFGS update - see Nocedal & Wright (2004):
-
-            # Need previous omega
-            if sks.shape[0] > 0:
-                omega = compute_omega(yks, sks)
-            else:
-                omega = 1
-
-            # Initialize hessian
-            H0 = scp.sparse.identity(len(sk), format="csc") * omega
-
-            Ht1, _, Ht2, Ht3 = computeH(sks, yks, rhos, H0, explicit=False)
-            Bs = H0 @ sk + Ht1 @ Ht2 @ Ht3 @ sk
-            sBs = sk.T @ Bs
-
-            if sk.T @ yk < 0.2 * sBs:
-                theta = (0.8 * sBs) / (sBs - sk.T @ yk)
-                yk = theta * yk + (1 - theta) * Bs
+        # Update defined, can collect update vectors
 
         # Collect
         if len(sks) == 0:
@@ -6979,7 +6922,6 @@ def sample_ys_qefs(
     coef: np.ndarray,
     coef_split_idx: list[int],
     S_emb: scp.sparse.csc_array,
-    form: str,
     maxcor: int,
     method: int,
     seed: int,
@@ -7022,8 +6964,6 @@ def sample_ys_qefs(
     :type coef_split_idx: list[int]
     :param S_emb: Total penalty matrix
     :type S_emb: scp.sparse.csc_array
-    :param form: Which update to use: "SR1" or "LBFGS"
-    :type form: str
     :param maxcor: Maximum number of update vectors to retain as part of the limited memory
         approximations to the hessian/inverse.
     :type maxcor: int
@@ -7179,7 +7119,6 @@ def sample_ys_qefs(
                 step0,
                 r,
                 False,
-                form,
                 maxcor,
             )
 
@@ -7226,7 +7165,6 @@ def sample_ys_qefs(
                 None,
                 None,
                 False,
-                form,
                 maxcor,
             )
 
@@ -7338,7 +7276,6 @@ def makepdd_fd2llk(
 
 def init_qEFS_storage(
     coef: np.ndarray,
-    qEFSH: str,
     bfgs_options: dict,
     sample_hessian: bool,
     sample_hessian_method: int,
@@ -7346,15 +7283,12 @@ def init_qEFS_storage(
     fcols: np.ndarray,
     sqEFS_options: dict,
 ) -> scp.optimize.LbfgsInvHessProduct:
-    """Initializes storage to hold l-qEFS approximations to the negative Hessian.
+    """Initializes storage to hold l-qEFS SR1 approximations to the negative Hessian.
 
     Returns a ``scp.optimize.LbfgsInvHessProduct`` object with extra attributes.
 
     :param coef: Coefficient array
     :type coef: np.ndarray
-    :param qEFSH: Should the hessian approximation use a symmetric rank 1 update (``qEFSH='SR1'``)
-        that is forced to result in positive semi-definiteness of the approximation or the standard
-        bfgs update (``qEFSH='BFGS'``)
     :param bfgs_options: An optional dictionary holding arguments that should be passed on to the
         call of :func:`scipy.optimize.minimize` if ``method=='qEFS'``.
     :type bfgs_options: dict
@@ -7397,7 +7331,6 @@ def init_qEFS_storage(
     opt_storage.init = False
 
     opt_storage.method = "qEFS"
-    opt_storage.form = qEFSH
     opt_storage.bfgs_options = bfgs_options
     opt_storage.sample_hessian = sample_hessian
     opt_storage.sample_hessian_method = sample_hessian_method
@@ -7478,23 +7411,16 @@ def getExplicitnH(
             omega = 1
 
         # Get an approximation of the Hessian of the likelihood
-        if linopH.form == "SR1":
-            nH = computeHSR1(
-                linopH.sk,
-                linopH.yk,
-                linopH.rho,
-                scp.sparse.identity(n_coef, format="csc") * omega,
-                omega=omega,
-                make_psd=make_psd,
-                make_pd=make_pd,
-            )
-        else:
-            nH = computeH(
-                linopH.sk,
-                linopH.yk,
-                linopH.rho,
-                scp.sparse.identity(n_coef, format="csc") * omega,
-            )
+        nH = computeHSR1(
+            linopH.sk,
+            linopH.yk,
+            linopH.rho,
+            scp.sparse.identity(n_coef, format="csc") * omega,
+            omega=omega,
+            make_psd=make_psd,
+            make_pd=make_pd,
+        )
+
     else:
         dampen_HBb = (
             linopH.sqEFS_options["dampen_HBb"]
@@ -7520,7 +7446,6 @@ def getExplicitnH(
             dampen_HBB,
             make_psd=make_psd,
             make_pd=make_pd,
-            form=linopH.form,
         )
 
     return scp.sparse.csc_array(nH)
@@ -7595,7 +7520,6 @@ def getCholnH(
             dampen_HBB,
             make_psd=True,
             make_pd=make_pd,
-            form=linopH.form,
             explicit=False,
         )
         t1 = t1.toarray()
@@ -7881,7 +7805,6 @@ def sampleHcoef(
             coef,
             coef_split_idx,
             S_emb,
-            linopH.form,
             linopH.bfgs_options["maxcor"],
             sample_hessian_method,
             seed,
@@ -8058,8 +7981,6 @@ def update_coef_gen_smooth(
                 [grad[i] - (S_emb[[i], :] @ coef)[0] for i in range(len(grad))]
             )
             return -1 * pgrad.flatten()
-
-        form = opt_raw.form
 
         # Sampling options
         sample_hessian = opt_raw.sample_hessian
@@ -8293,7 +8214,6 @@ def update_coef_gen_smooth(
                     coef,
                     coef_split_idx,
                     S_emb,
-                    form,
                     maxcor,
                     sample_hessian_method,
                     outer + attempts,
@@ -8462,7 +8382,6 @@ def update_coef_gen_smooth(
         LV = scp.optimize.LbfgsInvHessProduct(sks, yks)
         LV.nit = opt["nit"]
         LV.method = "qEFS"
-        LV.form = form
         LV.sample_hessian = sample_hessian
         LV.sample_hessian_method = sample_hessian_method
         LV.sample_hessian_options = sample_hessian_options
@@ -9115,7 +9034,6 @@ def solve_generalSmooth_sparse(
     should_keep_drop: bool = True,
     form_VH: bool = True,
     gamma: float = 1,
-    qEFSH: str = "SR1",
     max_restarts: int = 0,
     prefit_grad: bool = False,
     progress_bar: bool = True,
@@ -9239,10 +9157,6 @@ def solve_generalSmooth_sparse(
         Setting this to a value smaller than 1 (but must be > 0) promotes smoother models,
         defaults to 1
     :type gamma: float, optional
-    :param qEFSH: Should the hessian approximation use a symmetric rank 1 update (``qEFSH='SR1'``)
-        that is forced to result in positive semi-definiteness of the approximation or the standard
-        bfgs update (``qEFSH='BFGS'``), defaults to 'SR1'
-    :type qEFSH: str, optional
     :param max_restarts: How often to shrink the coefficient estimate back to a random vector when
         convergence is reached and when ``method='qEFS'``. The optimizer might get stuck in local
         minima so it can be helpful to set this to 1-3. What happens is that if we converge, we
@@ -9418,7 +9332,6 @@ def solve_generalSmooth_sparse(
         if method != "qEFS"
         else init_qEFS_storage(
             coef,
-            qEFSH,
             bfgs_options,
             sample_hessian,
             sample_hessian_method,

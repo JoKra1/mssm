@@ -1,4 +1,3 @@
-import copy
 import numpy as np
 import scipy as scp
 from .matrix_solvers import cpp_cholP, compute_Linv, apply_eigen_perm
@@ -52,240 +51,6 @@ def compute_omega(yks: np.ndarray, sks: np.ndarray, method: str = "NoWr") -> flo
         omega = 1
 
     return omega
-
-
-def computeH(
-    s: np.ndarray,
-    y: np.ndarray,
-    rho: np.ndarray,
-    H0: scp.sparse.csc_array,
-    explicit: bool = True,
-) -> (
-    np.ndarray
-    | tuple[
-        np.ndarray,
-        np.ndarray,
-        np.ndarray,
-        np.ndarray,
-    ]
-):
-    """Computes (explicitly or implicitly) the quasi-Newton approximation to the negative Hessian
-    of the (penalized) likelihood :math:`\\mathbf{H}` (:math:`\\mathcal{H}`) from the L-BFGS-B
-    optimizer info.
-
-    Relies on equations 2.16 in Byrd, Nocdeal & Schnabel (1992).
-
-    References:
-     - Byrd, R. H., Nocedal, J., & Schnabel, R. B. (1994). Representations of quasi-Newton \
-        matrices and their use in limited memory methods. Mathematical Programming, 63(1), \
-        129–156. https://doi.org/10.1007/BF01582063
-
-    :param s: np.ndarray of shape (m,p), where p is the number of coefficients, holding the first
-        set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
-    :type s: np.ndarray
-    :param y: np.ndarray of shape (m,p), where p is the number of coefficients, holding the second
-        set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
-    :type y: np.ndarray
-    :param rho: flattened numpy.array of shape (m,), holding element-wise ``1/y.T@s`` from Byrd,
-        Nocdeal & Schnabel (1992).
-    :type rho: np.ndarray
-    :param H0: Initial estimate for the hessian of the negative (penalized) likelihood. Here some
-        multiple of the identity (multiplied by ``omega``).
-    :type H0: scipy.sparse.csc_array
-    :param explicit: Whether or not to return the approximate matrix explicitly or implicitly in
-        form of four update matrices.
-    :type explicit: bool
-    :return: H, either as np.ndarray (``explicit=='True'``) or represented implicitly via four
-        update vectors (also np.ndarrays)
-    :rtype: np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
-    """
-    # Number of updates?
-    m = len(y)
-
-    # First form S,Y, and D
-    S = s.T
-    Y = y.T
-
-    STS = S.T @ H0 @ S
-    DK = np.identity(m)
-    DK[0, 0] *= np.dot(s[0], y[0])
-
-    # Now use eq. 2.5 to compute R - only have to do this once
-    R0 = np.dot(s[0], y[0]).reshape(1, 1)
-    R = R0
-    for k in range(1, m):
-
-        DK[k, k] *= np.dot(s[k], y[k])
-
-        R = np.concatenate(
-            (
-                np.concatenate((R0, S[:, :k].T @ Y[:, [k]]), axis=1),
-                np.concatenate(
-                    (np.zeros((1, R0.shape[1])), np.array([1 / rho[k]]).reshape(1, 1)),
-                    axis=1,
-                ),
-            ),
-            axis=0,
-        )
-
-        R0 = R
-
-    # Eq 2.22
-    L = S.T @ Y - R
-
-    # Now compute term 2 in 3.13 of Byrd, Nocdeal & Schnabel (1992)
-    t2 = np.zeros((2 * m, 2 * m))
-    t2[:m, :m] = STS
-    t2[:m, m:] = L
-    t2[m:, :m] = L.T
-    t2[m:, m:] = -1 * DK
-
-    # We actually need the inverse to compute H
-
-    # Eq 2.26 of Byrd, Nocdeal & Schnabel (1992)
-    Dinv = copy.deepcopy(DK)
-    Dpow = copy.deepcopy(DK)
-    Dnpow = copy.deepcopy(DK)
-    for k in range(m):
-        Dinv[k, k] = 1 / Dinv[k, k]
-        Dpow[k, k] = np.power(Dpow[k, k], 0.5)
-        Dnpow[k, k] = np.power(Dnpow[k, k], -0.5)
-
-    JJT = STS + L @ Dinv @ L.T
-    J = scp.linalg.cholesky(JJT, lower=True)
-
-    t2L = np.zeros((2 * m, 2 * m))
-    t2L[:m, :m] = Dpow
-    t2L[m:, :m] = (-1 * L) @ Dnpow
-    t2L[m:, m:] = J
-
-    t2U = np.zeros((2 * m, 2 * m))
-    t2U[:m, :m] = -1 * Dpow
-    t2U[:m:, m:] = Dnpow @ L.T
-    t2U[m:, m:] = J.T
-
-    t2_flip = t2L @ t2U
-
-    invt2L = scp.linalg.inv(t2L)
-    invT2U = scp.linalg.inv(t2U)
-    invt2 = invt2L.T @ invT2U.T
-
-    t2_sort = np.zeros((2 * m, 2 * m))
-    # top left <- bottom right
-    t2_sort[:m, :m] = t2_flip[m:, m:]
-    # top right <- bottom left
-    t2_sort[:m, m:] = t2_flip[m:, :m]
-    # bottom left <- top right
-    t2_sort[m:, :m] = t2_flip[:m, m:]
-    # bottom right <- top left
-    t2_sort[m:, m:] = t2_flip[:m, :m]
-
-    invt2_sort = np.zeros((2 * m, 2 * m))
-    # top left <- bottom right
-    invt2_sort[:m, :m] = invt2[m:, m:]
-    # top right <- bottom left
-    invt2_sort[:m, m:] = invt2[m:, :m]
-    # bottom left <- top right
-    invt2_sort[m:, :m] = invt2[:m, m:]
-    # bottom right <- top left
-    invt2_sort[m:, m:] = invt2[:m, :m]
-
-    # And terms 1 and 2
-    t1 = np.concatenate((H0 @ S, Y), axis=1)
-    t3 = np.concatenate((S.T @ H0, Y.T), axis=0)
-
-    # Return matrix in compact representation
-    if explicit is False:
-        return t1, (-1 * t2_sort), (-1 * invt2_sort), t3
-
-    H = H0 + t1 @ (-1 * invt2_sort) @ t3
-
-    return H
-
-
-def computeV(
-    s: np.ndarray,
-    y: np.ndarray,
-    rho: np.ndarray,
-    V0: scp.sparse.csc_array,
-    explicit: bool = True,
-) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Computes (explicitly or implicitly) the quasi-Newton approximation to the inverse of the
-    negative Hessian of the (penalized) likelihood :math:`\\mathcal{I}` (:math:`\\mathbf{V}`)
-    from the L-BFGS-B optimizer info.
-
-    Relies on equations 2.16 and 3.13 in Byrd, Nocdeal & Schnabel (1992).
-
-    References:
-     - Byrd, R. H., Nocedal, J., & Schnabel, R. B. (1994). Representations of quasi-Newton \
-        matrices and their use in limited memory methods. Mathematical Programming, 63(1), \
-        129–156. https://doi.org/10.1007/BF01582063
-
-    :param s: np.ndarray of shape (m,p), where p is the number of coefficients, holding the
-        first set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
-    :type s: np.ndarray
-    :param y: np.ndarray of shape (m,p), where p is the number of coefficients, holding the second
-        set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992).
-    :type y: np.ndarray
-    :param rho: flattened numpy.array of shape (m,), holding element-wise ```1/y.T@s`` from Byrd,
-        Nocdeal & Schnabel (1992).
-    :type rho: np.ndarray
-    :param V0: Initial estimate for the inverse of the hessian of the negative (penalized)
-        likelihood. Here some multiple of the identity (multiplied by ``omega``).
-    :type V0: scipy.sparse.csc_array
-    :param explicit: Whether or not to return the approximate matrix explicitly or implicitly in
-        form of three update matrices.
-    :type explicit: bool
-    :return: V, either as np.ndarray (``explicit=='True'``) or represented implicitly via three
-        update vectors (also np.ndarrays)
-    :rtype: np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]
-    """
-    m = len(y)
-    # First form S,Y, and D
-    S = s.T
-    Y = y.T
-
-    DYTY = Y.T @ V0 @ Y
-
-    DYTY[0, 0] += np.dot(s[0], y[0])
-
-    # Now use eq. 2.5 to compute R^{-1} - only have to do this once
-    Rinv0 = 1 / np.dot(s[0], y[0]).reshape(1, 1)
-    Rinv = Rinv0
-    for k in range(1, m):
-
-        DYTY[k, k] += np.dot(s[k], y[k])
-
-        Rinv = np.concatenate(
-            (
-                np.concatenate(
-                    (Rinv0, (-rho[k]) * Rinv0 @ S[:, :k].T @ Y[:, [k]]), axis=1
-                ),
-                np.concatenate(
-                    (np.zeros((1, Rinv0.shape[1])), np.array([rho[k]]).reshape(1, 1)),
-                    axis=1,
-                ),
-            ),
-            axis=0,
-        )
-
-        Rinv0 = Rinv
-
-    # Now compute term 2 in 3.13 used for all S_j
-    t2 = np.zeros((2 * m, 2 * m))
-    t2[:m, :m] = Rinv.T @ DYTY @ Rinv
-    t2[:m, m:] = -Rinv.T
-    t2[m:, :m] = -Rinv
-
-    # And terms 1 and 2
-    t1 = np.concatenate((S, V0 @ Y), axis=1)
-    t3 = np.concatenate((S.T, Y.T @ V0), axis=0)
-
-    if explicit:
-        V = V0 + t1 @ t2 @ t3
-        return V
-    else:
-        return t1, t2, t3
 
 
 def computeVSR1(
@@ -561,7 +326,6 @@ def computeSH(
     make_psd: bool = True,
     make_pd: bool = False,
     explicit: bool = True,
-    form: str = "SR1",
 ) -> (
     np.ndarray
     | tuple[
@@ -732,10 +496,6 @@ def computeSH(
     :param explicit: Whether or not to return the approximate matrix explicitly or implicitly in
         form of 8 update matrices, defaults to True
     :type explicit: bool
-    :param form: Should the quasi Newton Hessian approximation use a symmetric rank 1 update
-        (``qEFSH='SR1'``) that is forced to result in positive semi-definiteness of the
-        approximation or the standard bfgs update (``qEFSH='BFGS'``). Defaults to 'SR1'.
-    :type form: str
     :return: H, either as np.ndarray (``explicit=='True'``) or represented implicitly via an initial
         matrix and 8 update matrices as defined in the description (i.e.,
         ``nH1, nH2t1, nH2t2, nH2t3, nH3t1, nH3t3, nH4t1, nH4t2, nH4t3``).
@@ -795,19 +555,16 @@ def computeSH(
     H0 = scp.sparse.identity(nA, format="csc") * omega
 
     # Implicit representation of Schur complement SonHbbqa
-    if form == "SR1":
-        qat1, qat2, qat3 = computeHSR1(
-            sks,
-            yks,
-            rhos,
-            H0,
-            omega,
-            make_psd=make_psd,
-            explicit=False,
-            make_pd=make_pd,
-        )
-    else:
-        qat1, qat2, qat3 = computeH(sks, yks, rhos, H0, explicit=False)
+    qat1, qat2, qat3 = computeHSR1(
+        sks,
+        yks,
+        rhos,
+        H0,
+        omega,
+        make_psd=make_psd,
+        explicit=False,
+        make_pd=make_pd,
+    )
 
     if explicit:
         # At this point we can explicitly form the PSD approximation to nH (conH). First we define
