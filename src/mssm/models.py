@@ -717,7 +717,7 @@ class GSMM:
         sample_hessian_method: int = 0,
         sample_hessian_options: dict | None = None,
         structured_qefs: bool = True,
-        structured_qefs_budget: int | list[int] = 100,
+        structured_qefs_budget: float | int | list[int] = 1.0,
         sqEFS_options: dict = {
             "dampen_HBB": 0.1,
             "dampen_HBb": 1,
@@ -896,16 +896,17 @@ class GSMM:
             being estimated from quasi Newton update vectors. See the
             :func:`mssm.src.python.compact_rep.computeSH` function for details. Defaults to True.
         :type structured_qefs: bool, optional
-        :param structured_qefs_budget: An integer, determining how many columns/rows of the Hessian
-            are to be computed analytically (or via finite differences) when
-            ``structured_qefs is True``. Columns are chosen from the set of columns associated with
-            fixed effects or smooth terms with a non-trivial null-space ("fixed smooth effects").
-            If the model has more of such "fixed" coefficients/columns than what is specified as
-            budget, at random subset of these "fixed" columns is chosen instead.
+        :param structured_qefs_budget: An float or (for backwards compatability) an integer,
+            determining the percentage of (i.e., 'number of' in the int case) columns/rows of the
+            Hessian that are to be computed analytically (or via finite differences) when
+            ``structured_qefs is True``. **Columns are chosen from the set of columns associated
+            with parametric effects or smooth terms with a non-trivial null-space ("fixed smooth
+            effects")**. If the model has more of such "fixed" coefficients/columns than what is
+            specified as budget, at random subset of these "fixed" columns is chosen instead.
             Alternatively, a list of the columns/rows to approximate can be provided - which could
             also hold indices pointing to "random" columns.
-            Defaults to 100.
-        :type structured_qefs_budget: int | list[int], optional
+            Defaults to 1.0.
+        :type structured_qefs_budget: float | int | list[int], optional
         :param sqEFS_options: Optional key-word arguments determining behavior of the structured
             qEFS method (``structured_qefs is True``). Currently only ``"dampen_HBB"``,
             ``"dampen_HBb"``, ``"pre_cond"``, and ``"PD_HBB"`` are supported. ``"dampen_HBB"`` takes
@@ -1103,13 +1104,15 @@ class GSMM:
                         fcols.extend(np.arange(self.family.extra_coef) + start_idx)
 
                     np_gen = np.random.default_rng(seed)
-                    if len(fcols) == len(coef) and len(fcols) <= structured_qefs_budget:
+                    cols_budget = structured_qefs_budget
+                    if isinstance(cols_budget, float) and cols_budget <= 1:
+                        cols_budget = max(1, int(cols_budget * len(fcols)))
+
+                    if len(fcols) == len(coef) and len(fcols) <= cols_budget:
                         fcols = np_gen.choice(fcols, size=len(coef) - 1, replace=False)
 
-                    elif len(fcols) > structured_qefs_budget:
-                        fcols = np_gen.choice(
-                            fcols, size=structured_qefs_budget, replace=False
-                        )
+                    elif len(fcols) > cols_budget:
+                        fcols = np_gen.choice(fcols, size=cols_budget, replace=False)
 
                     if len(fcols) == 0:
                         fcols = None
