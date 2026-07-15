@@ -1702,6 +1702,7 @@ class GAMMLSS(GSMM):
     def __init__(self, formulas: list[Formula], family: GAMLSSFamily):
         super().__init__(formulas, family)
         self.res: np.ndarray | None = None
+        self.family: GAMLSSFamily
 
     #################################### Getters #####################################  # noqa: E266
 
@@ -2612,6 +2613,7 @@ class GAMM(GAMMLSS):
         self.rho: float | None = None
         self.res_ar: np.ndarray | None = None
         self.transform_X: Callable | None = None
+        self.family: Family
 
     ##################################### Getters ####################################  # noqa: E266
 
