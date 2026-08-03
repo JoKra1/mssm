@@ -26,6 +26,7 @@ from .penalties import (
     IdentityPenalty,
 )
 from .smooths import TP_basis_calc
+from .discrete import DiscreteTerm
 
 
 class GammTerm:
@@ -117,8 +118,13 @@ class i(GammTerm):
         self.name = "Intercept"
 
     def build_matrix(
-        self, ci: int, ti: int, ridx: np.ndarray, use_only: list[int]
-    ) -> tuple[list[float], list[int], list[int], int]:
+        self,
+        ci: int,
+        ti: int,
+        ridx: np.ndarray,
+        use_only: list[int],
+        discrete: bool,
+    ) -> tuple[list[float], list[int], list[int], int] | list[DiscreteTerm]:
         """Builds the design/term/model matrix for an intercept term.
 
         :param ci: Current column index.
@@ -136,10 +142,27 @@ class i(GammTerm):
         :rtype: tuple[list[float],list[int],list[int],int]
         """
         n_y = len(ridx)
-        offset = np.ones(n_y)
+
+        if discrete:
+            dt = DiscreteTerm(
+                [np.ones(1).reshape(1, 1)],
+                [np.zeros(n_y, dtype=np.int64)],
+                ci,
+                ci + 1,
+            )
+        else:
+            offset = np.ones(n_y)
 
         if use_only is None or ti in use_only:
+
+            if discrete:
+                return [dt]
+
             return offset, ridx, [ci for _ in range(n_y)], 1
+
+        if discrete:
+            dt.zero_columns = [0]
+            return [dt]
 
         return [], [], [], 1
 
@@ -1132,7 +1155,10 @@ class f(GammTerm):
         cov_flat: np.ndarray,
         use_only: list[int],
         tol: int = 0,
-    ) -> tuple[list[float], list[int], list[int], int]:
+        discrete: bool = False,
+        discrete_cov: dict | None = None,
+        discrete_idx: dict | None = None,
+    ) -> tuple[list[float], list[int], list[int], int] | list[DiscreteTerm]:
         """Builds the design/term/model matrix for this smooth term.
 
         References:
@@ -1183,6 +1209,8 @@ class f(GammTerm):
         new_cols = []
         new_ci = 0
 
+        print(ci)
+
         # Calculate Coef number for control checks
         if len(vars) > 1:
             n_coef = np.prod(self.nk)
@@ -1191,6 +1219,15 @@ class f(GammTerm):
         else:
             n_coef = self.nk
         # print(n_coef)
+
+        if discrete:
+            dt_start = ci
+            dt_end = ci + n_coef  # Before *= len(by_levels) and drop coef!
+            dt_n_coef = n_coef
+            dt = DiscreteTerm(
+                [],
+                [],
+            )
 
         if self.by is not None:
             by_levels = factor_levels[self.by]
@@ -1216,7 +1253,7 @@ class f(GammTerm):
 
             # print(var_mins[vars[0]],var_maxs[vars[0]])
             matrix_term_v = self.basis(
-                cov_flat[:, var_map[vars[vi]]],
+                discrete_cov[vars[vi]] if discrete else cov_flat[:, var_map[vars[vi]]],
                 None,
                 id_nk,
                 min_c=var_mins[vars[vi]],
@@ -1264,12 +1301,19 @@ class f(GammTerm):
 
             if vi == 0:
                 matrix_term = matrix_term_v
-            else:
+            elif discrete is False:
                 matrix_term = TP_basis_calc(matrix_term, matrix_term_v)
+
+            if discrete:
+                dt.unique_matrices.append(matrix_term_v)
+                dt.indices.append(discrete_idx[vars[vi]])
 
         if self.is_identifiable and self.te:
             if self.Z[0].type == ConstType.QR:
-                matrix_term = matrix_term @ self.Z[0].Z
+                if discrete:
+                    dt.Q = self.Z[0].Z
+                else:
+                    matrix_term = matrix_term @ self.Z[0].Z
 
             elif self.Z[0].type == ConstType.DROP:
                 matrix_term = np.delete(matrix_term, self.Z[0].Z, axis=1)
@@ -1302,9 +1346,14 @@ class f(GammTerm):
         # Multiply each row of model matrix by value in by_cont
         if self.by_cont is not None:
             by_cont_cov = cov_flat[:, var_map[self.by_cont]]
-            matrix_term *= by_cont_cov.reshape(-1, 1)
+
+            if discrete:
+                dt.by_cov = by_cont_cov.reshape(-1, 1)
+            else:
+                matrix_term *= by_cont_cov.reshape(-1, 1)
 
         # Handle optional by keyword
+        dts = []
         if self.by is not None:
             term_ridx = []
 
@@ -1314,10 +1363,43 @@ class f(GammTerm):
             m_coli_by = 0
             for by_level in range(len(by_levels)):
                 by_cidx = by_cov == by_level
+
+                if discrete:
+                    dt_by = copy.deepcopy(dt)
+                    dt_by.start_idx = dt_start
+                    dt_by.end_idx = dt_end
+                    dt_by.exclude_columns = []
+
+                    # Update unique matrix rows and indices
+                    for midx in range(len(dt_by.unique_matrices)):
+                        dt_by.unique_matrices[midx] = np.concatenate(
+                            (
+                                dt_by.unique_matrices[midx],
+                                np.zeros(dt_by.unique_matrices[midx].shape[1]).reshape(
+                                    1, -1
+                                ),
+                            ),
+                            axis=0,
+                        )
+                        dt_by.indices[midx][~by_cidx] = (
+                            dt_by.unique_matrices[midx].shape[0] - 1
+                        )
+
+                    # Update coef indices for discrete storage
+                    dt_start += dt_n_coef
+                    dt_end += dt_n_coef
+
                 for m_coli in range(m_cols):
                     if self.drop_coef is None or m_coli_by not in self.drop_coef:
                         term_ridx.append(ridx[by_cidx,])
+                    elif discrete:
+                        dt_by.exclude_columns.append(m_coli_by)
                     m_coli_by += 1
+
+                if discrete:
+                    if len(dt_by.exclude_columns) == 0:
+                        dt_by.exclude_columns = None
+                    dts.append(dt_by)
 
         # Handle optional binary keyword
         elif self.binary is not None:
@@ -1325,7 +1407,27 @@ class f(GammTerm):
             by_cov = cov_flat[:, var_map[self.binary[0]]]
             by_cidx = by_cov == self.binary_level
 
-            if self.drop_coef is None:
+            if discrete:
+                dt.start_idx = dt_start
+                dt.end_idx = dt_end
+
+                # Update unique matrix rows and indices
+                for midx in range(len(dt.unique_matrices)):
+                    dt.unique_matrices[midx] = np.concatenate(
+                        (
+                            dt.unique_matrices[midx],
+                            np.zeros(dt.unique_matrices[midx].shape[1]).reshape(1, -1),
+                        ),
+                        axis=0,
+                    )
+                    dt.indices[midx][~by_cidx] = dt.unique_matrices[midx].shape[0] - 1
+
+                if self.drop_coef is not None:
+                    dt.exclude_columns = self.drop_coef
+
+                dts.append(dt)
+
+            elif self.drop_coef is None:
                 term_ridx = [ridx[by_cidx,] for _ in range(m_cols)]
             else:
                 term_ridx = [
@@ -1336,12 +1438,29 @@ class f(GammTerm):
 
         # No by or binary just use rows/cols as they are
         else:
-            if self.drop_coef is None:
+            if discrete:
+                dt.start_idx = dt_start
+                dt.end_idx = dt_end
+
+                if self.drop_coef is not None:
+                    dt.exclude_columns = self.drop_coef
+
+                dts.append(dt)
+            elif self.drop_coef is None:
                 term_ridx = [ridx[:] for _ in range(m_cols)]
             else:
                 term_ridx = [
                     ridx[:] for m_coli in range(m_cols) if m_coli not in self.drop_coef
                 ]
+
+        if discrete:
+            if use_only is not None and ti not in use_only:
+                for didx in range(len(dts)):
+                    dts[didx].zero_columns = list(
+                        range(dts[didx].end_idx - dts[didx].start_idx)
+                    )
+
+            return dts
 
         f_cols = len(term_ridx)
 
@@ -1639,7 +1758,10 @@ class fs(f):
         cov_flat: np.ndarray,
         use_only: list[int],
         tol: int = 0,
-    ) -> tuple[list[float], list[int], list[int], int]:
+        discrete: bool = False,
+        discrete_cov: dict | None = None,
+        discrete_idx: dict | None = None,
+    ) -> tuple[list[float], list[int], list[int], int] | list[DiscreteTerm]:
         """Builds the design/term/model matrix for this factor smooth term.
 
         References:
@@ -1693,6 +1815,9 @@ class fs(f):
             cov_flat,
             use_only,
             tol,
+            discrete,
+            discrete_cov,
+            discrete_idx,
         )
 
     def get_coef_info(self, factor_levels: dict) -> tuple[int, int, list[str]]:
@@ -2438,7 +2563,8 @@ class ri(GammTerm):
         ridx: np.ndarray,
         cov_flat: np.ndarray,
         use_only: list[int],
-    ) -> tuple[list[float], list[int], list[int], int]:
+        discrete: bool = False,
+    ) -> tuple[list[float], list[int], list[int], int] | list[DiscreteTerm]:
         """Builds the design/term/model matrix associated with this random intercept term.
 
         :param ci: Current column index.
@@ -2476,14 +2602,34 @@ class ri(GammTerm):
         new_cols = []
         new_ci = 0
 
+        if discrete:
+            n_fact = len(factor_levels[vars[0]])
+            dt = DiscreteTerm(
+                [np.identity(n_fact)],
+                [np.zeros(n_y, dtype=np.int64)],
+                ci,
+                ci + n_fact,
+            )
+
+            if use_only is not None and ti not in use_only:
+                dt.zero_columns = list(range(dt.end_idx - dt.start_idx))
+
+                return [dt]
+
         for fl in range(len(factor_levels[vars[0]])):
             fl_idx = by_cov == fl
             if use_only is None or ti in use_only:
-                new_elements.extend(offset[fl_idx])
-                new_rows.extend(ridx[fl_idx])
-                new_cols.extend([ci for _ in range(len(offset[fl_idx]))])
+                if discrete:
+                    dt.indices[fl_idx] = fl
+                else:
+                    new_elements.extend(offset[fl_idx])
+                    new_rows.extend(ridx[fl_idx])
+                    new_cols.extend([ci for _ in range(len(offset[fl_idx]))])
             new_ci += 1
             ci += 1
+
+        if discrete:
+            return [dt]
 
         return new_elements, new_rows, new_cols, new_ci
 
@@ -2581,7 +2727,8 @@ class l(GammTerm):  # noqa: E742
         ridx: np.ndarray,
         cov_flat: np.ndarray,
         use_only: list[int],
-    ) -> tuple[list[float], list[int], list[int], int]:
+        discrete: bool = False,
+    ) -> tuple[list[float], list[int], list[int], int] | list[DiscreteTerm]:
         """Builds the design/term/model matrix associated with this linear term.
 
         :param has_intercept: Whether or not the formula of which this term is part includes an
@@ -2627,6 +2774,7 @@ class l(GammTerm):  # noqa: E742
             ridx,
             cov_flat,
             use_only,
+            discrete,
         )
 
     def get_coef_info(
@@ -2887,7 +3035,8 @@ class rs(GammTerm):
         ridx: np.ndarray,
         cov_flat: np.ndarray,
         use_only: list[int],
-    ) -> tuple[list[float], list[int], list[int], int]:
+        discrete: bool = False,
+    ) -> tuple[list[float], list[int], list[int], int] | list[DiscreteTerm]:
         """Builds the design/term/model matrix associated with this random slope term.
 
         :param ci: Current column index.
@@ -2926,15 +3075,41 @@ class rs(GammTerm):
 
         # First get all columns for all linear predictors associated with this
         # term - might involve interactions!
-        lin_elements, lin_rows, lin_cols, lin_ci = build_linear_term(
-            self, False, ci, ti, var_map, var_types, factor_levels, ridx, cov_flat, None
+        lit = build_linear_term(
+            self,
+            False,
+            ci,
+            ti,
+            var_map,
+            var_types,
+            factor_levels,
+            ridx,
+            cov_flat,
+            None,
+            discrete,
         )
 
+        if discrete:
+            dt = lit[0]
+        else:
+            lin_elements = lit[0]
+            lin_rows = lit[1]
+            lin_cols = lit[2]
+            lin_ci = lit[3]
+
         if self.by is None:
-            if use_only is None or ti in use_only:
-                new_elements = lin_elements
-                new_rows = lin_rows
-                new_cols = lin_cols
+            if discrete:
+
+                if use_only is not None and ti not in use_only:
+                    dt.zero_columns = list(range(dt.end_idx - dt.start_idx))
+
+                return [dt]
+
+            else:
+                if use_only is None or ti in use_only:
+                    new_elements = lin_elements
+                    new_rows = lin_rows
+                    new_cols = lin_cols
 
             return new_elements, new_rows, new_cols, lin_ci
 
@@ -2942,10 +3117,16 @@ class rs(GammTerm):
         by_cov = cov_flat[:, var_map[self.by]]
         by_levels = factor_levels[self.by]
 
-        # Need to cast to np.array for indexing
-        lin_elements = np.array(lin_elements)
-        lin_rows = np.array(lin_rows)
-        lin_cols = np.array(lin_cols)
+        if discrete:
+            dts = []
+            dt_start = dt.start_idx
+            dt_end = dt.end_idx
+            dt_n_coef = dt.end_idx - dt.start_idx
+        else:
+            # Need to cast to np.array for indexing
+            lin_elements = np.array(lin_elements)
+            lin_rows = np.array(lin_rows)
+            lin_cols = np.array(lin_cols)
 
         new_ci = 0
         old_ci = ci
@@ -2955,22 +3136,51 @@ class rs(GammTerm):
             # Collect rows associated with the level of this factor
             fl_idx = by_cov == fl
 
-            # For every coef of the linear terms..
-            for coef_i in range(lin_ci):
-                # Collect the coefficinet column and row index
-                inter_i = lin_elements[lin_cols == old_ci + coef_i]
-                rdx_i = lin_rows[lin_cols == old_ci + coef_i]
+            if discrete:
+                dt_by = copy.deepcopy(dt)
+                dt_by.start_idx = dt_start
+                dt_by.end_idx = dt_end
+                dt_by.zero_columns = []
 
-                # Then adjust to the rows actually present in the interaction column
-                fl_cidx = fl_idx[rdx_i]
+                # Update unique matrix rows and indices
+                for midx in range(len(dt_by.unique_matrices)):
+                    dt_by.unique_matrices[midx] = np.concatenate(
+                        (
+                            dt_by.unique_matrices[midx],
+                            np.zeros(dt_by.unique_matrices[midx].shape[1]).reshape(
+                                1, -1
+                            ),
+                        ),
+                        axis=0,
+                    )
+                    dt_by.indices[midx][~fl_idx] = (
+                        dt_by.unique_matrices[midx].shape[0] - 1
+                    )
 
-                # Now collect
-                if use_only is None or ti in use_only:
-                    new_elements.extend(inter_i[fl_cidx])
-                    new_rows.extend(rdx_i[fl_cidx])
-                    new_cols.extend([ci for _ in range(len(inter_i[fl_cidx]))])
-                new_ci += 1
-                ci += 1
+                # Update coef indices for discrete storage
+                dt_start += dt_n_coef
+                dt_end += dt_n_coef
+                dts.append(dt_by)
+            else:
+                # For every coef of the linear terms..
+                for coef_i in range(lin_ci):
+                    # Collect the coefficinet column and row index
+                    inter_i = lin_elements[lin_cols == old_ci + coef_i]
+                    rdx_i = lin_rows[lin_cols == old_ci + coef_i]
+
+                    # Then adjust to the rows actually present in the interaction column
+                    fl_cidx = fl_idx[rdx_i]
+
+                    # Now collect
+                    if use_only is None or ti in use_only:
+                        new_elements.extend(inter_i[fl_cidx])
+                        new_rows.extend(rdx_i[fl_cidx])
+                        new_cols.extend([ci for _ in range(len(inter_i[fl_cidx]))])
+                    new_ci += 1
+                    ci += 1
+
+        if discrete:
+            return dts
 
         # Matrix returned here holds for every level of by factor all coefficients in lin_elements
         return new_elements, new_rows, new_cols, new_ci
@@ -3033,7 +3243,8 @@ def build_linear_term(
     ridx: np.ndarray,
     cov_flat: np.ndarray,
     use_only: list[int],
-) -> tuple[list[float], list[int], list[int], int]:
+    discrete: bool = False,
+) -> tuple[list[float], list[int], list[int], int] | list[DiscreteTerm]:
     """Builds the design/term/model matrix associated with a linear/random term and returns it
     represented as a list of values, a list of row indices, and a list of column indices.
 
@@ -3075,6 +3286,14 @@ def build_linear_term(
     new_cols = []
     new_ci = 0
     n_y = len(ridx)
+
+    if discrete:
+        oci = ci
+        ouse_only = use_only
+
+        # Force build from zero index
+        ci = 0
+        use_only = None
 
     # Main effects
     if len(lTerm.variables) == 1:
@@ -3155,6 +3374,17 @@ def build_linear_term(
                 new_cols.extend([ci for _ in range(len(ridx[inter_idx]))])
             ci += 1
             new_ci += 1
+
+    # Build discrete storage
+    if discrete:
+        t = scp.sparse.csc_array((new_elements, (new_rows, new_cols)), shape=(n_y, ci))
+        unqm, unqi = np.unique(t.toarray(), return_inverse=True, axis=0)
+        dt = DiscreteTerm([unqm], [unqi], oci, oci + new_ci)
+
+        if ouse_only is not None and ti not in ouse_only:
+            dt.zero_columns = list(range(dt.end_idx - dt.start_idx))
+
+        return [dt]
 
     return new_elements, new_rows, new_cols, new_ci
 

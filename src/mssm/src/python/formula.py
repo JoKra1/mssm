@@ -25,6 +25,7 @@ from .custom_types import (
     VarType,
 )
 from .matrix_solvers import translate_sparse, eigen_solvers
+from .discrete import DiscreteModelMatrix
 
 
 class lhs:
@@ -322,6 +323,7 @@ class Formula:
         file_paths: list[str] = [],
         file_loading_nc: int = 1,
         file_loading_kwargs: dict = {"header": 0, "index_col": False},
+        discretize: bool = False,
     ) -> None:
 
         self.lhs = lhs
@@ -376,6 +378,9 @@ class Formula:
 
         # Discretization?
         self.discretize = {}
+        self.discretize_cov = discretize
+        self.cov_bins: dict | None = {} if discretize else None
+        self.cov_bin_idxs: dict | None = {} if discretize else None
 
         # Perform input checks first for LHS/Dependent variable.
         if len(self.file_paths) == 0 and self.lhs.variable not in self.data.columns:
@@ -908,6 +913,8 @@ class Formula:
         # Build NA index
         var_map = self.get_var_map()
         var_keys = var_map.keys()
+        var_mins = self.get_var_mins()
+        var_maxs = self.get_var_maxs()
         if prediction:
             NAs = None
             NAs_flat = None
@@ -994,6 +1001,9 @@ class Formula:
             if data is not None:
                 y_flat = np.array(data[self.lhs.variable]).reshape(-1, 1)
 
+                if self.discretize_cov:
+                    n_bins = int(np.sqrt(data[NAs_flat].shape[0]))
+
             # Then split by seried id
             y = None
             NAs = None
@@ -1044,6 +1054,20 @@ class Formula:
                 cov_flat[:, var_map[c]] = c_code
 
             else:
+                if data is not None and self.discretize_cov:
+                    # ToDo: Check if number of unique covariate values is < n_bins
+                    if prediction is False:
+                        c_bins = np.linspace(
+                            var_mins[c],
+                            var_maxs[c],
+                            num=n_bins,
+                        )
+
+                        self.cov_bins[c] = c_bins
+                        self.cov_bin_idxs[c] = np.digitize(c_raw, self.cov_bins[c]) - 1
+
+                    c_raw = self.cov_bins[c][self.cov_bin_idxs[c]]
+
                 cov_flat[:, var_map[c]] = c_raw
 
         # Now split cov by series id as well
@@ -1086,8 +1110,8 @@ class Formula:
                     max(self.cov_flat[:, var_map[var]]),
                     int(len(np.unique(self.cov_flat[:, var_map[var]])) ** 0.5),
                 )
-                dig_cov_flat[:, var_map[var]] = np.digitize(
-                    self.cov_flat[:, var_map[var]], values
+                dig_cov_flat[:, var_map[var]] = (
+                    np.digitize(self.cov_flat[:, var_map[var]], values) - 1
                 )
                 collected.append(var_map[var])
                 collected_vars.append(var)
@@ -2558,6 +2582,9 @@ def build_sparse_matrix_from_formula(
     pool: mp.pool.Pool | None = None,
     use_only: list[int] | None = None,
     tol: float = 0,
+    discrete: bool = False,
+    cov_bins: dict | None = None,
+    cov_bin_idxs: dict | None = None,
 ) -> scp.sparse.csc_array:
     """Build model matrix from formula properties.
 
@@ -2617,19 +2644,24 @@ def build_sparse_matrix_from_formula(
     # when we have multiple factor variables
     has_constant = has_intercept
 
+    dts = []
     for lti in ltx:
         # Build matrix for linear terms
         lterm = terms[lti]
 
         if isinstance(lterm, i):
             # Intercept
-            new_elements, new_rows, new_cols, new_ci = lterm.build_matrix(
-                ci, lti, ridx, use_only
+            lit = lterm.build_matrix(
+                ci,
+                lti,
+                ridx,
+                use_only,
+                discrete,
             )
 
         else:
             # Linear term
-            new_elements, new_rows, new_cols, new_ci = lterm.build_matrix(
+            lit = lterm.build_matrix(
                 has_constant,
                 ci,
                 lti,
@@ -2639,6 +2671,7 @@ def build_sparse_matrix_from_formula(
                 ridx,
                 cov_flat,
                 use_only,
+                discrete,
             )
 
             # Check whether this term had a factor variable
@@ -2648,10 +2681,18 @@ def build_sparse_matrix_from_formula(
                         has_constant = True
                         break
 
-        elements.extend(new_elements)
-        rows.extend(new_rows)
-        cols.extend(new_cols)
-        ci += new_ci
+        if discrete:
+            dts.extend(lit)
+            ci = dts[-1].end_idx
+        else:
+            new_elements = lit[0]
+            new_rows = lit[1]
+            new_cols = lit[2]
+            new_ci = lit[3]
+            elements.extend(new_elements)
+            rows.extend(new_rows)
+            cols.extend(new_cols)
+            ci += new_ci
 
     for irsti in irstx:
         # Impulse response terms need to be calculate for every series individually - costly
@@ -2680,7 +2721,7 @@ def build_sparse_matrix_from_formula(
 
         sterm = terms[sti]
 
-        new_elements, new_rows, new_cols, new_ci = sterm.build_matrix(
+        st = sterm.build_matrix(
             ci,
             sti,
             var_map,
@@ -2691,31 +2732,69 @@ def build_sparse_matrix_from_formula(
             cov_flat,
             use_only,
             tol,
+            discrete,
+            cov_bins,
+            cov_bin_idxs,
         )
 
-        elements.extend(new_elements)
-        rows.extend(new_rows)
-        cols.extend(new_cols)
-        ci += new_ci
+        if discrete:
+            dts.extend(st)
+            ci = dts[-1].end_idx
+        else:
+            new_elements = st[0]
+            new_rows = st[1]
+            new_cols = st[2]
+            new_ci = st[3]
+            elements.extend(new_elements)
+            rows.extend(new_rows)
+            cols.extend(new_cols)
+            ci += new_ci
 
     for rti in rtx:
         rterm = terms[rti]
 
         if isinstance(rterm, ri):
-            new_elements, new_rows, new_cols, new_ci = rterm.build_matrix(
-                ci, rti, var_map, factor_levels, ridx, cov_flat, use_only
+            rt = rterm.build_matrix(
+                ci,
+                rti,
+                var_map,
+                factor_levels,
+                ridx,
+                cov_flat,
+                use_only,
+                discrete,
             )
 
         elif isinstance(rterm, rs):
-            new_elements, new_rows, new_cols, new_ci = rterm.build_matrix(
-                ci, rti, var_map, var_types, factor_levels, ridx, cov_flat, use_only
+            rt = rterm.build_matrix(
+                ci,
+                rti,
+                var_map,
+                var_types,
+                factor_levels,
+                ridx,
+                cov_flat,
+                use_only,
+                discrete,
             )
 
-        elements.extend(new_elements)
-        rows.extend(new_rows)
-        cols.extend(new_cols)
-        ci += new_ci
+        if discrete:
+            dts.extend(rt)
+            ci = dts[-1].end_idx
+        else:
+            new_elements = rt[0]
+            new_rows = rt[1]
+            new_cols = rt[2]
+            new_ci = rt[3]
+            elements.extend(new_elements)
+            rows.extend(new_rows)
+            cols.extend(new_cols)
+            ci += new_ci
 
+    if discrete:
+        return DiscreteModelMatrix(dts)
+
+    # Build sparse matrix
     mat = scp.sparse.csc_array((elements, (rows, cols)), shape=(n_y, ci))
 
     return mat
@@ -2827,6 +2906,9 @@ def build_model_matrix(
         pool,
         use_only,
         tol,
+        formula.discretize_cov,
+        formula.cov_bins,
+        formula.cov_bin_idxs,
     )
 
     if len(irstx) > 0:
