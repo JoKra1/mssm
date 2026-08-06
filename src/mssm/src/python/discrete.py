@@ -44,7 +44,7 @@ class DiscreteTerm:
 class DiscreteModelMatrix:
 
     def __init__(self, dTerms: list[DiscreteTerm]):
-        self.terms: list[DiscreteTerm] = copy.deepcopy(dTerms)
+        self.terms: list[DiscreteTerm] = dTerms
         self.preM: list[scp.sparse.csc_array] = []
         self.postM: list[scp.sparse.csc_array] = []
         self.exclude_rows: np.ndarray = np.array([], dtype=np.int64)
@@ -56,6 +56,8 @@ class DiscreteModelMatrix:
             self.terms[0].indices[0].shape[0],
             int(self.terms[-1].end_idx),
         )
+
+        self._T: bool = False
 
     def __get_tensor_row(self, dti: int, ri: int) -> np.ndarray:
         dt = self.terms[dti]
@@ -84,8 +86,13 @@ class DiscreteModelMatrix:
 
     def __get_cols(self, col: int) -> np.ndarray:
 
+        c_shape = self.shape
+        if self._T:
+            # Flip keys
+            c_shape = np.flip(c_shape)
+
         if col < 0:
-            col = self.shape[1] + col
+            col = c_shape[1] + col
 
         for dti, dt in enumerate(self.terms):
             if dt.start_idx <= col and col < dt.end_idx:
@@ -94,7 +101,7 @@ class DiscreteModelMatrix:
                 print(xcol)
 
                 if dt.zero_columns is not None and xcol in dt.zero_columns:
-                    return np.zeros(self.shape[0])
+                    return np.zeros(c_shape[0])
 
                 # Compute column index
                 cidx = np.arange(dt.total_columns)
@@ -160,6 +167,14 @@ class DiscreteModelMatrix:
                 "Slices > 2D are not supported with class:`DiscreteModelMatrix`."
             )
 
+        c_shape = self.shape
+        if self._T:
+            # Flip keys
+            trows = copy.deepcopy(rows)
+            rows = cols
+            cols = trows
+            c_shape = np.flip(c_shape)
+
         # Start by extracting columns.
         flatten_col = False
         if isinstance(cols, int):
@@ -167,7 +182,7 @@ class DiscreteModelMatrix:
             flatten_col = True
         elif isinstance(cols, slice):
             start = cols.start if cols.start is not None else 0
-            stop = cols.stop if cols.stop is not None else self.shape[1]
+            stop = cols.stop if cols.stop is not None else c_shape[1]
             step = cols.step if cols.step is not None else 1
             cols = list(range(start, stop, step))
 
@@ -177,7 +192,7 @@ class DiscreteModelMatrix:
             rcols = np.array([self.__get_cols(col) for col in cols]).T
 
             if rcols.shape == (0,):
-                rcols = rcols.reshape(self.shape[0], 0)
+                rcols = rcols.reshape(c_shape[0], 0)
 
             if flatten_col:
                 rcols = rcols.flatten()
@@ -198,7 +213,7 @@ class DiscreteModelMatrix:
                 if rcols.shape[0] == 1:
                     return rcols.flatten()
 
-                return rcols
+                return rcols.T if self._T else rcols
 
             return rcols[ridx]
 
@@ -206,7 +221,7 @@ class DiscreteModelMatrix:
         newS = copy.deepcopy(self)
 
         # First drop columns
-        cidx = np.arange(self.shape[1])
+        cidx = np.arange(c_shape[1])
         print("tobedropped", cidx[~np.isin(cidx, cols)])
         newS.drop_columns(cidx[~np.isin(cidx, cols)])
 
@@ -215,10 +230,64 @@ class DiscreteModelMatrix:
         ridx_new = ridx[~np.isin(ridx, self.exclude_rows)][rows]
         print(ridx_new)
         new_exclude = ridx[~np.isin(ridx, ridx_new)]
-
         newS.exclude_rows = new_exclude
-        newS.shape = (self.terms[0].indices[0].shape[0] - len(new_exclude), len(cols))
+
+        # Compute correct dimensions
+        if self._T:
+            newS.shape = (
+                len(cols),
+                self.terms[0].indices[0].shape[0] - len(new_exclude),
+            )
+        else:
+            newS.shape = (
+                self.terms[0].indices[0].shape[0] - len(new_exclude),
+                len(cols),
+            )
+
         return newS
+
+    def is_transposed(self) -> bool:
+        return self.__T
+
+    @property
+    def T(self) -> Self:
+        """Returns transpose. Data is not copied.
+
+        :return: _description_
+        :rtype: Self
+        """
+        return self.transpose()
+
+    def transpose(self) -> Self:
+        """Returns transpose. Data is not copied.
+
+        :return: _description_
+        :rtype: Self
+        """
+
+        # Trivial case when self is vector
+        if self.shape[0] == 1 or self.shape[1] == 0:
+            return self
+
+        newS = DiscreteModelMatrix(self.terms)
+        newS.exclude_rows = self.exclude_rows
+        newS.max_slize_size = self.max_slize_size
+        newS.id = self.id
+        newS.postM = list(np.flip(self.preM))
+        newS.preM = list(np.flip(self.postM))
+
+        newS._T = not self._T  # Update flag
+        newS.shape = (self.shape[1], self.shape[0])
+
+        return newS
+
+    def copy(self) -> Self:
+        """Return copy of self.
+
+        :return: _description_
+        :rtype: Self
+        """
+        return copy.deepcopy(self)
 
     def toarray(self) -> np.ndarray:
         """Represents discrete matrix explicitly as a 2D numpy array."""
@@ -260,7 +329,7 @@ class DiscreteModelMatrix:
         ridx = np.arange(mat.shape[0])
         mat = mat[~np.isin(ridx, self.exclude_rows), :]
 
-        return mat
+        return mat.T if self._T else mat
 
     def drop_columns(self, cols: list[int]):
 
