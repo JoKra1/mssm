@@ -82,4 +82,11 @@ ext6 = Pybind11Extension(
     cxx_std=14,
 )
 
-setup(ext_modules=[ext1, ext2, ext3, ext4, ext5, ext6])
+ext7 = Pybind11Extension(
+    name="discrete",
+    sources=["src/mssm/src/cpp/discrete.cpp"],
+    include_dirs=[get_eigen_include()],
+    cxx_std=14,
+)
+
+setup(ext_modules=[ext1, ext2, ext3, ext4, ext5, ext6, ext7])

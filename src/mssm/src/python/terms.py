@@ -145,10 +145,11 @@ class i(GammTerm):
 
         if discrete:
             dt = DiscreteTerm(
-                [np.ones(1).reshape(1, 1)],
+                [np.ones(1, order="F").reshape(1, 1)],
                 [np.zeros(n_y, dtype=np.int64)],
                 ci,
                 ci + 1,
+                total_columns=1,
             )
         else:
             offset = np.ones(n_y)
@@ -1224,10 +1225,7 @@ class f(GammTerm):
             dt_start = ci
             dt_end = ci + n_coef  # Before *= len(by_levels) and drop coef!
             dt_n_coef = n_coef
-            dt = DiscreteTerm(
-                [],
-                [],
-            )
+            dt = DiscreteTerm([], [], total_columns=n_coef, n_marginals=len(vars))
 
         if self.by is not None:
             by_levels = factor_levels[self.by]
@@ -1301,7 +1299,7 @@ class f(GammTerm):
                 matrix_term = TP_basis_calc(matrix_term, matrix_term_v)
 
             if discrete:
-                dt.unique_matrices.append(matrix_term_v)
+                dt.unique_matrices.append(np.asfortranarray(matrix_term_v))
                 dt.indices.append(discrete_idx[vars[vi]])
 
         if self.is_identifiable and self.te:
@@ -1381,13 +1379,10 @@ class f(GammTerm):
                             dt_by.unique_matrices[midx].shape[0] - 1
                         )
 
-                    # Update coef indices for discrete storage
-                    dt_start += dt_n_coef
-                    dt_end += dt_n_coef
-
                 for m_coli in range(m_cols):
                     if discrete:
                         dt_by.exclude_columns.append(m_coli_by)
+                        dt_by.end_idx -= 1
                     else:
                         term_ridx.append(ridx[by_cidx,])
                     m_coli_by += 1
@@ -1395,6 +1390,8 @@ class f(GammTerm):
                 if discrete:
                     if len(dt_by.exclude_columns) == 0:
                         dt_by.exclude_columns = None
+                    dt_start = dt_by.end_idx
+                    dt_end = dt_start + dt_n_coef
                     dts.append(dt_by)
 
         # Handle optional binary keyword
@@ -1419,6 +1416,7 @@ class f(GammTerm):
 
                 if self.drop_coef is not None:
                     dt.exclude_columns = self.drop_coef
+                    dt.end_idx -= len(self.drop_coef)
 
                 dts.append(dt)
 
@@ -1433,6 +1431,7 @@ class f(GammTerm):
 
                 if self.drop_coef is not None:
                     dt.exclude_columns = self.drop_coef
+                    dt.end_idx -= len(self.drop_coef)
 
                 dts.append(dt)
             else:
@@ -2592,10 +2591,11 @@ class ri(GammTerm):
         if discrete:
             n_fact = len(factor_levels[vars[0]])
             dt = DiscreteTerm(
-                [np.identity(n_fact)],
+                [np.identity(n_fact, order="F")],
                 [np.zeros(n_y, dtype=np.int64)],
                 ci,
                 ci + n_fact,
+                total_columns=n_fact,
             )
 
             if use_only is not None and ti not in use_only:
@@ -3366,7 +3366,9 @@ def build_linear_term(
     if discrete:
         t = scp.sparse.csc_array((new_elements, (new_rows, new_cols)), shape=(n_y, ci))
         unqm, unqi = np.unique(t.toarray(), return_inverse=True, axis=0)
-        dt = DiscreteTerm([unqm], [unqi], oci, oci + new_ci)
+        dt = DiscreteTerm(
+            [np.asfortranarray(unqm)], [unqi], oci, oci + new_ci, total_columns=new_ci
+        )
 
         if ouse_only is not None and ti not in ouse_only:
             dt.zero_columns = list(range(dt.end_idx - dt.start_idx))
