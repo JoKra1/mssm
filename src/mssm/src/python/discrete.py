@@ -45,8 +45,8 @@ class DiscreteModelMatrix:
 
     def __init__(self, dTerms: list[DiscreteTerm]):
         self.terms: list[DiscreteTerm] = dTerms
-        self.preM: list[scp.sparse.csc_array] = []
-        self.postM: list[scp.sparse.csc_array] = []
+        self.preM: scp.sparse.csc_array | np.ndarray | None = None
+        self.postM: scp.sparse.csc_array | np.ndarray | None = None
         self.exclude_rows: np.ndarray = np.array([], dtype=np.int64)
         self.max_slize_size: int = 10
         self.id: int = id(self)
@@ -59,32 +59,86 @@ class DiscreteModelMatrix:
 
         self._T: bool = False
 
-    def __get_tensor_row(self, dti: int, ri: int) -> np.ndarray:
-        dt = self.terms[dti]
-        n_k = dt.total_columns
-        if dt.Q is not None:
-            n_k += 1
+    def __get_row(self, row: int) -> np.ndarray:
+        """Returns row of model matrix ``X`` (i.e., not transposed) **after** excluding any columns.
 
-        cidx = np.arange(n_k)
+        Columns that are zeroed have zero values in place.
 
-        # Modified Algorithm A2 from Wood et al., 2017
-        ps = [mat.shape[1] for mat in dt.unique_matrices]
-        q = np.prod(ps)
-        j = cidx
-        j2 = j
+        :param row: _description_
+        :type row: int
+        :return: _description_
+        :rtype: np.ndarray
+        """
+        c_shape = self.shape
+        if self._T:
+            # Flip keys
+            c_shape = np.flip(c_shape)
 
-        Xr = np.ones(n_k)
+        if row < 0:
+            row = c_shape[0] + row
 
-        for i in range(len(dt.unique_matrices)):
-            q //= ps[i]
-            ji = j2 // q
-            j2 = j2 % q
-            # print("2", j2)
-            Xr *= dt.unique_matrices[i][dt.indices[i][ri], ji]
+        # Need row in current state
+        ridx = np.arange(self.terms[0].indices[0].shape[0])
+        ridx = ridx[~np.isin(ridx, self.exclude_rows)]
+        xrow = ridx[row]
+        print(row, xrow)
 
-        return Xr
+        n_c = 0
+        for dt in self.terms:
+            n_c += dt.total_columns
 
-    def __get_cols(self, col: int) -> np.ndarray:
+        Xr = []
+
+        for dt in self.terms:
+
+            if len(dt.unique_matrices) == 1:
+                Xrj = dt.unique_matrices[0][dt.indices[0][xrow], :].flatten()
+            else:
+                n_k = dt.total_columns
+                if dt.Q is not None:
+                    n_k += 1  # + 1 because of Q
+
+                j = np.arange(n_k)
+                ps = [mat.shape[1] for mat in dt.unique_matrices]
+                q = np.prod(ps)
+
+                Xrj = discrete.Xrtensor(
+                    dt.unique_matrices,
+                    np.array([idx[xrow] for idx in dt.indices], dtype=np.int64),
+                    np.array(ps, dtype=np.int64),
+                    q,
+                    dt.n_marginals,
+                    j,
+                    n_k,
+                )
+
+                if dt.Q is not None:
+                    Xrj = (Xrj.reshape(1, -1) @ dt.Q).flatten()
+
+            cidx = np.arange(dt.total_columns)
+            if dt.exclude_columns is not None:
+                # Exclude columns
+                cidx = cidx[~np.isin(cidx, dt.exclude_columns)]
+                Xrj = Xrj[cidx]
+
+            if dt.zero_columns is not None:
+                # zero columns
+                Xrj[dt.zero_columns] = 0
+
+            Xr.extend(Xrj)
+
+        return np.array(Xr)
+
+    def __get_col(self, col: int) -> np.ndarray:
+        """Returns column of model matrix ``X`` (i.e., not transposed) before excluding any rows.
+
+        A column of zeros is returned if the column has been zeroed.
+
+        :param col: _description_
+        :type col: int
+        :return: _description_
+        :rtype: np.ndarray
+        """
 
         c_shape = self.shape
         if self._T:
@@ -94,14 +148,14 @@ class DiscreteModelMatrix:
         if col < 0:
             col = c_shape[1] + col
 
-        for dti, dt in enumerate(self.terms):
+        for dt in self.terms:
             if dt.start_idx <= col and col < dt.end_idx:
 
                 xcol = col - dt.start_idx
                 print(xcol)
 
                 if dt.zero_columns is not None and xcol in dt.zero_columns:
-                    return np.zeros(c_shape[0])
+                    return np.zeros(dt.indices[0].shape[0])
 
                 # Compute column index
                 cidx = np.arange(dt.total_columns)
@@ -109,7 +163,7 @@ class DiscreteModelMatrix:
                 cidx = cidx[xcol]  # Target column in original marginals
 
                 if len(dt.unique_matrices) == 1:
-                    # marginal case
+                    # Algorithm A1 from Wood et al., 2017
                     return dt.unique_matrices[0][:, [cidx]][dt.indices[0]].flatten()
                 else:
                     print("Extract tensor")
@@ -186,10 +240,64 @@ class DiscreteModelMatrix:
             step = cols.step if cols.step is not None else 1
             cols = list(range(start, stop, step))
 
-        if len(cols) <= self.max_slize_size:
-            # Explicitly evaluate slize
+        # Compute new row indices after extraction
+        ridx = np.arange(self.terms[0].indices[0].shape[0])
+        ridx_new = ridx[~np.isin(ridx, self.exclude_rows)][rows]
 
-            rcols = np.array([self.__get_cols(col) for col in cols]).T
+        if (self.preM is not None) and (self.postM is not None):
+            # Check postM size here
+
+            check_shape = self.postM[:, rows].shape[1] if self._T else len(cols)
+
+            if check_shape <= self.max_slize_size:
+                # Return self.preM @ (X.T @ self.postM) if self._T and
+                # self.preM @ (X @ self.postM) is self._T is False
+                print("A3-A6")
+                pass
+        elif self.preM is not None:
+            # Check X/X.T size here
+            check_shape = len(ridx_new) if self.T else len(cols)
+            print("self.preM", check_shape)
+
+            if check_shape <= self.max_slize_size:
+                # Return self.preM[cols, :] @ self.X.T[:,rows] if self._T
+                # else self.preM[rows, :] @ self.X[:,cols]
+                if self._T:
+                    rrows = np.array([self.__get_row(r) for r in ridx_new]).T
+                    print("self.preM pre check Xr shape", rrows.shape)
+                    return self.preM[cols, :] @ rrows
+                else:
+                    rcols = np.array([self.__get_col(col) for col in cols]).T
+                    if rcols.shape == (0,):
+                        rcols = rcols.reshape(c_shape[0], 0)
+                    return self.preM[rows, :] @ rcols
+
+        elif self.postM is not None:
+
+            check_shape = len(cols) if self.T else len(ridx_new)
+            print("self.postM", check_shape)
+
+            if check_shape <= self.max_slize_size:
+                # Return X.T[cols,:] @ self.postM[:, rows] if self._T
+                # else Return X[rows,:] @ self.postM[:, cols]
+                if self._T:
+                    rcols = np.array([self.__get_col(col) for col in cols]).T
+                    if rcols.shape == (0,):
+                        rcols = rcols.reshape(c_shape[0], 0)
+                    return rcols.T @ self.postM[:, rows]
+
+                else:
+                    rrows = np.array([self.__get_row(r) for r in ridx_new])
+                    print("self.postM pre check Xr shape", rrows.shape)
+
+                    return rrows @ self.postM[:, cols]
+
+        elif len(cols) <= self.max_slize_size:
+            # Explicitly evaluate slize
+            # ToDo: Handle postM and PreM
+            # postM is easy if self._T and preM is easy if not self._T
+            # for the hard cases we need a get_row method ideally.
+            rcols = np.array([self.__get_col(col) for col in cols]).T
 
             if rcols.shape == (0,):
                 rcols = rcols.reshape(c_shape[0], 0)
@@ -202,13 +310,9 @@ class DiscreteModelMatrix:
             # if isinstance(full_row_check, bool) and full_row_check:
             #    return rcols
 
-            # Need rows
-            ridx = np.arange(self.terms[0].indices[0].shape[0])
-            ridx = ridx[~np.isin(ridx, self.exclude_rows)]
-            ridx = ridx[rows]
-
+            # Need to account for rows
             if len(rcols.shape) == 2:
-                rcols = rcols[ridx, :]
+                rcols = rcols[ridx_new, :]
 
                 if rcols.shape[0] == 1:
                     return rcols.flatten()
@@ -219,32 +323,157 @@ class DiscreteModelMatrix:
 
         # At this point need to return implicit slice
         newS = copy.deepcopy(self)
+        newS.id = id(newS)  # Update id
 
-        # First drop columns
-        cidx = np.arange(c_shape[1])
-        print("tobedropped", cidx[~np.isin(cidx, cols)])
-        newS.drop_columns(cidx[~np.isin(cidx, cols)])
+        # First need to check for preM and postM - remember cols and rows are flipped if self._T
+        if (self.preM is not None) and (self.postM is not None):
+            # No need to change anything to data in newS, can drop from
+            # preM and postM only.
+            if self._T:
+                newS.preM = self.preM[cols, :]
+                newS.postM = self.postM[:, rows]
+            else:
+                newS.preM = self.preM[rows, :]
+                newS.postM = self.postM[:, cols]
 
-        # Drop rows
-        ridx = np.arange(self.terms[0].indices[0].shape[0])
-        ridx_new = ridx[~np.isin(ridx, self.exclude_rows)][rows]
-        print(ridx_new)
-        new_exclude = ridx[~np.isin(ridx, ridx_new)]
-        newS.exclude_rows = new_exclude
+            n_rows = newS.preM.shape[0]
+            n_cols = newS.postM.shape[1]
+
+        elif self.preM is not None:
+            # Drop rows from preM and cols from self
+            if self._T:
+                newS.preM = self.preM[cols, :]
+
+                # Need to drop rows instead -> columns after transpose
+                new_exclude = ridx[~np.isin(ridx, ridx_new)]
+                newS.exclude_rows = new_exclude
+                n_cols = self.terms[0].indices[0].shape[0] - len(new_exclude)
+            else:
+                newS.preM = self.preM[rows, :]
+
+                # And drop columns
+                cidx = np.arange(c_shape[1])
+                newS.drop_columns(cidx[~np.isin(cidx, cols)])
+                n_cols = len(cols)
+
+            n_rows = newS.preM.shape[0]
+
+        elif self.postM is not None:
+            # Drop rows from self and cols from postM
+            if self._T:
+                newS.postM = self.postM[:, rows]
+
+                # Need to drop columns instead -> rows after transpose
+                cidx = np.arange(c_shape[1])
+                newS.drop_columns(cidx[~np.isin(cidx, cols)])
+                n_rows = len(cols)
+
+            else:
+                newS.postM = self.postM[:, cols]
+
+                # And drop rows
+                new_exclude = ridx[~np.isin(ridx, ridx_new)]
+                newS.exclude_rows = new_exclude
+                n_rows = self.terms[0].indices[0].shape[0] - len(new_exclude)
+
+            n_cols = newS.postM.shape[1]
+
+        else:
+            # Drop both, rows and columns, from self
+
+            # First cols
+            cidx = np.arange(c_shape[1])
+            newS.drop_columns(cidx[~np.isin(cidx, cols)])
+            n_cols = len(cols)
+
+            # And then rows
+            new_exclude = ridx[~np.isin(ridx, ridx_new)]
+            newS.exclude_rows = new_exclude
+            n_rows = self.terms[0].indices[0].shape[0] - len(new_exclude)
+
+            if self._T:
+                # Flip dims
+                t_cols = n_cols
+                n_cols = n_rows
+                n_rows = t_cols
 
         # Compute correct dimensions
-        if self._T:
-            newS.shape = (
-                len(cols),
-                self.terms[0].indices[0].shape[0] - len(new_exclude),
-            )
-        else:
-            newS.shape = (
-                self.terms[0].indices[0].shape[0] - len(new_exclude),
-                len(cols),
-            )
+        newS.shape = (n_rows, n_cols)
 
         return newS
+
+    def __matmul__(
+        self, other: np.ndarray | scp.sparse.sparray | Self
+    ) -> Self | np.ndarray:
+        print("__matmul__", other)
+        if (
+            isinstance(other, np.ndarray)
+            or isinstance(other, scp.sparse.sparray)
+            or isinstance(other, DiscreteModelMatrix)
+        ):
+
+            if self.shape[1] != other.shape[0]:
+                raise ArithmeticError(
+                    (
+                        f"Dimension of self is ({self.shape[0]},{self.shape[1]}), "
+                        f"but other is of dimension ({other.shape[0]},{other.shape[1]})"
+                    )
+                )
+
+            # Explicit evaluation of return
+            if other.shape[1] == 1:
+                pass
+
+            elif other.shape[1] <= self.max_slize_size:
+                pass
+
+            else:
+                # Store matrix in postM and update shape
+                newS = copy.deepcopy(self)
+                if self.postM is None:
+                    newS.postM = other
+                else:
+                    newS.postM = self.postM @ other
+                newS.shape = (self.shape[0], other.shape[1])
+                return newS
+
+        else:
+            raise NotImplementedError(
+                (
+                    "Matrix multiplication is only implemented for scipy sparse,"
+                    " numpy arrays and `DiscreteModelMatrix` objects."
+                )
+            )
+
+    def __rmatmul__(self, other: np.ndarray | scp.sparse.sparray) -> Self:
+        print("__rmatmul__", other)
+        if isinstance(other, np.ndarray) or isinstance(other, scp.sparse.sparray):
+            if other.shape[1] != self.shape[0]:
+                raise ArithmeticError(
+                    (
+                        f"Dimension of self is ({self.shape[0]},{self.shape[1]}), "
+                        f"but other is of dimension ({other.shape[0]},{other.shape[1]})"
+                    )
+                )
+
+            # Store matrix in preM and update shape
+            newS = copy.deepcopy(self)
+            if self.preM is None:
+                newS.preM = other
+            else:
+                newS.preM = other @ self.preM
+            newS.shape = (other.shape[0], self.shape[1])
+            return newS
+
+        else:
+            raise NotImplementedError(
+                (
+                    "Reflected Matrix multiplication is only implemented for scipy sparse and"
+                    " numpy arrays."
+                )
+            )
+
+    __array_priority__ = 10000
 
     def is_transposed(self) -> bool:
         return self.__T
@@ -273,8 +502,8 @@ class DiscreteModelMatrix:
         newS.exclude_rows = self.exclude_rows
         newS.max_slize_size = self.max_slize_size
         newS.id = self.id
-        newS.postM = list(np.flip(self.preM))
-        newS.preM = list(np.flip(self.postM))
+        newS.postM = None if self.preM is None else self.preM.T
+        newS.preM = None if self.postM is None else self.postM.T
 
         newS._T = not self._T  # Update flag
         newS.shape = (self.shape[1], self.shape[0])
@@ -329,7 +558,16 @@ class DiscreteModelMatrix:
         ridx = np.arange(mat.shape[0])
         mat = mat[~np.isin(ridx, self.exclude_rows), :]
 
-        return mat.T if self._T else mat
+        if self._T:
+            mat = mat.T
+
+        if self.postM is not None:
+            mat = mat @ self.postM
+
+        if self.preM is not None:
+            mat = self.preM @ mat
+
+        return mat
 
     def drop_columns(self, cols: list[int]):
 

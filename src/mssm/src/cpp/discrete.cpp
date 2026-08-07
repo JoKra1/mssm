@@ -135,7 +135,54 @@ Eigen::VectorXd A2Q(
     return Xj;
 }
 
+Eigen::VectorXd Xrtensor(
+                   py::list uMats,
+                   VectorXi64 rows, // desired row in marginal for each marginal
+                   py::array_t<size_t, py::array::f_style | py::array::forcecast> ps_a,
+                   size_t q,
+                   size_t n_t,
+                   VectorXi64 j,
+                   size_t n_c
+                )
+{
+    auto ps = ps_a.unchecked();
+    VectorXi64 j2 = j;
+
+    Eigen::VectorXd Xr;
+    Xr.setOnes(n_c);
+
+    for (size_t i = 0; i < n_t; i++)
+    {
+        q /= ps(i);
+        VectorXi64 ji = j2 / q;
+        j2 = (j2.array() - (q * (j2.array() / q))).matrix();
+        //py::print(j2);
+        //j2 = (j2.unaryExpr([q](const long long int x) { return x%q; })).eval();
+
+        /*
+        Get matrix and index buffer
+        */
+        py::handle m_ih = uMats[i];
+        py::array_t<double> m_i = py::cast<py::array>(m_ih);
+        py::buffer_info info_i = m_i.request();
+
+        double *ptr_i = static_cast<double *>(info_i.ptr);
+
+        Eigen::Map<Eigen::MatrixXd> m(ptr_i,m_i.shape(0),m_i.shape(1));
+        
+        // Get marginal row
+        Eigen::VectorXd mr = m(rows(i), ji);
+        //py::print(mr);
+
+        Xr = (Xr.array() * mr.array()).matrix();
+    }
+
+    return Xr;
+
+}
+
 PYBIND11_MODULE(discrete, m) {
     m.def("A2", &A2, "Algorithm A2 from Wood et al., 2017.");
     m.def("A2Q", &A2Q, "Modified version of Algorithm A2 from Wood et al., 2017 to account for constraint matrix Q.");
+    m.def("Xrtensor", &Xrtensor, "Extract row of tensor product before correcting for constraint matrix Q.");
 }
