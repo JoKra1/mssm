@@ -33,6 +33,7 @@ from functools import reduce
 from .custom_types import Fit_info, LambdaTerm, DerivOrder
 from .terms import GammTerm
 from .matrix_solvers import *  # noqa: F403
+from .discrete import DiscreteModelMatrix
 from collections.abc import Callable
 import os
 import math
@@ -595,7 +596,10 @@ def update_PIRLS(
 
         # Update yb and Xb
         yb = Wr @ z[inval == False]  # noqa: E712
-        Xb = (Wr @ X[inval == False, :]).tocsc()  # noqa: E712
+        Xb = Wr @ X[inval == False, :]  # noqa: E712
+
+        if not isinstance(X, DiscreteModelMatrix):
+            Xb = Xb.tocsc()
 
         if Lrhoi is not None:
             # Apply ar1 model to working linear model.
@@ -1288,7 +1292,10 @@ def update_coef(
     drop = None
     if formula is None:
         if S_root is None:
-            LP, Pr, coef, code = cpp_solve_coef(yb, Xb, S_emb)  # noqa: F405
+            if isinstance(Xb, DiscreteModelMatrix):
+                LP, Pr, coef, code = cpp_solve_coefXX(Xb.T @ yb, Xb.T @ Xb + S_emb)
+            else:
+                LP, Pr, coef, code = cpp_solve_coef(yb, Xb, S_emb)  # noqa: F405
             P = compute_eigen_perm(Pr)  # noqa: F405
 
         else:  # Qr-based

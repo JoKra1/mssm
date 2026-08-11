@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import copy
 from typing import Self
 from .smooths import TP_basis_calc
+from .matrix_solvers import map_csc_to_eigen
 import discrete
 
 
@@ -50,6 +51,7 @@ class DiscreteModelMatrix:
         self.exclude_rows: np.ndarray = np.array([], dtype=np.int64)
         self.max_slize_size: int = 10
         self.id: int = id(self)
+        self.return_sparse: bool = False
 
         # Compute shape
         self.shape: tuple[int, int] = (
@@ -74,18 +76,18 @@ class DiscreteModelMatrix:
             else:
                 W = otherpreM
 
-        if isinstance(W, scp.sparse.sparray):
+        # Check if W is sparse
+        W_is_sparse = False
+        if isinstance(W, scp.sparse.sparray) or isinstance(W, scp.sparse.spmatrix):
             W = W.tocsc()
+            W = map_csc_to_eigen(W)
+            W_is_sparse = True
 
         hasW: bool = W is not None
         if W is None:
             W = np.array([])
 
-        alg = (
-            discrete.XTWXS
-            if (hasW and isinstance(W, scp.sparse.sparray))
-            else discrete.XTWXD
-        )
+        alg = discrete.XTWXS if W_is_sparse else discrete.XTWXD
 
         # Check dimensions:
         n_col = 0
@@ -137,7 +139,7 @@ class DiscreteModelMatrix:
                     dtj.Q if dtj.Q is not None else np.array([]),
                     dtk.Q if dtk.Q is not None else np.array([]),
                     hasW,
-                    W,
+                    *W if isinstance(W, scp.sparse.sparray) else W,
                 )
 
                 print(
@@ -147,7 +149,7 @@ class DiscreteModelMatrix:
                             cols[dtj.start_idx : dtj.end_idx],
                             cols[dtk.start_idx : dtk.end_idx],
                         )
-                    ],
+                    ].shape,
                 )
                 XTWX[
                     np.ix_(
@@ -623,12 +625,15 @@ class DiscreteModelMatrix:
         return newS
 
     def __matmul__(
-        self, other: np.ndarray | scp.sparse.sparray | Self
+        self, other: np.ndarray | scp.sparse.sparray | scp.sparse.spmatrix | Self
     ) -> Self | np.ndarray:
-        print("__matmul__", other)
+        print("__matmul__", other.shape)
+        if len(other.shape) == 1:
+            other = other.reshape(-1, 1)
         if (
             isinstance(other, np.ndarray)
             or isinstance(other, scp.sparse.sparray)
+            or isinstance(other, scp.sparse.spmatrix)
             or isinstance(other, DiscreteModelMatrix)
         ):
 
@@ -690,7 +695,13 @@ class DiscreteModelMatrix:
                 and self._T
                 and other._T is False
             ):
-                return self.__XTWX(other.preM)
+                XTWX = self.__XTWX(other.preM)
+                if self.preM is not None:
+                    XTWX = self.preM @ XTWX
+                if other.postM is not None:
+                    XTWX = XTWX @ other.postM
+                print(self.return_sparse)
+                return scp.sparse.csc_array(XTWX) if self.return_sparse else XTWX
 
             elif isinstance(other, DiscreteModelMatrix) is False:
                 # Store matrix in postM and update shape
@@ -712,9 +723,15 @@ class DiscreteModelMatrix:
                 )
             )
 
-    def __rmatmul__(self, other: np.ndarray | scp.sparse.sparray) -> Self:
-        print("__rmatmul__", other)
-        if isinstance(other, np.ndarray) or isinstance(other, scp.sparse.sparray):
+    def __rmatmul__(
+        self, other: np.ndarray | scp.sparse.sparray | scp.sparse.spmatrix
+    ) -> Self:
+        print("__rmatmul__", other.shape)
+        if (
+            isinstance(other, np.ndarray)
+            or isinstance(other, scp.sparse.sparray)
+            or isinstance(other, scp.sparse.spmatrix)
+        ):
             if other.shape[1] != self.shape[0]:
                 raise ArithmeticError(
                     (
@@ -766,6 +783,7 @@ class DiscreteModelMatrix:
             return self
 
         newS = DiscreteModelMatrix(self.terms)
+        newS.return_sparse = self.return_sparse
         newS.exclude_rows = self.exclude_rows
         newS.max_slize_size = self.max_slize_size
         newS.id = self.id

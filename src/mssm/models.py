@@ -3178,7 +3178,7 @@ class GAMM(GAMMLSS):
                 print("NAs were excluded for fitting.")
 
             # Build the model matrix with all information from the formula
-            if self.formulas[0].file_loading_nc == 1:
+            if self.formulas[0].file_loading_nc == 1 or self.formulas[0].discretize_cov:
                 model_mat = build_sparse_matrix_from_formula(
                     terms,
                     has_intercept,
@@ -3193,7 +3193,13 @@ class GAMM(GAMMLSS):
                     factor_levels,
                     cov_flat,
                     cov,
+                    discrete=self.formulas[0].discretize_cov,
+                    cov_bins=self.formulas[0].cov_bins,
+                    cov_bin_idxs=self.formulas[0].cov_bin_idxs,
                 )
+
+                if self.formulas[0].discretize_cov:
+                    model_mat.return_sparse = True
 
             else:
                 # Build row sets of model matrix in parallel:
