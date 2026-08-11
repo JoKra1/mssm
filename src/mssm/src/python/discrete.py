@@ -59,8 +59,228 @@ class DiscreteModelMatrix:
 
         self._T: bool = False
 
+    def __XTWX(self, otherpreM: scp.sparse.csc_array | np.ndarray | None) -> np.ndarray:
+
+        ridx = np.arange(self.terms[0].indices[0].shape[0])
+        ridx = ridx[~np.isin(ridx, self.exclude_rows)]
+
+        # Check for W
+        W: scp.sparse.csc_array | np.ndarray | None = None
+        if self.postM is not None:
+            W = self.postM
+        if otherpreM is not None:
+            if W is not None:
+                W = W @ otherpreM
+            else:
+                W = otherpreM
+
+        if isinstance(W, scp.sparse.sparray):
+            W = W.tocsc()
+
+        hasW: bool = W is not None
+        if W is None:
+            W = np.array([])
+
+        alg = (
+            discrete.XTWXS
+            if (hasW and isinstance(W, scp.sparse.sparray))
+            else discrete.XTWXD
+        )
+
+        # Check dimensions:
+        n_col = 0
+        for dti, dt in enumerate(self.terms):
+            if dt.end_idx <= dt.start_idx:
+                # Skip terms removed completely
+                continue
+
+            n_col += dt.end_idx - dt.start_idx
+        cols = np.arange(n_col)
+
+        XTWX = np.zeros((n_col, n_col))
+        for dtji, dtj in enumerate(self.terms):
+
+            for dtki in range(dtji, len(self.terms)):
+                dtk = self.terms[dtki]
+
+                if (dtj.end_idx <= dtj.start_idx) or (dtk.end_idx <= dtk.start_idx):
+                    continue
+
+                # Extract all quantities needed
+                psj = [mat.shape[1] for mat in dtj.unique_matrices]
+                psk = [mat.shape[1] for mat in dtk.unique_matrices]
+                qk = np.prod(psk)
+
+                cidxj = np.arange(dtj.total_columns)
+                cidxj = cidxj[~np.isin(cidxj, dtj.exclude_columns)]
+                cidxk = np.arange(dtk.total_columns)
+                cidxk = cidxk[~np.isin(cidxk, dtk.exclude_columns)]
+
+                XjTWXk = alg(
+                    dtj.unique_matrices,
+                    dtk.unique_matrices,
+                    dtj.indices,
+                    dtk.indices,
+                    psj,
+                    psk,
+                    self.terms[0].indices[0].shape[0],
+                    dtj.n_marginals,
+                    dtk.n_marginals,
+                    dtj.total_columns,
+                    dtk.total_columns,
+                    qk,
+                    ridx,
+                    cidxj,
+                    cidxk,
+                    dtj.Q is not None,
+                    dtk.Q is not None,
+                    dtj.Q if dtj.Q is not None else np.array([]),
+                    dtk.Q if dtk.Q is not None else np.array([]),
+                    hasW,
+                    W,
+                )
+
+                print(
+                    XjTWXk.shape,
+                    XTWX[
+                        np.ix_(
+                            cols[dtj.start_idx : dtj.end_idx],
+                            cols[dtk.start_idx : dtk.end_idx],
+                        )
+                    ],
+                )
+                XTWX[
+                    np.ix_(
+                        cols[dtj.start_idx : dtj.end_idx],
+                        cols[dtk.start_idx : dtk.end_idx],
+                    )
+                ] = XjTWXk
+
+                if dtji != dtki:
+                    XTWX[
+                        np.ix_(
+                            cols[dtk.start_idx : dtk.end_idx],
+                            cols[dtj.start_idx : dtj.end_idx],
+                        )
+                    ] = XjTWXk.T
+
+        return XTWX
+
+    def __XTy(self, y: np.ndarray) -> np.ndarray:
+        """_summary_
+
+        :param y: _description_
+        :type y: np.ndarray | scp.sparse.sparray
+        :return: _description_
+        :rtype: np.ndarray
+        """
+        ridx = np.arange(self.terms[0].indices[0].shape[0])
+        ridx = ridx[~np.isin(ridx, self.exclude_rows)]
+        res = []
+        for dti, dt in enumerate(self.terms):
+            if len(dt.unique_matrices) == 1:
+                # Algorithm A3 from Wood et al., 2017
+
+                cidx = np.arange(dt.unique_matrices[0].shape[1])
+                cidx = cidx[~np.isin(cidx, dt.exclude_columns)]
+
+                res.append(
+                    discrete.A3(
+                        dt.unique_matrices[0], y.flatten(), dt.indices[0][ridx], cidx
+                    ).reshape(-1, 1)
+                )
+            else:
+                # Algorithm A4 from Wood et al., 2017
+                n_k = dt.total_columns
+                cidx = np.arange(n_k)
+                cidx = cidx[~np.isin(cidx, dt.exclude_columns)]
+
+                print("A4 n_k", n_k, dt.Q is not None)
+                v = discrete.A4(
+                    dt.unique_matrices,
+                    dt.indices,
+                    np.array(
+                        [mat.shape[1] for mat in dt.unique_matrices], dtype=np.int64
+                    ),
+                    dt.indices[0].shape[0],
+                    dt.n_marginals,
+                    n_k,
+                    ridx,
+                    cidx,
+                    y,
+                    dt.Q is not None,
+                    dt.Q if dt.Q is not None else np.array([], dtype=np.float64),
+                ).reshape(-1, 1)
+
+                res.append(v)
+
+        return np.concatenate(res, axis=0)
+
+    def __Xb(self, b: np.ndarray) -> np.ndarray:
+        """_summary_
+
+        :param b: _description_
+        :type b: np.ndarray
+        :return: _description_
+        :rtype: np.ndarray
+        """
+        ridx = np.arange(self.terms[0].indices[0].shape[0])
+        ridx = ridx[~np.isin(ridx, self.exclude_rows)]
+        res = np.zeros((len(ridx), 1))
+        for dti, dt in enumerate(self.terms):
+            if dt.end_idx <= dt.start_idx:
+                # Skip terms removed completely
+                continue
+
+            # Get rows in b associated with dt
+            bt = b[dt.start_idx : dt.end_idx, 0]
+            if len(dt.unique_matrices) == 1:
+                # Algorithm A5 from Wood et al., 2017
+                cidx = np.arange(dt.unique_matrices[0].shape[1])
+                cidx = cidx[~np.isin(cidx, dt.exclude_columns)]
+
+                res += discrete.A5(
+                    dt.unique_matrices[0], bt, dt.indices[0][ridx], cidx
+                ).reshape(-1, 1)
+
+            else:
+                # Algorithm A6 from Wood et al., 2017
+
+                # Embed bt in full dimensions with zeros for dropped cols
+                cidx = np.arange(dt.total_columns)
+                cidx = cidx[~np.isin(cidx, dt.exclude_columns)]
+                bte = np.zeros(dt.total_columns)
+                bte[cidx] = bt
+
+                if dt.Q is not None:
+                    bte = (dt.Q @ bte.reshape(-1, 1)).flatten()
+
+                # Prepare matrices and indices to implicitly represent A
+                umatsA = [mat for mat in dt.unique_matrices[:-1]]
+                indicesA = [idx[ridx] for idx in dt.indices[:-1]]
+                psA = [mat.shape[1] for mat in umatsA]
+                qA = np.prod(psA)
+
+                # Create C + index
+                indexC = dt.indices[-1][ridx]
+                B = np.reshape(bte, (dt.unique_matrices[-1].shape[1], qA), order="F")
+                C = np.asfortranarray(dt.unique_matrices[-1] @ B)
+
+                res += discrete.A6(
+                    umatsA,
+                    indicesA,
+                    indexC,
+                    np.array(psA, dtype=np.int64),
+                    qA,
+                    ridx.shape[0],
+                    dt.n_marginals - 1,
+                    C,
+                ).reshape(-1, 1)
+
+        return res
+
     def __get_row(self, row: int) -> np.ndarray:
-        """Returns row of model matrix ``X`` (i.e., not transposed) **after** excluding any columns.
+        """Returns row of model matrix ``X`` (i.e., not transposed) **after** excluding columns.
 
         Columns that are zeroed have zero values in place.
 
@@ -130,7 +350,7 @@ class DiscreteModelMatrix:
         return np.array(Xr)
 
     def __get_col(self, col: int) -> np.ndarray:
-        """Returns column of model matrix ``X`` (i.e., not transposed) before excluding any rows.
+        """Returns column of model matrix ``X`` (i.e., not transposed) before excluding rows.
 
         A column of zeros is returned if the column has been zeroed.
 
@@ -164,7 +384,7 @@ class DiscreteModelMatrix:
 
                 if len(dt.unique_matrices) == 1:
                     # Algorithm A1 from Wood et al., 2017
-                    return dt.unique_matrices[0][:, [cidx]][dt.indices[0]].flatten()
+                    return discrete.A1(dt.unique_matrices[0], dt.indices[0], cidx)
                 else:
                     print("Extract tensor")
                     if dt.Q is None:
@@ -421,13 +641,58 @@ class DiscreteModelMatrix:
                 )
 
             # Explicit evaluation of return
-            if other.shape[1] == 1:
-                pass
+            if (
+                other.shape[1] <= self.max_slize_size
+                and isinstance(other, DiscreteModelMatrix) is False
+            ):
 
-            elif other.shape[1] <= self.max_slize_size:
-                pass
+                if isinstance(other, scp.sparse.sparray):
+                    other = other.toarray()
 
-            else:
+                if self._T:
+                    # Handle transpose case
+                    if other.shape[1] == 1:
+                        XTy = self.__XTy(
+                            self.postM @ other if self.postM is not None else other
+                        )
+
+                        return self.preM @ XTy if self.preM is not None else XTy
+
+                    XTY = []
+                    Y = self.postM @ other if self.postM is not None else other
+                    for ci in range(other.shape[1]):
+                        XTY.append(self.__XTy(Y[:, [ci]]).flatten())
+
+                    XTY = np.array(XTY).T
+                    print("XTY shape", XTY.shape)
+                    return self.preM @ XTY if self.preM is not None else XTY
+
+                # Handle un-transposed case
+                if other.shape[1] == 1:
+                    Xb = self.__Xb(
+                        self.postM @ other if self.postM is not None else other
+                    )
+
+                    return self.preM @ Xb if self.preM is not None else Xb
+
+                XB = []
+                B = self.postM @ other if self.postM is not None else other
+                for ci in range(other.shape[1]):
+                    XB.append(self.__Xb(B[:, [ci]]).flatten())
+
+                XB = np.array(XB).T
+                print("XB shape", XB.shape)
+                return self.preM @ XB if self.preM is not None else XB
+
+            elif (
+                isinstance(other, DiscreteModelMatrix)
+                and self.id == other.id
+                and self._T
+                and other._T is False
+            ):
+                return self.__XTWX(other.preM)
+
+            elif isinstance(other, DiscreteModelMatrix) is False:
                 # Store matrix in postM and update shape
                 newS = copy.deepcopy(self)
                 if self.postM is None:
@@ -436,6 +701,8 @@ class DiscreteModelMatrix:
                     newS.postM = self.postM @ other
                 newS.shape = (self.shape[0], other.shape[1])
                 return newS
+            else:
+                raise NotImplementedError("Requested Product is not implemented.")
 
         else:
             raise NotImplementedError(
