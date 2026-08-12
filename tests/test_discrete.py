@@ -39,7 +39,7 @@ class Test_algorithms:
 
     sim_formula_m1 = Formula(
         lhs("y"),
-        [i(), f(["x0"]), f(["x1"]), f(["x2"], te=False), f(["x3"])],
+        [i(), f(["x0"]), f(["x1"]), f(["x1", "x2"], te=True), f(["x3"])],
         data=sim_dat,
         discretize=True,
         find_nested=True,
@@ -55,7 +55,7 @@ class Test_algorithms:
 
     sim_formula_m2 = Formula(
         lhs("y"),
-        [i(), f(["x0"]), f(["x1"]), f(["x2"], te=False), f(["x3"])],
+        [i(), f(["x0"]), f(["x1"]), f(["x1", "x2"], te=True), f(["x3"])],
         data=sim_dat,
         discretize=True,
         find_nested=True,
