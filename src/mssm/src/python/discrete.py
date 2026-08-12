@@ -45,11 +45,43 @@ class DiscreteTerm:
 def _XjTWXk(
     dtj: DiscreteTerm,
     dtk: DiscreteTerm,
-    data_adr: str,
-    idx_adr: str | None,
-    pointr_adr: str | None,
+    hasW: bool,
+    W: list,
+    alg,
 ) -> np.ndarray:
-    pass
+    # Extract all quantities needed
+    psj = np.array([mat.shape[1] for mat in dtj.unique_matrices], dtype=np.int64)
+    psk = np.array([mat.shape[1] for mat in dtk.unique_matrices], dtype=np.int64)
+    qk = np.prod(psk)
+    cidxj = np.arange(dtj.total_columns, dtype=np.int64)
+    cidxj = cidxj[~np.isin(cidxj, dtj.exclude_columns)]
+    cidxk = np.arange(dtk.total_columns, dtype=np.int64)
+    cidxk = cidxk[~np.isin(cidxk, dtk.exclude_columns)]
+
+    # Compute XjTWXk
+    return alg(
+        dtj.unique_matrices,
+        dtk.unique_matrices,
+        dtj.indices,
+        dtk.indices,
+        psj,
+        psk,
+        dtj.indices[0].shape[0],
+        dtk.indices[0].shape[0],
+        dtj.n_marginals,
+        dtk.n_marginals,
+        dtj.total_columns,
+        dtk.total_columns,
+        qk,
+        cidxj,
+        cidxk,
+        dtj.Q is not None,
+        dtk.Q is not None,
+        dtj.Q if dtj.Q is not None else np.array([]),
+        dtk.Q if dtk.Q is not None else np.array([]),
+        hasW,
+        *W,
+    )
 
 
 class DiscreteModelMatrix:
@@ -117,49 +149,12 @@ class DiscreteModelMatrix:
                 if (dtj.end_idx <= dtj.start_idx) or (dtk.end_idx <= dtk.start_idx):
                     continue
 
-                # Extract all quantities needed
-                psj = np.array(
-                    [mat.shape[1] for mat in dtj.unique_matrices], dtype=np.int64
-                )
-                psk = np.array(
-                    [mat.shape[1] for mat in dtk.unique_matrices], dtype=np.int64
-                )
-                qk = np.prod(psk)
-                cidxj = np.arange(dtj.total_columns, dtype=np.int64)
-                cidxj = cidxj[~np.isin(cidxj, dtj.exclude_columns)]
-                cidxk = np.arange(dtk.total_columns, dtype=np.int64)
-                cidxk = cidxk[~np.isin(cidxk, dtk.exclude_columns)]
-
-                XjTWXk = alg(
-                    dtj.unique_matrices,
-                    dtk.unique_matrices,
-                    dtj.indices,
-                    dtk.indices,
-                    psj,
-                    psk,
-                    self.terms[0].indices[0].shape[0],
-                    self.terms[0].indices[0].shape[0],
-                    dtj.n_marginals,
-                    dtk.n_marginals,
-                    dtj.total_columns,
-                    dtk.total_columns,
-                    qk,
-                    cidxj,
-                    cidxk,
-                    dtj.Q is not None,
-                    dtk.Q is not None,
-                    dtj.Q if dtj.Q is not None else np.array([]),
-                    dtk.Q if dtk.Q is not None else np.array([]),
-                    hasW,
-                    *W,
-                )
-
                 XTWX[
                     np.ix_(
                         cols[dtj.start_idx : dtj.end_idx],
                         cols[dtk.start_idx : dtk.end_idx],
                     )
-                ] = XjTWXk
+                ] = _XjTWXk(dtj, dtk, hasW, W, alg)
 
                 if dtji != dtki:
                     XTWX[
@@ -167,7 +162,12 @@ class DiscreteModelMatrix:
                             cols[dtk.start_idx : dtk.end_idx],
                             cols[dtj.start_idx : dtj.end_idx],
                         )
-                    ] = XjTWXk.T
+                    ] = XTWX[
+                        np.ix_(
+                            cols[dtj.start_idx : dtj.end_idx],
+                            cols[dtk.start_idx : dtk.end_idx],
+                        )
+                    ].T
 
         return XTWX
 
