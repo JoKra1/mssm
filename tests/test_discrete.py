@@ -71,6 +71,12 @@ class Test_algorithms:
     mmat3 = mmat2 @ C
     mmat4 = D @ mmat2
 
+    def testIndexC(self):
+        assert np.abs(self.mmat2[:50, 0:3] - self.mmat1[:50, 0:3]).max() < 1e-7
+
+    def testIndexC2(self):
+        assert np.abs(self.mmat2[:50, 3] - self.mmat1[:50, 3]).max() < 1e-7
+
     def testIndexPre(self):
         assert (
             np.abs(

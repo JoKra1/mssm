@@ -168,7 +168,6 @@ Eigen::VectorXd A4(py::list uMats,
                    size_t n,
                    size_t n_t,
                    size_t n_c,
-                   VectorXi64 ridx,
                    VectorXi64 cidx,
                    const Eigen::Ref<Eigen::MatrixXd>& y,
                    bool hasQ,
@@ -178,7 +177,7 @@ Eigen::VectorXd A4(py::list uMats,
     py::list uMats2;
     py::list indices2;
     VectorXi64 ps2;
-    ps2.setZero(ridx.rows());
+    ps2.setZero(n);
     size_t pd = 1;
 
     for (size_t i = 0; i < n_t - 1; i++)
@@ -205,7 +204,7 @@ Eigen::VectorXd A4(py::list uMats,
         
         // Collect
         uMats2.append(m);
-        indices2.append(idx(ridx));
+        indices2.append(idx);
         ps2(i) = ps(i);
         pd *= ps(i);
     }
@@ -254,12 +253,12 @@ Eigen::VectorXd A4(py::list uMats,
                                 indices2,
                                 ps2,
                                 pd,
-                                ridx.rows(),
+                                n,
                                 n_t,
                                 l
                             );
         
-        Eigen::VectorXd vl = A3(m, Al, idx(ridx), mcidx);
+        Eigen::VectorXd vl = A3(m, Al, idx, mcidx);
         v(Eigen::seq(l * pdj, (l * pdj + pdj - 1))) = vl;
     }
     
@@ -363,13 +362,13 @@ Eigen::MatrixXd XTWXA(
                     py::list indicesk,
                     VectorXi64 psj,
                     VectorXi64 psk,
-                    size_t n,
+                    size_t nj,
+                    size_t nk,
                     size_t n_tj,
                     size_t n_tk,
                     size_t n_cj, // After absorbing constraints
                     size_t n_ck, // After absorbing constraints
                     size_t qk,
-                    VectorXi64 ridx,
                     VectorXi64 cidxj,
                     VectorXi64 cidxk,
                     bool hasQj,
@@ -393,7 +392,7 @@ Eigen::MatrixXd XTWXA(
         size_t i = ((hasQk) ? pki : cidxk(pki)); // col i to extract form X_k
 
         Eigen::VectorXd Xi;
-        Xi.setZero(ridx.rows());
+        Xi.setZero(nk);
 
         // Get column i from X_k
         if (n_tk == 1)
@@ -417,25 +416,23 @@ Eigen::MatrixXd XTWXA(
 
             long long int *ptr_ii = static_cast<long long int *>(info_ii.ptr);
 
-            Eigen::Map<VectorXi64> idx(ptr_ii, n);
+            Eigen::Map<VectorXi64> idx(ptr_ii, nk);
 
             // Now get column i
-            Xi = A1(m, idx(ridx), i);
+            Xi = A1(m, idx, i);
         }
         else
         {
             // Tensor smooth -> A2
-            Eigen::VectorXd Xie = A2(
-                                     uMatsk,
-                                     indicesk, // HAVE NOT YET DROPPED ROWS
-                                     psk,
-                                     qk,
-                                     n,
-                                     n_tk,
-                                     i
-                                  );
-
-            Xi = Xie(ridx); // Drop rows
+            Xi = A2(
+                    uMatsk,
+                    indicesk,
+                    psk,
+                    qk,
+                    nk,
+                    n_tk,
+                    i
+                );
         }
 
         // Optionally account for W
@@ -466,9 +463,9 @@ Eigen::MatrixXd XTWXA(
 
             long long int *ptr_ii = static_cast<long long int *>(info_ii.ptr);
 
-            Eigen::Map<VectorXi64> idx(ptr_ii, n);
+            Eigen::Map<VectorXi64> idx(ptr_ii, nj);
 
-            XTWX(Eigen::all,pki) = A3(m, Xi, idx(ridx), cidxj);
+            XTWX(Eigen::all,pki) = A3(m, Xi, idx, cidxj);
 
         }
         else
@@ -477,10 +474,9 @@ Eigen::MatrixXd XTWXA(
             XTWX(Eigen::all,pki) = A4(uMatsj,
                                       indicesj,
                                       psj,
-                                      n,
+                                      nj,
                                       n_tj,
                                       ((hasQj) ? n_cj + 1 : n_cj),
-                                      ridx,
                                       ((hasQj) ?
                                         VectorXi64::LinSpaced(Eigen::Sequential,
                                                               n_cj + 1, 0, n_cj) :
@@ -516,13 +512,13 @@ Eigen::MatrixXd XTWXD(
                     py::list indicesk,
                     VectorXi64 psj,
                     VectorXi64 psk,
-                    size_t n,
+                    size_t nj,
+                    size_t nk,
                     size_t n_tj,
                     size_t n_tk,
                     size_t n_cj,
                     size_t n_ck,
                     size_t qk,
-                    VectorXi64 ridx,
                     VectorXi64 cidxj,
                     VectorXi64 cidxk,
                     bool hasQj,
@@ -540,13 +536,13 @@ Eigen::MatrixXd XTWXD(
                 indicesk,
                 psj,
                 psk,
-                n,
+                nj,
+                nk,
                 n_tj,
                 n_tk,
                 n_cj,
                 n_ck,
                 qk,
-                ridx,
                 cidxj,
                 cidxk,
                 hasQj,
@@ -567,13 +563,13 @@ Eigen::MatrixXd XTWXS(
                     py::list indicesk,
                     VectorXi64 psj,
                     VectorXi64 psk,
-                    size_t n,
+                    size_t nj,
+                    size_t nk,
                     size_t n_tj,
                     size_t n_tk,
                     size_t n_cj,
                     size_t n_ck,
                     size_t qk,
-                    VectorXi64 ridx,
                     VectorXi64 cidxj,
                     VectorXi64 cidxk,
                     bool hasQj,
@@ -601,13 +597,13 @@ Eigen::MatrixXd XTWXS(
                 indicesk,
                 psj,
                 psk,
-                n,
+                nj,
+                nk,
                 n_tj,
                 n_tk,
                 n_cj,
                 n_ck,
                 qk,
-                ridx,
                 cidxj,
                 cidxk,
                 hasQj,

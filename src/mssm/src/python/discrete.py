@@ -42,13 +42,22 @@ class DiscreteTerm:
     n_marginals: int = 1
 
 
+def _XjTWXk(
+    dtj: DiscreteTerm,
+    dtk: DiscreteTerm,
+    data_adr: str,
+    idx_adr: str | None,
+    pointr_adr: str | None,
+) -> np.ndarray:
+    pass
+
+
 class DiscreteModelMatrix:
 
     def __init__(self, dTerms: list[DiscreteTerm]):
         self.terms: list[DiscreteTerm] = dTerms
         self.preM: scp.sparse.csc_array | np.ndarray | None = None
         self.postM: scp.sparse.csc_array | np.ndarray | None = None
-        self.exclude_rows: np.ndarray = np.array([], dtype=np.int64)
         self.max_slize_size: int = 10
         self.id: int = id(self)
         self.return_sparse: bool = False
@@ -62,9 +71,6 @@ class DiscreteModelMatrix:
         self._T: bool = False
 
     def __XTWX(self, otherpreM: scp.sparse.csc_array | np.ndarray | None) -> np.ndarray:
-
-        ridx = np.arange(self.terms[0].indices[0].shape[0])
-        ridx = ridx[~np.isin(ridx, self.exclude_rows)]
 
         # Check for W
         W: scp.sparse.csc_array | np.ndarray | None = None
@@ -129,12 +135,12 @@ class DiscreteModelMatrix:
                     psj,
                     psk,
                     self.terms[0].indices[0].shape[0],
+                    self.terms[0].indices[0].shape[0],
                     dtj.n_marginals,
                     dtk.n_marginals,
                     dtj.total_columns,
                     dtk.total_columns,
                     qk,
-                    ridx,
                     cidxj,
                     cidxk,
                     dtj.Q is not None,
@@ -170,8 +176,7 @@ class DiscreteModelMatrix:
         :return: _description_
         :rtype: np.ndarray
         """
-        ridx = np.arange(self.terms[0].indices[0].shape[0])
-        ridx = ridx[~np.isin(ridx, self.exclude_rows)]
+
         res = []
         for dti, dt in enumerate(self.terms):
             if len(dt.unique_matrices) == 1:
@@ -182,7 +187,7 @@ class DiscreteModelMatrix:
 
                 res.append(
                     discrete.A3(
-                        dt.unique_matrices[0], y.flatten(), dt.indices[0][ridx], cidx
+                        dt.unique_matrices[0], y.flatten(), dt.indices[0], cidx
                     ).reshape(-1, 1)
                 )
             else:
@@ -201,7 +206,6 @@ class DiscreteModelMatrix:
                     dt.indices[0].shape[0],
                     dt.n_marginals,
                     n_k,
-                    ridx,
                     cidx,
                     y,
                     dt.Q is not None,
@@ -220,9 +224,8 @@ class DiscreteModelMatrix:
         :return: _description_
         :rtype: np.ndarray
         """
-        ridx = np.arange(self.terms[0].indices[0].shape[0])
-        ridx = ridx[~np.isin(ridx, self.exclude_rows)]
-        res = np.zeros((len(ridx), 1))
+
+        res = np.zeros((self.terms[0].indices[0].shape[0], 1))
         for dti, dt in enumerate(self.terms):
             if dt.end_idx <= dt.start_idx:
                 # Skip terms removed completely
@@ -236,7 +239,7 @@ class DiscreteModelMatrix:
                 cidx = cidx[~np.isin(cidx, dt.exclude_columns)]
 
                 res += discrete.A5(
-                    dt.unique_matrices[0], bt, dt.indices[0][ridx], cidx
+                    dt.unique_matrices[0], bt, dt.indices[0], cidx
                 ).reshape(-1, 1)
 
             else:
@@ -253,12 +256,12 @@ class DiscreteModelMatrix:
 
                 # Prepare matrices and indices to implicitly represent A
                 umatsA = [mat for mat in dt.unique_matrices[:-1]]
-                indicesA = [idx[ridx] for idx in dt.indices[:-1]]
+                indicesA = [idx for idx in dt.indices[:-1]]
                 psA = [mat.shape[1] for mat in umatsA]
                 qA = np.prod(psA)
 
                 # Create C + index
-                indexC = dt.indices[-1][ridx]
+                indexC = dt.indices[-1]
                 B = np.reshape(bte, (dt.unique_matrices[-1].shape[1], qA), order="F")
                 C = np.asfortranarray(dt.unique_matrices[-1] @ B)
 
@@ -268,7 +271,7 @@ class DiscreteModelMatrix:
                     indexC,
                     np.array(psA, dtype=np.int64),
                     qA,
-                    ridx.shape[0],
+                    dt.indices[0].shape[0],
                     dt.n_marginals - 1,
                     C,
                 ).reshape(-1, 1)
@@ -293,12 +296,6 @@ class DiscreteModelMatrix:
         if row < 0:
             row = c_shape[0] + row
 
-        # Need row in current state
-        ridx = np.arange(self.terms[0].indices[0].shape[0])
-        ridx = ridx[~np.isin(ridx, self.exclude_rows)]
-        xrow = ridx[row]
-        print(row, xrow)
-
         n_c = 0
         for dt in self.terms:
             n_c += dt.total_columns
@@ -308,7 +305,7 @@ class DiscreteModelMatrix:
         for dt in self.terms:
 
             if len(dt.unique_matrices) == 1:
-                Xrj = dt.unique_matrices[0][dt.indices[0][xrow], :].flatten()
+                Xrj = dt.unique_matrices[0][dt.indices[0][row], :].flatten()
             else:
                 n_k = dt.total_columns
                 if dt.Q is not None:
@@ -320,7 +317,7 @@ class DiscreteModelMatrix:
 
                 Xrj = discrete.Xrtensor(
                     dt.unique_matrices,
-                    np.array([idx[xrow] for idx in dt.indices], dtype=np.int64),
+                    np.array([idx[row] for idx in dt.indices], dtype=np.int64),
                     np.array(ps, dtype=np.int64),
                     q,
                     dt.n_marginals,
@@ -346,7 +343,7 @@ class DiscreteModelMatrix:
         return np.array(Xr)
 
     def __get_col(self, col: int) -> np.ndarray:
-        """Returns column of model matrix ``X`` (i.e., not transposed) before excluding rows.
+        """Returns column of model matrix ``X`` (i.e., not transposed).
 
         A column of zeros is returned if the column has been zeroed.
 
@@ -458,7 +455,7 @@ class DiscreteModelMatrix:
 
         # Compute new row indices after extraction
         ridx = np.arange(self.terms[0].indices[0].shape[0])
-        ridx_new = ridx[~np.isin(ridx, self.exclude_rows)][rows]
+        ridx_new = ridx[rows]
 
         if (self.preM is not None) and (self.postM is not None):
             # Check postM size here
@@ -526,7 +523,7 @@ class DiscreteModelMatrix:
             # if isinstance(full_row_check, bool) and full_row_check:
             #    return rcols
 
-            # Need to account for rows
+            # Need to account for new rows
             if len(rcols.shape) == 2:
                 rcols = rcols[ridx_new, :]
 
@@ -535,7 +532,7 @@ class DiscreteModelMatrix:
 
                 return rcols.T if self._T else rcols
 
-            return rcols[ridx]
+            return rcols[ridx_new]
 
         # At this point need to return implicit slice
         newS = copy.deepcopy(self)
@@ -561,9 +558,8 @@ class DiscreteModelMatrix:
                 newS.preM = self.preM[cols, :]
 
                 # Need to drop rows instead -> columns after transpose
-                new_exclude = ridx[~np.isin(ridx, ridx_new)]
-                newS.exclude_rows = new_exclude
-                n_cols = self.terms[0].indices[0].shape[0] - len(new_exclude)
+                newS.drop_rows(ridx[~np.isin(ridx, ridx_new)])
+                n_cols = newS.terms[0].indices[0].shape[0]
             else:
                 newS.preM = self.preM[rows, :]
 
@@ -588,9 +584,8 @@ class DiscreteModelMatrix:
                 newS.postM = self.postM[:, cols]
 
                 # And drop rows
-                new_exclude = ridx[~np.isin(ridx, ridx_new)]
-                newS.exclude_rows = new_exclude
-                n_rows = self.terms[0].indices[0].shape[0] - len(new_exclude)
+                newS.drop_rows(ridx[~np.isin(ridx, ridx_new)])
+                n_rows = newS.terms[0].indices[0].shape[0]
 
             n_cols = newS.postM.shape[1]
 
@@ -603,9 +598,8 @@ class DiscreteModelMatrix:
             n_cols = len(cols)
 
             # And then rows
-            new_exclude = ridx[~np.isin(ridx, ridx_new)]
-            newS.exclude_rows = new_exclude
-            n_rows = self.terms[0].indices[0].shape[0] - len(new_exclude)
+            newS.drop_rows(ridx[~np.isin(ridx, ridx_new)])
+            n_rows = newS.terms[0].indices[0].shape[0]
 
             if self._T:
                 # Flip dims
@@ -806,7 +800,6 @@ class DiscreteModelMatrix:
 
         newS = DiscreteModelMatrix(self.terms)
         newS.return_sparse = self.return_sparse
-        newS.exclude_rows = self.exclude_rows
         newS.max_slize_size = self.max_slize_size
         newS.id = self.id
         newS.postM = None if self.preM is None else self.preM.T
@@ -861,10 +854,6 @@ class DiscreteModelMatrix:
 
         mat = np.concatenate(mat, axis=1)
 
-        # Drop excluded rows
-        ridx = np.arange(mat.shape[0])
-        mat = mat[~np.isin(ridx, self.exclude_rows), :]
-
         if self._T:
             mat = mat.T
 
@@ -876,7 +865,16 @@ class DiscreteModelMatrix:
 
         return mat
 
-    def drop_columns(self, cols: list[int]):
+    def drop_rows(self, rows: list[int]) -> None:
+
+        ridx = np.arange(self.terms[0].indices[0].shape[0])
+        new_ridx = ridx[~np.isin(ridx, rows)]
+
+        for dt in self.terms:
+            for idx in range(len(dt.indices)):
+                dt.indices[idx] = dt.indices[idx][new_ridx]
+
+    def drop_columns(self, cols: list[int]) -> None:
 
         # Sort cols
         cols = np.unique(cols)
