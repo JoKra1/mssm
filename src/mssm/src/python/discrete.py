@@ -87,6 +87,9 @@ class DiscreteModelMatrix:
         if W is None:
             W = np.array([])
 
+        if not W_is_sparse:
+            W = [W]
+
         alg = discrete.XTWXS if W_is_sparse else discrete.XTWXD
 
         # Check dimensions:
@@ -139,18 +142,9 @@ class DiscreteModelMatrix:
                     dtj.Q if dtj.Q is not None else np.array([]),
                     dtk.Q if dtk.Q is not None else np.array([]),
                     hasW,
-                    *W if isinstance(W, scp.sparse.sparray) else W,
+                    *W,
                 )
 
-                print(
-                    XjTWXk.shape,
-                    XTWX[
-                        np.ix_(
-                            cols[dtj.start_idx : dtj.end_idx],
-                            cols[dtk.start_idx : dtk.end_idx],
-                        )
-                    ].shape,
-                )
                 XTWX[
                     np.ix_(
                         cols[dtj.start_idx : dtj.end_idx],
@@ -545,7 +539,7 @@ class DiscreteModelMatrix:
 
         # At this point need to return implicit slice
         newS = copy.deepcopy(self)
-        newS.id = id(newS)  # Update id
+        # newS.id = id(newS)  # Update id
 
         # First need to check for preM and postM - remember cols and rows are flipped if self._T
         if (self.preM is not None) and (self.postM is not None):
@@ -627,9 +621,11 @@ class DiscreteModelMatrix:
     def __matmul__(
         self, other: np.ndarray | scp.sparse.sparray | scp.sparse.spmatrix | Self
     ) -> Self | np.ndarray:
-        print("__matmul__", other.shape)
+        print("__matmul__", other.shape, type(other), self.id)
+        flatten = False
         if len(other.shape) == 1:
             other = other.reshape(-1, 1)
+            flatten = True
         if (
             isinstance(other, np.ndarray)
             or isinstance(other, scp.sparse.sparray)
@@ -661,6 +657,9 @@ class DiscreteModelMatrix:
                             self.postM @ other if self.postM is not None else other
                         )
 
+                        if flatten:
+                            XTy = XTy.flatten()
+
                         return self.preM @ XTy if self.preM is not None else XTy
 
                     XTY = []
@@ -677,6 +676,9 @@ class DiscreteModelMatrix:
                     Xb = self.__Xb(
                         self.postM @ other if self.postM is not None else other
                     )
+
+                    if flatten:
+                        Xb = Xb.flatten()
 
                     return self.preM @ Xb if self.preM is not None else Xb
 
@@ -726,7 +728,7 @@ class DiscreteModelMatrix:
     def __rmatmul__(
         self, other: np.ndarray | scp.sparse.sparray | scp.sparse.spmatrix
     ) -> Self:
-        print("__rmatmul__", other.shape)
+        print("__rmatmul__", other.shape, type(other), self.id)
         if (
             isinstance(other, np.ndarray)
             or isinstance(other, scp.sparse.sparray)
@@ -758,6 +760,26 @@ class DiscreteModelMatrix:
             )
 
     __array_priority__ = 10000
+
+    def __mul__(self, other: float | int) -> Self:
+        print("__mul__", other, type(other), self.id)
+        if isinstance(other, float) or isinstance(other, int):
+            newS = copy.deepcopy(self)
+            for dti, dt in enumerate(newS.terms):
+                for mi in range(len(dt.unique_matrices)):
+                    dt.unique_matrices[mi] *= other
+            return newS
+        else:
+            raise NotImplementedError(
+                (
+                    "Element-wise multiplication is only supported "
+                    "for float and int arguments."
+                )
+            )
+
+    def __rmul__(self, other):
+        print("__rmul__", other, type(other), self.id)
+        return self.__mul__
 
     def is_transposed(self) -> bool:
         return self.__T

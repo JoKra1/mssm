@@ -1421,8 +1421,8 @@ class GSMM:
             lvi = self.lvi
 
         # Encode test data
-        _, pred_cov_flat, _, _, pred_cov, _, _ = form.encode_data(
-            n_dat, prediction=True
+        _, pred_cov_flat, _, _, pred_cov, _, _, cov_bin_idxs = form.encode_data(
+            n_dat, prediction=True, discretize=False
         )
 
         # Then, we need to build the model matrix - but only for the terms which should
@@ -1457,6 +1457,9 @@ class GSMM:
             pred_cov_flat,
             pred_cov,
             use_only=use_terms,
+            discrete=False,
+            cov_bins=form.cov_bins,
+            cov_bin_idxs=cov_bin_idxs,
         )
 
         # Now we calculate the prediction
@@ -1465,7 +1468,7 @@ class GSMM:
         # Optionally calculate the boundary for a 1-alpha CI
         if ci:
             # Wood (2017) 6.10
-            c = predi_mat @ lvi.T @ lvi * self.scale @ predi_mat.T
+            c = predi_mat.toarray() @ lvi.T @ lvi * self.scale @ predi_mat.T.toarray()
             c = c.diagonal()
             b = scp.stats.norm.ppf(1 - (alpha / 2)) * np.sqrt(c)
 

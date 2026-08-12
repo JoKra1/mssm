@@ -3465,7 +3465,7 @@ def read_XTX(
     file_dat = pd.read_csv(file)
 
     # Encode data in this file
-    y_flat_file, cov_flat_file, NAs_flat_file, _, _, _, _ = formula.encode_data(
+    y_flat_file, cov_flat_file, NAs_flat_file, _, _, _, _, _ = formula.encode_data(
         file_dat
     )
     cov_flat_file = cov_flat_file[NAs_flat_file, :]
@@ -3727,7 +3727,7 @@ def read_eta(file, formula: Formula, coef: np.ndarray, nc: int) -> list[float]:
     file_dat = pd.read_csv(file)
 
     # Encode data in this file
-    _, cov_flat_file, NAs_flat_file, _, _, _, _ = formula.encode_data(file_dat)
+    _, cov_flat_file, NAs_flat_file, _, _, _, _, _ = formula.encode_data(file_dat)
     cov_flat_file = cov_flat_file[NAs_flat_file, :]
 
     # Parallelize over sub-sets of this file
@@ -3969,7 +3969,7 @@ def solve_gamm_sparse2(
             file_dat = pd.read_csv(file)
 
             # Encode data in this file
-            y_flat_file, _, NAs_flat_file, _, _, _, _ = formula.encode_data(file_dat)
+            y_flat_file, _, NAs_flat_file, _, _, _, _, _ = formula.encode_data(file_dat)
             y_flat.extend(y_flat_file[NAs_flat_file])
 
             # Build the model matrix products with all information from the formula - but only

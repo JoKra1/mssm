@@ -380,7 +380,7 @@ class Formula:
         self.discretize = {}
         self.discretize_cov = discretize
         self.cov_bins: dict | None = {} if discretize else None
-        self.cov_bin_idxs: dict | None = {} if discretize else None
+        self.cov_bin_idxs: dict | None = None
 
         # Perform input checks first for LHS/Dependent variable.
         if len(self.file_paths) == 0 and self.lhs.variable not in self.data.columns:
@@ -613,7 +613,9 @@ class Formula:
 
         # Encode data into columns usable by the model
         if len(self.file_paths) == 0 or self.keep_cov:
-            y_flat, cov_flat, NAs_flat, y, cov, NAs, sid = self.encode_data(self.data)
+            y_flat, cov_flat, NAs_flat, y, cov, NAs, sid, cov_bin_idxs = (
+                self.encode_data(self.data, discretize=True)
+            )
 
             # Store encoding
             self.y_flat = y_flat
@@ -623,6 +625,7 @@ class Formula:
             self.cov = cov
             self.NOT_NA = NAs
             self.sid = sid
+            self.cov_bin_idxs = cov_bin_idxs
 
         if len(self.discretize) > 0:
             if self.series_id is None:
@@ -667,6 +670,15 @@ class Formula:
         self.__get_coef_info()
 
         # print(self.n_coef,len(self.coef_names))
+
+        if self.discretize_cov:
+            # Re-compute cov_flat **after** computing all constraints/nested checks
+            # for discretized model so that plot functions keep on working as if no
+            # discretization happened.
+            _, cov_flat, _, _, _, _, _, _ = self.encode_data(
+                self.data, prediction=True, discretize=False
+            )
+            self.cov_flat = cov_flat
 
     def __encode_var(
         self,
@@ -878,7 +890,9 @@ class Formula:
             self.n_coef += t_total_coef
             self.unpenalized_coef += t_unpenalized_coef
 
-    def encode_data(self, data: pd.DataFrame, prediction: bool = False) -> tuple[
+    def encode_data(
+        self, data: pd.DataFrame, prediction: bool = False, discretize: bool = False
+    ) -> tuple[
         np.ndarray | None,
         np.ndarray,
         np.ndarray | None,
@@ -886,6 +900,7 @@ class Formula:
         list[np.ndarray] | None,
         list[np.ndarray] | None,
         np.ndarray | None,
+        dict | None,
     ]:
         """
         Encodes ``data``, which needs to be a ``pd.DataFrame`` and by default
@@ -897,16 +912,21 @@ class Formula:
         :param prediction: Whether or not a NA index and a column for the dependent variable should
             be generated.
         :type prediction: bool, optional
-        :return: A tuple with 7 (optional) entries: the dependent variable described by
+        :param discretize: Whether or not covariates should be discretized. Only has an effect if
+            ``self.discretize_cov is True``.
+        :type discretize: bool, optional
+        :return: A tuple with 8 (optional) entries: the dependent variable described by
             ``self.lhs``, the encoded predictor variables as a (N,k) array (number of rows matches
             the number of rows of the first entry returned, the number of columns matches the
             number of k variables present in the formula), an indication for each row whether
             the dependent variable described by ``self.lhs`` is NA, like the first entry but split
             into a list of lists by ``self.series_id``, like the second entry but split into a
-            list of lists by ``self.series_id``, ike the third entry but split into a list of lists
+            list of lists by ``self.series_id``, like the third entry but split into a list of lists
             by ``self.series_id``, start and end points for the splits used to split the previous
             three elements (identifying the start and end point of every level of
-            ``self.series_id``).
+            ``self.series_id``) and finally a dictionary ``cov_bin_idxs`` with the discretized
+            indices for covariates ``c`` so that ``self.cov_bins[c][cov_bin_idxs[c]]``
+            yields the discretized version of covariate ``c``.
         :rtype: (np.ndarray|None, np.ndarray, np.ndarray|None, list[np.ndarray]|None,
             list[np.ndarray]|None, list[np.ndarray]|None, np.ndarray|None)
         """
@@ -915,6 +935,7 @@ class Formula:
         var_keys = var_map.keys()
         var_mins = self.get_var_mins()
         var_maxs = self.get_var_maxs()
+        cov_bin_idxs = {} if self.discretize_cov else None
         if prediction:
             NAs = None
             NAs_flat = None
@@ -1003,6 +1024,7 @@ class Formula:
 
                 if self.discretize_cov:
                     n_bins = int(np.sqrt(data[NAs_flat].shape[0]))
+                    print("N bins", n_bins)
 
             # Then split by seried id
             y = None
@@ -1064,9 +1086,10 @@ class Formula:
                         )
 
                         self.cov_bins[c] = c_bins
-                        self.cov_bin_idxs[c] = np.digitize(c_raw, self.cov_bins[c]) - 1
 
-                    c_raw = self.cov_bins[c][self.cov_bin_idxs[c]]
+                    cov_bin_idxs[c] = np.digitize(c_raw, self.cov_bins[c]) - 1
+                    if discretize:
+                        c_raw = self.cov_bins[c][cov_bin_idxs[c]]
 
                 cov_flat[:, var_map[c]] = c_raw
 
@@ -1075,7 +1098,7 @@ class Formula:
         if self.series_id is not None:
             cov = np.split(cov_flat, sid[1:], axis=0)
 
-        return y_flat, cov_flat, NAs_flat, y, cov, NAs, sid
+        return y_flat, cov_flat, NAs_flat, y, cov, NAs, sid, cov_bin_idxs
 
     def __discretize(self, sti: int) -> tuple[np.ndarray, list[str]]:
         """Internal function to discretize covariates.
