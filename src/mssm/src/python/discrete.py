@@ -118,13 +118,16 @@ class DiscreteModelMatrix:
                     continue
 
                 # Extract all quantities needed
-                psj = [mat.shape[1] for mat in dtj.unique_matrices]
-                psk = [mat.shape[1] for mat in dtk.unique_matrices]
+                psj = np.array(
+                    [mat.shape[1] for mat in dtj.unique_matrices], dtype=np.int64
+                )
+                psk = np.array(
+                    [mat.shape[1] for mat in dtk.unique_matrices], dtype=np.int64
+                )
                 qk = np.prod(psk)
-
-                cidxj = np.arange(dtj.total_columns)
+                cidxj = np.arange(dtj.total_columns, dtype=np.int64)
                 cidxj = cidxj[~np.isin(cidxj, dtj.exclude_columns)]
-                cidxk = np.arange(dtk.total_columns)
+                cidxk = np.arange(dtk.total_columns, dtype=np.int64)
                 cidxk = cidxk[~np.isin(cidxk, dtk.exclude_columns)]
 
                 XjTWXk = alg(

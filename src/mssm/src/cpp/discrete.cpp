@@ -16,8 +16,8 @@ typedef Eigen::Vector<long long int, Eigen::Dynamic> VectorXi64;
 typedef Eigen::Vector<long int, Eigen::Dynamic> VectorXi32;
 
 Eigen::VectorXd A1(
-                   const Eigen::Ref<Eigen::MatrixXd>& umat,
-                   VectorXi64 idx, // Optionally after dropping rows
+                   Eigen::Ref<Eigen::MatrixXd> umat,
+                   Eigen::Ref<VectorXi64> idx, // Optionally after dropping rows
                    size_t col
 )
 {
@@ -27,7 +27,7 @@ Eigen::VectorXd A1(
 Eigen::VectorXd A2(
                    py::list uMats,
                    py::list indices, // Optionally after dropping rows
-                   VectorXi64 ps,
+                   Eigen::Ref<VectorXi64> ps,
                    size_t q,
                    size_t n,
                    size_t n_t,
@@ -142,20 +142,19 @@ Eigen::VectorXd A2Q(
     return Xj;
 }
 
-Eigen::VectorXd A3(const Eigen::Ref<Eigen::MatrixXd>& umat,
-                   const Eigen::Ref<Eigen::VectorXd>& y,
-                   VectorXi64 idx, // Needs to have ridx dropped
+Eigen::VectorXd A3(Eigen::Ref<Eigen::MatrixXd> umat,
+                   Eigen::Ref<Eigen::VectorXd> y,
+                   Eigen::Ref<VectorXi64> idx, // Needs to have ridx dropped
                    VectorXi64 cidx
 )
 {
     Eigen::VectorXd ybar;
     ybar.setZero(umat.rows());
 
-    for (size_t ri = 0; ri < umat.rows(); ri++)
+    for (size_t ri = 0; ri < y.rows(); ri++)
     {
         // np.sum(y[dt.indices[mi][ridx] == ri, :], axis=0)
-        Eigen::VectorXd mask = (idx.array() == ri).cast<double>();
-        ybar(ri) = (y.array() * mask.array()).matrix().sum();
+        ybar(idx(ri)) += y(ri);
     }
     
     return umat(Eigen::all,cidx).transpose() * ybar;
@@ -164,14 +163,14 @@ Eigen::VectorXd A3(const Eigen::Ref<Eigen::MatrixXd>& umat,
 
 Eigen::VectorXd A4(py::list uMats,
                    py::list indices,
-                   VectorXi64 ps,
+                   Eigen::Ref<VectorXi64> ps,
                    size_t n,
                    size_t n_t,
                    size_t n_c,
                    VectorXi64 cidx,
-                   const Eigen::Ref<Eigen::MatrixXd>& y,
+                   Eigen::Ref<Eigen::MatrixXd> y,
                    bool hasQ,
-                   const Eigen::Ref<Eigen::MatrixXd>& Q
+                   Eigen::Ref<Eigen::MatrixXd> Q
 )
 {
     py::list uMats2;
@@ -271,8 +270,8 @@ Eigen::VectorXd A4(py::list uMats,
 }
 
 Eigen::VectorXd A5(
-                   const Eigen::Ref<Eigen::MatrixXd>& umat,
-                   const Eigen::Ref<Eigen::VectorXd>& beta,
+                   Eigen::Ref<Eigen::MatrixXd> umat,
+                   Eigen::Ref<Eigen::VectorXd> beta,
                    VectorXi64 idx,
                    VectorXi64 cidx
 )
@@ -287,7 +286,7 @@ Eigen::VectorXd A6(py::list uMatsA,
                    size_t qA,
                    size_t n, // optionally after dropping rows
                    size_t n_t,
-                   const Eigen::Ref<Eigen::MatrixXd>& C
+                   Eigen::Ref<Eigen::MatrixXd> C
 )
 {
     Eigen::VectorXd f;
@@ -360,8 +359,8 @@ Eigen::MatrixXd XTWXA(
                     py::list uMatsk,
                     py::list indicesj,
                     py::list indicesk,
-                    VectorXi64 psj,
-                    VectorXi64 psk,
+                    Eigen::Ref<VectorXi64> psj,
+                    Eigen::Ref<VectorXi64> psk,
                     size_t nj,
                     size_t nk,
                     size_t n_tj,
@@ -373,8 +372,8 @@ Eigen::MatrixXd XTWXA(
                     VectorXi64 cidxk,
                     bool hasQj,
                     bool hasQk,
-                    const Eigen::Ref<Eigen::MatrixXd>& Qj,
-                    const Eigen::Ref<Eigen::MatrixXd>& Qk,
+                    Eigen::Ref<Eigen::MatrixXd> Qj,
+                    Eigen::Ref<Eigen::MatrixXd> Qk,
                     bool hasW,
                     const WMatrix &W                    
 )
@@ -435,6 +434,8 @@ Eigen::MatrixXd XTWXA(
                 );
         }
 
+        //py::print("Column of j done", pki);
+
         // Optionally account for W
         if (hasW)
         {
@@ -486,6 +487,8 @@ Eigen::MatrixXd XTWXA(
                                       Qj
                                     );
         }
+
+        //py::print("Product with column j done",pki);
         
     }
 
@@ -510,8 +513,8 @@ Eigen::MatrixXd XTWXD(
                     py::list uMatsk,
                     py::list indicesj,
                     py::list indicesk,
-                    VectorXi64 psj,
-                    VectorXi64 psk,
+                    Eigen::Ref<VectorXi64> psj,
+                    Eigen::Ref<VectorXi64> psk,
                     size_t nj,
                     size_t nk,
                     size_t n_tj,
@@ -523,10 +526,10 @@ Eigen::MatrixXd XTWXD(
                     VectorXi64 cidxk,
                     bool hasQj,
                     bool hasQk,
-                    const Eigen::Ref<Eigen::MatrixXd>& Qj,
-                    const Eigen::Ref<Eigen::MatrixXd>& Qk,
+                    Eigen::Ref<Eigen::MatrixXd> Qj,
+                    Eigen::Ref<Eigen::MatrixXd> Qk,
                     bool hasW,
-                    const Eigen::Ref<Eigen::MatrixXd>& W
+                    Eigen::Ref<Eigen::MatrixXd> W
 )
 {
 
@@ -561,8 +564,8 @@ Eigen::MatrixXd XTWXS(
                     py::list uMatsk,
                     py::list indicesj,
                     py::list indicesk,
-                    VectorXi64 psj,
-                    VectorXi64 psk,
+                    Eigen::Ref<VectorXi64> psj,
+                    Eigen::Ref<VectorXi64> psk,
                     size_t nj,
                     size_t nk,
                     size_t n_tj,
@@ -574,8 +577,8 @@ Eigen::MatrixXd XTWXS(
                     VectorXi64 cidxk,
                     bool hasQj,
                     bool hasQk,
-                    const Eigen::Ref<Eigen::MatrixXd>& Qj,
-                    const Eigen::Ref<Eigen::MatrixXd>& Qk,
+                    Eigen::Ref<Eigen::MatrixXd> Qj,
+                    Eigen::Ref<Eigen::MatrixXd> Qk,
                     bool hasW,
                     long long int Wrows, long long int Wcols, long long int Wnnz,
                     py::array_t<double, py::array::f_style | py::array::forcecast> Wdata,
