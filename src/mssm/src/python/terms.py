@@ -1210,8 +1210,6 @@ class f(GammTerm):
         new_cols = []
         new_ci = 0
 
-        print(ci)
-
         # Calculate Coef number for control checks
         if len(vars) > 1:
             n_coef = np.prod(self.nk)

@@ -1024,7 +1024,7 @@ class Formula:
 
                 if self.discretize_cov:
                     n_bins = min(int(np.sqrt(data[NAs_flat].shape[0])), 1000)
-                    print("N bins", n_bins)
+                    # print("N bins", n_bins)
 
             # Then split by seried id
             y = None

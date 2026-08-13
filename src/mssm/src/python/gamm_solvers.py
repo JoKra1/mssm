@@ -1293,7 +1293,9 @@ def update_coef(
     if formula is None:
         if S_root is None:
             if isinstance(Xb, DiscreteModelMatrix):
-                LP, Pr, coef, code = cpp_solve_coefXX(Xb.T @ yb, Xb.T @ Xb + S_emb)
+                LP, Pr, coef, code = cpp_solve_coefXX(  # noqa: F405
+                    Xb.T @ yb, Xb.T @ Xb + S_emb
+                )
             else:
                 LP, Pr, coef, code = cpp_solve_coef(yb, Xb, S_emb)  # noqa: F405
             P = compute_eigen_perm(Pr)  # noqa: F405
@@ -4364,9 +4366,10 @@ def deriv_transform_eta_beta(
     d1eta: list[np.ndarray],
     d2eta: list[np.ndarray],
     d2meta: list[np.ndarray],
-    Xs,
-    only_grad=False,
-):
+    Xs: list[scp.sparse.csc_array],
+    only_grad: bool = False,
+    sparse: bool = True,
+) -> tuple[np.ndarray, np.ndarray | scp.sparse.csc_array | None]:
     """
     Further transforms derivatives of llk with respect to eta to get derivatives of llk with
     respect to coefficients.
@@ -4407,6 +4410,8 @@ def deriv_transform_eta_beta(
     h_rows = []
     h_cols = []
     h_vals = []
+    hessian = None if sparse else np.zeros((len(grad), len(grad)))
+    cols = None if sparse else np.arange(len(grad))
     for etai in range(len(d1eta)):
         hc_idx = 0
         for etaj in range(len(d1eta)):
@@ -4424,49 +4429,72 @@ def deriv_transform_eta_beta(
                 mixed_idx += 1
 
             # val_idx = ((np.isnan(d2) | np.isinf(d2)) == False).flatten()
+            if sparse:
+                for coefi in range(Xs[etai].shape[1]):
 
-            for coefi in range(Xs[etai].shape[1]):
-
-                d2beta = (d2 * Xs[etai][:, [coefi]]).T @ Xs[etaj][
-                    :, (coefi if etai == etaj else 0) : Xs[etaj].shape[1]  # noqa: E203
-                ]
-
-                if d2beta.nnz > 0:
-
-                    # Sort, to make symmetric deriv extraction easier
-                    if not d2beta.has_sorted_indices:
-                        d2beta.sort_indices()
-
-                    # Get non-zero column entries for current row
-                    cols = d2beta.indices[
-                        d2beta.indptr[0] : d2beta.indptr[1]  # noqa: E203
-                    ] + (coefi if etai == etaj else 0)
-
-                    # Get non-zero values for current row in sorted order
-                    vals = d2beta.data[
-                        d2beta.indptr[0] : d2beta.indptr[1]  # noqa: E203
+                    d2beta = (d2 * Xs[etai][:, [coefi]]).T @ Xs[etaj][
+                        :,
+                        (coefi if etai == etaj else 0) : Xs[etaj].shape[  # noqa: E203
+                            1
+                        ],
                     ]
+                    # print(d2beta)
 
-                    h_rows.extend(np.tile(coefi, d2beta.nnz) + hr_idx)
-                    h_cols.extend(cols + hc_idx)
-                    h_vals.extend(vals)
+                    if d2beta.nnz > 0:
 
-                    # Symmetric 2nd deriv..
-                    if etai == etaj and ((cols[0] + hc_idx) == (coefi + hr_idx)):
-                        # For diagonal block need to skip diagonal
-                        # element if present (i.e., non-zero)
-                        h_rows.extend(cols[1:] + hc_idx)
-                        h_cols.extend(np.tile(coefi, d2beta.nnz - 1) + hr_idx)
-                        h_vals.extend(vals[1:])
-                    else:  # For off-diagonal block can assign everything
-                        h_rows.extend(cols + hc_idx)
-                        h_cols.extend(np.tile(coefi, d2beta.nnz) + hr_idx)
+                        # Sort, to make symmetric deriv extraction easier
+                        if not d2beta.has_sorted_indices:
+                            d2beta.sort_indices()
+
+                        # Get non-zero column entries for current row
+                        cols = d2beta.indices[
+                            d2beta.indptr[0] : d2beta.indptr[1]  # noqa: E203
+                        ] + (coefi if etai == etaj else 0)
+
+                        # Get non-zero values for current row in sorted order
+                        vals = d2beta.data[
+                            d2beta.indptr[0] : d2beta.indptr[1]  # noqa: E203
+                        ]
+
+                        h_rows.extend(np.tile(coefi, d2beta.nnz) + hr_idx)
+                        h_cols.extend(cols + hc_idx)
                         h_vals.extend(vals)
+
+                        # Symmetric 2nd deriv..
+                        if etai == etaj and ((cols[0] + hc_idx) == (coefi + hr_idx)):
+                            # For diagonal block need to skip diagonal
+                            # element if present (i.e., non-zero)
+                            h_rows.extend(cols[1:] + hc_idx)
+                            h_cols.extend(np.tile(coefi, d2beta.nnz - 1) + hr_idx)
+                            h_vals.extend(vals[1:])
+                        else:  # For off-diagonal block can assign everything
+                            h_rows.extend(cols + hc_idx)
+                            h_cols.extend(np.tile(coefi, d2beta.nnz) + hr_idx)
+                            h_vals.extend(vals)
+            else:
+                # Unpack directly
+                d2beta = Xs[etai].T @ scp.sparse.diags_array(d2.flatten()) @ Xs[etaj]
+
+                hessian[
+                    np.ix_(
+                        cols[hr_idx : (hr_idx + Xs[etai].shape[1])],  # noqa: E203
+                        cols[hc_idx : (hc_idx + Xs[etaj].shape[1])],  # noqa: E203
+                    )
+                ] = d2beta
+
+                if etai != etaj:
+                    hessian[
+                        np.ix_(
+                            cols[hc_idx : (hc_idx + Xs[etaj].shape[1])],  # noqa: E203
+                            cols[hr_idx : (hr_idx + Xs[etai].shape[1])],  # noqa: E203
+                        )
+                    ] = d2beta.T
 
             hc_idx += Xs[etaj].shape[1]
         hr_idx += Xs[etai].shape[1]
 
-    hessian = scp.sparse.csc_array((h_vals, (h_rows, h_cols)))
+    if sparse:
+        hessian = scp.sparse.csc_array((h_vals, (h_rows, h_cols)))
     return np.array(grad).reshape(-1, 1), hessian
 
 

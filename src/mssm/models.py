@@ -86,6 +86,8 @@ from .src.python.custom_types import (  # noqa: F401
     Fit_info,
 )
 
+from .src.python.discrete import DiscreteModelMatrix
+
 ##################################### GSMM class #####################################  # noqa: E266
 
 
@@ -395,7 +397,12 @@ class GSMM:
         use_terms: list[int] | None = None,
         drop_NA: bool = True,
         par: int | None = None,
-    ) -> list[scp.sparse.csc_array] | scp.sparse.csc_array:
+        discretize: bool = False,
+    ) -> (
+        list[scp.sparse.csc_array | DiscreteModelMatrix]
+        | scp.sparse.csc_array
+        | DiscreteModelMatrix
+    ):
         """
         By default, returns a list containing exactly (as long as you specify the same value for
         ``drop_NA``) the model matrices used for fitting as a ``scipy.sparse.csc_array``. Will raise
@@ -417,11 +424,16 @@ class GSMM:
             obtain the model matrix. Setting this to ``None`` means all matrices are returned in
             a list, defaults to None.
         :type par: int or None, optional
+        :param discretize: Whether the model matrix (or matrices) should be returned as a
+            :class:`DiscreteModelMatrix` instead of a sparse matrix. Only has an effect for formulas
+            with discretized covariates, defaults to False.
+        :type discretize: bool, optional
         :raises ValueError: Will throw an error when called before the model was fitted/before
             model penalties were formed.
         :return: Model matrices :math:`\\mathbf{X}` used for fitting - one per parameter of
             ``self.family`` or a single model matrix for a specific parameter.
-        :rtype: [scp.sparse.csc_array] or scp.sparse.csc_array
+        :rtype: list[scp.sparse.csc_array | DiscreteModelMatrix] or scp.sparse.csc_array or
+            DiscreteModelMatrix
         """
 
         # Check for valid index
@@ -489,6 +501,9 @@ class GSMM:
                 cov_flat,
                 cov,
                 use_only=use_terms,
+                discrete=(discretize and form.discretize_cov),
+                cov_bins=form.cov_bins,
+                cov_bin_idxs=form.cov_bin_idxs,
             )
 
             if len(irstx) > 0 and drop_NA:
@@ -994,7 +1009,13 @@ class GSMM:
                 ind_penalties.append(build_penalties(form))
 
             if build_mat is None or build_mat[fi]:
-                Xs.append(self.get_mmat(drop_NA=drop_NA, par=fi))
+                Xs.append(
+                    self.get_mmat(
+                        drop_NA=drop_NA, par=fi, discretize=form.discretize_cov
+                    )
+                )
+                if form.discretize_cov:
+                    Xs[-1].return_sparse = True
             else:
                 Xs.append(None)
 
@@ -1725,8 +1746,15 @@ class GAMMLSS(GSMM):
         return super().get_ys(drop_NA=True, par=0)
 
     def get_mmat(
-        self, use_terms: list[int] | None = None, par: int | None = None
-    ) -> list[scp.sparse.csc_array] | scp.sparse.csc_array:
+        self,
+        use_terms: list[int] | None = None,
+        par: int | None = None,
+        discretize: bool = False,
+    ) -> (
+        list[scp.sparse.csc_array | DiscreteModelMatrix]
+        | scp.sparse.csc_array
+        | DiscreteModelMatrix
+    ):
         """
         Returns a list containing exaclty the model matrices used for fitting as a
         ``scipy.sparse.csc_array``. Will raise an error when fitting was not completed before
@@ -1745,13 +1773,18 @@ class GAMMLSS(GSMM):
             obtain the model matrix. Setting this to ``None`` means all matrices are returned in
             a list, defaults to None.
         :type par: int or None, optional
+        :param discretize: Whether the model matrix (or matrices) should be returned as a
+            :class:`DiscreteModelMatrix` instead of a sparse matrix. Only has an effect for formulas
+            with discretized covariates, defaults to False.
+        :type discretize: bool, optional
         :raises ValueError: Will throw an error when called before the model was fitted/before
             model penalties were formed.
         :return: Model matrices :math:`\\mathbf{X}` used for fitting - one per parameter of
             ``self.family`` or a single model matrix for a specific parameter.
-        :rtype: [scp.sparse.csc_array] or scp.sparse.csc_array
+        :rtype: list[scp.sparse.csc_array | DiscreteModelMatrix] or scp.sparse.csc_array or
+            DiscreteModelMatrix
         """
-        return super().get_mmat(use_terms, True, par)
+        return super().get_mmat(use_terms, True, par, discretize)
 
     def get_llk(self, penalized: bool = True) -> float | None:
         """
@@ -2015,7 +2048,10 @@ class GAMMLSS(GSMM):
         for fi, form in enumerate(self.formulas):
             if restart is False:
                 ind_penalties.append(build_penalties(form))
-            Xs.append(self.get_mmat(par=fi))
+            Xs.append(self.get_mmat(par=fi, discretize=form.discretize_cov))
+
+            if form.discretize_cov:
+                Xs[-1].return_sparse = True
 
         # Initialize coef from family
         coef = self.family.init_coef(
@@ -2642,7 +2678,11 @@ class GAMM(GAMMLSS):
         coef = super().get_pars(par=0, term=term)
         return coef, self.scale
 
-    def get_mmat(self, use_terms: list[int] | None = None) -> scp.sparse.csc_array:
+    def get_mmat(
+        self,
+        use_terms: list[int] | None = None,
+        discretize: bool = False,
+    ) -> scp.sparse.csc_array | DiscreteModelMatrix:
         """
         Returns exaclty the model matrix used for fitting as a scipy.sparse.csc_array.
 
@@ -2661,12 +2701,16 @@ class GAMM(GAMMLSS):
             If this argument is provided columns corresponding to any term not included in this list
             will be zeroed, defaults to None
         :type use_terms: [int], optional
+        :param discretize: Whether the model matrix should be returned as a
+            :class:`DiscreteModelMatrix` instead of a sparse matrix. Only has an effect if
+            ``self.formula`` has discretized covariates, defaults to False.
+        :type discretize: bool, optional
         :raises ValueError: Will throw an error when called before the model was fitted/before model
             penalties were formed.
         :raises NotImplementedError: Will throw an error when called for a model for which the model
             matrix was never former completely
         :return: Model matrix :math:`\\mathbf{X}` used for fitting.
-        :rtype: scp.sparse.csc_array
+        :rtype: scp.sparse.csc_array or DiscreteModelMatrix
         """
 
         if len(self.formulas[0].file_paths) != 0:
@@ -2674,7 +2718,7 @@ class GAMM(GAMMLSS):
                 "Cannot return the model-matrix if X.T@X was formed iteratively."
             )
 
-        X = super().get_mmat(use_terms, par=0)
+        X = super().get_mmat(use_terms, par=0, discretize=discretize)
 
         if self.transform_X is not None:
             X = self.transform_X(X)
