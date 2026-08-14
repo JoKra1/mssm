@@ -43,6 +43,7 @@ default_gamm_test_kwargs = {
     "progress_bar": True,
     "n_cores": 10,
     "offset": None,
+    "force_sparse": True,
 }
 
 default_gammlss_test_kwargs = {
@@ -64,6 +65,7 @@ default_gammlss_test_kwargs = {
     "n_cores": 10,
     "seed": 0,
     "init_lambda": None,
+    "force_sparse": True,
 }
 
 default_gsmm_test_kwargs = {
@@ -108,6 +110,7 @@ default_gsmm_test_kwargs = {
     "sqEFS_options_final": None,
     "qEFS_memory_usage": 1,
     "qEFS_final_memory_usage": None,
+    "force_sparse": True,
 }
 
 

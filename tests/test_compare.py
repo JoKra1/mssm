@@ -27,6 +27,68 @@ mssm.src.python.exp_fam.MULNOMLSS.init_lambda = init_penalties_tests_gammlss
 ################################################################## Tests ##################################################################
 
 
+class Test_dense_compare:
+    # Simulate some data
+    sim_fit_dat = sim3(n=500, scale=2, c=0.1, family=Gaussian(), seed=21)
+
+    # Now fit nested models
+    sim_fit_formula = Formula(
+        lhs("y"),
+        [
+            i(),
+            f(["x0"], nk=20, rp=1),
+            f(["x1"], nk=20, rp=1),
+            f(["x2"], nk=20, rp=1),
+            f(["x3"], nk=20, rp=1),
+        ],
+        data=sim_fit_dat,
+        print_warn=False,
+    )
+
+    sim_fit_model = GAMM(sim_fit_formula, Gaussian())
+
+    test_kwargs_model = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs_model["exclude_lambda"] = False
+    test_kwargs_model["max_outer"] = 100
+    test_kwargs_model["force_sparse"] = False
+    test_kwargs_model["force_dense"] = True
+
+    sim_fit_model.fit(**test_kwargs_model)
+
+    sim_fit_formula2 = Formula(
+        lhs("y"),
+        [i(), f(["x1"], nk=20, rp=1), f(["x2"], nk=20, rp=1), f(["x3"], nk=20, rp=1)],
+        data=sim_fit_dat,
+        print_warn=False,
+    )
+
+    sim_fit_model2 = GAMM(sim_fit_formula2, Gaussian())
+    sim_fit_model2.fit(**test_kwargs_model)
+
+    test_kwargs = copy.deepcopy(default_compare_test_kwargs)
+    test_kwargs["correct_V"] = False
+    test_kwargs["correct_t1"] = True
+    test_kwargs["perform_GLRT"] = True
+    test_kwargs["seed"] = 22
+    uncor_result = compare_CDL(sim_fit_model, sim_fit_model2, **test_kwargs)
+
+    def test_edf1(self):
+        np.testing.assert_allclose(
+            self.uncor_result["DOF1"],
+            21.60937705197807,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.03),
+        )
+
+    def test_edf2(self):
+        np.testing.assert_allclose(
+            self.uncor_result["DOF2"],
+            20.628037193337164,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.03),
+        )
+
+
 class Test_model_comparisons1:
 
     # Model comparison and smoothness uncertainty correction tests

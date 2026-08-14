@@ -3579,20 +3579,25 @@ class GSMMFamily(ABC):
     :type links: [Link]
     :ivar int n_par: Value passed for ``pars``.
     :ivar list[Link] links: List passed for ``links``.
-    :ivar int, optional extra_coef: Number of extra coefficients required by specific family for
+    :ivar int extra_coef: Number of extra coefficients required by specific family for
         parameters of the log-likelihood that are constant (i.e., not a function of predictor
         variables) or ``None``. If this is not set to ``None``, ``mssm`` will automatically append
         ``extra_coef`` elements to the coefficient vector passed to the log-likelihood and gradient
         methods of this family. Additionally, ``coef_split_idx`` will be modified, so that the last
         list of the split holds the ``extra_coef``. By default set to ``None`` and changed to
         ``int`` by specific families requiring this.
-
+    :ivar bool return_sparse: Whether the family returns a sparse hessian or not (in which case
+        a 2D numpy array should be returned). Defaults to ``True`` but can be set to ``False`` by a
+        model before calling the fitting routine. In contrast, if ``self.return_sparse`` is
+        set to ``False`` before fitting it is never overwritten (Useful if the Hessian is
+        generally dense).
     """
 
     def __init__(self, pars: int, links: list[Link]) -> None:
         self.n_par: int = pars
         self.links: list[Link] = links
         self.extra_coef: int | None = None
+        self.return_sparse: bool = True
 
     @abstractmethod
     def llk(
@@ -3744,7 +3749,7 @@ class GSMMFamily(ABC):
         ys: list[np.ndarray | None],
         Xs: list[scp.sparse.csc_array | None],
         n_c: int = 1,
-    ) -> scp.sparse.csc_array:
+    ) -> scp.sparse.csc_array | np.ndarray:
         """(Optional) method to compute a sparse approximation to the Hessian of the llk, containing
         only the ``j`` columns and rows of the Hessian indexed by ``jcols``.
 
@@ -3775,7 +3780,7 @@ class GSMMFamily(ABC):
         :return: Finite difference approximation matrix which is symmetric sparse matrix with
             ``jcols`` rows and columns set to finite difference approximation of columns of
             Hessian of llk
-        :rtype: scp.sparse.csc_array
+        :rtype: scp.sparse.csc_array | np.ndarray
         """
 
         ccols = []
@@ -3785,6 +3790,8 @@ class GSMMFamily(ABC):
         Hcols = []
 
         Hdim = len(coef)
+
+        Ha = None if self.return_sparse else np.zeros((Hdim, Hdim))
 
         if HAS_MP and n_c > 1:
             # Compute columns in parallel
@@ -3809,28 +3816,34 @@ class GSMMFamily(ABC):
                 # Entire column j of negative hessian
                 Hj = self.jcolhessian(j, coef, coef_split_idx, ys, Xs).flatten()
 
-            # Take out elements previously computed
-            Hjrows = np.arange(Hdim)
-            Hjc = np.delete(Hj, ccols)
-            Hjrows = np.delete(Hjrows, ccols)
+            if self.return_sparse is False:
+                # Dense case
+                Ha[:, j] = Hj
+                Ha[j, :] = Hj
+            else:
+                # Take out elements previously computed
+                Hjrows = np.arange(Hdim)
+                Hjc = np.delete(Hj, ccols)
+                Hjrows = np.delete(Hjrows, ccols)
 
-            Hdat.extend(Hjc)
-            Hrows.extend(Hjrows)
-            Hcols.extend(np.tile(j, len(Hjrows)))
+                Hdat.extend(Hjc)
+                Hrows.extend(Hjrows)
+                Hcols.extend(np.tile(j, len(Hjrows)))
 
-            # Keep symmetric - remove element on diagonal
-            ccols.append(j)
+                # Keep symmetric - remove element on diagonal
+                ccols.append(j)
 
-            Hjcols = np.arange(Hdim)
-            Hjr = np.delete(Hj, ccols)
-            Hjcols = np.delete(Hjcols, ccols)
+                Hjcols = np.arange(Hdim)
+                Hjr = np.delete(Hj, ccols)
+                Hjcols = np.delete(Hjcols, ccols)
 
-            Hdat.extend(Hjr)
-            Hcols.extend(Hjcols)
-            Hrows.extend(np.tile(j, len(Hjcols)))
+                Hdat.extend(Hjr)
+                Hcols.extend(Hjcols)
+                Hrows.extend(np.tile(j, len(Hjcols)))
 
-        # Build sparse hessian approximation
-        Ha = scp.sparse.csc_array((Hdat, (Hrows, Hcols)), shape=(Hdim, Hdim))
+        if self.return_sparse:
+            # Build sparse hessian approximation
+            Ha = scp.sparse.csc_array((Hdat, (Hrows, Hcols)), shape=(Hdim, Hdim))
 
         return Ha
 
@@ -3840,7 +3853,7 @@ class GSMMFamily(ABC):
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
         Xs: list[scp.sparse.csc_array | None],
-    ) -> scp.sparse.csc_array:
+    ) -> scp.sparse.csc_array | np.ndarray:
         """Function to evaluate the hessian of the llk at current coefficient estimate ``coef``.
 
         Only has to be implemented if full Newton is to be used to estimate coefficients. If the
@@ -3873,7 +3886,7 @@ class GSMMFamily(ABC):
             argument of the :func:`mssm.models.GSMM.fit` method.
         :type Xs: list[scp.sparse.csc_array | None]
         :return: The Hessian of the log-likelihood evaluated at ``coef``.
-        :rtype: scp.sparse.csc_array
+        :rtype: scp.sparse.csc_array | np.ndarray
         """
         return self.jhessian(np.arange(len(coef)), coef, coef_split_idx, ys, Xs)
 
@@ -4016,6 +4029,7 @@ class PropHaz(GSMMFamily):
         self.__hs = None
         self.__qs = None
         self.__avs = None
+        self.return_sparse = False
 
         # Create index vectors ri for ut and r
         idx = np.arange(len(self.r), dtype=np.int64)
@@ -4056,7 +4070,7 @@ class PropHaz(GSMMFamily):
         delta = ys[0]
         ut = self.ut
         nt = len(ut)
-        X = Xs[0].toarray()
+        X = Xs[0] if isinstance(Xs[0], np.ndarray) else Xs[0].toarray()
         eta = X @ coef
 
         with warnings.catch_warnings():  # Overflow, etc.
@@ -4104,7 +4118,7 @@ class PropHaz(GSMMFamily):
         delta = ys[0]
         ut = self.ut
         nt = len(ut)
-        X = Xs[0].toarray()
+        X = Xs[0] if isinstance(Xs[0], np.ndarray) else Xs[0].toarray()
         eta = X @ coef
 
         with warnings.catch_warnings():  # Overflow, etc.
@@ -4124,7 +4138,7 @@ class PropHaz(GSMMFamily):
         coef_split_idx: list[int],
         ys: list[np.ndarray],
         Xs: list[scp.sparse.csc_array],
-    ) -> scp.sparse.csc_array:
+    ) -> np.ndarray:
         """Hessian as defined by Wood, Pya, & Säfken (2016).
 
         References:
@@ -4144,14 +4158,14 @@ class PropHaz(GSMMFamily):
         :param Xs: A list containing the sparse model matrix at the first and only index.
         :type Xs: [scp.sparse.csc_array]
         :return: The Hessian of the log-likelihood evaluated at ``coef``.
-        :rtype: scp.sparse.csc_array
+        :rtype: np.ndarray
         """
 
         # Extract and define all variables defined by WPS (2016)
         delta = ys[0]
         ut = self.ut
         nt = len(ut)
-        X = Xs[0].toarray()
+        X = Xs[0] if isinstance(Xs[0], np.ndarray) else Xs[0].toarray()
         eta = X @ coef
 
         with warnings.catch_warnings():  # Overflow
@@ -4161,7 +4175,7 @@ class PropHaz(GSMMFamily):
             # Compute hessian in cpp
             H = hazard.hessian(nt, gamma.flatten(), delta.flatten(), self.__ris, X)
 
-        return scp.sparse.csc_array(H)
+        return H
 
     def get_resid(
         self,
@@ -4218,7 +4232,7 @@ class PropHaz(GSMMFamily):
         # Following based on derivation by Wood, Pya, and Säfken (2016)
         res = np.zeros(X.shape[0])
         for idx, tidx in enumerate(r):
-            Xi = X[idx, :].toarray()
+            Xi = X[idx, :] if isinstance(X, np.ndarray) else X[idx, :].toarray()
             ti = ut[tidx]
             di = delta[idx]
             Si, _ = self.get_survival(coef, Xs, delta, ti, Xi, None, compute_var=False)
@@ -4930,9 +4944,11 @@ class MultiGauss(GSMMFamily):
                 parj_idx += 1
 
             coef_j_idx = j if parj_idx == 0 else j - par_n_coef[parj_idx - 1]
+
+            xbarj = Xfix[parj_idx][:, coef_j_idx]
             xbarj = scp.sparse.csc_array(
                 (
-                    Xfix[parj_idx][:, coef_j_idx].toarray(),
+                    xbarj if isinstance(xbarj, np.ndarray) else xbarj.toarray(),
                     (np.tile(parj_idx, n_obs), np.arange(n_obs)),
                 ),
                 shape=(self.n_par, n_obs),

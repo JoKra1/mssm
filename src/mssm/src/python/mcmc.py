@@ -550,7 +550,7 @@ def sample_mssm(
         from all chains.
     :rtype: SamplerResult
     """
-
+    # ToDo: Need dense case
     np_gen = np.random.default_rng(seed)
 
     # Make sure model has been estimated

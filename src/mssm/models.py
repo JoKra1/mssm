@@ -76,6 +76,7 @@ from .src.python.utils import (  # noqa: F401
     compute_bias_corrected_edf,
     GAMLSSGSMMFamily,
     computeAr1Chol,
+    computeFcolsSparsity,
 )
 from .src.python.custom_types import (  # noqa: F401
     VarType,
@@ -258,6 +259,7 @@ class GSMM:
         self.info: Fit_info | None = None
         self.coef_split_idx: list[int] | None = None
         self.has_extra_coef: bool = False
+        self._uses_sparse_matrices: bool = True
 
     ##################################### Getters ####################################  # noqa: E266
 
@@ -398,10 +400,12 @@ class GSMM:
         drop_NA: bool = True,
         par: int | None = None,
         discretize: bool = False,
+        dense: bool = False,
     ) -> (
         list[scp.sparse.csc_array | DiscreteModelMatrix]
         | scp.sparse.csc_array
         | DiscreteModelMatrix
+        | np.ndarray
     ):
         """
         By default, returns a list containing exactly (as long as you specify the same value for
@@ -428,12 +432,16 @@ class GSMM:
             :class:`DiscreteModelMatrix` instead of a sparse matrix. Only has an effect for formulas
             with discretized covariates, defaults to False.
         :type discretize: bool, optional
+        :param dense: Whether the model matrix (or matrices) should be returned as a
+            numpy.array instead of a sparse matrix. Only has an effect for formulas
+            with no discretized covariates, defaults to False.
+        :type dense: bool, optional
         :raises ValueError: Will throw an error when called before the model was fitted/before
             model penalties were formed.
         :return: Model matrices :math:`\\mathbf{X}` used for fitting - one per parameter of
             ``self.family`` or a single model matrix for a specific parameter.
         :rtype: list[scp.sparse.csc_array | DiscreteModelMatrix] or scp.sparse.csc_array or
-            DiscreteModelMatrix
+            DiscreteModelMatrix or np.ndarray
         """
 
         # Check for valid index
@@ -504,6 +512,7 @@ class GSMM:
                 discrete=(discretize and form.discretize_cov),
                 cov_bins=form.cov_bins,
                 cov_bin_idxs=form.cov_bin_idxs,
+                dense=dense,
             )
 
             if len(irstx) > 0 and drop_NA:
@@ -541,7 +550,7 @@ class GSMM:
 
             # Build model matrices and response vectors for all formulas
             ys = self.get_ys(drop_NA=drop_NA)
-            Xs = self.get_mmat(drop_NA=drop_NA)
+            Xs = self.get_mmat(drop_NA=drop_NA, dense=self._uses_sparse_matrices)
 
             return self.family.llk(self.coef, self.coef_split_idx, ys, Xs) - pen
 
@@ -627,7 +636,7 @@ class GSMM:
 
         # Build model matrices and response vectors for all formulas
         ys = self.get_ys(drop_NA=drop_NA)
-        Xs = self.get_mmat(drop_NA=drop_NA)
+        Xs = self.get_mmat(drop_NA=drop_NA, dense=self._uses_sparse_matrices)
 
         return self.family.get_resid(self.coef, self.coef_split_idx, ys, Xs, **kwargs)
 
@@ -747,6 +756,8 @@ class GSMM:
         },
         qEFS_memory_usage: float = 1,
         qEFS_final_memory_usage: float | None = 1,
+        force_sparse: bool = False,
+        force_dense: bool = False,
     ):
         """
         Fit the specified model.
@@ -959,6 +970,14 @@ class GSMM:
             accurate hessian matrix will be re-sampled after fitting has concluded, independent of
             the value passed for ``sample_hessian``.
         :type qEFS_final_memory_usage: float | None, optional
+        :param force_sparse: Whether to force reliance on sparse matrix algorithms. Defaults to
+            False, which means it will automatically be determined which type of algorithms is more
+            efficient for the model to be estimated.
+        :type force_sparse: bool, optional
+        :param force_dense: Whether to force reliance on dense matrix algorithms. Defaults to
+            False, which means it will automatically be determined which type of algorithms is more
+            efficient for the model to be estimated.
+        :type force_dense: bool, optional
         :raises ValueError: Will throw an error when ``optimizer`` is not 'Newton'.
         """
 
@@ -997,12 +1016,31 @@ class GSMM:
             )
             extend_lambda = False
 
+        if force_sparse and force_dense:
+            raise ValueError(
+                (
+                    "Cannot have ``force_sparse is True`` and "
+                    "``force_dense is True``. Set one to False."
+                )
+            )
+
         # Get ys
         ys = self.get_ys(drop_NA=drop_NA)
 
         # Build penalties and model matrices for all formulas
         Xs = []
         ind_penalties = []
+
+        # Check model sparsity
+        fcols, sp_ratio, n_coef = computeFcolsSparsity(
+            self.formulas, self.family.extra_coef
+        )
+        return_sparse = True
+        if (sp_ratio > 0.3 and n_coef <= 1e4 and force_sparse is False) or force_dense:
+            return_sparse = False
+            self._uses_sparse_matrices = False
+            self.family.return_sparse = False
+
         for fi, form in enumerate(self.formulas):
 
             if restart is False:
@@ -1011,11 +1049,14 @@ class GSMM:
             if build_mat is None or build_mat[fi]:
                 Xs.append(
                     self.get_mmat(
-                        drop_NA=drop_NA, par=fi, discretize=form.discretize_cov
+                        drop_NA=drop_NA,
+                        par=fi,
+                        discretize=form.discretize_cov,
+                        dense=not return_sparse,
                     )
                 )
                 if form.discretize_cov:
-                    Xs[-1].return_sparse = True
+                    Xs[-1].return_sparse = return_sparse
             else:
                 Xs.append(None)
 
@@ -1067,12 +1108,10 @@ class GSMM:
         # Initialize overall coefficients
         form_n_coef = [form.n_coef for form in self.formulas]
         form_up_coef = [form.unpenalized_coef for form in self.formulas]
-        n_coef = np.sum(form_n_coef)
 
         if self.family.extra_coef is not None:
             form_n_coef.append(self.family.extra_coef)
             form_up_coef.append(self.family.extra_coef)
-            n_coef += self.family.extra_coef
             self.has_extra_coef = True
 
         # Again check first for family wide initialization
@@ -1093,54 +1132,34 @@ class GSMM:
             for coef_i in range(1, len(coef_split_idx)):
                 coef_split_idx[coef_i] += coef_split_idx[coef_i - 1]
 
-        fcols = None
+        qfcols = None
         if method == "qEFS":
 
             if structured_qefs:
 
                 if isinstance(structured_qefs_budget, list):
                     # User provided columns of hessian to be approximated via fd
-                    fcols = structured_qefs_budget
+                    qfcols = structured_qefs_budget
 
                 elif structured_qefs_budget > 0:
                     # Collect columns of hessian associated with "fixed" effects
-                    fcols = []
-                    start_idx = 0
-                    for form in self.formulas:
-                        lti = form.get_linear_term_idx()
-                        irsti = form.get_ir_smooth_term_idx()
-                        sti = form.get_smooth_term_idx()
-
-                        for tidx in [*lti, *irsti, *sti]:
-
-                            if isinstance(form.terms[tidx], fs):
-                                continue
-
-                            fcols.extend(form.coef_idx_per_term[tidx] + start_idx)
-
-                        start_idx += form.n_coef
-
-                    # Also account for extra coef that are un-penalized
-                    if self.has_extra_coef:
-                        fcols.extend(np.arange(self.family.extra_coef) + start_idx)
-
                     np_gen = np.random.default_rng(seed)
                     cols_budget = structured_qefs_budget
                     if isinstance(cols_budget, float) and cols_budget <= 1:
                         cols_budget = max(1, int(cols_budget * len(fcols)))
 
                     if len(fcols) == len(coef) and len(fcols) <= cols_budget:
-                        fcols = np_gen.choice(fcols, size=len(coef) - 1, replace=False)
+                        qfcols = np_gen.choice(fcols, size=len(coef) - 1, replace=False)
 
                     elif len(fcols) > cols_budget:
-                        fcols = np_gen.choice(fcols, size=cols_budget, replace=False)
+                        qfcols = np_gen.choice(fcols, size=cols_budget, replace=False)
 
-                    if len(fcols) == 0:
-                        fcols = None
+                    if qfcols is not None and len(qfcols) == 0:
+                        qfcols = None
 
                 # Make sure fcols are in order and unique
-                if fcols is not None:
-                    fcols = np.unique(fcols)
+                if qfcols is not None:
+                    qfcols = np.unique(qfcols)
 
             if sqEFS_options_final is None:
                 sqEFS_options_final = sqEFS_options
@@ -1158,7 +1177,7 @@ class GSMM:
 
             # Get dimension of block that needs to be approximated
             # and select N_u dimnesion based on that
-            N_b = len(coef) if fcols is None else len(coef) - len(fcols)
+            N_b = len(coef) if qfcols is None else len(coef) - len(qfcols)
             N_u = max(
                 1,
                 int(qEFS_memory_usage * N_b),
@@ -1213,7 +1232,7 @@ class GSMM:
                 sample_hessian,
                 sample_hessian_method,
                 sample_hessian_options,
-                fcols,
+                qfcols,
                 sqEFS_options,
                 sqEFS_options_final,
                 qEFS_final_memory_usage,
@@ -1347,7 +1366,7 @@ class GSMM:
         n_ps: int = 10000,
         seed: int | None = None,
         par: int = 0,
-    ) -> tuple[np.ndarray, scp.sparse.csc_array, np.ndarray | None]:
+    ) -> tuple[np.ndarray, scp.sparse.csc_array | np.ndarray, np.ndarray | None]:
         """
         Make a prediction using the fitted model for new data ``n_dat`` using only the terms indexed
         by ``use_terms`` and for parameter ``par`` of the log-likelihood.
@@ -1401,7 +1420,7 @@ class GSMM:
             multiplied by the critical value determined by ``alpha`` (e.g., ~ 1.96 if ``alpha``
             = 0.05). **If you want the function to return just the standard error**, set
             ``alpha = 2 * (1 - scp.stats.norm.cdf(1))``.
-        :rtype: (np.ndarray,scp.sparse.csc_array,np.ndarray or None)
+        :rtype: (np.ndarray, scp.sparse.csc_array | np.ndarray, np.ndarray or None)
         """
 
         # Check for valid index
@@ -1481,6 +1500,7 @@ class GSMM:
             discrete=False,
             cov_bins=form.cov_bins,
             cov_bin_idxs=cov_bin_idxs,
+            dense=not self._uses_sparse_matrices,
         )
 
         # Now we calculate the prediction
@@ -1489,7 +1509,7 @@ class GSMM:
         # Optionally calculate the boundary for a 1-alpha CI
         if ci:
             # Wood (2017) 6.10
-            c = predi_mat.toarray() @ lvi.T @ lvi * self.scale @ predi_mat.T.toarray()
+            c = predi_mat @ lvi.T @ lvi * self.scale @ predi_mat.T
             c = c.diagonal()
             b = scp.stats.norm.ppf(1 - (alpha / 2)) * np.sqrt(c)
 
@@ -1750,10 +1770,12 @@ class GAMMLSS(GSMM):
         use_terms: list[int] | None = None,
         par: int | None = None,
         discretize: bool = False,
+        dense: bool = False,
     ) -> (
         list[scp.sparse.csc_array | DiscreteModelMatrix]
         | scp.sparse.csc_array
         | DiscreteModelMatrix
+        | np.ndarray
     ):
         """
         Returns a list containing exaclty the model matrices used for fitting as a
@@ -1777,14 +1799,18 @@ class GAMMLSS(GSMM):
             :class:`DiscreteModelMatrix` instead of a sparse matrix. Only has an effect for formulas
             with discretized covariates, defaults to False.
         :type discretize: bool, optional
+        :param dense: Whether the model matrix (or matrices) should be returned as a
+            numpy.array instead of a sparse matrix. Only has an effect for formulas
+            with no discretized covariates, defaults to False.
+        :type dense: bool, optional
         :raises ValueError: Will throw an error when called before the model was fitted/before
             model penalties were formed.
         :return: Model matrices :math:`\\mathbf{X}` used for fitting - one per parameter of
             ``self.family`` or a single model matrix for a specific parameter.
         :rtype: list[scp.sparse.csc_array | DiscreteModelMatrix] or scp.sparse.csc_array or
-            DiscreteModelMatrix
+            DiscreteModelMatrix or np.ndarray
         """
-        return super().get_mmat(use_terms, True, par, discretize)
+        return super().get_mmat(use_terms, True, par, discretize, dense)
 
     def get_llk(self, penalized: bool = True) -> float | None:
         """
@@ -1918,6 +1944,8 @@ class GAMMLSS(GSMM):
         n_cores: int = 10,
         seed: int = 0,
         init_lambda: list[float] | None = None,
+        force_sparse: bool = False,
+        force_dense: bool = False,
     ):
         """
         Fit the specified model.
@@ -2027,6 +2055,14 @@ class GAMMLSS(GSMM):
         :param init_lambda: A set of initial :math:`\\lambda` parameters to use by the model.
             Length of list must match number of parameters to be estimated. Defaults to None
         :type init_lambda: [float],optional
+        :param force_sparse: Whether to force reliance on sparse matrix algorithms. Defaults to
+            False, which means it will automatically be determined which type of algorithms is more
+            efficient for the model to be estimated.
+        :type force_sparse: bool, optional
+        :param force_dense: Whether to force reliance on dense matrix algorithms. Defaults to
+            False, which means it will automatically be determined which type of algorithms is more
+            efficient for the model to be estimated.
+        :type force_dense: bool, optional
         """
 
         # Initialize remaining arguments to defaults
@@ -2045,13 +2081,25 @@ class GAMMLSS(GSMM):
         # Build penalties and model matrices for all formulas
         Xs = []
         ind_penalties = []
+
+        # Check model sparsity
+        _, sp_ratio, n_coef = computeFcolsSparsity(self.formulas)
+        return_sparse = True
+        if (sp_ratio > 0.3 and n_coef <= 1e4 and force_sparse is False) or force_dense:
+            return_sparse = False
+            self._uses_sparse_matrices = False
+
         for fi, form in enumerate(self.formulas):
             if restart is False:
                 ind_penalties.append(build_penalties(form))
-            Xs.append(self.get_mmat(par=fi, discretize=form.discretize_cov))
+            Xs.append(
+                self.get_mmat(
+                    par=fi, discretize=form.discretize_cov, dense=not return_sparse
+                )
+            )
 
             if form.discretize_cov:
-                Xs[-1].return_sparse = True
+                Xs[-1].return_sparse = return_sparse
 
         # Initialize coef from family
         coef = self.family.init_coef(
@@ -2140,6 +2188,7 @@ class GAMMLSS(GSMM):
             check_cond,
             piv_tol,
             repara,
+            return_sparse,
             should_keep_drop,
             prefit_grad,
             progress_bar,
@@ -2682,7 +2731,8 @@ class GAMM(GAMMLSS):
         self,
         use_terms: list[int] | None = None,
         discretize: bool = False,
-    ) -> scp.sparse.csc_array | DiscreteModelMatrix:
+        dense: bool = False,
+    ) -> scp.sparse.csc_array | DiscreteModelMatrix | np.ndarray:
         """
         Returns exaclty the model matrix used for fitting as a scipy.sparse.csc_array.
 
@@ -2705,12 +2755,16 @@ class GAMM(GAMMLSS):
             :class:`DiscreteModelMatrix` instead of a sparse matrix. Only has an effect if
             ``self.formula`` has discretized covariates, defaults to False.
         :type discretize: bool, optional
+        :param dense: Whether the model matrix (or matrices) should be returned as a
+            numpy.array instead of a sparse matrix. Only has an effect for formulas
+            with no discretized covariates, defaults to False.
+        :type dense: bool, optional
         :raises ValueError: Will throw an error when called before the model was fitted/before model
             penalties were formed.
         :raises NotImplementedError: Will throw an error when called for a model for which the model
             matrix was never former completely
         :return: Model matrix :math:`\\mathbf{X}` used for fitting.
-        :rtype: scp.sparse.csc_array or DiscreteModelMatrix
+        :rtype: scp.sparse.csc_array or DiscreteModelMatrix or np.ndarray
         """
 
         if len(self.formulas[0].file_paths) != 0:
@@ -2718,7 +2772,7 @@ class GAMM(GAMMLSS):
                 "Cannot return the model-matrix if X.T@X was formed iteratively."
             )
 
-        X = super().get_mmat(use_terms, par=0, discretize=discretize)
+        X = super().get_mmat(use_terms, par=0, discretize=discretize, dense=dense)
 
         if self.transform_X is not None:
             X = self.transform_X(X)
@@ -2943,6 +2997,8 @@ class GAMM(GAMMLSS):
         offset: float | np.ndarray | None = None,
         rho: float | None = None,
         transform_X: Callable | None = None,
+        force_sparse: bool = False,
+        force_dense: bool = False,
     ):
         """
         Fit the specified model.
@@ -3119,6 +3175,14 @@ class GAMM(GAMMLSS):
             :math:`\\mathbf{X}^T\\mathbf{X}` and :math:`\\mathbf{X}^T\\mathbf{y}` should be created
             iteratively. Defaults to None.
         :type transform_X: Callable | None, optional
+        :param force_sparse: Whether to force reliance on sparse matrix algorithms. Defaults to
+            False, which means it will automatically be determined which type of algorithms is more
+            efficient for the model to be estimated.
+        :type force_sparse: bool, optional
+        :param force_dense: Whether to force reliance on dense matrix algorithms. Defaults to
+            False, which means it will automatically be determined which type of algorithms is more
+            efficient for the model to be estimated.
+        :type force_dense: bool, optional
         """
 
         # We need to initialize penalties
@@ -3225,6 +3289,15 @@ class GAMM(GAMMLSS):
                 print("NAs were excluded for fitting.")
 
             # Build the model matrix with all information from the formula
+
+            _, sp_ratio, n_coef = computeFcolsSparsity(self.formulas)
+            return_sparse = True
+            if (
+                sp_ratio > 0.3 and n_coef <= 1e4 and force_sparse is False
+            ) or force_dense:
+                return_sparse = False
+                self._uses_sparse_matrices = False
+
             if self.formulas[0].file_loading_nc == 1 or self.formulas[0].discretize_cov:
                 model_mat = build_sparse_matrix_from_formula(
                     terms,
@@ -3246,7 +3319,7 @@ class GAMM(GAMMLSS):
                 )
 
                 if self.formulas[0].discretize_cov:
-                    model_mat.return_sparse = True
+                    model_mat.return_sparse = return_sparse
 
             else:
                 # Build row sets of model matrix in parallel:
@@ -3342,37 +3415,40 @@ class GAMM(GAMMLSS):
                     wres = wres[1]
 
                     self.hessian = -1 * (
-                        (model_mat.T @ (Wr @ Lrhoi @ Lrhoi.T @ Wr) @ model_mat).tocsc()
-                        / scale
+                        (model_mat.T @ (Wr @ Lrhoi @ Lrhoi.T @ Wr) @ model_mat) / scale
                     )
 
                 else:
-                    self.hessian = -1 * (
-                        (model_mat.T @ (Wr @ Wr) @ model_mat).tocsc() / scale
-                    )
+                    self.hessian = -1 * ((model_mat.T @ (Wr @ Wr) @ model_mat) / scale)
 
                     # Compute observed Hessian of llk
-                    self.hessian_obs = -1 * (
-                        (model_mat.T @ (WN) @ model_mat).tocsc() / scale
-                    )
+                    self.hessian_obs = -1 * ((model_mat.T @ (WN) @ model_mat) / scale)
 
             else:
                 if rho is not None:
                     self.hessian = -1 * (
-                        (model_mat.T @ Lrhoi @ Lrhoi.T @ model_mat).tocsc() / scale
+                        (model_mat.T @ Lrhoi @ Lrhoi.T @ model_mat) / scale
                     )
                     eta = model_mat @ coef.reshape(-1, 1)
                     self.res_ar = wres
                     wres = y_flat.reshape(-1, 1) - eta
 
                 else:
-                    self.hessian = -1 * ((model_mat.T @ model_mat).tocsc() / scale)
+                    self.hessian = -1 * ((model_mat.T @ model_mat) / scale)
 
                 if offset is not None:
                     # Assign correct offset and re-adjust y_flat + eta
                     self.offset = offset
                     y_flat += offset
                     eta += offset
+
+            # Cast to correct sparse type
+            if isinstance(self.hessian, scp.sparse.sparray):
+                self.hessian = self.hessian.tocsc()
+            if self.hessian_obs is not None and isinstance(
+                self.hessian_obs, scp.sparse.sparray
+            ):
+                self.hessian_obs = self.hessian_obs.tocsc()
 
         else:
             # Iteratively build model matrix.

@@ -2608,6 +2608,7 @@ def build_sparse_matrix_from_formula(
     discrete: bool = False,
     cov_bins: dict | None = None,
     cov_bin_idxs: dict | None = None,
+    dense: bool = False,
 ) -> scp.sparse.csc_array:
     """Build model matrix from formula properties.
 
@@ -2820,6 +2821,11 @@ def build_sparse_matrix_from_formula(
     # Build sparse matrix
     mat = scp.sparse.csc_array((elements, (rows, cols)), shape=(n_y, ci))
 
+    if dense:
+        # ToDo: can build dense matrix directly much more
+        # efficiently.
+        mat = mat.toarray()
+
     return mat
 
 
@@ -2828,6 +2834,7 @@ def build_model_matrix(
     pool: mp.pool.Pool | None = None,
     use_only: list[int] | None = None,
     tol: float = 0,
+    dense: bool = False,
 ) -> scp.sparse.csc_array:
     """Function to build the model matrix implied by ``formula``.
 
@@ -2932,6 +2939,7 @@ def build_model_matrix(
         formula.discretize_cov,
         formula.cov_bins,
         formula.cov_bin_idxs,
+        dense,
     )
 
     if len(irstx) > 0:

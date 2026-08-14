@@ -308,7 +308,7 @@ def computeHSR1(
 
     if explicit:
         H = H0 + t1 @ t2 @ t3
-        return H
+        return H.A  # Somehow Scipy returns a np matrix here
     else:
         return t1, t2, t3
 

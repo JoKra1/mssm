@@ -1424,13 +1424,13 @@ class Test_te_scaling_qefs:
     def test_GAMreml(self):
         reml = self.model.get_reml()
         np.testing.assert_allclose(
-            reml, -1758.4067889827427, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            reml, -1758.4067889827425, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
         np.testing.assert_allclose(
-            llk, -1719.5435425750152, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            llk, -1719.543542575015, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_edf1(self):
@@ -1459,7 +1459,7 @@ class Test_te_scaling_qefs:
             Trs.extend(pTrs)
         np.testing.assert_allclose(
             Trs,
-            np.array([348.97586692872943]),
+            np.array([379.31644773658763]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 1.5),
         )

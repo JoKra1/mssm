@@ -474,8 +474,16 @@ def compare_CDL(
                 F1 = V1 @ (-1 * model1.hessian)
                 F2 = V2 @ (-1 * model2.hessian)
 
-            ucFFd1 = F1.multiply(F1.T).sum(axis=0)
-            ucFFd2 = F2.multiply(F2.T).sum(axis=0)
+            ucFFd1 = (
+                (F1 * F1.T).sum(axis=0)
+                if isinstance(F1, np.ndarray)
+                else F1.multiply(F1.T).sum(axis=0)
+            )
+            ucFFd2 = (
+                (F2 * F2.T).sum(axis=0)
+                if isinstance(F2, np.ndarray)
+                else F2.multiply(F2.T).sum(axis=0)
+            )
 
             DOF12 = 2 * DOF1 - np.sum(ucFFd1)
             DOF22 = 2 * DOF2 - np.sum(ucFFd2)

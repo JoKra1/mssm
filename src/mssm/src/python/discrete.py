@@ -2,10 +2,12 @@ import numpy as np
 import scipy as scp
 from dataclasses import dataclass
 import copy
-from typing import Self
+from typing import TypeVar
 from .smooths import TP_basis_calc
 from .matrix_solvers import map_csc_to_eigen
 import discrete
+
+TDiscreteMatrix = TypeVar("TDiscreteMatrix", bound="DiscreteModelMatrix")
 
 
 @dataclass
@@ -138,7 +140,7 @@ class DiscreteModelMatrix:
 
         return W, hasW, W_is_sparse
 
-    def __XTWZ(self, other: Self) -> np.ndarray:
+    def __XTWZ(self, other: TDiscreteMatrix) -> np.ndarray:
         """_summary_
 
         :param other: _description_
@@ -493,7 +495,7 @@ class DiscreteModelMatrix:
 
                     return Xj
 
-    def __getitem__(self, key) -> np.ndarray | scp.sparse.sparray | Self:
+    def __getitem__(self, key) -> np.ndarray | scp.sparse.sparray | TDiscreteMatrix:
 
         # print(key)
         advanced = False
@@ -704,8 +706,9 @@ class DiscreteModelMatrix:
         return newS
 
     def __matmul__(
-        self, other: np.ndarray | scp.sparse.sparray | scp.sparse.spmatrix | Self
-    ) -> np.ndarray | scp.sparse.sparray | Self:
+        self,
+        other: np.ndarray | scp.sparse.sparray | scp.sparse.spmatrix | TDiscreteMatrix,
+    ) -> np.ndarray | scp.sparse.sparray | TDiscreteMatrix:
         # print("__matmul__", other.shape, type(other), self.id)
         flatten = False
         if len(other.shape) == 1:
@@ -849,7 +852,7 @@ class DiscreteModelMatrix:
 
     def __rmatmul__(
         self, other: np.ndarray | scp.sparse.sparray | scp.sparse.spmatrix
-    ) -> np.ndarray | scp.sparse.sparray | Self:
+    ) -> np.ndarray | scp.sparse.sparray | TDiscreteMatrix:
         # print("__rmatmul__", other.shape, type(other), self.id)
 
         flatten = False
@@ -900,7 +903,7 @@ class DiscreteModelMatrix:
 
     __array_priority__ = 10000
 
-    def __mul__(self, other: float | int | np.ndarray) -> Self:
+    def __mul__(self, other: float | int | np.ndarray) -> TDiscreteMatrix:
         # print("__mul__", other, type(other), self.id)
         if (
             isinstance(other, float)
@@ -932,19 +935,19 @@ class DiscreteModelMatrix:
         return self.__T
 
     @property
-    def T(self) -> Self:
+    def T(self) -> TDiscreteMatrix:
         """Returns transpose. Data is not copied.
 
         :return: _description_
-        :rtype: Self
+        :rtype: TDiscreteMatrix
         """
         return self.transpose()
 
-    def transpose(self) -> Self:
+    def transpose(self) -> TDiscreteMatrix:
         """Returns transpose. Data is not copied.
 
         :return: _description_
-        :rtype: Self
+        :rtype: TDiscreteMatrix
         """
 
         # Trivial case when self is vector
@@ -963,11 +966,11 @@ class DiscreteModelMatrix:
 
         return newS
 
-    def copy(self) -> Self:
+    def copy(self) -> TDiscreteMatrix:
         """Return copy of self.
 
         :return: _description_
-        :rtype: Self
+        :rtype: TDiscreteMatrix
         """
         return copy.deepcopy(self)
 
@@ -1017,6 +1020,20 @@ class DiscreteModelMatrix:
             mat = self.preM @ mat
 
         return mat
+
+    def eval(self) -> np.ndarray | scp.sparse.csc_array:
+        """Explicitly returns matrix either as np.array or as scp.sparse.csc_array
+        depending on ``self.return_sparse``
+
+        :return: _description_
+        :rtype: np.ndarray | scp.sparse.csc_array
+        """
+
+        return (
+            scp.sparse.csc_array(self.toarray())
+            if self.return_sparse
+            else self.toarray()
+        )
 
     def drop_rows(self, rows: list[int]) -> None:
 

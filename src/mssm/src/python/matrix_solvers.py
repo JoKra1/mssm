@@ -149,42 +149,64 @@ def compute_eigen_perm(Pr: list[int] | np.ndarray) -> scp.sparse.csc_array:
 
 
 def apply_eigen_perm(
-    Pr: list[int], InvCholXXSP: scp.sparse.csc_array
-) -> scp.sparse.csc_array:
+    Pr: list[int], InvCholXXSP: scp.sparse.csc_array | np.ndarray
+) -> scp.sparse.csc_array | np.ndarray:
     """Internal function. Unpivots columns of ``InvCholXXSP`` (usually the inverse of a
     Cholesky factor) and returns the unpivoted version.
 
     :param Pr: List of column indices
     :type Pr: list[int]
     :param InvCholXXSP: Pivoted matrix
-    :type InvCholXXSP: scp.sparse.csc_array
+    :type InvCholXXSP: scp.sparse.csc_array | np.ndarray
     :return: Unpivoted matrix
-    :rtype: scp.sparse.csc_array
+    :rtype: scp.sparse.csc_array | np.ndarray
     """
     Perm = compute_eigen_perm(Pr)
     InvCholXXS = InvCholXXSP @ Perm
     return InvCholXXS
 
 
-def cpp_chol(A: scp.sparse.csc_array) -> tuple[scp.sparse.csc_array, int]:
+def cpp_chol(
+    A: scp.sparse.csc_array | np.ndarray,
+) -> tuple[scp.sparse.csc_array | np.ndarray, int]:
     """Computes Cholesky of ``A``.
 
     :param A: Some square symmetric matrix
-    :type A: scp.sparse.csc_array
+    :type A: scp.sparse.csc_array | np.ndarray
     :return: Returns Cholesky and code indicating success
-    :rtype: tuple[scp.sparse.csc_array,int]
+    :rtype: tuple[scp.sparse.csc_array | np.ndarray, int]
     """
+    if isinstance(A, np.ndarray):
+        return eigen_solvers.dchol(A)
+
     return eigen_solvers.chol(*map_csc_to_eigen(A))
 
 
-def cpp_cholP(A: scp.sparse.csc_array) -> tuple[scp.sparse.csc_array, list[int], int]:
+def cpp_cholP(
+    A: scp.sparse.csc_array | np.ndarray,
+) -> tuple[scp.sparse.csc_array | np.ndarray, list[int], int]:
     """Computes pivoted Cholesky of ``A``.
 
     :param A: Some square symmetric matrix
-    :type A: scp.sparse.csc_array
+    :type A: scp.sparse.csc_array | np.ndarray
     :return: Returns pivoted Cholesky, pivoted column order, and code indicating success
-    :rtype: tuple[scp.sparse.csc_array,list[int],int]
+    :rtype: tuple[scp.sparse.csc_array | np.ndarray,list[int],int]
     """
+    if isinstance(A, np.ndarray):
+        # Perform stability oriented pivoted LDL decomp
+        L, d, p, code = eigen_solvers.dcholP(A)
+
+        if code == 0:
+            # Check PD
+            eps = np.power(np.finfo(float).eps, 0.5)
+            thresh = eps * np.max(np.abs(d))
+            code = int(np.any(d < thresh))
+            dr = np.zeros_like(d)
+            dr[d >= thresh] = np.sqrt(d[d >= thresh])
+            L @= scp.sparse.diags_array(dr)  # Cholesky if PD
+
+        return L, p, code
+
     return eigen_solvers.cholP(*map_csc_to_eigen(A))
 
 
@@ -202,25 +224,29 @@ def cpp_qr(
 
 
 def cpp_qrr(
-    A: scp.sparse.csc_array,
-) -> tuple[scp.sparse.csc_array, list[int], int, int]:
-    """Computes pivoted QR decomposition of ``A`` and returns rank estimate
+    A: scp.sparse.csc_array | np.ndarray,
+) -> tuple[scp.sparse.csc_array | np.ndarray, list[int], int, int]:
+    """Computes pivoted QR decomposition of ``A`` only returning matrix R and rank estimate
 
     :param A: Some matrix
-    :type A: scp.sparse.csc_array
-    :return: Matrices Q, R, pivoted column order, estimated rank, and code indicating success
-    :rtype: tuple[scp.sparse.csc_array,list[int],int,int]
+    :type A: scp.sparse.csc_array | np.ndarray
+    :return: Matrix R, pivoted column order, estimated rank, and code indicating success
+    :rtype: tuple[scp.sparse.csc_array | np.ndarray,list[int],int,int]
     """
+    if isinstance(A, np.ndarray):
+        R, p, r = cpp_dqrr(A)
+        return R, p, r, int(r == 0)
+
     return eigen_solvers.pqrr(*map_csc_to_eigen(A))
 
 
-def cpp_dqrr(A: np.ndarray) -> tuple[list[int], int]:
+def cpp_dqrr(A: np.ndarray) -> tuple[np.ndarray, list[int], int]:
     """Computes pivoted QR decomposition of dense matrix ``A``.
 
     :param A: Some matrix
     :type A: np.ndarray
-    :return: column pivot order for rank estimation, estimated rank
-    :rtype: tuple[list[int],int]
+    :return: Matrix R column pivot order for rank estimation, estimated rank
+    :rtype: tuple[np.ndarray, list[int],int]
     """
     return eigen_solvers.dpqrr(A)
 
@@ -273,26 +299,43 @@ def cpp_solve_am(
 
 
 def cpp_solve_coef(
-    y: np.ndarray, X: scp.sparse.csc_array, S: scp.sparse.csc_array
-) -> tuple[scp.sparse.csc_array, list[int], np.ndarray, int]:
+    y: np.ndarray, X: scp.sparse.csc_array | np.ndarray, S: scp.sparse.csc_array
+) -> tuple[scp.sparse.csc_array | np.ndarray, list[int], np.ndarray, int]:
     """Solves ``(X.T@X + S)@b = X.T@y`` for ``b`` via sparse Cholesky decomposition.
 
     :param y: vector of observations
     :type y: np.ndarray
-    :param X: Some rectangular sparse matrix
-    :type X: scp.sparse.csc_array
+    :param X: Some rectangular (sparse) matrix
+    :type X: scp.sparse.csc_array | np.ndarray
     :param S: Sparse square matrix
     :type S: scp.sparse.csc_array
     :return: Pivoted Cholesky of ``X.T@X + S``, column pivot indices in a list, ``b``, and code
         indicating success
-    :rtype: tuple[scp.sparse.csc_array,list[int],np.ndarray,int]
+    :rtype: tuple[scp.sparse.csc_array | np.ndarray, list[int],np.ndarray,int]
     """
+    if isinstance(X, np.ndarray):
+
+        L, d, p, b, code = eigen_solvers.dsolve_coef(y, X, *map_csc_to_eigen(S))
+
+        if code == 0:
+            # Check PD
+            eps = np.power(np.finfo(float).eps, 0.5)
+            thresh = eps * np.max(np.abs(d))
+            code = int(np.any(d < thresh))
+            dr = np.zeros_like(d)
+            dr[d >= thresh] = np.sqrt(d[d >= thresh])
+            L @= scp.sparse.diags_array(dr)  # Cholesky if PD
+
+        return L, p, b, code
+
     return eigen_solvers.solve_coef(y, *map_csc_to_eigen(X), *map_csc_to_eigen(S))
 
 
 def cpp_solve_coef_pqr(
-    y: np.ndarray, X: scp.sparse.csc_array, E: scp.sparse.csc_array
-) -> tuple[scp.sparse.csc_array, list[int], list[int], np.ndarray, int, int]:
+    y: np.ndarray, X: scp.sparse.csc_array | np.ndarray, E: scp.sparse.csc_array
+) -> tuple[
+    scp.sparse.csc_array | np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, int
+]:
     """Solves ``(X.T@X + S)@b = X.T@y`` for ``b`` via sparse QR decomposition, where ``E.T@E=S``.
 
     **Does not form ``X.T@X + S`` for solve**. Potentially pivots twice - once for sparsity (always)
@@ -325,7 +368,7 @@ def cpp_solve_coef_pqr(
        coef[drop] = 0
 
        # Convert R so that rest of code can just continue as with Chol (i.e., L)
-       LP = RP.T.tocsc()
+       LP = RP.T if isinstance(R,np.ndarray) else RP.T.tocsc()
 
        # Keep only columns of Pr/P that belong to identifiable params. So P.T@LP is Cholesky of
        # negative penalized Hessian of model without unidentifiable coef. Important: LP and Pr/P no
@@ -338,31 +381,54 @@ def cpp_solve_coef_pqr(
 
     :param y: vector of observations
     :type y: np.ndarray
-    :param X: Some rectangular sparse matrix
-    :type X: scp.sparse.csc_array
+    :param X: Some rectangular (sparse) matrix
+    :type X: scp.sparse.csc_array | np.ndarray
     :param E: Sparse square matrix
     :type E: scp.sparse.csc_array
-    :return: Pivoted Cholesky of ``X.T@X + S``, first column pivot indices in a list, second column
-        pivot indices in a list, ``b``, estimated rank, and code indicating success.
-    :rtype: tuple[scp.sparse.csc_array,list[int],list[int],np.ndarray,int,int]
+    :return: Pivoted Cholesky of ``X.T@X + S``, first column pivot indices in an array, second
+        column pivot indices in an array, ``b``, estimated rank, and code indicating success.
+    :rtype: tuple[scp.sparse.csc_array | np.ndarray,np.ndarray,np.ndarray,np.ndarray,int,int]
     """
+    if isinstance(X, np.ndarray):
+        R, p, b, r, code = eigen_solvers.dsolve_coef_pqr(
+            y, np.concatenate((X, E.toarray()), axis=0)
+        )
+        # pseudo 2nd pivot vector to maintain compatability
+        p2 = np.arange(p.shape[0])
+        return R, p, p2, b, r, code
+
     return eigen_solvers.solve_coef_pqr(y, *map_csc_to_eigen(X), *map_csc_to_eigen(E))
 
 
 def cpp_solve_coefXX(
-    Xy: np.ndarray, XXS: scp.sparse.csc_array
-) -> tuple[scp.sparse.csc_array, list[int], np.ndarray, int]:
+    Xy: np.ndarray, XXS: scp.sparse.csc_array | np.ndarray
+) -> tuple[scp.sparse.csc_array | np.ndarray, list[int], np.ndarray, int]:
     """Solves ``(X.T@X + S)@b = X.T@y`` for ``b`` via sparse Cholesky decomposition with
     ``(X.T@X + S)`` and ``X.T@y`` pre-computed.
 
     :param Xy: Holds ``X.T@y``
     :type Xy: np.ndarray
     :param XXS: Holds ``(X.T@X + S)``
-    :type XXS: scp.sparse.csc_array
+    :type XXS: scp.sparse.csc_array | np.ndarray
     :return: Pivoted Cholesky of ``X.T@X + S``, column pivot indices in a list, ``b``, and
         code indicating success
-    :rtype: tuple[scp.sparse.csc_array,list[int],np.ndarray,int]
+    :rtype: tuple[scp.sparse.csc_array | np.ndarray,list[int],np.ndarray,int]
     """
+    if isinstance(XXS, np.ndarray):
+
+        L, d, p, b, code = eigen_solvers.dsolve_coefXX(Xy, XXS)
+
+        if code == 0:
+            # Check PD
+            eps = np.power(np.finfo(float).eps, 0.5)
+            thresh = eps * np.max(np.abs(d))
+            code = int(np.any(d < thresh))
+            dr = np.zeros_like(d)
+            dr[d >= thresh] = np.sqrt(d[d >= thresh])
+            L @= scp.sparse.diags_array(dr)  # Cholesky if PD
+
+        return L, p, b, code
+
     return eigen_solvers.solve_coefXX(Xy, *map_csc_to_eigen(XXS))
 
 
@@ -399,40 +465,57 @@ def cpp_solve_LXX(
 
 
 def cpp_solve_tr(
-    A: scp.sparse.csc_array, C: scp.sparse.csc_array
-) -> scp.sparse.csc_array:
-    """Solves ``A@B=C``, where ``A`` is sparse and lower triangular. This can be utilized to obtain
-    ``B = inv(A)``, when ``C`` is the identity.
+    A: scp.sparse.csc_array | np.ndarray, C: scp.sparse.csc_array | np.ndarray
+) -> scp.sparse.csc_array | np.ndarray:
+    """Solves ``A@B=C``, where ``A`` is (sparse and) lower triangular. This can be utilized to
+    obtain ``B = inv(A)``, when ``C`` is the identity.
 
     :param A: Lower triangluar sparse matrix
-    :type A: scp.sparse.csc_array
+    :type A: scp.sparse.csc_array | np.ndarray
     :param C: Sparse potentially rectangular matrix
-    :type C: scp.sparse.csc_array
+    :type C: scp.sparse.csc_array | np.ndarray
     :return: ``B``
-    :rtype: scp.sparse.csc_array
+    :rtype: scp.sparse.csc_array | np.ndarray
     """
-    return eigen_solvers.solve_tr(*map_csc_to_eigen(A), C)
+
+    if isinstance(A, np.ndarray):
+        return eigen_solvers.dsolve_tr(
+            A, C if isinstance(C, np.ndarray) else C.toarray()
+        )
+
+    return eigen_solvers.solve_tr(
+        *map_csc_to_eigen(A),
+        scp.sparse.csc_array(C) if isinstance(C, np.ndarray) else C,
+    )
 
 
 def cpp_backsolve_tr(
-    A: scp.sparse.csc_array, C: scp.sparse.csc_array
-) -> scp.sparse.csc_array:
-    """Solves ``A@B=C``, where ``A`` is sparse and upper triangular. This can be utilized to obtain
-    ``B = inv(A)``, when ``C`` is the identity.
+    A: scp.sparse.csc_array | np.ndarray, C: scp.sparse.csc_array | np.ndarray
+) -> scp.sparse.csc_array | np.ndarray:
+    """Solves ``A@B=C``, where ``A`` (is sparse and) upper triangular. This can be utilized to
+    obtain ``B = inv(A)``, when ``C`` is the identity.
 
     :param A: Lower triangluar sparse matrix
-    :type A: scp.sparse.csc_array
+    :type A: scp.sparse.csc_array | np.ndarray
     :param C: Sparse potentially rectangular matrix
-    :type C: scp.sparse.csc_array
+    :type C: scp.sparse.csc_array | np.ndarray
     :return: ``B``
-    :rtype: scp.sparse.csc_array
+    :rtype: scp.sparse.csc_array | np.ndarray
     """
-    return eigen_solvers.backsolve_tr(*map_csc_to_eigen(A), C)
+    if isinstance(A, np.ndarray):
+        return eigen_solvers.dbacksolve_tr(
+            A, C if isinstance(C, np.ndarray) else C.toarray()
+        )
+
+    return eigen_solvers.backsolve_tr(
+        *map_csc_to_eigen(A),
+        scp.sparse.csc_array(C) if isinstance(C, np.ndarray) else C,
+    )
 
 
 def est_condition(
-    L: scp.sparse.csc_array,
-    Linv: scp.sparse.csc_array,
+    L: scp.sparse.csc_array | np.ndarray,
+    Linv: scp.sparse.csc_array | np.ndarray,
     seed: int | None = 0,
     verbose: bool = True,
 ) -> tuple[float, float, float, int]:
@@ -452,10 +535,10 @@ def est_condition(
       - Cline et al. (1979). An Estimate for the Condition Number of a Matrix.
       - Golub & Van Loan (2013). Matrix computations, 4th edition.
 
-    :param L: Cholesky or any other root of ``A.T@A`` as a sparse matrix.
-    :type L: scp.sparse.csc_array
+    :param L: Cholesky or any other root of ``A.T@A`` as (a sparse) matrix.
+    :type L: scp.sparse.csc_array | np.ndarray
     :param Linv: Inverse of Choleksy (or any other root) of ``A.T@A``.
-    :type Linv: scp.sparse.csc_array
+    :type Linv: scp.sparse.csc_array | np.ndarray
     :param seed: The seed to use for the random parts of the singular value decomposition.
         Defaults to 0.
     :type seed: int or None or numpy.random.Generator
@@ -473,29 +556,46 @@ def est_condition(
 
     # Now get estimates of largest and smallest singular values of A
     # from norms of L and Linv (Cline et al. 1979)
+
     try:
-        min_sing = scp.sparse.linalg.svds(
-            Linv, k=1, return_singular_vectors=False, random_state=seed
-        )[0]
-        max_sing = scp.sparse.linalg.svds(
-            L, k=1, return_singular_vectors=False, random_state=seed
-        )[0]
+        min_sing = (
+            np.min(scp.linalg.svd(Linv, compute_uv=False))
+            if isinstance(Linv, np.ndarray)
+            else scp.sparse.linalg.svds(
+                Linv, k=1, return_singular_vectors=False, random_state=seed
+            )[0]
+        )
+        max_sing = (
+            np.max(scp.linalg.svd(L, compute_uv=False))
+            if isinstance(L, np.ndarray)
+            else scp.sparse.linalg.svds(
+                L, k=1, return_singular_vectors=False, random_state=seed
+            )[0]
+        )
     except:  # noqa: E722
         try:
-            min_sing = scp.sparse.linalg.svds(
-                Linv,
-                k=1,
-                return_singular_vectors=False,
-                random_state=seed,
-                solver="lobpcg",
-            )[0]
-            max_sing = scp.sparse.linalg.svds(
-                L,
-                k=1,
-                return_singular_vectors=False,
-                random_state=seed,
-                solver="lobpcg",
-            )[0]
+            min_sing = (
+                np.min(scp.linalg.svd(Linv, compute_uv=False, lapack_driver="gesvd"))
+                if isinstance(Linv, np.ndarray)
+                else scp.sparse.linalg.svds(
+                    Linv,
+                    k=1,
+                    return_singular_vectors=False,
+                    random_state=seed,
+                    solver="lobpcg",
+                )[0]
+            )
+            max_sing = (
+                np.max(scp.linalg.svd(L, compute_uv=False, lapack_driver="gesvd"))
+                if isinstance(L, np.ndarray)
+                else scp.sparse.linalg.svds(
+                    L,
+                    k=1,
+                    return_singular_vectors=False,
+                    random_state=seed,
+                    solver="lobpcg",
+                )[0]
+            )
         except:  # noqa: E722
             # Solver failed.. get out
             warnings.warn(
@@ -535,13 +635,13 @@ def est_condition(
 
 def compute_block_B_shared(
     address_dat: str,
-    address_ptr: str,
-    address_idx: str,
+    address_ptr: str | None,
+    address_idx: str | None,
     shape_dat: tuple,
-    shape_ptr: tuple,
+    shape_ptr: tuple | None,
     rows: int,
     cols: int,
-    nnz: int,
+    nnz: int | None,
     T: scp.sparse.csc_array,
 ) -> float:
     """Solves ``L @ B = T`` for ``B`` via forward solving and based on shared memory for ``L``,
@@ -550,19 +650,19 @@ def compute_block_B_shared(
     :param address_dat: Address to data array of ``L``
     :type address_dat: str
     :param address_ptr: Address to pointer array of ``L``
-    :type address_ptr: str
+    :type address_ptr: str | None
     :param address_idx: Address to indices array of ``L``
-    :type address_idx: str
+    :type address_idx: str | None
     :param shape_dat: Shape of data array of ``L``
     :type shape_dat: tuple
     :param shape_ptr: Shape of pointer array of ``L``
-    :type shape_ptr: tuple
+    :type shape_ptr: tuple | None
     :param rows: Number of rows of ``L``
     :type rows: int
     :param cols: Number of cols of ``L``
     :type cols: int
     :param nnz: Number of non-zero elements in ``L``
-    :type nnz: int
+    :type nnz: int | None
     :param T: Target matrix
     :type T: scp.sparse.csc_array
     :return: ``B.power(2).sum()``
@@ -571,18 +671,18 @@ def compute_block_B_shared(
     BB = compute_block_linv_shared(
         address_dat, address_ptr, address_idx, shape_dat, shape_ptr, rows, cols, nnz, T
     )
-    return BB.power(2).sum()
+    return np.power(BB, 2).sum() if isinstance(BB, np.ndarray) else BB.power(2).sum()
 
 
 def compute_block_B_shared_cluster(
     address_dat: str,
-    address_ptr: str,
-    address_idx: str,
+    address_ptr: str | None,
+    address_idx: str | None,
     shape_dat: tuple,
-    shape_ptr: tuple,
+    shape_ptr: tuple | None,
     rows: int,
     cols: int,
-    nnz: int,
+    nnz: int | None,
     T: scp.sparse.csc_array,
     cluster_weights: list[float],
 ) -> tuple[float, float]:
@@ -593,19 +693,19 @@ def compute_block_B_shared_cluster(
     :param address_dat: Address to data array of ``L``
     :type address_dat: str
     :param address_ptr: Address to pointer array of ``L``
-    :type address_ptr: str
+    :type address_ptr: str | None
     :param address_idx: Address to indices array of ``L``
-    :type address_idx: str
+    :type address_idx: str | None
     :param shape_dat: Shape of data array of ``L``
     :type shape_dat: tuple
     :param shape_ptr: Shape of pointer array of ``L``
-    :type shape_ptr: tuple
+    :type shape_ptr: tuple | None
     :param rows: Number of rows of ``L``
     :type rows: int
     :param cols: Number of cols of ``L``
     :type cols: int
     :param nnz: Number of non-zero elements in ``L``
-    :type nnz: int
+    :type nnz: int | None
     :param T: Target matrix
     :type T: scp.sparse.csc_array
     :param cluster_weights: Cluster weights obtained from
@@ -618,12 +718,12 @@ def compute_block_B_shared_cluster(
     BB = compute_block_linv_shared(
         address_dat, address_ptr, address_idx, shape_dat, shape_ptr, rows, cols, nnz, T
     )
-    BBps = BB.power(2).sum()
+    BBps = np.power(BB, 2).sum() if isinstance(BB, np.ndarray) else BB.power(2).sum()
     return np.sum(cluster_weights * BBps), len(cluster_weights) * BBps
 
 
 def compute_B(
-    L: scp.sparse.csc_array,
+    L: scp.sparse.csc_array | np.ndarray,
     P: scp.sparse.csc_array,
     lTerm: LambdaTerm,
     n_c: int = 10,
@@ -632,8 +732,8 @@ def compute_B(
     """Solves ``L @ B = P @ lTerm.D_J_emb`` for ``B``, then returns ``B.power(2).sum()`` or two
     approximations of this (for very big factor smooth models).
 
-    :param L: Lower triangular sparse matrix
-    :type L: scp.sparse.csc_array
+    :param L: Lower triangular (sparse) matrix
+    :type L: scp.sparse.csc_array | np.ndarray
     :param P: Permuation matrix
     :type P: scp.sparse.csc_array
     :param lTerm: Current penalty term
@@ -700,26 +800,49 @@ def compute_B(
                 mp.Pool(processes=n_c) as pool,
             ):
                 # Create shared memory copies of data, indptr, and indices
-                rows, cols, nnz, data, indptr, indices = map_csc_to_eigen(L)
-                shape_dat = data.shape
-                shape_ptr = indptr.shape
+                if isinstance(L, np.ndarray):
+                    # dense case
+                    rows, cols = L.shape
+                    shape_dat = L.shape
 
-                dat_mem = manager.SharedMemory(data.nbytes)
-                dat_shared = np.ndarray(shape_dat, dtype=np.double, buffer=dat_mem.buf)
-                dat_shared[:] = data[:]
+                    dat_mem = manager.SharedMemory(L.nbytes)
+                    dat_shared = np.ndarray(
+                        shape_dat, dtype=np.double, buffer=dat_mem.buf
+                    )
+                    dat_shared[:] = L[:]
 
-                ptr_mem = manager.SharedMemory(indptr.nbytes)
-                ptr_shared = np.ndarray(shape_ptr, dtype=np.int64, buffer=ptr_mem.buf)
-                ptr_shared[:] = indptr[:]
+                    shape_ptr = None
+                    nnz = None
+                    ptr_mem = None
+                    idx_mem = None
 
-                idx_mem = manager.SharedMemory(indices.nbytes)
-                idx_shared = np.ndarray(shape_dat, dtype=np.int64, buffer=idx_mem.buf)
-                idx_shared[:] = indices[:]
+                else:
+                    rows, cols, nnz, data, indptr, indices = map_csc_to_eigen(L)
+                    shape_dat = data.shape
+                    shape_ptr = indptr.shape
+
+                    dat_mem = manager.SharedMemory(data.nbytes)
+                    dat_shared = np.ndarray(
+                        shape_dat, dtype=np.double, buffer=dat_mem.buf
+                    )
+                    dat_shared[:] = data[:]
+
+                    ptr_mem = manager.SharedMemory(indptr.nbytes)
+                    ptr_shared = np.ndarray(
+                        shape_ptr, dtype=np.int64, buffer=ptr_mem.buf
+                    )
+                    ptr_shared[:] = indptr[:]
+
+                    idx_mem = manager.SharedMemory(indices.nbytes)
+                    idx_shared = np.ndarray(
+                        shape_dat, dtype=np.int64, buffer=idx_mem.buf
+                    )
+                    idx_shared[:] = indices[:]
 
                 args = zip(
                     repeat(dat_mem.name),
-                    repeat(ptr_mem.name),
-                    repeat(idx_mem.name),
+                    repeat(None if ptr_mem is None else ptr_mem.name),
+                    repeat(None if idx_mem is None else idx_mem.name),
                     repeat(shape_dat),
                     repeat(shape_ptr),
                     repeat(rows),
@@ -734,7 +857,7 @@ def compute_B(
 
         # Not worth parallelizing, solve directly
         B = cpp_solve_tr(L, PD)
-        return B.power(2).sum()
+        return np.power(B, 2).sum() if isinstance(B, np.ndarray) else B.power(2).sum()
 
     # Approximate the derivative based just on the columns in D_J that belong to the
     # maximum series identified for each cluster. Use the size of the cluster and the weights to
@@ -774,26 +897,42 @@ def compute_B(
         # Parallelize
         with managers.SharedMemoryManager() as manager, mp.Pool(processes=n_c) as pool:
             # Create shared memory copies of data, indptr, and indices
-            rows, cols, nnz, data, indptr, indices = map_csc_to_eigen(L)
-            shape_dat = data.shape
-            shape_ptr = indptr.shape
 
-            dat_mem = manager.SharedMemory(data.nbytes)
-            dat_shared = np.ndarray(shape_dat, dtype=np.double, buffer=dat_mem.buf)
-            dat_shared[:] = data[:]
+            if isinstance(L, np.ndarray):
+                # dense case
+                rows, cols = L.shape
+                shape_dat = L.shape
 
-            ptr_mem = manager.SharedMemory(indptr.nbytes)
-            ptr_shared = np.ndarray(shape_ptr, dtype=np.int64, buffer=ptr_mem.buf)
-            ptr_shared[:] = indptr[:]
+                dat_mem = manager.SharedMemory(L.nbytes)
+                dat_shared = np.ndarray(shape_dat, dtype=np.double, buffer=dat_mem.buf)
+                dat_shared[:] = L[:]
 
-            idx_mem = manager.SharedMemory(indices.nbytes)
-            idx_shared = np.ndarray(shape_dat, dtype=np.int64, buffer=idx_mem.buf)
-            idx_shared[:] = indices[:]
+                shape_ptr = None
+                nnz = None
+                ptr_mem = None
+                idx_mem = None
+
+            else:
+                rows, cols, nnz, data, indptr, indices = map_csc_to_eigen(L)
+                shape_dat = data.shape
+                shape_ptr = indptr.shape
+
+                dat_mem = manager.SharedMemory(data.nbytes)
+                dat_shared = np.ndarray(shape_dat, dtype=np.double, buffer=dat_mem.buf)
+                dat_shared[:] = data[:]
+
+                ptr_mem = manager.SharedMemory(indptr.nbytes)
+                ptr_shared = np.ndarray(shape_ptr, dtype=np.int64, buffer=ptr_mem.buf)
+                ptr_shared[:] = indptr[:]
+
+                idx_mem = manager.SharedMemory(indices.nbytes)
+                idx_shared = np.ndarray(shape_dat, dtype=np.int64, buffer=idx_mem.buf)
+                idx_shared[:] = indices[:]
 
             args = zip(
                 repeat(dat_mem.name),
-                repeat(ptr_mem.name),
-                repeat(idx_mem.name),
+                repeat(None if ptr_mem is None else ptr_mem.name),
+                repeat(None if idx_mem is None else idx_mem.name),
                 repeat(shape_dat),
                 repeat(shape_ptr),
                 repeat(rows),
@@ -815,62 +954,70 @@ def compute_B(
 
 def compute_block_linv_shared(
     address_dat: str,
-    address_ptr: str,
-    address_idx: str,
+    address_ptr: str | None,
+    address_idx: str | None,
     shape_dat: tuple,
-    shape_ptr: tuple,
+    shape_ptr: tuple | None,
     rows: int,
     cols: int,
-    nnz: int,
+    nnz: int | None,
     T: scp.sparse.csc_array,
-) -> scp.sparse.csc_array:
+) -> scp.sparse.csc_array | np.ndarray:
     """Solves ``L@B = T`` where ``L`` is available in shared memory and ``T`` is a column subset of
     the identity matrix.
 
     :param address_dat: Address to data array of ``L``
     :type address_dat: str
     :param address_ptr: Address to pointer array of ``L``
-    :type address_ptr: str
+    :type address_ptr: str | None
     :param address_idx: Address to indices array of ``L``
-    :type address_idx: str
+    :type address_idx: str | None
     :param shape_dat: Shape of data array of ``L``
     :type shape_dat: tuple
     :param shape_ptr: Shape of pointer array of ``L``
-    :type shape_ptr: tuple
+    :type shape_ptr: tuple | None
     :param rows: Number of rows of ``L``
     :type rows: int
     :param cols: Number of cols of ``L``
     :type cols: int
     :param nnz: Number of non-zero elements in ``L``
-    :type nnz: int
+    :type nnz: int | None
     :param T: Target matrix
     :type T: scp.sparse.csc_array
     :return: ``B``
-    :rtype: scp.sparse.csc_array
+    :rtype: scp.sparse.csc_array | np.ndarray
     """
-    dat_shared = shared_memory.SharedMemory(name=address_dat, create=False)
-    ptr_shared = shared_memory.SharedMemory(name=address_ptr, create=False)
-    idx_shared = shared_memory.SharedMemory(name=address_idx, create=False)
+    if nnz is None:
+        # dense case
+        dat_shared = shared_memory.SharedMemory(name=address_dat, create=False)
+        L = np.ndarray(shape_dat, dtype=np.double, buffer=dat_shared.buf)
+        B = cpp_solve_tr(L, T)
+    else:
+        dat_shared = shared_memory.SharedMemory(name=address_dat, create=False)
+        ptr_shared = shared_memory.SharedMemory(name=address_ptr, create=False)
+        idx_shared = shared_memory.SharedMemory(name=address_idx, create=False)
 
-    data = np.ndarray(shape_dat, dtype=np.double, buffer=dat_shared.buf)
-    indptr = np.ndarray(shape_ptr, dtype=np.int64, buffer=ptr_shared.buf)
-    indices = np.ndarray(shape_dat, dtype=np.int64, buffer=idx_shared.buf)
+        data = np.ndarray(shape_dat, dtype=np.double, buffer=dat_shared.buf)
+        indptr = np.ndarray(shape_ptr, dtype=np.int64, buffer=ptr_shared.buf)
+        indices = np.ndarray(shape_dat, dtype=np.int64, buffer=idx_shared.buf)
 
-    L = eigen_solvers.solve_tr(rows, cols, nnz, data, indptr, indices, T)
+        B = eigen_solvers.solve_tr(rows, cols, nnz, data, indptr, indices, T)
 
-    return L
+    return B
 
 
-def compute_Linv(L: scp.sparse.csc_array, n_c: int = 10) -> scp.sparse.csc_array:
+def compute_Linv(
+    L: scp.sparse.csc_array | np.ndarray, n_c: int = 10
+) -> scp.sparse.csc_array | np.ndarray:
     """Solves ``L @ inv(L) = I`` for ``inv(L)`` optionally parallelizing over column blocks of
     ``I``.
 
-    :param L: Lower triangular sparse matrix
-    :type L: scp.sparse.csc_array
+    :param L: Lower triangular (sparse) matrix
+    :type L: scp.sparse.csc_array | np.ndarray
     :param n_c: Number of cores to use, defaults to 10
     :type n_c: int, optional
     :return: ``inv(L)``
-    :rtype: scp.sparse.csc_array
+    :rtype: scp.sparse.csc_array | np.ndarray
     """
     # Solves L @ inv(L) = I for inv(L) parallelizing over column
     # blocks of I if int(I.shape[1]/2000) > 1
@@ -889,26 +1036,41 @@ def compute_Linv(L: scp.sparse.csc_array, n_c: int = 10) -> scp.sparse.csc_array
 
         with managers.SharedMemoryManager() as manager, mp.Pool(processes=n_c) as pool:
             # Create shared memory copies of data, indptr, and indices
-            rows, cols, nnz, data, indptr, indices = map_csc_to_eigen(L)
-            shape_dat = data.shape
-            shape_ptr = indptr.shape
+            if isinstance(L, np.ndarray):
+                # dense case
+                rows, cols = L.shape
+                shape_dat = L.shape
 
-            dat_mem = manager.SharedMemory(data.nbytes)
-            dat_shared = np.ndarray(shape_dat, dtype=np.double, buffer=dat_mem.buf)
-            dat_shared[:] = data[:]
+                dat_mem = manager.SharedMemory(L.nbytes)
+                dat_shared = np.ndarray(shape_dat, dtype=np.double, buffer=dat_mem.buf)
+                dat_shared[:] = L[:]
 
-            ptr_mem = manager.SharedMemory(indptr.nbytes)
-            ptr_shared = np.ndarray(shape_ptr, dtype=np.int64, buffer=ptr_mem.buf)
-            ptr_shared[:] = indptr[:]
+                shape_ptr = None
+                nnz = None
+                ptr_mem = None
+                idx_mem = None
 
-            idx_mem = manager.SharedMemory(indices.nbytes)
-            idx_shared = np.ndarray(shape_dat, dtype=np.int64, buffer=idx_mem.buf)
-            idx_shared[:] = indices[:]
+            else:
+                rows, cols, nnz, data, indptr, indices = map_csc_to_eigen(L)
+                shape_dat = data.shape
+                shape_ptr = indptr.shape
+
+                dat_mem = manager.SharedMemory(data.nbytes)
+                dat_shared = np.ndarray(shape_dat, dtype=np.double, buffer=dat_mem.buf)
+                dat_shared[:] = data[:]
+
+                ptr_mem = manager.SharedMemory(indptr.nbytes)
+                ptr_shared = np.ndarray(shape_ptr, dtype=np.int64, buffer=ptr_mem.buf)
+                ptr_shared[:] = indptr[:]
+
+                idx_mem = manager.SharedMemory(indices.nbytes)
+                idx_shared = np.ndarray(shape_dat, dtype=np.int64, buffer=idx_mem.buf)
+                idx_shared[:] = indices[:]
 
             args = zip(
                 repeat(dat_mem.name),
-                repeat(ptr_mem.name),
-                repeat(idx_mem.name),
+                repeat(None if ptr_mem is None else ptr_mem.name),
+                repeat(None if idx_mem is None else idx_mem.name),
                 repeat(shape_dat),
                 repeat(shape_ptr),
                 repeat(rows),
@@ -919,6 +1081,8 @@ def compute_Linv(L: scp.sparse.csc_array, n_c: int = 10) -> scp.sparse.csc_array
 
             LBinvs = pool.starmap(compute_block_linv_shared, args)
 
-        return scp.sparse.hstack(LBinvs)
+        return (
+            np.concatenate(LBinvs, axis=1) if nnz is None else scp.sparse.hstack(LBinvs)
+        )
 
     return cpp_solve_tr(L, T)
