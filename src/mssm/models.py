@@ -550,7 +550,7 @@ class GSMM:
 
             # Build model matrices and response vectors for all formulas
             ys = self.get_ys(drop_NA=drop_NA)
-            Xs = self.get_mmat(drop_NA=drop_NA, dense=self._uses_sparse_matrices)
+            Xs = self.get_mmat(drop_NA=drop_NA, dense=not self._uses_sparse_matrices)
 
             return self.family.llk(self.coef, self.coef_split_idx, ys, Xs) - pen
 
@@ -636,7 +636,7 @@ class GSMM:
 
         # Build model matrices and response vectors for all formulas
         ys = self.get_ys(drop_NA=drop_NA)
-        Xs = self.get_mmat(drop_NA=drop_NA, dense=self._uses_sparse_matrices)
+        Xs = self.get_mmat(drop_NA=drop_NA, dense=not self._uses_sparse_matrices)
 
         return self.family.get_resid(self.coef, self.coef_split_idx, ys, Xs, **kwargs)
 

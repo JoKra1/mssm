@@ -2210,7 +2210,7 @@ def compute_REML_candidate_GSMM(
             scp.sparse.csc_matrix((len(coef), len(coef))),
             scp.sparse.csc_matrix((len(coef), len(coef))),
             coef.reshape(-1, 1),
-            total_edf,
+            coef.shape[0],
             -np.inf,
         )
 
