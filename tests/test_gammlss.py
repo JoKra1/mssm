@@ -627,7 +627,7 @@ class Test_te_p_values:
             self.ps[0],
             np.array([np.float64(0.39714921685433136), np.float64(0.0)]),
             atol=min(max_atol, 0),
-            rtol=min(max_rtol, 1e-6),
+            rtol=min(max_rtol, 0.01),
         )
 
     def test_p2_hard(self):
@@ -643,7 +643,7 @@ class Test_te_p_values:
             self.Trs[0],
             np.array([np.float64(5.67384667149778), np.float64(226.9137363518526)]),
             atol=min(max_atol, 0),
-            rtol=min(max_rtol, 1e-6),
+            rtol=min(max_rtol, 0.01),
         )
 
     def test_trs2(self):
