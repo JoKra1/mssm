@@ -18,6 +18,7 @@ import io
 from contextlib import redirect_stdout
 from .defaults import default_gamm_test_kwargs, max_atol, max_rtol
 from mssm.src.python.mcmc import sample_mssm
+from mssm.src.python.formula import build_model_matrix
 
 ################################################################## Tests ##################################################################
 
@@ -217,9 +218,50 @@ class Test_BIG_GAMM_Discretize2:
         series_id="series",
     )  # When approximating the computations for a random smooth, the series identifier column needs to be specified!
 
+    formula2 = Formula(
+        lhs=lhs("y"),  # The dependent variable - here y!
+        terms=[
+            i(),  # The intercept, a
+            l(["cond"]),  # For cond='b'
+            f(
+                ["time"], by="cond", nk=20
+            ),  # to-way interaction between time and cond; one smooth over time per cond level
+            f(
+                ["x"], by="cond"
+            ),  # to-way interaction between x and cond; one smooth over x per cond level
+            f(
+                ["time", "x"], by="cond", nk=9, rp=0, scale_te=False
+            ),  # three-way interaction
+            fs(["time"], rf="series", nk=20, approx_deriv=discretize),
+        ],  # Random non-linear effect of time - one smooth per level of factor series
+        data=dat,
+        series_id="series",
+        find_nested=False,
+    )  # When approximating the computations for a random smooth, the series identifier column needs to be specified!
+
     model = GAMM(formula, Gaussian())
 
     model.fit(**default_gamm_test_kwargs)
+    _ = build_penalties(formula2)
+    X1 = model.get_mmat()
+    X2 = build_model_matrix(formula2)
+
+    # Find terms in X1 kept from X2:
+    keep = []
+    for tidx in range(len(formula.coef_idx_per_term)):
+
+        if tidx in formula.get_smooth_term_idx():
+            if formula.terms[tidx].drop_coef is not None:
+                keep.extend(
+                    formula2.coef_idx_per_term[tidx][
+                        ~np.isin(
+                            np.arange(len(formula2.coef_idx_per_term[tidx])),
+                            formula.terms[tidx].drop_coef,
+                        )
+                    ]
+                )
+                continue
+        keep.extend(formula2.coef_idx_per_term[tidx])
 
     def test_GAMedf(self):
         assert round(self.model.edf, ndigits=0) == 2421.0
@@ -232,6 +274,9 @@ class Test_BIG_GAMM_Discretize2:
 
     def test_GAMllk(self):
         assert round(self.model.get_llk(False), ndigits=0) == -75225.0
+
+    def test_find_nested(self):
+        assert np.abs((self.X1 - self.X2[:, self.keep]).toarray()).max() <= 1e-10
 
 
 class Test_NUll_penalty_reparam:
