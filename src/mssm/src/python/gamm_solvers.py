@@ -7361,7 +7361,9 @@ def makepdd_fd2llk(
     onHBb = dampen_HBb * onHfd[np.ix_(np.arange(nF), np.arange(nF, nT))]
 
     # Need an ev decomp of onHBB to check for pd and subsequently invert
-    eigonHBB, U = scp.linalg.eigh(onHBB.toarray())
+    eigonHBB, U = scp.linalg.eigh(
+        onHBB if isinstance(onHBB, np.ndarray) else onHBB.toarray()
+    )
 
     if make_PD and make_PSD:
         # Enforce PD
@@ -7701,7 +7703,9 @@ def getCholnH(
         onHBb = onHfd[np.ix_(np.arange(nF), np.arange(nF, nT))]
 
         # Now Eigen-decomposition of onHBB
-        eig, U = scp.linalg.eigh(onHBB.toarray())
+        eig, U = scp.linalg.eigh(
+            onHBB if isinstance(onHBB, np.ndarray) else onHBB.toarray()
+        )
         eig[eig < 0] = 0  # Must be PSD for Chol to make sense
 
         if PD_HBB:

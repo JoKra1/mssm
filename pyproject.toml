@@ -42,9 +42,7 @@ local_scheme = "no-local-version"
 
 [project.optional-dependencies]
 
-mp = ["multiprocess >= 0.70.18"]
-mcmc = ["arviz >= 0.23.0",
-        "mssm[mp]"]
+mcmc = ["arviz >= 0.23.0"]
 plot = ["mssmViz == 0.1.51"]
 dev = [
        "mssm[plot]",

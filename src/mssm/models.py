@@ -1154,7 +1154,10 @@ class GSMM:
                     elif len(fcols) > cols_budget:
                         qfcols = np_gen.choice(fcols, size=cols_budget, replace=False)
 
-                    if qfcols is not None and len(qfcols) == 0:
+                    else:
+                        qfcols = fcols
+
+                    if len(qfcols) == 0:
                         qfcols = None
 
                 # Make sure fcols are in order and unique

@@ -316,7 +316,7 @@ def computeHSR1(
 def computeSH(
     yks: np.ndarray,
     sks: np.ndarray,
-    nHfd: scp.sparse.csc_array,
+    nHfd: scp.sparse.csc_array | np.ndarray,
     IonHBB: np.ndarray,
     fcols: np.ndarray,
     acols: np.ndarray,
@@ -467,7 +467,7 @@ def computeSH(
     :param nHfd: Finite difference approximation matrix which is symmetric sparse matrix with
         ``fcols`` rows and columns set to finite difference approximation of columns of negative
         Hessian of llk
-    :type nHfd: scp.sparse.csc_array
+    :type nHfd: scp.sparse.csc_array | np.ndarray
     :param IonHBB: The inverse of the top left block of ``nHfd`` after ordering so that column
         (and row) order is ``[fcols, acols]``
     :type IonHBB: np.ndarray
@@ -614,8 +614,12 @@ def computeSH(
 
     # Now represent first additive update, P2 @ onHBb.T @ IonHBB @ onHBb @ P2.T, implicitly
     nH2t1 = P2 @ onHBb.T
+    if isinstance(nH2t1, np.ndarray):
+        nH2t1 = scp.sparse.csc_array(nH2t1)
     nH2t2 = IonHBB
     nH2t3 = onHBb @ P2.T
+    if isinstance(nH2t3, np.ndarray):
+        nH2t3 = scp.sparse.csc_array(nH2t3)
 
     # For second additive update t2, the central matrix, is the identity so we only need t1 and
     # t3

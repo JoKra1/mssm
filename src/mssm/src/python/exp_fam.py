@@ -8,12 +8,7 @@ from collections.abc import Callable
 from .custom_types import DerivOrder
 from abc import ABC, abstractmethod
 import hazard
-
-HAS_MP = True
-try:
-    import multiprocess as mp
-except ImportError:
-    HAS_MP = False
+import multiprocessing as mp
 
 
 class Link(ABC):
@@ -3793,7 +3788,7 @@ class GSMMFamily(ABC):
 
         Ha = None if self.return_sparse else np.zeros((Hdim, Hdim))
 
-        if HAS_MP and n_c > 1:
+        if n_c > 1:
             # Compute columns in parallel
             args = zip(
                 jcols,
@@ -3808,7 +3803,7 @@ class GSMMFamily(ABC):
 
         for ji, j in enumerate(jcols):
 
-            if HAS_MP and n_c > 1:
+            if n_c > 1:
                 # Simply extract
                 Hj = Hjs[ji].flatten()
             else:

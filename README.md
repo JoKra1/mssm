@@ -28,7 +28,7 @@ conda create -n mssm_env python=3.13
 conda activate mssm_env
 pip install "mssm[plot,mcmc]"
 ```
-**Note**: This will also install optional dependencies, listed in the square brackets, required for model visualization, parallelization of selected functions, and convergence statistics for the mcmc sampler.
+**Note**: This will also install optional dependencies, listed in the square brackets, required for model visualization and convergence statistics for the mcmc sampler.
 Also note, that pypi will only reflect releases (Basically, the state of the stable branch). If you urgently need a feature currently only available on the main branch, consider building from source.
 
 ### Building from source
