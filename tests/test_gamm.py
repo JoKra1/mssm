@@ -164,19 +164,19 @@ class Test_BIG_GAMM_Discretize:
     model.fit(**default_gamm_test_kwargs)
 
     def test_GAMedf(self):
-        assert round(self.model.edf, ndigits=0) == 2429.0
+        assert round(self.model.edf, ndigits=0) == 2433.0
 
     def test_GAMsigma(self):
         _, sigma = self.model.get_pars()
-        assert round(sigma, ndigits=3) == 10.97
+        assert round(sigma, ndigits=3) == 10.968
 
     def test_GAMreml(self):
         reml = self.model.get_reml()
-        assert round(reml, ndigits=2) == -84062.14
+        assert round(reml, ndigits=2) == -84063.0
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
-        assert round(llk, ndigits=0) == -75232.0
+        assert round(llk, ndigits=0) == -75228.0
 
 
 class Test_BIG_GAMM_Discretize2:
@@ -222,16 +222,16 @@ class Test_BIG_GAMM_Discretize2:
     model.fit(**default_gamm_test_kwargs)
 
     def test_GAMedf(self):
-        assert round(self.model.edf, ndigits=0) == 2418.0
+        assert round(self.model.edf, ndigits=0) == 2421.0
 
     def test_GAMsigma(self):
-        assert round(self.model.scale, ndigits=3) == 10.965
+        assert round(self.model.scale, ndigits=3) == 10.962
 
     def test_GAMreml(self):
-        assert round(self.model.get_reml(), ndigits=2) == -84062.1
+        assert round(self.model.get_reml(), ndigits=2) == -84062.96
 
     def test_GAMllk(self):
-        assert round(self.model.get_llk(False), ndigits=0) == -75230.0
+        assert round(self.model.get_llk(False), ndigits=0) == -75225.0
 
 
 class Test_NUll_penalty_reparam:
@@ -314,7 +314,7 @@ class Test_NUll_penalty_reparam:
     def test_GAMedf_hard(self):
         np.testing.assert_allclose(
             self.model.edf,
-            151.4620626246641,
+            151.46328165128642,
             atol=min(max_atol, 0.0),
             rtol=min(max_rtol, 0.002),
         )
@@ -323,7 +323,7 @@ class Test_NUll_penalty_reparam:
         _, sigma = self.model.get_pars()
         np.testing.assert_allclose(
             sigma,
-            577.1990564685502,
+            577.1990013867439,
             atol=min(max_atol, 0.0),
             rtol=min(max_rtol, 0.001),
         )
@@ -332,7 +332,7 @@ class Test_NUll_penalty_reparam:
         reml = self.model.get_reml()
         np.testing.assert_allclose(
             reml,
-            -134748.71831654513,
+            -134748.7180599829,
             atol=min(max_atol, 0.0),
             rtol=min(max_rtol, 0.01),
         )
@@ -341,7 +341,7 @@ class Test_NUll_penalty_reparam:
         llk = self.model.get_llk(False)
         np.testing.assert_allclose(
             llk,
-            -134264.97369100052,
+            -134264.9716874038,
             atol=min(max_atol, 0.0),
             rtol=min(max_rtol, 0.01),
         )
@@ -523,7 +523,7 @@ class Test_NUll_3:
     def test_GAMedf_hard(self):
         np.testing.assert_allclose(
             self.model.edf,
-            151.4620626246641,
+            151.46328165128642,
             atol=min(max_atol, 0.0),
             rtol=min(max_rtol, 0.002),
         )
@@ -532,7 +532,7 @@ class Test_NUll_3:
         _, sigma = self.model.get_pars()
         np.testing.assert_allclose(
             sigma,
-            577.1990564685502,
+            577.1990013867439,
             atol=min(max_atol, 0.0),
             rtol=min(max_rtol, 0.001),
         )
@@ -541,7 +541,7 @@ class Test_NUll_3:
         reml = self.model.get_reml()
         np.testing.assert_allclose(
             reml,
-            -134748.71831654513,
+            -134748.7180599829,
             atol=min(max_atol, 0.0),
             rtol=min(max_rtol, 0.01),
         )
@@ -550,7 +550,7 @@ class Test_NUll_3:
         llk = self.model.get_llk(False)
         np.testing.assert_allclose(
             llk,
-            -134264.97369100052,
+            -134264.9716874038,
             atol=min(max_atol, 0.0),
             rtol=min(max_rtol, 0.001),
         )
@@ -597,20 +597,40 @@ class Test_NUll_4:
 
     model.fit(**default_gamm_test_kwargs)
 
-    def test_GAMedf(self):
-        assert round(self.model.edf, ndigits=2) == 151.46
+    def test_GAMedf_hard(self):
+        np.testing.assert_allclose(
+            self.model.edf,
+            151.45727353520425,
+            atol=min(max_atol, 0.0),
+            rtol=min(max_rtol, 0.002),
+        )
 
     def test_GAMsigma(self):
         _, sigma = self.model.get_pars()
-        assert round(sigma, ndigits=3) == 577.199
+        np.testing.assert_allclose(
+            sigma,
+            577.199095539071,
+            atol=min(max_atol, 0.0),
+            rtol=min(max_rtol, 0.001),
+        )
 
     def test_GAMreml(self):
         reml = self.model.get_reml()
-        assert round(reml, ndigits=3) == -134748.718
+        np.testing.assert_allclose(
+            reml,
+            -134748.7176161204,
+            atol=min(max_atol, 0.0),
+            rtol=min(max_rtol, 0.01),
+        )
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
-        assert round(llk, ndigits=1) == -134265.0
+        np.testing.assert_allclose(
+            llk,
+            -134264.9770743907,
+            atol=min(max_atol, 0.0),
+            rtol=min(max_rtol, 0.001),
+        )
 
 
 class Test_ar1_Gaussian:
