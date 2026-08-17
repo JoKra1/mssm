@@ -16,9 +16,10 @@ namespace py = pybind11;
 
 typedef std::mt19937 rnd_eng;
 
+template<typename MassInv>
 double compute_energy(
     const Eigen::Ref<Eigen::MatrixXd> &r,
-    const Eigen::SparseMatrix<double,0,long long int> &Minv
+    const MassInv &Minv
 )
 /*
 Computes current kinetic energy of Hamiltonian as defined by Betancourt (2013,2018).
@@ -28,7 +29,7 @@ Computes current kinetic energy of Hamiltonian as defined by Betancourt (2013,20
     return energy(0,0);
 }
 
-
+template<typename MassInv>
 std::tuple<Eigen::MatrixXd, // stateprime
            Eigen::MatrixXd, // gradprime
            Eigen::MatrixXd, // rprime
@@ -38,7 +39,7 @@ leap_frog(
     const Eigen::Ref<Eigen::MatrixXd> &state,
     const Eigen::Ref<Eigen::MatrixXd> &grad,
     const Eigen::Ref<Eigen::MatrixXd> &r,
-    const Eigen::SparseMatrix<double,0,long long int> &Minv,
+    const MassInv &Minv,
     double epsilon,
     const std::function<double(const Eigen::Ref<Eigen::MatrixXd>&)> &llk_fun,
     const std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)> &grad_fun
@@ -68,6 +69,7 @@ with inverse of metric ``Minv``, as described in their discussion.
     return std::make_tuple(std::move(stateprime),std::move(gradprime),std::move(rprime),llkprime);
 }
 
+template<typename MassInv>
 int check_dynamic_divergence(
     const Eigen::Ref<Eigen::MatrixXd> &rb1,
     const Eigen::Ref<Eigen::MatrixXd> &rb2,
@@ -75,7 +77,7 @@ int check_dynamic_divergence(
     const Eigen::Ref<Eigen::MatrixXd> &re2,
     const Eigen::Ref<Eigen::MatrixXd> &rsum1,
     const Eigen::Ref<Eigen::MatrixXd> &rsum2,
-    const Eigen::SparseMatrix<double,0,long long int> &Minv
+    const MassInv &Minv
 )
 /*
 Computes the dynamic termination criterion proposed by M. J. Betancourt (2013,2018)
@@ -116,7 +118,7 @@ Computes the dynamic termination criterion proposed by M. J. Betancourt (2013,20
     return s;
 }
 
-template<typename RandDist>
+template<typename MassInv, typename RandDist>
 std::tuple<Eigen::MatrixXd, // statem
            Eigen::MatrixXd, // statep
            Eigen::MatrixXd, // stateprime
@@ -132,7 +134,7 @@ std::tuple<Eigen::MatrixXd, // statem
 build_tree(
     const Eigen::Ref<Eigen::MatrixXd> &state,
     const Eigen::Ref<Eigen::MatrixXd> &r,
-    const Eigen::SparseMatrix<double,0,long long int> &Minv,
+    const MassInv &Minv,
     double logu,
     int v,
     size_t j,
@@ -291,20 +293,15 @@ M. J. Betancourt (2013,2018) - requiring book-keeping for the additional rsum va
     }
 }
 
-
-double find_reasonable_epsilon(
+template<typename MassInv>
+double find_reasonable_epsilonA(
     const Eigen::Ref<Eigen::MatrixXd> &state,
     const Eigen::Ref<Eigen::MatrixXd> &grad,
-    long long int Mrows,
-    long long int Mcols,
-    long long int Mnnz,
-    py::array_t<double, py::array::f_style | py::array::forcecast> Mdata,
-    py::array_t<long long int, py::array::f_style | py::array::forcecast> Midptr,
-    py::array_t<long long int, py::array::f_style | py::array::forcecast> Mindices,
+    const MassInv &Minv,
     double L,
-    std::function<double(const Eigen::Ref<Eigen::MatrixXd>&)> llk_fun,
-    std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)> grad_fun,
-    std::function<Eigen::MatrixXd(size_t)> r_sampler_fun,
+    const std::function<double(const Eigen::Ref<Eigen::MatrixXd>&)> &llk_fun,
+    const std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)> &grad_fun,
+    const std::function<Eigen::MatrixXd(size_t)> &r_sampler_fun,
     size_t seed
 )
 /*
@@ -315,13 +312,6 @@ Hoffman & Gelman (2014).
     // Random number engine
     rnd_eng gen(seed);
     
-    // Build Minv
-    Eigen::Map<Eigen::SparseMatrix<double,0,long long int>> Minv (  
-        Mrows,Mcols,Mnnz,
-        (Eigen::SparseMatrix<double,0,long long int>::StorageIndex*) Midptr.data(),
-        (Eigen::SparseMatrix<double,0,long long int>::StorageIndex*) Mindices.data(),
-        (Eigen::SparseMatrix<double,0,long long int>::Scalar*) Mdata.data()
-    );
     
     // Init epsilon
     double epsilon = 0.1;
@@ -368,25 +358,84 @@ Hoffman & Gelman (2014).
     return epsilon;
 }
 
+double find_reasonable_epsilonS(
+    const Eigen::Ref<Eigen::MatrixXd> &state,
+    const Eigen::Ref<Eigen::MatrixXd> &grad,
+    long long int Mrows,
+    long long int Mcols,
+    long long int Mnnz,
+    py::array_t<double, py::array::f_style | py::array::forcecast> Mdata,
+    py::array_t<long long int, py::array::f_style | py::array::forcecast> Midptr,
+    py::array_t<long long int, py::array::f_style | py::array::forcecast> Mindices,
+    double L,
+    std::function<double(const Eigen::Ref<Eigen::MatrixXd>&)> llk_fun,
+    std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)> grad_fun,
+    std::function<Eigen::MatrixXd(size_t)> r_sampler_fun,
+    size_t seed
+)
+{   
+    // Wrapper for sparse Mass inverse
 
+    // Build Minv
+    Eigen::Map<Eigen::SparseMatrix<double,0,long long int>> Minv (  
+        Mrows,Mcols,Mnnz,
+        (Eigen::SparseMatrix<double,0,long long int>::StorageIndex*) Midptr.data(),
+        (Eigen::SparseMatrix<double,0,long long int>::StorageIndex*) Mindices.data(),
+        (Eigen::SparseMatrix<double,0,long long int>::Scalar*) Mdata.data()
+    );
+
+    return find_reasonable_epsilonA(
+        state,
+        grad,
+        Minv,
+        L,
+        llk_fun,
+        grad_fun,
+        r_sampler_fun,
+        seed
+    );
+}
+
+double find_reasonable_epsilonD(
+    const Eigen::Ref<Eigen::MatrixXd> &state,
+    const Eigen::Ref<Eigen::MatrixXd> &grad,
+    const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &Minv,
+    double L,
+    std::function<double(const Eigen::Ref<Eigen::MatrixXd>&)> llk_fun,
+    std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)> grad_fun,
+    std::function<Eigen::MatrixXd(size_t)> r_sampler_fun,
+    size_t seed
+)
+{
+    // Wrapper for dense Mass inverse
+
+    return find_reasonable_epsilonA(
+        state,
+        grad,
+        Minv,
+        L,
+        llk_fun,
+        grad_fun,
+        r_sampler_fun,
+        seed
+    );
+}
+
+
+template<typename MassInv>
 std::tuple<Eigen::VectorXd,
            Eigen::MatrixXd,
            double,
            double,
            double
->advance_chain(
+>advance_chainA(
             size_t seed,
             size_t m,
             size_t Madapt,
             size_t steps,
             double cL,
-            Eigen::MatrixXd cstate,
-            long long int Mrows,
-            long long int Mcols,
-            long long int Mnnz,
-            py::array_t<double, py::array::f_style | py::array::forcecast> Mdata,
-            py::array_t<long long int, py::array::f_style | py::array::forcecast> Midptr,
-            py::array_t<long long int, py::array::f_style | py::array::forcecast> Mindices,
+            Eigen::Ref<Eigen::MatrixXd> cstate,
+            const MassInv &Minv,
             double epsilon,
             double epsilonbar,
             double Hbar,
@@ -396,9 +445,9 @@ std::tuple<Eigen::VectorXd,
             double gamma,
             int t0,
             size_t max_j,
-            std::function<double(const Eigen::Ref<Eigen::MatrixXd>&)> llk,
-            std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)> grad,
-            std::function<Eigen::MatrixXd(size_t)> r_sampler
+            const std::function<double(const Eigen::Ref<Eigen::MatrixXd>&)> &llk,
+            const std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)> &grad,
+            const std::function<Eigen::MatrixXd(size_t)> &r_sampler
 )
 /*
 Complete steps of algorithm 6 as defined by Hoffman & Gelman (2014) to sample next states and llks
@@ -422,15 +471,7 @@ References:
     std::uniform_real_distribution<> U(0.0, 1.0);
     std::exponential_distribution<> ed(1);
     double DeltaMax = 1000;
-    long long int n_coef = Mrows;
-
-    // Construct Minv from buffers
-    Eigen::Map<Eigen::SparseMatrix<double,0,long long int>> Minv (  
-        Mrows,Mcols,Mnnz,
-        (Eigen::SparseMatrix<double,0,long long int>::StorageIndex*) Midptr.data(),
-        (Eigen::SparseMatrix<double,0,long long int>::StorageIndex*) Mindices.data(),
-        (Eigen::SparseMatrix<double,0,long long int>::Scalar*) Mdata.data()
-    );
+    long long int n_coef = Minv.rows();
 
     // Create storage for llks and states
     Eigen::VectorXd llks;
@@ -565,8 +606,127 @@ References:
     return std::make_tuple(std::move(llks),std::move(states), epsilon, epsilonbar, Hbar);
 }
 
+std::tuple<Eigen::VectorXd,
+           Eigen::MatrixXd,
+           double,
+           double,
+           double
+>advance_chainS(
+            size_t seed,
+            size_t m,
+            size_t Madapt,
+            size_t steps,
+            double cL,
+            Eigen::MatrixXd cstate,
+            long long int Mrows,
+            long long int Mcols,
+            long long int Mnnz,
+            py::array_t<double, py::array::f_style | py::array::forcecast> Mdata,
+            py::array_t<long long int, py::array::f_style | py::array::forcecast> Midptr,
+            py::array_t<long long int, py::array::f_style | py::array::forcecast> Mindices,
+            double epsilon,
+            double epsilonbar,
+            double Hbar,
+            double mu,
+            double delta,
+            double kappa,
+            double gamma,
+            int t0,
+            size_t max_j,
+            std::function<double(const Eigen::Ref<Eigen::MatrixXd>&)> llk,
+            std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)> grad,
+            std::function<Eigen::MatrixXd(size_t)> r_sampler
+)
+{
+    // Wrapper for sparse Mass inverse
+
+    // Construct Minv from buffers
+    Eigen::Map<Eigen::SparseMatrix<double,0,long long int>> Minv (  
+        Mrows,Mcols,Mnnz,
+        (Eigen::SparseMatrix<double,0,long long int>::StorageIndex*) Midptr.data(),
+        (Eigen::SparseMatrix<double,0,long long int>::StorageIndex*) Mindices.data(),
+        (Eigen::SparseMatrix<double,0,long long int>::Scalar*) Mdata.data()
+    );
+
+    return advance_chainA(
+        seed,
+        m,
+        Madapt,
+        steps,
+        cL,
+        cstate,
+        Minv,
+        epsilon,
+        epsilonbar,
+        Hbar,
+        mu,
+        delta,
+        kappa,
+        gamma,
+        t0,
+        max_j,
+        llk,
+        grad,
+        r_sampler
+    );
+}
+
+std::tuple<Eigen::VectorXd,
+           Eigen::MatrixXd,
+           double,
+           double,
+           double
+>advance_chainD(
+            size_t seed,
+            size_t m,
+            size_t Madapt,
+            size_t steps,
+            double cL,
+            Eigen::MatrixXd cstate,
+            const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &Minv,
+            double epsilon,
+            double epsilonbar,
+            double Hbar,
+            double mu,
+            double delta,
+            double kappa,
+            double gamma,
+            int t0,
+            size_t max_j,
+            std::function<double(const Eigen::Ref<Eigen::MatrixXd>&)> llk,
+            std::function<Eigen::MatrixXd(const Eigen::Ref<Eigen::MatrixXd>&)> grad,
+            std::function<Eigen::MatrixXd(size_t)> r_sampler
+)
+{
+    // Wrapper for dense Mass inverse
+
+    return advance_chainA(
+        seed,
+        m,
+        Madapt,
+        steps,
+        cL,
+        cstate,
+        Minv,
+        epsilon,
+        epsilonbar,
+        Hbar,
+        mu,
+        delta,
+        kappa,
+        gamma,
+        t0,
+        max_j,
+        llk,
+        grad,
+        r_sampler
+    );
+}
+
 
 PYBIND11_MODULE(mcmc, m) {
-    m.def("find_reasonable_epsilon", &find_reasonable_epsilon);
-    m.def("advance_chain", &advance_chain);
+    m.def("find_reasonable_epsilonD", &find_reasonable_epsilonD);
+    m.def("find_reasonable_epsilonS", &find_reasonable_epsilonS);
+    m.def("advance_chainD", &advance_chainD);
+    m.def("advance_chainS", &advance_chainS);
 }

@@ -494,7 +494,7 @@ def advance_chain_mssm(
             (Mdata, Mindices, Mindptr), shape=(Mrows, Mrows), copy=False
         )
 
-    llks, omegas, epsilon, epsilonbar, Hbar = mcmc.advance_chain(
+    llks, omegas, epsilon, epsilonbar, Hbar = mcmc.advance_chainS(
         chain_seed,  # To seed the c++ side
         iter,
         M_adapt,
@@ -1150,7 +1150,7 @@ def sample_mssm(
 
         # Initialize epsilon and mu per chain
         epsilons.append(
-            mcmc.find_reasonable_epsilon(
+            mcmc.find_reasonable_epsilonS(
                 omega,
                 mcmcm_model.grad_wrapper(omega),
                 *map_csc_to_eigen(Minv),
