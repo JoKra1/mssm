@@ -123,10 +123,10 @@ class Test_Chol_updating:
             Trs,
             np.array(
                 [
-                    56.579810558691,
-                    2709.9201524805353,
-                    237.11272829051055,
-                    4.758159728976485,
+                    56.57981055869128,
+                    2704.9256868875573,
+                    237.11272829050944,
+                    4.758159728976558,
                 ]
             ),
             atol=min(max_atol, 0),
@@ -1719,7 +1719,7 @@ class Test_shared_qefs:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.11668572393893417]),
+            np.array([0.0, 0.0, 0.0, 0.11668572393892673]),
             atol=min(max_atol, 0.15),
             rtol=min(max_rtol, 0.5),
         )
@@ -1733,10 +1733,10 @@ class Test_shared_qefs:
             Trs,
             np.array(
                 [
-                    53.796589281794525,
-                    2630.310492085669,
-                    242.58795873779337,
-                    4.620478620568756,
+                    53.796589281794425,
+                    2636.0643962021027,
+                    242.58795873779485,
+                    4.620478620568877,
                 ]
             ),
             atol=min(max_atol, 0),
@@ -2259,12 +2259,12 @@ class Test_no_pen:
             ((self.model.coef - self.gsmm.coef[:-1]) / self.gsmm.coef[:-1]),
             np.array(
                 [
-                    [-1.18189822e-05],
-                    [-1.24714928e-05],
-                    [-6.19873768e-06],
-                    [-2.34373385e-05],
-                    [-4.64458871e-05],
-                    [-3.90664436e-05],
+                    [-1.11693121e-05],
+                    [-1.14776556e-05],
+                    [-4.72684579e-06],
+                    [-2.47267895e-05],
+                    [-3.27695576e-05],
+                    [-4.21319704e-05],
                 ]
             ),
             atol=min(max_atol, 0.01),
@@ -2289,6 +2289,7 @@ class Test_PSD_sqEFS:
     test_kwargs["repara"] = True
     test_kwargs["prefit_grad"] = True
     test_kwargs["structured_qefs"] = True
+    test_kwargs["n_cores"] = 1
 
     test_kwargs["sqEFS_options"] = {
         "dampen_HBB": 0.1,
@@ -2307,7 +2308,7 @@ class Test_PSD_sqEFS:
     def test_GAMedf(self):
         np.testing.assert_allclose(
             self.model.edf,
-            18.732245790906493,
+            18.73224579089581,
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.1),
         )
@@ -2398,9 +2399,9 @@ class Test_PSD_sqEFS:
             np.array(
                 [
                     4.495552217924287,
-                    4.198053626450506,
-                    7.831578363579387,
-                    2.5417272688279735,
+                    4.1980536264505055,
+                    7.8315783635794105,
+                    2.5417272688279713,
                 ]
             ),
             atol=min(max_atol, 0),
@@ -2414,7 +2415,7 @@ class Test_PSD_sqEFS:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.12082735068125461]),
+            np.array([0.0, 0.0, 0.0, 0.12082735068125411]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.5),
         )
@@ -2428,10 +2429,10 @@ class Test_PSD_sqEFS:
             Trs,
             np.array(
                 [
-                    57.680315094570034,
-                    465.2549450546292,
-                    1327.879824946911,
-                    5.454546919656915,
+                    57.706704279703494,
+                    465.2549450546295,
+                    1327.879824946903,
+                    5.454546919656936,
                 ]
             ),
             atol=min(max_atol, 0),

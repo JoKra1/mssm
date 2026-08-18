@@ -3319,6 +3319,7 @@ class GAMM(GAMMLSS):
                     discrete=self.formulas[0].discretize_cov,
                     cov_bins=self.formulas[0].cov_bins,
                     cov_bin_idxs=self.formulas[0].cov_bin_idxs,
+                    dense=not self._uses_sparse_matrices,
                 )
 
                 if self.formulas[0].discretize_cov:
@@ -3349,10 +3350,13 @@ class GAMM(GAMMLSS):
                             repeat(factor_levels),
                             cov_split,
                             repeat(cov),
+                            repeat(not self._uses_sparse_matrices),
                         ),
                     )
-
-                    model_mat = scp.sparse.vstack(Xs, format="csc")
+                    if self._uses_sparse_matrices:
+                        model_mat = scp.sparse.vstack(Xs, format="csc")
+                    else:
+                        model_mat = np.concatenate(Xs, axis=1)
 
             if len(irstx) > 0:
                 model_mat = model_mat[self.formulas[0].NOT_NA_flat, :]
@@ -3402,7 +3406,10 @@ class GAMM(GAMMLSS):
             self.WN = WN
 
             # Make sure hessian has zero columns/rows for unidentifiable coef.
-            if fit_info.dropped is not None:
+            if (
+                fit_info.dropped is not None
+                and isinstance(model_mat, DiscreteModelMatrix) is False
+            ):
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     model_mat[:, fit_info.dropped] = 0
@@ -3452,6 +3459,19 @@ class GAMM(GAMMLSS):
                 self.hessian_obs, scp.sparse.sparray
             ):
                 self.hessian_obs = self.hessian_obs.tocsc()
+
+            if fit_info.dropped is not None and isinstance(
+                model_mat, DiscreteModelMatrix
+            ):
+                # Can now handle dropped columns for discrete models
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    self.hessian[:, fit_info.dropped] = 0
+                    self.hessian[fit_info.dropped, :] = 0
+
+                    if self.hessian_obs is not None:
+                        self.hessian_obs[:, fit_info.dropped] = 0
+                        self.hessian_obs[fit_info.dropped, :] = 0
 
         else:
             # Iteratively build model matrix.

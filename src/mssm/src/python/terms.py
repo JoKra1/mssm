@@ -1293,7 +1293,8 @@ class f(GammTerm):
 
             if vi == 0:
                 matrix_term = matrix_term_v
-            elif discrete is False:
+            else:
+                # ToDo: Expensive for discrete and not necessary but need correct m_cols
                 matrix_term = TP_basis_calc(matrix_term, matrix_term_v)
 
             if discrete:
@@ -1304,8 +1305,9 @@ class f(GammTerm):
             if self.Z[0].type == ConstType.QR:
                 if discrete:
                     dt.Q = self.Z[0].Z
-                else:
-                    matrix_term = matrix_term @ self.Z[0].Z
+
+                # ToDo: Expensive for discrete and not necessary but need correct m_cols
+                matrix_term = matrix_term @ self.Z[0].Z
 
             elif self.Z[0].type == ConstType.DROP:
                 matrix_term = np.delete(matrix_term, self.Z[0].Z, axis=1)
@@ -1378,8 +1380,12 @@ class f(GammTerm):
                         )
 
                 for m_coli in range(m_cols):
-                    if discrete:
-                        dt_by.exclude_columns.append(m_coli_by)
+                    if (
+                        discrete
+                        and self.drop_coef is not None
+                        and m_coli_by in self.drop_coef
+                    ):
+                        dt_by.exclude_columns.append(m_coli)
                         dt_by.end_idx -= 1
                     else:
                         term_ridx.append(ridx[by_cidx,])
@@ -2589,7 +2595,7 @@ class ri(GammTerm):
         if discrete:
             n_fact = len(factor_levels[vars[0]])
             dt = DiscreteTerm(
-                [np.identity(n_fact, order="F")],
+                [np.asfortranarray(np.identity(n_fact))],
                 [np.zeros(n_y, dtype=np.int64)],
                 ci,
                 ci + n_fact,
@@ -2605,7 +2611,7 @@ class ri(GammTerm):
             fl_idx = by_cov == fl
             if use_only is None or ti in use_only:
                 if discrete:
-                    dt.indices[fl_idx] = fl
+                    dt.indices[0][fl_idx] = fl
                 else:
                     new_elements.extend(offset[fl_idx])
                     new_rows.extend(ridx[fl_idx])

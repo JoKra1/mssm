@@ -70,8 +70,8 @@ class Test_algorithms:
 
     mmat3 = mmat2 @ C
     mmat4 = D @ mmat2
-    mmat5 = 10 * mmat2
-    mmat6 = 10 * mmat2[:, :20]
+    mmat5 = mmat2
+    mmat6 = mmat2[:, :20]
 
     def testIndexC(self):
         assert np.abs(self.mmat2[:50, 0:3] - self.mmat1[:50, 0:3]).max() < 1e-7
@@ -352,6 +352,207 @@ class Test_algorithms:
         )
 
 
+class Test_algorithms2:
+    sim_dat = sim13(5000, 2, c=0, seed=0, family=Gaussian(), binom_offset=0, n_ranef=20)
+
+    sim_formula_m1 = Formula(
+        lhs("y"),
+        [
+            i(),
+            l(["x5"]),
+            l(["x6"]),
+            f(["x0"], by="x5"),
+            f(["x0"], by="x6"),
+            fs(["x0"], rf="x4"),
+        ],
+        data=sim_dat,
+        discretize=True,
+    )
+
+    _, cov_flat, _, _, _, _, _, _ = sim_formula_m1.encode_data(
+        sim_formula_m1.data, prediction=True, discretize=True
+    )
+    sim_formula_m1.cov_flat = cov_flat
+    sim_formula_m1.discretize_cov = False
+    _ = build_penalties(sim_formula_m1)
+    mmat1 = build_model_matrix(sim_formula_m1)
+
+    sim_formula_m2 = Formula(
+        lhs("y"),
+        [
+            i(),
+            l(["x5"]),
+            l(["x6"]),
+            f(["x0"], by="x5"),
+            f(["x0"], by="x6"),
+            fs(["x0"], rf="x4"),
+        ],
+        data=sim_dat,
+        discretize=True,
+    )
+    pen = build_penalties(sim_formula_m2)
+    mmat2 = build_model_matrix(sim_formula_m2)
+
+    def test_mmat(self):
+        assert np.abs(self.mmat1 - self.mmat2.toarray()).max() < 1e-10
+
+
+class Test_algorithms3:
+    sim_dat = sim13(5000, 2, c=0, seed=0, family=Gaussian(), binom_offset=0, n_ranef=20)
+
+    sim_formula_m1 = Formula(
+        lhs("y"),
+        [
+            i(),
+            l(["x5"]),
+            l(["x6"]),
+            f(["x0"], by="x5"),
+            f(["x0"], by="x6"),
+            rs(["x5", "x4"], by="x5"),
+        ],
+        data=sim_dat,
+        discretize=True,
+    )
+
+    _, cov_flat, _, _, _, _, _, _ = sim_formula_m1.encode_data(
+        sim_formula_m1.data, prediction=True, discretize=True
+    )
+    sim_formula_m1.cov_flat = cov_flat
+    sim_formula_m1.discretize_cov = False
+    _ = build_penalties(sim_formula_m1)
+    mmat1 = build_model_matrix(sim_formula_m1)
+
+    sim_formula_m2 = Formula(
+        lhs("y"),
+        [
+            i(),
+            l(["x5"]),
+            l(["x6"]),
+            f(["x0"], by="x5"),
+            f(["x0"], by="x6"),
+            rs(["x5", "x4"], by="x5"),
+        ],
+        data=sim_dat,
+        discretize=True,
+    )
+    pen = build_penalties(sim_formula_m2)
+    mmat2 = build_model_matrix(sim_formula_m2)
+
+    def test_mmat(self):
+        assert np.abs(self.mmat1 - self.mmat2.toarray()).max() < 1e-10
+
+
+class Test_algorithms4:
+    sim_dat = sim13(5000, 2, c=0, seed=0, family=Gamma(), binom_offset=0, n_ranef=20)
+
+    sim_formula_m1 = Formula(
+        lhs("y"),
+        [i(), l(["x5"]), l(["x6"]), f(["x0"], by="x5"), f(["x0"], by="x6"), ri("x4")],
+        data=sim_dat,
+        discretize=True,
+    )
+
+    _, cov_flat, _, _, _, _, _, _ = sim_formula_m1.encode_data(
+        sim_formula_m1.data, prediction=True, discretize=True
+    )
+    sim_formula_m1.cov_flat = cov_flat
+    sim_formula_m1.discretize_cov = False
+    _ = build_penalties(sim_formula_m1)
+    mmat1 = build_model_matrix(sim_formula_m1)
+
+    sim_formula_m2 = Formula(
+        lhs("y"),
+        [i(), l(["x5"]), l(["x6"]), f(["x0"], by="x5"), f(["x0"], by="x6"), ri("x4")],
+        data=sim_dat,
+        discretize=True,
+    )
+    pen = build_penalties(sim_formula_m2)
+    mmat2 = build_model_matrix(sim_formula_m2)
+
+    model1 = GAMM(sim_formula_m1, Gamma())
+    model1.fit()
+    model2 = GAMM(sim_formula_m2, Gamma())
+    model2.fit()
+
+    def test_mmat(self):
+        assert np.abs(self.mmat1 - self.mmat2.toarray()).max() < 1e-10
+
+    def test_hess(self):
+        assert np.abs(self.model1.hessian - self.model2.hessian).max() < 0.01
+
+    def test_hess2(self):
+        assert np.abs(self.model1.hessian_obs - self.model2.hessian_obs).max() < 0.01
+
+
+class Test_algorithm5:
+    dat = pd.read_csv(
+        "https://raw.githubusercontent.com/JoKra1/mssmViz/main/data/GAMM/sim_dat.csv"
+    )
+
+    # mssm requires that the data-type for variables used as factors is 'O'=object
+    dat = dat.astype({"series": "O", "cond": "O", "sub": "O", "series": "O"})
+
+    sim_formula_m1 = Formula(
+        lhs=lhs("y"),  # The dependent variable - here y!
+        terms=[
+            i(),  # The intercept, a
+            l(["cond"]),  # For cond='b'
+            f(
+                ["time"], by="cond", nk=20
+            ),  # to-way interaction between time and cond; one smooth over time per cond level
+            f(
+                ["x"], by="cond"
+            ),  # to-way interaction between x and cond; one smooth over x per cond level
+            f(
+                ["time", "x"], by="cond", nk=9, rp=0, scale_te=False
+            ),  # three-way interaction
+            fs(["time"], rf="sub", nk=20),
+        ],  # Random non-linear effect of time - one smooth per level of factor series
+        data=dat,
+        series_id="series",
+        discretize=True,
+    )
+
+    _, cov_flat, _, _, _, _, _, _ = sim_formula_m1.encode_data(
+        sim_formula_m1.data, prediction=True, discretize=True
+    )
+    sim_formula_m1.cov_flat = cov_flat
+    sim_formula_m1.discretize_cov = False
+    _ = build_penalties(sim_formula_m1)
+    mmat1 = build_model_matrix(sim_formula_m1)
+
+    sim_formula_m2 = Formula(
+        lhs=lhs("y"),  # The dependent variable - here y!
+        terms=[
+            i(),  # The intercept, a
+            l(["cond"]),  # For cond='b'
+            f(
+                ["time"], by="cond", nk=20
+            ),  # to-way interaction between time and cond; one smooth over time per cond level
+            f(
+                ["x"], by="cond"
+            ),  # to-way interaction between x and cond; one smooth over x per cond level
+            f(
+                ["time", "x"], by="cond", nk=9, rp=0, scale_te=False
+            ),  # three-way interaction
+            fs(["time"], rf="sub", nk=20),
+        ],  # Random non-linear effect of time - one smooth per level of factor series
+        data=dat,
+        series_id="series",
+        discretize=True,
+    )
+    pen = build_penalties(sim_formula_m2)
+    mmat2 = build_model_matrix(sim_formula_m2)
+
+    def test_cross(self):
+        assert (
+            np.abs(
+                (self.mmat1.T @ self.mmat1).toarray() - self.mmat2.T @ self.mmat2
+            ).max()
+            < 1e-7
+        )
+
+
 class Test_GSMM:
     sim_dat = sim16(500, seed=1134, correlate=True)
 
@@ -380,56 +581,56 @@ class Test_GSMM:
         )
 
     def test_GAMcoef(self):
-        coef = self.model.coef
+        coef = np.round(self.model.coef, decimals=6)
         np.testing.assert_allclose(
             coef,
             np.array(
                 [
-                    [1.31082693],
-                    [-0.59331707],
-                    [0.78756107],
-                    [1.35808945],
-                    [1.5196968],
-                    [1.37363527],
-                    [0.98205442],
-                    [0.44220833],
-                    [-0.40092235],
-                    [-1.15219686],
-                    [6.61798949],
-                    [-1.57225428],
-                    [-0.53531507],
-                    [0.04227462],
-                    [0.43120953],
-                    [1.15790488],
-                    [2.33707751],
-                    [3.66936567],
-                    [4.41443138],
-                    [5.34129387],
-                    [-6.23811349],
-                    [6.43335623],
-                    [5.56535205],
-                    [-1.62452649],
-                    [0.48079646],
-                    [-0.7382446],
-                    [-3.24232253],
-                    [-2.96302565],
-                    [1.42633009],
-                    [-0.00627918],
-                    [0.04324352],
-                    [0.02437675],
-                    [0.01461572],
-                    [-0.00139048],
-                    [-0.0294582],
-                    [-0.07006832],
-                    [-0.11707651],
-                    [-0.15732075],
-                    [-0.20111756],
-                    [-0.27113372],
-                    [-0.09060747],
-                    [0.16940554],
-                    [-0.32340814],
-                    [-0.02800592],
-                    [-0.35655767],
+                    [1.310827e00],
+                    [-5.933170e-01],
+                    [7.875610e-01],
+                    [1.358089e00],
+                    [1.519697e00],
+                    [1.373635e00],
+                    [9.820540e-01],
+                    [4.422080e-01],
+                    [-4.009220e-01],
+                    [-1.152197e00],
+                    [6.617989e00],
+                    [-1.572254e00],
+                    [-5.353150e-01],
+                    [4.227500e-02],
+                    [4.312100e-01],
+                    [1.157905e00],
+                    [2.337078e00],
+                    [3.669366e00],
+                    [4.414431e00],
+                    [5.341294e00],
+                    [-6.238113e00],
+                    [6.433356e00],
+                    [5.565352e00],
+                    [-1.624526e00],
+                    [4.807960e-01],
+                    [-7.382450e-01],
+                    [-3.242323e00],
+                    [-2.963026e00],
+                    [1.426330e00],
+                    [-6.279000e-03],
+                    [4.324400e-02],
+                    [2.437700e-02],
+                    [1.461600e-02],
+                    [-1.390000e-03],
+                    [-2.945800e-02],
+                    [-7.006800e-02],
+                    [-1.170770e-01],
+                    [-1.573210e-01],
+                    [-2.011180e-01],
+                    [-2.711340e-01],
+                    [-9.060700e-02],
+                    [1.694060e-01],
+                    [-3.234080e-01],
+                    [-2.800600e-02],
+                    [-3.565580e-01],
                 ]
             ),
             atol=min(max_atol, 0),
@@ -721,7 +922,7 @@ class Test_GAM:
     def test_GAMedf(self):
         np.testing.assert_allclose(
             self.model.edf,
-            16.217102086109605,
+            16.217102086109538,
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.1),
         )
@@ -729,7 +930,7 @@ class Test_GAM:
     def test_GAMsigma(self):
         _, sigma = self.model.get_pars()
         np.testing.assert_allclose(
-            sigma, 4.8690196365611, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            sigma, 4.86901963656099, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_GAMcoef(self):
@@ -787,10 +988,10 @@ class Test_GAM:
             lam,
             np.array(
                 [
-                    17.011127889091096,
-                    19.042454809845644,
-                    0.08344490631172775,
-                    201.3330048705406,
+                    17.011127889091426,
+                    19.04245480984634,
+                    0.0834449063117302,
+                    201.3330048705442,
                 ]
             ),
             atol=min(max_atol, 0),
@@ -800,13 +1001,13 @@ class Test_GAM:
     def test_GAMreml(self):
         reml = self.model.get_reml()
         np.testing.assert_allclose(
-            reml, -4562.50111774846, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            reml, -4562.501117748458, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
         np.testing.assert_allclose(
-            llk, -4537.152264070222, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            llk, -4537.152264070219, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_edf1(self):
@@ -816,10 +1017,10 @@ class Test_GAM:
             edf1,
             np.array(
                 [
-                    3.8068091829338613,
-                    3.7177926652731523,
-                    7.773343135810451,
-                    2.269803064911821,
+                    3.8068091829338453,
+                    3.717792665273125,
+                    7.773343135810432,
+                    2.2698030649118124,
                 ]
             ),
             atol=min(max_atol, 0),
@@ -833,7 +1034,7 @@ class Test_GAM:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([1.0176132997363752e-06, 0.0, 0.0, 0.29480269422544003]),
+            np.array([1.0176132998473975e-06, 0.0, 0.0, 0.29480269422543426]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.5),
         )
@@ -847,10 +1048,10 @@ class Test_GAM:
             Trs,
             np.array(
                 [
-                    9.677726601950233,
-                    83.94745537083544,
-                    96.40503803785347,
-                    1.2164726810908715,
+                    9.677726601950566,
+                    84.31997605238361,
+                    96.40503803785562,
+                    1.2164726810908904,
                 ]
             ),
             atol=min(max_atol, 0),

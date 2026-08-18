@@ -387,7 +387,7 @@ def advance_chain_mssm(
     epsilonbar: float,
     Hbar: float,
     mu: float,
-    Minv: scp.sparse.csc_array | None,
+    Minv: scp.sparse.csc_array | np.ndarray | None,
     Mrows: int | None,
     address_Mdat: str | None,
     address_Mptr: str | None,
@@ -444,7 +444,7 @@ def advance_chain_mssm(
         the Nuts sampler
     :type mu: float
     :param Minv: Inverse of the metric used by the sampler (see Betancourt; 2013, 2018)
-    :type Minv: scp.sparse.csc_array | None
+    :type Minv: scp.sparse.csc_array | np.ndarray | None
     :param Mrows: Rows of ``Minv``
     :type Mrows: int | None
     :param address_Mdat: Address to buffer holding data of ``Minv``
@@ -481,27 +481,38 @@ def advance_chain_mssm(
     :type r_sampler: Callable
     """
 
+    is_dense = False
+    alg = mcmc.advance_chainS
     if Minv is None:
-        Mdat_shared = mp.shared_memory.SharedMemory(name=address_Mdat, create=False)
-        Mptr_shared = mp.shared_memory.SharedMemory(name=address_Mptr, create=False)
-        Midx_shared = mp.shared_memory.SharedMemory(name=address_Midx, create=False)
+        if address_Mptr is None:
+            is_dense = True
+            alg = mcmc.advance_chainD
+            Mdat_shared = mp.shared_memory.SharedMemory(name=address_Mdat, create=False)
+            Minv = np.ndarray(shape_Mdat, dtype=np.double, buffer=Mdat_shared.buf)
+        else:
+            Mdat_shared = mp.shared_memory.SharedMemory(name=address_Mdat, create=False)
+            Mptr_shared = mp.shared_memory.SharedMemory(name=address_Mptr, create=False)
+            Midx_shared = mp.shared_memory.SharedMemory(name=address_Midx, create=False)
 
-        Mdata = np.ndarray(shape_Mdat, dtype=np.double, buffer=Mdat_shared.buf)
-        Mindptr = np.ndarray(shape_Mptr, dtype=np.int64, buffer=Mptr_shared.buf)
-        Mindices = np.ndarray(shape_Mdat, dtype=np.int64, buffer=Midx_shared.buf)
+            Mdata = np.ndarray(shape_Mdat, dtype=np.double, buffer=Mdat_shared.buf)
+            Mindptr = np.ndarray(shape_Mptr, dtype=np.int64, buffer=Mptr_shared.buf)
+            Mindices = np.ndarray(shape_Mdat, dtype=np.int64, buffer=Midx_shared.buf)
 
-        Minv = scp.sparse.csc_array(
-            (Mdata, Mindices, Mindptr), shape=(Mrows, Mrows), copy=False
-        )
+            Minv = scp.sparse.csc_array(
+                (Mdata, Mindices, Mindptr), shape=(Mrows, Mrows), copy=False
+            )
+    elif isinstance(Minv, np.ndarray):
+        is_dense = True
+        alg = mcmc.advance_chainD
 
-    llks, omegas, epsilon, epsilonbar, Hbar = mcmc.advance_chainS(
+    llks, omegas, epsilon, epsilonbar, Hbar = alg(
         chain_seed,  # To seed the c++ side
         iter,
         M_adapt,
         steps,
         cllk,
         omega,
-        *map_csc_to_eigen(Minv),
+        *([Minv] if is_dense else map_csc_to_eigen(Minv)),
         epsilon,
         epsilonbar,
         Hbar,
@@ -757,13 +768,18 @@ def sample_mssm(
     orig_theta = None
     n_lam = len(model.overall_penalties)
     r_pen = copy.deepcopy(model.overall_penalties)
+    is_dense = (
+        (not model._uses_sparse_matrices)
+        or isinstance(model.lvi, np.ndarray)
+        or init_unconditional
+    )
 
     # Now get ys and Xs
     if isinstance(family, Family):
         y = model.get_ys()
 
         ys = [y]
-        Xs = [model.get_mmat()]
+        Xs = [model.get_mmat(dense=not model._uses_sparse_matrices)]
 
         if family.twopar:
             # Sample scale parameter as well
@@ -783,13 +799,13 @@ def sample_mssm(
             ys = [y]
             for _ in range(1, family.n_par):
                 ys.append(None)
-            Xs = model.get_mmat()
+            Xs = model.get_mmat(dense=not model._uses_sparse_matrices)
 
             deriv_fam = GAMLSSGSMMFamily(family.n_par, family)
 
         else:
             ys = model.get_ys(drop_NA=drop_NA)
-            Xs = model.get_mmat(drop_NA=drop_NA)
+            Xs = model.get_mmat(drop_NA=drop_NA, dense=not model._uses_sparse_matrices)
             deriv_fam = family
 
         coef_split_idx = model.coef_split_idx
@@ -807,7 +823,10 @@ def sample_mssm(
             keep_drop = (keep, model.info.dropped)  # noqa
 
     # Can now start building Minv and MLT so that MLT.T@MLT = inv(Minv)
-    Minv = (model.lvi.T @ model.lvi).tocsc() * orig_scale
+    Minv = (model.lvi.T @ model.lvi) * orig_scale
+
+    if isinstance(Minv, np.ndarray) is False:
+        Minv = Minv.tocsc()
 
     # Approximate covariance matrix for log lambda parameters - might be needed here to
     # modify covariance matrix for coefficients.
@@ -819,7 +838,11 @@ def sample_mssm(
             Vc = Vpr @ dBetadRhos.T
             Vc = Vc.T @ Vc
 
-            Minv = scp.sparse.csc_array(Vc + Minv)
+            Minv = Vc + Minv
+
+            if isinstance(Minv, np.matrix):
+                # Adding sparse to dense -> matrix
+                Minv = Minv.A
 
     Lp, Pr, _ = cpp_cholP(Minv)
     Lpinv = compute_Linv(Lp, n_c=n_chains)
@@ -848,14 +871,34 @@ def sample_mssm(
         # And invert
         V_scale = 1 / nH_scale
 
-        MLT = scp.sparse.block_array(
-            [[MLT, None], [None, np.identity(n_scale) * np.sqrt(nH_scale)]],
-            format="csc",
-        )
+        if is_dense:
+            MLT = np.block(
+                [
+                    [MLT, np.zeros((MLT.shape[0], n_scale))],
+                    [
+                        np.zeros((n_scale, MLT.shape[0])),
+                        np.identity(n_scale) * np.sqrt(nH_scale),
+                    ],
+                ]
+            )
+            Minv = np.block(
+                [
+                    [Minv, np.zeros((Minv.shape[0], n_scale))],
+                    [
+                        np.zeros((n_scale, Minv.shape[0])),
+                        np.identity(n_scale) * np.sqrt(V_scale),
+                    ],
+                ]
+            )
+        else:
+            MLT = scp.sparse.block_array(
+                [[MLT, None], [None, np.identity(n_scale) * np.sqrt(nH_scale)]],
+                format="csc",
+            )
 
-        Minv = scp.sparse.block_array(
-            [[Minv, None], [None, np.identity(n_scale) * V_scale]], format="csc"
-        )
+            Minv = scp.sparse.block_array(
+                [[Minv, None], [None, np.identity(n_scale) * V_scale]], format="csc"
+            )
 
     if n_theta > 0:
 
@@ -889,8 +932,25 @@ def sample_mssm(
         # ... and build root Re_theta so that Re_theta.T@Re_theta = inv(inH_theta) = nH_theta
         Re_theta = np.diag([np.sqrt(e) for e in eig]) @ U.T
 
-        MLT = scp.sparse.block_array([[MLT, None], [None, Re_theta]], format="csc")
-        Minv = scp.sparse.block_array([[Minv, None], [None, inH_theta]], format="csc")
+        if is_dense:
+            MLT = np.block(
+                [
+                    [MLT, np.zeros((MLT.shape[0], n_theta))],
+                    [np.zeros((n_theta, MLT.shape[0])), Re_theta],
+                ]
+            )
+            Minv = np.block(
+                [
+                    [Minv, np.zeros((Minv.shape[0], n_theta))],
+                    [np.zeros((n_theta, Minv.shape[0])), inH_theta],
+                ]
+            )
+        else:
+
+            MLT = scp.sparse.block_array([[MLT, None], [None, Re_theta]], format="csc")
+            Minv = scp.sparse.block_array(
+                [[Minv, None], [None, inH_theta]], format="csc"
+            )
 
     # Modify covariance matrix to account for log lambda parameters
     if sample_rho:
@@ -923,30 +983,57 @@ def sample_mssm(
         # Now stack onto Minv and MLT
 
         # MLT.T@MLT = inv(Minv) defined below
-        MLT = scp.sparse.block_array([[MLT, None], [None, Ri]], format="csc")
+        if is_dense:
+            MLT = np.block(
+                [
+                    [MLT, np.zeros((MLT.shape[0], ep.shape[0]))],
+                    [np.zeros((ep.shape[0], MLT.shape[0])), Ri],
+                ]
+            )
+            Minv = np.block(
+                [
+                    [Minv, np.zeros((Minv.shape[0], ep.shape[0]))],
+                    [np.zeros((ep.shape[0], Minv.shape[0])), Vpreg],
+                ]
+            )
+        else:
+            MLT = scp.sparse.block_array([[MLT, None], [None, Ri]], format="csc")
 
-        Minv = scp.sparse.block_array([[Minv, None], [None, Vpreg]], format="csc")
+            Minv = scp.sparse.block_array([[Minv, None], [None, Vpreg]], format="csc")
 
     # Optionally create shared memory object for parallelization of Minv
     if parallelize_chains:
-        Mrows, _, _, Mdata, Mindptr, Mindices = map_csc_to_eigen(Minv)
-        shape_Mdat = Mdata.shape
-        shape_Mptr = Mindptr.shape
-
         # Start memory manager
         mem_manager.start()
 
-        dat_mem = mem_manager.SharedMemory(Mdata.nbytes)
-        dat_shared = np.ndarray(Mdata.shape, dtype=np.double, buffer=dat_mem.buf)
-        dat_shared[:] = Mdata[:]
+        if is_dense:
+            # Only need buffer for dat
+            Mrows = Minv.shape[0]
+            shape_Mdat = Minv.shape
+            shape_Mptr = None
+            ptr_mem = None
+            idx_mem = None
 
-        ptr_mem = mem_manager.SharedMemory(Mindptr.nbytes)
-        ptr_shared = np.ndarray(Mindptr.shape, dtype=np.int64, buffer=ptr_mem.buf)
-        ptr_shared[:] = Mindptr[:]
+            dat_mem = mem_manager.SharedMemory(Minv.nbytes)
+            dat_shared = np.ndarray(shape_Mdat, dtype=np.double, buffer=dat_mem.buf)
+            dat_shared[:] = Minv[:]
 
-        idx_mem = mem_manager.SharedMemory(Mindices.nbytes)
-        idx_shared = np.ndarray(Mindices.shape, dtype=np.int64, buffer=idx_mem.buf)
-        idx_shared[:] = Mindices[:]
+        else:
+            Mrows, _, _, Mdata, Mindptr, Mindices = map_csc_to_eigen(Minv)
+            shape_Mdat = Mdata.shape
+            shape_Mptr = Mindptr.shape
+
+            dat_mem = mem_manager.SharedMemory(Mdata.nbytes)
+            dat_shared = np.ndarray(Mdata.shape, dtype=np.double, buffer=dat_mem.buf)
+            dat_shared[:] = Mdata[:]
+
+            ptr_mem = mem_manager.SharedMemory(Mindptr.nbytes)
+            ptr_shared = np.ndarray(Mindptr.shape, dtype=np.int64, buffer=ptr_mem.buf)
+            ptr_shared[:] = Mindptr[:]
+
+            idx_mem = mem_manager.SharedMemory(Mindices.nbytes)
+            idx_shared = np.ndarray(Mindices.shape, dtype=np.int64, buffer=idx_mem.buf)
+            idx_shared[:] = Mindices[:]
 
     # Sample initial coefs for chains (n_coef,n_chains)
     init_coef = sample_MVN(
@@ -1125,6 +1212,9 @@ def sample_mssm(
     epsilonbars = []
     Hbars = []
     mus = []
+    init_alg = (
+        mcmc.find_reasonable_epsilonD if is_dense else mcmc.find_reasonable_epsilonS
+    )
 
     for chain in range(n_chains):
 
@@ -1150,10 +1240,10 @@ def sample_mssm(
 
         # Initialize epsilon and mu per chain
         epsilons.append(
-            mcmc.find_reasonable_epsilonS(
+            init_alg(
                 omega,
                 mcmcm_model.grad_wrapper(omega),
-                *map_csc_to_eigen(Minv),
+                *([Minv] if is_dense else map_csc_to_eigen(Minv)),
                 cLs[chain],
                 mcmcm_model.llk_wrapper,
                 mcmcm_model.grad_wrapper,
@@ -1225,8 +1315,8 @@ def sample_mssm(
                 None if parallelize_chains else Minv,
                 Mrows if parallelize_chains else None,
                 dat_mem.name if parallelize_chains else None,
-                ptr_mem.name if parallelize_chains else None,
-                idx_mem.name if parallelize_chains else None,
+                ptr_mem.name if parallelize_chains and ptr_mem is not None else None,
+                idx_mem.name if parallelize_chains and idx_mem is not None else None,
                 shape_Mdat if parallelize_chains else None,
                 shape_Mptr if parallelize_chains else None,
                 delta,

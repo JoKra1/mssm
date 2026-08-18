@@ -4574,11 +4574,16 @@ def correct_VB(
                 nH = -1 * H
 
             if verbose:
+                Hdnorm = (
+                    np.linalg.norm(nH + model.hessian)
+                    if isinstance(nH, np.ndarray)
+                    else scp.sparse.linalg.norm(nH + model.hessian)
+                )
                 print(
                     (
                         f"Recomputed negative Hessian. 2 Norm of coef. difference: "
                         f"{np.linalg.norm(mean_coef-model.coef)}. F. Norm of n. Hessian "
-                        f"difference: {scp.sparse.linalg.norm(nH + model.hessian)}"
+                        f"difference: {Hdnorm}"
                     )
                 )
 

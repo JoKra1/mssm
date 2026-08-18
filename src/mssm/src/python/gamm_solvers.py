@@ -598,7 +598,7 @@ def update_PIRLS(
         yb = Wr @ z[inval == False]  # noqa: E712
         Xb = Wr @ X[inval == False, :]  # noqa: E712
 
-        if not isinstance(X, DiscreteModelMatrix):
+        if isinstance(X, scp.sparse.sparray):
             Xb = Xb.tocsc()
 
         if Lrhoi is not None:

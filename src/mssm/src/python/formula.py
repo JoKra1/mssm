@@ -1087,9 +1087,17 @@ class Formula:
 
                         self.cov_bins[c] = c_bins
 
-                    cov_bin_idxs[c] = np.digitize(c_raw, self.cov_bins[c]) - 1
+                    cov_bin_idxs[c] = (
+                        np.digitize(
+                            c_raw if prediction else c_raw[NAs_flat], self.cov_bins[c]
+                        )
+                        - 1
+                    )
                     if discretize:
-                        c_raw = self.cov_bins[c][cov_bin_idxs[c]]
+                        if prediction:
+                            c_raw = self.cov_bins[c][cov_bin_idxs[c]]
+                        else:
+                            c_raw[NAs_flat] = self.cov_bins[c][cov_bin_idxs[c]]
 
                 cov_flat[:, var_map[c]] = c_raw
 
