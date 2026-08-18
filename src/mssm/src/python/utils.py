@@ -47,6 +47,7 @@ from ..python.exp_fam import (
 )
 from ..python.formula import Formula, LambdaTerm
 from ..python.penalties import split_shared_penalties, combine_shared_penalties
+from .discrete import DiscreteModelMatrix
 import davies
 import dChol
 from collections.abc import Callable
@@ -281,7 +282,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
     ) -> float:
         """
         Function to evaluate log-likelihood of GAMM(LSS) model when estimated via GSMM.
@@ -299,7 +300,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
             their indices to save memory.
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter.
-        :type Xs: [scp.sparse.csc_array]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
         :return: The log-likelihood evaluated at ``coef``.
         :rtype: float
         """
@@ -345,7 +346,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
     ) -> np.ndarray:
         """
         Function to evaluate gradient of GAMM(LSS) model when estimated via GSMM.
@@ -363,7 +364,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
             their indices to save memory.
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter.
-        :type Xs: [scp.sparse.csc_array]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
         :return: The Gradient of the log-likelihood evaluated at ``coef`` as numpy array) of
             shape (-1,1).
         :rtype: np.ndarray
@@ -437,7 +438,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
     ) -> scp.sparse.csc_array:
         """
         Function to evaluate Hessian of GAMM(LSS) model when estimated via GSMM.
@@ -455,7 +456,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
             their indices to save memory.
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter.
-        :type Xs: [scp.sparse.csc_array]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
         :return: The Hessian of the log-likelihood evaluated at ``coef``.
         :rtype: scp.sparse.csc_array
         """
@@ -495,7 +496,14 @@ class GAMLSSGSMMFamily(GSMMFamily):
 
         return H
 
-    def get_resid(self, coef, coef_split_idx, ys, Xs, **kwargs):
+    def get_resid(
+        self,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
+        **kwargs,
+    ) -> np.ndarray:
         """
         Function to compute residuals of GAMM(LSS) model when estimated via GSMM.
 
@@ -515,9 +523,9 @@ class GAMLSSGSMMFamily(GSMMFamily):
             their indices to save memory.
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter.
-        :type Xs: [scp.sparse.csc_array]
-        :return: The Hessian of the log-likelihood evaluated at ``coef``.
-        :rtype: scp.sparse.csc_array
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
+        :return: The residuals of the model.
+        :rtype: np.ndarray
         """
 
         y = ys[0]
@@ -1695,7 +1703,7 @@ def adjust_CI(
 def compute_reml_candidate_GAMM(
     family: Family,
     y: np.ndarray,
-    X: scp.sparse.csc_array,
+    X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix,
     penalties: list[LambdaTerm],
     n_c: int = 10,
     offset: float | np.ndarray = 0,
@@ -1726,7 +1734,7 @@ def compute_reml_candidate_GAMM(
     :param y: vector of observations
     :type y: np.ndarray
     :param X: Model matrix
-    :type X: scp.sparse.csc_array
+    :type X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix
     :param penalties: List of penalties
     :type penalties: list[LambdaTerm]
     :param n_c: Number of cores to use, defaults to 10
@@ -1987,7 +1995,7 @@ def compute_reml_candidate_GAMM(
 def compute_REML_candidate_GSMM(
     family: GAMLSSFamily | GSMMFamily,
     y: np.ndarray | list[np.ndarray],
-    Xs: list[scp.sparse.csc_array],
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
     penalties: list[LambdaTerm],
     coef: np.ndarray,
     n_coef: int,
@@ -2015,7 +2023,7 @@ def compute_REML_candidate_GSMM(
     :param y: Vector of observations or list of vectors (for GSMM)
     :type y: np.ndarray | list[np.ndarray]
     :param Xs: List of model matrices
-    :type Xs: list[scp.sparse.csc_array]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
     :param penalties: List of penalties
     :type penalties: list[LambdaTerm]
     :param coef: Final coefficient estimate obtained from estimation - used to initialize
@@ -2216,7 +2224,7 @@ def compute_REML_candidate_GSMM(
 
 def REML(
     llk: float,
-    nH: scp.sparse.csc_array,
+    nH: scp.sparse.csc_array | np.ndarray,
     coef: np.ndarray,
     scale: float,
     penalties: list[LambdaTerm],
@@ -2240,7 +2248,7 @@ def REML(
     :param llk: log-likelihood of model
     :type llk: float
     :param nH: negative hessian of log-likelihood of model
-    :type nH: scp.sparse.csc_array
+    :type nH: scp.sparse.csc_array | np.ndarray
     :param coef: Estimated vector of coefficients of shape (-1,1)
     :type coef: np.ndarray
     :param scale: (Estimated) scale parameter - can be set to 1 for GAMLSS or GSMMs.
@@ -3164,8 +3172,8 @@ def _compute_VB_corr_terms_MP(
 
 
 def compute_Vp_WPS(
-    Vbr: scp.sparse.csc_array,
-    H: scp.sparse.csc_array,
+    Vbr: scp.sparse.csc_array | np.ndarray,
+    H: scp.sparse.csc_array | np.ndarray,
     S_emb: scp.sparse.csc_array,
     penalties: list[LambdaTerm],
     coef: np.ndarray,
@@ -3195,9 +3203,9 @@ def compute_Vp_WPS(
     :param Vbr: Transpose of root for the estimate for the (unscaled) covariance matrix of
         :math:`\\boldsymbol{\\beta} | y, \\boldsymbol{\\lambda}` - the coefficients estimated
         by the model.
-    :type Vbr: scp.sparse.csc_array
+    :type Vbr: scp.sparse.csc_array | np.ndarray
     :param H: The Hessian of the log-likelihood
-    :type H: scp.sparse.csc_array
+    :type H: scp.sparse.csc_array | np.ndarray
     :param S_emb: The weighted penalty matrix.
     :type S_emb: scp.sparse.csc_array
     :param penalties: A list holding the Lambdaterms estimated for the model.
@@ -3369,10 +3377,10 @@ def compute_Vp_WPS(
 
 
 def compute_Vb_corr_WPS(
-    Vbr: scp.sparse.csc_array,
-    Vpr,
-    Vr,
-    H: scp.sparse.csc_array,
+    Vbr: scp.sparse.csc_array | np.ndarray,
+    Vpr: np.ndarray,
+    Vr: np.ndarray,
+    H: scp.sparse.csc_array | np.ndarray,
     S_emb: scp.sparse.csc_array,
     penalties: list[LambdaTerm],
     coef: np.ndarray,
@@ -3396,7 +3404,7 @@ def compute_Vb_corr_WPS(
     :param Vbr: Transpose of root for the estimate for the (unscaled) covariance matrix of
         :math:`\\boldsymbol{\\beta} | y, \\boldsymbol{\\lambda}` - the coefficients estimated
         by the model.
-    :type Vbr: scp.sparse.csc_array
+    :type Vbr: scp.sparse.csc_array | np.ndarray
     :param Vpr: A (regularized) estimate of the covariance matrix of
         :math:`\\boldsymbol{\\rho}` - the log smoothing penalties.
     :type Vpr: np.ndarray
@@ -3404,7 +3412,7 @@ def compute_Vb_corr_WPS(
         :math:`\\boldsymbol{\\rho}` - the log smoothing penalties.
     :type Vr: np.ndarray
     :param H: The Hessian of the log-likelihood
-    :type H: scp.sparse.csc_array
+    :type H: scp.sparse.csc_array | np.ndarray
     :param S_emb: The weighted penalty matrix.
     :type S_emb: scp.sparse.csc_array
     :param penalties: A list holding the Lambdaterms estimated for the model.

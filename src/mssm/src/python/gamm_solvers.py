@@ -544,8 +544,8 @@ def update_PIRLS(
     yb: np.ndarray,
     mu: np.ndarray,
     eta: np.ndarray,
-    X: scp.sparse.csc_array,
-    Xb: scp.sparse.csc_array,
+    X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix,
+    Xb: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix,
     family: Family,
     Lrhoi: scp.sparse.csc_array | None,
 ) -> tuple[
@@ -566,9 +566,9 @@ def update_PIRLS(
     :param eta: vector of linear predictors
     :type eta: np.ndarray
     :param X: Model matrix
-    :type X: scp.sparse.csc_array
+    :type X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix
     :param Xb: Model matrix of working model
-    :type Xb: scp.sparse.csc_array
+    :type Xb: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix
     :param family: Family of model
     :type family: Family
     :param Lrhoi: Optional covariance matrix of an ar1 model
@@ -892,9 +892,11 @@ def getImplicitV(
 
 
 def calculate_edf(
-    LP: scp.sparse.csc_array | None,
+    LP: scp.sparse.csc_array | np.ndarray | None,
     Pr: list[int] | None,
-    InvCholXXS: scp.sparse.csc_array | scp.sparse.linalg.LinearOperator | None,
+    InvCholXXS: (
+        scp.sparse.csc_array | scp.sparse.linalg.LinearOperator | np.ndarray | None
+    ),
     merged_penalties: list[LambdaTerm],
     lgdetDs: list[float] | None,
     colsX: int,
@@ -923,12 +925,12 @@ def calculate_edf(
         https://doi.org/10.48550/arXiv.2506.13132
 
     :param LP: Pivoted Cholesky of negative penalzied hessian or None
-    :type LP: scp.sparse.csc_array | None
+    :type LP: scp.sparse.csc_array | np.ndarray | None
     :param Pr: Permutation list of ``LP``
     :type Pr: list[int] | None
     :param InvCholXXS: Unpivoted Inverse of ``LP``, or a quasi-newton approximation of it
         (for the L-qEFS update), or None
-    :type InvCholXXS: scp.sparse.csc_array | scp.sparse.linalg.LinearOperator | None
+    :type InvCholXXS: scp.sparse.csc_array | scp.sparse.linalg.LinearOperator | np.ndarray | None
     :param merged_penalties: list of penalties
     :type merged_penalties: list[LambdaTerm]
     :param lgdetDs: list of Derivatives of
@@ -1092,8 +1094,8 @@ def update_scale_edf(
     Wr: scp.sparse.csc_array | None,
     rowsX: int,
     colsX: int,
-    LP: scp.sparse.csc_array | None,
-    InvCholXXSP: scp.sparse.csc_array | None,
+    LP: scp.sparse.csc_array | np.ndarray | None,
+    InvCholXXSP: scp.sparse.csc_array | np.ndarray | None,
     Pr: list[int],
     lgdetDs: list[float],
     Lrhoi: scp.sparse.csc_array | None,
@@ -1133,9 +1135,9 @@ def update_scale_edf(
     :param colsX: Cols of model matrix
     :type colsX: int
     :param LP: Pivoted Cholesky of negative penalzied hessian or None
-    :type LP: scp.sparse.csc_array | None
+    :type LP: scp.sparse.csc_array | np.ndarray | None
     :param InvCholXXSP: Inverse of ``LP``, or None
-    :type InvCholXXSP: scp.sparse.csc_array | None
+    :type InvCholXXSP: scp.sparse.csc_array | np.ndarray | None
     :param Pr: Permutation list of ``LP``
     :type Pr: list[int]
     :param lgdetDs: List of derivatives of :math:`log(|\\mathbf{S}_\\lambda|_+)`, the log of the
@@ -1243,8 +1245,8 @@ def update_scale_edf(
 
 def update_coef(
     yb: np.ndarray,
-    X: scp.sparse.csc_array,
-    Xb: scp.sparse.csc_array,
+    X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix,
+    Xb: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix,
     family: Family,
     S_emb: scp.sparse.csc_array,
     S_root: scp.sparse.csc_array | None,
@@ -1274,9 +1276,9 @@ def update_coef(
     :param yb: vector of observations of the working model
     :type yb: np.ndarray
     :param X: Model matrix
-    :type X: scp.sparse.csc_array
+    :type X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix
     :param Xb: Model matrix of working model
-    :type Xb: scp.sparse.csc_array
+    :type Xb: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix
     :param family: Family of Model
     :type family: Family
     :param S_emb: Total penalty matrix
@@ -1392,8 +1394,8 @@ def update_coef_and_scale(
     Wr: scp.sparse.csc_array | None,
     rowsX: int,
     colsX: int,
-    X: scp.sparse.csc_array | None,
-    Xb: scp.sparse.csc_array,
+    X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None,
+    Xb: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix,
     Lrhoi: scp.sparse.csc_array | None,
     family,
     S_emb: scp.sparse.csc_array,
@@ -1443,9 +1445,9 @@ def update_coef_and_scale(
     :param colsX: Cols of model matrix
     :type colsX: int
     :param X: Model matrix
-    :type X: scp.sparse.csc_array | None
+    :type X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None
     :param Xb: Model matrix of working model
-    :type Xb: scp.sparse.csc_array
+    :type Xb: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix
     :param Lrhoi: Optional covariance matrix of an ar1 model
     :type Lrhoi: scp.sparse.csc_array | None
     :param family: Family of model
@@ -1576,8 +1578,8 @@ def init_step_gam(
     eta: np.ndarray,
     rowsX: int,
     colsX: int,
-    X: scp.sparse.csc_array | None,
-    Xb: scp.sparse.csc_array,
+    X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None,
+    Xb: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix,
     family: Family,
     col_S: int,
     penalties: list[LambdaTerm],
@@ -1629,9 +1631,9 @@ def init_step_gam(
     :param colsX: Cols of model matrix
     :type colsX: int
     :param X: Model matrix
-    :type X: scp.sparse.csc_array | None
+    :type X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None
     :param Xb: Model matrix of working model
-    :type Xb: scp.sparse.csc_array
+    :type Xb: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix
     :param family: Family of model
     :type family: Family
     :param col_S: Cols of penalty matrix
@@ -1771,7 +1773,7 @@ def correct_coef_step(
     eta: np.ndarray,
     mu: np.ndarray,
     y: np.ndarray,
-    X: scp.sparse.csc_array | None,
+    X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None,
     n_pen: float,
     S_emb: scp.sparse.csc_array,
     formula: Formula | None,
@@ -1807,7 +1809,7 @@ def correct_coef_step(
     :param y: vector of observations
     :type y: np.ndarray
     :param X: Model matrix
-    :type X: scp.sparse.csc_array | None
+    :type X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None
     :param n_pen: total penalty under new coefficient estimate
     :type n_pen: float
     :param S_emb: Total penalty matrix
@@ -2067,8 +2069,8 @@ def correct_lambda_step(
     Wr: scp.sparse.csc_array | None,
     rowsX: int,
     colsX: int,
-    X: scp.sparse.csc_array | None,
-    Xb: scp.sparse.csc_array,
+    X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None,
+    Xb: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix,
     coef: np.ndarray,
     Lrhoi: scp.sparse.csc_array | None,
     family: Family,
@@ -2143,9 +2145,9 @@ def correct_lambda_step(
     :param colsX: Cols of model matrix
     :type colsX: int
     :param X: Model matrix
-    :type X: scp.sparse.csc_array | None
+    :type X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None
     :param Xb: Model matrix of working model
-    :type Xb: scp.sparse.csc_array
+    :type Xb: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix
     :param coef: Current coefficient estimate
     :type coef: np.ndarray
     :param Lrhoi: Optional covariance matrix of an ar1 model
@@ -2674,7 +2676,7 @@ def updateTheta(mu: np.ndarray, y: np.ndarray, family: ExtendedFamily) -> np.nda
 def solve_gamm_sparse(
     mu_init: np.ndarray,
     y: np.ndarray,
-    X: scp.sparse.csc_array,
+    X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix,
     penalties: list[LambdaTerm],
     col_S: int,
     family: Family,
@@ -2733,7 +2735,7 @@ def solve_gamm_sparse(
     :param y: vector of observations
     :type y: np.ndarray
     :param X: Model matrix
-    :type X: scp.sparse.csc_array
+    :type X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix
     :param penalties: List of penalties
     :type penalties: list[LambdaTerm]
     :param col_S: Columns of total penalty matrix
@@ -4390,7 +4392,7 @@ def deriv_transform_eta_beta(
     d1eta: list[np.ndarray],
     d2eta: list[np.ndarray],
     d2meta: list[np.ndarray],
-    Xs: list[scp.sparse.csc_array],
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
     only_grad: bool = False,
     sparse: bool = True,
 ) -> tuple[np.ndarray, np.ndarray | scp.sparse.csc_array | None]:
@@ -4525,7 +4527,7 @@ def deriv_transform_eta_beta(
 def newton_coef_smooth(
     coef: np.ndarray,
     grad: np.ndarray,
-    H: scp.sparse.csc_array,
+    H: scp.sparse.csc_array | np.ndarray,
     S_emb: scp.sparse.csc_array,
     n_c: int = 10,
 ) -> tuple[
@@ -4552,7 +4554,7 @@ def newton_coef_smooth(
     :param grad: gradient of llk with respect to coef
     :type grad: np.ndarray
     :param H: hessian of the llk
-    :type H: scp.sparse.csc_array
+    :type H: scp.sparse.csc_array | np.ndarray
     :param S_emb: Total penalty matrix
     :type S_emb: scp.sparse.csc_array
     :param n_c: Number of cores to use, defaults to 10
@@ -4680,7 +4682,7 @@ def gd_coef_smooth(
 def correct_coef_step_gammlss(
     family: GAMLSSFamily,
     y: np.ndarray,
-    Xs: list[scp.sparse.csc_array],
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
     coef: np.ndarray,
     next_coef: np.ndarray,
     coef_split_idx: list[int],
@@ -4707,7 +4709,7 @@ def correct_coef_step_gammlss(
     :param y: Vector of observations
     :type y: np.ndarray
     :param Xs: List of model matrices
-    :type Xs: list[scp.sparse.csc_array]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
     :param coef: Current coefficient estimate
     :type coef: np.ndarray
     :param next_coef: Updated coefficient estimate
@@ -4801,7 +4803,7 @@ def correct_coef_step_gammlss(
 
 
 def identify_drop(
-    H: scp.sparse.csc_array,
+    H: scp.sparse.csc_array | np.ndarray,
     S_scaled: scp.sparse.csc_array,
     method: str = "QR",
     n_c: int = 10,
@@ -4834,7 +4836,7 @@ def identify_drop(
      - mgcv source code, in particular: https://github.com/cran/mgcv/blob/master/R/gam.fit4.r
 
     :param H: Estimate of the hessian of the log-likelihood.
-    :type H: scp.sparse.csc_array
+    :type H: scp.sparse.csc_array | np.ndarray
     :param S_scaled: Scaled version of the penalty matrix (i.e., unweighted total penalty
         divided by it's norm).
     :type S_scaled: scp.sparse.csc_array
@@ -5007,12 +5009,13 @@ def identify_drop(
 
 
 def drop_terms_X(
-    Xs: list[scp.sparse.csc_array], keep: np.typing.NDArray[np.int_]
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
+    keep: np.typing.NDArray[np.int_],
 ) -> tuple[list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix], list[int]]:
     """Drops cols of model matrices corresponding to dropped terms.
 
     :param Xs: List of model matrices included in the model formula.
-    :type Xs: list[scp.sparse.csc_array]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
     :param keep: Array of columns to keep.
     :type keep: np.typing.NDArray[np.int_]
     :return: Tuple, containing a list of updated model matrices - a copy is made - and a new
@@ -5045,7 +5048,7 @@ def check_drop_valid_gammlss(
     y: np.ndarray,
     coef: np.ndarray,
     coef_split_idx: list[int],
-    Xs: list[scp.sparse.csc_array],
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
     S_emb: scp.sparse.csc_array,
     keep: np.typing.NDArray[np.int_],
     family: GAMLSSFamily,
@@ -5061,7 +5064,7 @@ def check_drop_valid_gammlss(
         distribution
     :type coef_split_idx: list[int]
     :param Xs: List of model matrices - one per parameter of response distribution
-    :type Xs: list[scp.sparse.csc_array]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
     :param S_emb: Total penalty matrix
     :type S_emb: scp.sparse.csc_array
     :param keep: Array of coefficients to retain
@@ -5118,7 +5121,7 @@ def handle_drop_gammlss(
     y: np.ndarray,
     coef: np.ndarray,
     keep: np.typing.NDArray[np.int_],
-    Xs: list[scp.sparse.csc_array],
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
     S_emb: scp.sparse.csc_array,
 ) -> tuple[
     np.ndarray,
@@ -5143,7 +5146,7 @@ def handle_drop_gammlss(
     :param keep: Array of parameter indices to keep.
     :type keep: np.typing.NDArray[np.int_]
     :param Xs: List of model matrices
-    :type Xs: list[scp.sparse.csc_array]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
     :param S_emb: Total penalty matrix.
     :type S_emb: scp.sparse.csc_array
     :return: A tuple holding: reduced coef vector, split version of the reduced coef vector, a new
@@ -5201,7 +5204,7 @@ def restart_coef_gammlss(
     n_coef: int,
     coef_split_idx: list[int],
     y: np.ndarray,
-    Xs: list[scp.sparse.csc_array],
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
     S_emb: scp.sparse.csc_array,
     family: GAMLSSFamily,
     outer: int,
@@ -5231,7 +5234,7 @@ def restart_coef_gammlss(
     :param y: Vector of observations
     :type y: np.ndarray
     :param Xs: List of model matrices - one per parameter of response distribution
-    :type Xs: [scp.sparse.csc_array]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
     :param S_emb: Total penalty matrix
     :type S_emb: scp.sparse.csc_array
     :param family: Model family
@@ -5355,7 +5358,7 @@ def update_coef_gammlss(
     :param y: Vector of observations
     :type y: np.ndarray
     :param Xs: List of model matrices - one per parameter of response distribution
-    :type Xs: [scp.sparse.csc_array]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
     :param coef: Coefficient estimate
     :type coef: np.ndarray
     :param coef_split_idx: List with indices to split coef - one per parameter of response
@@ -5683,7 +5686,7 @@ def correct_lambda_step_gamlss(
     family: GAMLSSFamily,
     mus: list[np.ndarray],
     y: np.ndarray,
-    Xs: list[scp.sparse.csc_array],
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
     S_norm: scp.sparse.csc_array,
     n_coef: int,
     form_n_coef: list[int],
@@ -5748,7 +5751,7 @@ def correct_lambda_step_gamlss(
     :param y: Vector of observations
     :type y: np.ndarray
     :param Xs: List of model matrices - one per parameter of response distribution
-    :type Xs: [scp.sparse.csc_array]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
     :param S_norm: Scaled version of the penalty matrix (i.e., unweighted total penalty divided
         by it's norm).
     :type S_norm: scp.sparse.csc_array
@@ -6093,7 +6096,7 @@ def correct_lambda_step_gamlss(
 def solve_gammlss_sparse(
     family: GAMLSSFamily,
     y: np.ndarray,
-    Xs: list[scp.sparse.csc_array],
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
     form_n_coef: list[int],
     form_up_coef: list[int],
     coef: np.ndarray,
@@ -6146,7 +6149,7 @@ def solve_gammlss_sparse(
     :param y: Vector of observations
     :type y: np.ndarray
     :param Xs: List of model matrices - one per parameter of response distribution
-    :type Xs: [scp.sparse.csc_array]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
     :param form_n_coef: List of number of coefficients per formula
     :type form_n_coef: list[int]
     :param form_up_coef: List of un-penalized number of coefficients per formula
@@ -6563,7 +6566,7 @@ def solve_gammlss_sparse(
 def correct_coef_step_gen_smooth(
     family: GSMMFamily,
     ys: list[np.ndarray | None],
-    Xs: list[scp.sparse.csc_array | None],
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     coef: np.ndarray,
     next_coef: np.ndarray,
     coef_split_idx: list[int],
@@ -6583,7 +6586,7 @@ def correct_coef_step_gen_smooth(
     :param ys: List of vectors of observations
     :type ys: list[np.ndarray | None]
     :param Xs: List of model matrices
-    :type Xs: list[scp.sparse.csc_array | None]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
     :param coef: Coefficient estimate
     :type coef: np.ndarray
     :param next_coef: Proposed next coefficient estimate
@@ -6694,7 +6697,7 @@ def back_track_alpha(
 def check_drop_valid_gensmooth(
     ys: list[np.ndarray | None],
     coef: np.ndarray,
-    Xs: list[scp.sparse.csc_array | None],
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     S_emb: scp.sparse.csc_array,
     keep: np.typing.NDArray[np.int_],
     family: GSMMFamily,
@@ -6707,7 +6710,7 @@ def check_drop_valid_gensmooth(
     :param coef: Vector of coefficients
     :type coef: np.ndarray
     :param Xs: List of model matrices - one per parameter
-    :type Xs: list[scp.sparse.csc_array | None]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
     :param S_emb: Total Penalty matrix
     :type S_emb: scp.sparse.csc_array
     :param keep: Array of coefficients to retain
@@ -6749,7 +6752,7 @@ def restart_coef(
     n_coef: int,
     coef_split_idx: list[int],
     ys: list[np.ndarray | None],
-    Xs: list[scp.sparse.csc_array | None],
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     S_emb: scp.sparse.csc_array,
     family: GSMMFamily,
     outer: int,
@@ -6771,7 +6774,7 @@ def restart_coef(
     :param ys: List of observation vectors
     :type ys: list[np.ndarray | None]
     :param Xs: List of model matrices
-    :type Xs: list[scp.sparse.csc_array | None]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
     :param S_emb: Total penalty matrix
     :type S_emb: scp.sparse.csc_array
     :param family: Model family
@@ -6883,7 +6886,7 @@ def handle_drop_gsmm(
     ys: list[np.ndarray | None],
     coef: np.ndarray,
     keep: np.typing.NDArray[np.int_],
-    Xs: list[scp.sparse.csc_array | None],
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     S_emb: scp.sparse.csc_array,
 ) -> tuple[
     np.ndarray,
@@ -6905,7 +6908,7 @@ def handle_drop_gsmm(
     :param keep: Array of parameter indices to keep.
     :type keep: np.typing.NDArray[np.int_]
     :param Xs: List of model matrices
-    :type Xs: list[scp.sparse.csc_array | None]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
     :param S_emb: Total penalty matrix.
     :type S_emb: scp.sparse.csc_array
     :return: A tuple holding: reduced coef vector, a new list of indices determining where to split
@@ -7038,7 +7041,7 @@ def update_ys_qefs(
 def sample_ys_qefs(
     family: GSMMFamily,
     ys: list[np.ndarray | None],
-    Xs: list[scp.sparse.csc_array | None],
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     coef: np.ndarray,
     coef_split_idx: list[int],
     S_emb: scp.sparse.csc_array,
@@ -7076,7 +7079,7 @@ def sample_ys_qefs(
     :param ys: List of observation vectors
     :type ys: list[np.ndarray | None]
     :param Xs: List of model matrices
-    :type Xs: list[scp.sparse.csc_array | None]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
     :param coef: Coefficient estimate (maximizer of pealized llk)
     :type coef: np.ndarray
     :param coef_split_idx: The indices at which to split the overall coefficient vector into
@@ -7805,7 +7808,7 @@ def sampleHcoef(
     linopH: scp.sparse.linalg.LinearOperator,
     family: GSMMFamily,
     ys: list[np.ndarray | None],
-    Xs: list[scp.sparse.csc_array | None],
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     coef: np.ndarray,
     coef_split_idx: list[int],
     smooth_pen: list[LambdaTerm],
@@ -7833,7 +7836,7 @@ def sampleHcoef(
     :param ys: List of observation vectors
     :type ys: list[np.ndarray | None]
     :param Xs: List of model matrices
-    :type Xs: list[scp.sparse.csc_array | None]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
     :param coef: Coefficient estimate
     :type coef: np.ndarray
     :param coef_split_idx: The indices at which to split the overall coefficient vector into
@@ -7998,7 +8001,7 @@ def sampleHcoef(
 def update_coef_gen_smooth(
     family: GSMMFamily,
     ys: list[np.ndarray | None],
-    Xs: list[scp.sparse.csc_array | None],
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     coef: np.ndarray,
     coef_split_idx: list[int],
     S_emb: scp.sparse.csc_array,
@@ -8045,7 +8048,7 @@ def update_coef_gen_smooth(
     :param ys: List of observation vectors
     :type ys: list[np.ndarray | None]
     :param Xs: List of model matrices
-    :type Xs: list[scp.sparse.csc_array | None]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
     :param coef: Coefficient estimate
     :type coef: np.ndarray
     :param coef_split_idx: The indices at which to split the overall coefficient vector into
@@ -8661,7 +8664,7 @@ def update_coef_gen_smooth(
 def correct_lambda_step_gen_smooth(
     family: GSMMFamily,
     ys: list[np.ndarray | None],
-    Xs: list[scp.sparse.csc_array | None],
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     S_norm: scp.sparse.csc_array,
     n_coef: int,
     form_n_coef: list[int],
@@ -8724,7 +8727,7 @@ def correct_lambda_step_gen_smooth(
     :param ys: List of observation vectors
     :type ys: list[np.ndarray | None]
     :param Xs: List of model matrices
-    :type Xs: list[scp.sparse.csc_array | None]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
     :param S_norm: Scaled version of the penalty matrix (i.e., unweighted total penalty divided
         by it's norm).
     :type S_norm: scp.sparse.csc_array
@@ -9177,7 +9180,7 @@ def correct_lambda_step_gen_smooth(
 def solve_generalSmooth_sparse(
     family: GSMMFamily,
     ys: list[np.ndarray | None],
-    Xs: list[scp.sparse.csc_array | None],
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     form_n_coef: list[int],
     form_up_coef: list[int],
     coef: np.ndarray,
@@ -9253,7 +9256,7 @@ def solve_generalSmooth_sparse(
     :param ys: List of observation vectors
     :type ys: list[np.ndarray | None]
     :param Xs: List of model matrices
-    :type Xs: list[scp.sparse.csc_array | None]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
     :param form_n_coef: List of number of coefficients per formula
     :type form_n_coef: list[int]
     :param form_up_coef: List of un-penalized number of coefficients per formula

@@ -13,11 +13,12 @@ from .exp_fam import (
 )
 import multiprocessing as mp
 from itertools import repeat
+from .discrete import DiscreteModelMatrix
 
 
 def _split_matrices(
     ys: list[np.ndarray | None],
-    Xs: list[scp.sparse.csc_array | None],
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     shared_pars: list[int],
     shared_m: bool,
     obs_fams: list[list[GAMLSSFamily | MultiGauss | None]],
@@ -43,7 +44,7 @@ def _split_matrices(
     :type ys: [np.ndarray or None]
     :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
         indices for which model matrix should not be formed explicitly.
-    :type Xs: [scp.sparse.csc_array | None]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
     :param shared_pars: A list containing indices of emission distribution parameters for which
         at least one (in case ``shared_m is False`` one for each of the ``M`` signals) formula
         has been provided containing terms to be shared between the ``n_S`` states.
@@ -230,7 +231,7 @@ def _compute_series_probs(
     shared_pars: list[int],
     shared_m: bool,
     ys: list[np.ndarray | None],
-    Xs: list[scp.sparse.csc_array | None],
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     n_S: int,
     obs_fams: list[list[GAMLSSFamily | MultiGauss | None]],
     d_fams: list[GAMLSSFamily | None],
@@ -285,7 +286,7 @@ def _compute_series_probs(
     :type ys: [np.ndarray or None]
     :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
         indices for which model matrix should not be formed explicitly.
-    :type Xs: [scp.sparse.csc_array | None]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
     :param n_S: Number of latent states.
     :type n_S: int
     ::param obs_fams: Distribution of emissions - one list per state containing the specific
@@ -790,7 +791,7 @@ def _sample_series_emissions(
     coef_split_idx: list[int],
     shared_pars: list[int],
     shared_m: bool,
-    Xs: list[scp.sparse.csc_array | None],
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     n_S: int,
     obs_fams: list[list[GAMLSSFamily | MultiGauss | None]],
     M: int,
@@ -826,7 +827,7 @@ def _sample_series_emissions(
     :type ys: [np.ndarray or None]
     :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
         indices for which model matrix should not be formed explicitly.
-    :type Xs: [scp.sparse.csc_array]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
     :param n_S: Number of latent states.
     :type n_S: int
     ::param obs_fams: Distribution of emissions - one list per state containing the specific
@@ -1259,7 +1260,7 @@ class HSMMFamily(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
         log: bool = True,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Computes the (log)-probabilities of observations and stage durations under given model
@@ -1279,7 +1280,7 @@ class HSMMFamily(GSMMFamily):
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter for single series.
             Can contain None for indices for which model matrix should not be formed explicitly.
-        :type Xs: [scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :param log: Boolena indicating whether to compute probabilities or log-probabilities.
             Defaults to ``True`` - meaning log-probabilities are computed.
         :type log: bool, optional
@@ -1352,7 +1353,7 @@ class HSMMFamily(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
-        Xs: list[scp.sparse.csc_array | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
         log: bool = True,
         sid: None | np.ndarray = None,
         tid: None | np.ndarray = None,
@@ -1373,7 +1374,7 @@ class HSMMFamily(GSMMFamily):
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
             indices for which model matrix should not be formed explicitly.
-        :type Xs: [scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :param log: Boolena indicating whether to compute probabilities or log-probabilities.
             Defaults to ``True`` - meaning log-probabilities are computed.
         :type log: bool, optional
@@ -1494,7 +1495,7 @@ class HSMMFamily(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
-        Xs: list[scp.sparse.csc_array | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     ) -> tuple[np.ndarray, np.ndarray]:
         """Computes the initial state distribution and state transition matrix for ``coef`` and
         ``Xs`` for a single series.
@@ -1515,7 +1516,7 @@ class HSMMFamily(GSMMFamily):
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
             indices for which model matrix should not be formed explicitly.
-        :type Xs: [scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :return: two arrays. First
             array is of dimension ``n_S * n_S`` and corresponds to the state transition matrix.
             Second array is of dimension ``n_S`` and corresponds to initial state distribution.
@@ -1583,7 +1584,7 @@ class HSMMFamily(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
-        Xs: list[scp.sparse.csc_array | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
         sid: None | np.ndarray = None,
         tid: None | np.ndarray = None,
     ) -> list[tuple[np.ndarray, np.ndarray]]:
@@ -1604,7 +1605,7 @@ class HSMMFamily(GSMMFamily):
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
             indices for which model matrix should not be formed explicitly.
-        :type Xs: [scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :param sid: Optional Array holding the first sample of each series in the data. Is used
             to split the observation vectors and model matrices into time-series specific versions.
             Defaults to None, in which case the array passed to the constructor of ``self`` is used.
@@ -1726,7 +1727,7 @@ class HSMMFamily(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
-        Xs: list[scp.sparse.csc_array | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
         seed: int,
         n_samples: int,
         scale: float,
@@ -1750,7 +1751,7 @@ class HSMMFamily(GSMMFamily):
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
             indices for which model matrix should not be formed explicitly.
-        :type Xs: [scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :param seed: Random seed to use
         :type seed: int
         :param n_samples: Number of samples to generate.
@@ -1971,7 +1972,7 @@ class HSMMFamily(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
-        Xs: list[scp.sparse.csc_array | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
         sid: None | np.ndarray = None,
         tid: None | np.ndarray = None,
         seed: int | None = 0,
@@ -1995,7 +1996,7 @@ class HSMMFamily(GSMMFamily):
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
             indices for which model matrix should not be formed explicitly.
-        :type Xs: [scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :param sid: Optional Array holding the first sample of each series in the data. Is used
             to split the observation vectors and model matrices into time-series specific versions.
             Defaults to None, in which case the array passed to the constructor of ``self`` is used.
@@ -2136,7 +2137,7 @@ class HSMMFamily(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
-        Xs: list[scp.sparse.csc_array | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     ) -> tuple[int, np.ndarray]:
         """Perform viterbi decoding of state sequence for a :class:`HSMMFamily` model for a single
         series.
@@ -2157,7 +2158,7 @@ class HSMMFamily(GSMMFamily):
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
             indices for which model matrix should not be formed explicitly.
-        :type Xs: [scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :return: First element of tuple is excess duration of
             final state, second is a np.array with the decoded state sequence matching the length
             of the time-series.
@@ -2269,7 +2270,7 @@ class HSMMFamily(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
-        Xs: list[scp.sparse.csc_array | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
         sid: None | np.ndarray = None,
         tid: None | np.ndarray = None,
         n_cores: None | int = None,
@@ -2290,7 +2291,7 @@ class HSMMFamily(GSMMFamily):
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
             indices for which model matrix should not be formed explicitly.
-        :type Xs: [scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :param sid: Optional Array holding the first sample of each series in the data. Is used
             to split the observation vectors and model matrices into time-series specific versions.
             Defaults to None, in which case the array passed to the constructor of ``self`` is used.
@@ -2418,7 +2419,7 @@ class HSMMFamily(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
-        Xs: list[scp.sparse.csc_array | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
         seed: int,
         n_samples: int,
     ) -> tuple[int, np.ndarray]:
@@ -2441,7 +2442,7 @@ class HSMMFamily(GSMMFamily):
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
             indices for which model matrix should not be formed explicitly.
-        :type Xs: [scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :param seed: Random seed to use
         :type seed: int
         :param n_samples: Number of samples to generate.
@@ -2557,7 +2558,7 @@ class HSMMFamily(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
-        Xs: list[scp.sparse.csc_array | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
         n_samples: int,
         seed: int = 0,
         sid: None | np.ndarray = None,
@@ -2580,7 +2581,7 @@ class HSMMFamily(GSMMFamily):
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
             indices for which model matrix should not be formed explicitly.
-        :type Xs: [scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :param n_samples: Number of state and observation sequences to generate (per series).
         :type n_samples: int
         :param seed: An optional seed to initialize the sampler. If this is set to None, then random
@@ -2718,7 +2719,7 @@ class HSMMFamily(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
         resid_type: str,
         seed: int,
         n_samples: int,
@@ -2744,7 +2745,7 @@ class HSMMFamily(GSMMFamily):
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
             indices for which model matrix should not be formed explicitly.
-        :type Xs: [scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :param resid_type: Type of residual to compute
         :type resid_type: str
         :param seed: Random seed to use
@@ -2948,7 +2949,7 @@ class HSMMFamily(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
-        Xs: list[scp.sparse.csc_array | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
         resid_type: str = "forward",
         transform_to_normal: bool = True,
         n_samples: int = 1000,
@@ -2987,7 +2988,7 @@ class HSMMFamily(GSMMFamily):
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
             indices for which model matrix should not be formed explicitly.
-        :type Xs: [scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :param resid_type: The type of residual to compute, supported are "forward".
         :type resid_type: str, optional
         :param transform_to_normal: The pseudo-residuals are uniformly distributed and can thus be
@@ -3143,7 +3144,7 @@ class HSMMFamily(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     ) -> float:
         """Computes log-likelihood of model for a single series.
 
@@ -3163,7 +3164,7 @@ class HSMMFamily(GSMMFamily):
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
             indices for which model matrix should not be formed explicitly.
-        :type Xs: [scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :return: The log-likelihood for a single series.
         :rtype: float
         """
@@ -3277,7 +3278,7 @@ class HSMMFamily(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
-        Xs: list[scp.sparse.csc_array | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
         sid: None | np.ndarray = None,
         tid: None | np.ndarray = None,
     ) -> float:
@@ -3297,7 +3298,7 @@ class HSMMFamily(GSMMFamily):
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
             indices for which model matrix should not be formed explicitly.
-        :type Xs: [scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :param sid: Optional Array holding the first sample of each series in the data. Is used
             to split the observation vectors and model matrices into time-series specific versions.
             Defaults to None, in which case the array passed to the constructor of ``self`` is used.
@@ -3428,7 +3429,7 @@ class HSMMFamily(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     ) -> np.ndarray:
         """Computes gradient of log-likelihood of model for a single series.
 
@@ -3448,7 +3449,7 @@ class HSMMFamily(GSMMFamily):
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
             indices for which model matrix should not be formed explicitly.
-        :type Xs: [scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :return:  Gradient as array of shape (-1,1)
         :rtype: np.ndarray
         """
@@ -4488,7 +4489,7 @@ class HSMMFamily(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
         sid: None | np.ndarray = None,
         tid: None | np.ndarray = None,
     ) -> np.ndarray:
@@ -4508,7 +4509,7 @@ class HSMMFamily(GSMMFamily):
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
             indices for which model matrix should not be formed explicitly.
-        :type Xs: [scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :param sid: Optional Array holding the first sample of each series in the data. Is used
             to split the observation vectors and model matrices into time-series specific versions.
             Defaults to None, in which case the array passed to the constructor of ``self`` is used.

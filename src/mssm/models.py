@@ -195,9 +195,10 @@ class GSMM:
     :param family: A GSMMFamily family.
     :type family: GSMMFamily
     :ivar [Formula] formulas: The list of formulas passed to the constructor.
-    :ivar scp.sparse.csc_array | None lvi: The inverse of the Cholesky factor of the conditional
-        model coefficient covariance matrix - or None, in case the ``L-BFGS-B`` optimizer was used
-        and ``form_VH`` was set to False when calling ``model.fit()``. Initialized with ``None``.
+    :ivar scp.sparse.csc_array | np.ndarray | None lvi: The inverse of the Cholesky factor of the
+        conditional model coefficient covariance matrix - or None, in case the ``L-BFGS-B``
+        optimizer was used and ``form_VH`` was set to False when calling ``model.fit()``.
+        Initialized with ``None``.
     :ivar scp.sparse.linalg.LinearOperator lvi_linop: A :class:`scipy.sparse.linalg.LinearOperator`
         of the conditional model coefficient covariance matrix (**not the root**) - or None. Only
         available in case the ``L-BFGS-B`` optimizer was used and ``form_VH`` was set to False when
@@ -208,8 +209,8 @@ class GSMM:
         each observation in the training data (after removing NaNs). Initialized with ``None``.
     :ivar [[float]] mus: The predicted means for every parameter of ``family`` evaluated for each
         observation in the training data (after removing NaNs). Initialized with ``None``.
-    :ivar scp.sparse.csc_array hessian:  Estimated hessian of the log-likelihood (will correspond
-        to ``hessian - diag*eps`` if ``self.info.eps > 0`` after fitting).
+    :ivar scp.sparse.csc_array | np.ndarray | None hessian:  Estimated hessian of the log-likelihood
+        (will correspond to ``hessian - diag*eps`` if ``self.info.eps > 0`` after fitting).
         Initialized with ``None``.
     :ivar float edf: The model estimated degrees of freedom as a float. Initialized with ``None``.
     :ivar float edf1: The model estimated degrees of freedom as a float corrected for smoothness
@@ -239,14 +240,14 @@ class GSMM:
 
         self.family = family
         self.formulas: list[Formula] = formulas
-        self.lvi: scp.sparse.csc_array | None = None
+        self.lvi: scp.sparse.csc_array | np.ndarray | None = None
         self.lvi_linop: scp.sparse.linalg.LinearOperator | None = None
         self.coef: np.ndarray | None = None
         self.preds: list[np.ndarray] | None = None  # Linear predictors
         self.mus: list[np.ndarray] | None = (
             None  # Estimated parameters of log-likelihood
         )
-        self.hessian: scp.sparse.csc_array | None = None
+        self.hessian: scp.sparse.csc_array | np.ndarray | None = None
         self.scale = 1
 
         self.edf: float | None = None
@@ -1716,16 +1717,16 @@ class GAMMLSS(GSMM):
         and :class:`GAMMALS` are supported.
     :type family: GAMLSSFamily
     :ivar [Formula] formulas: The list of formulas passed to the constructor.
-    :ivar scp.sparse.csc_array lvi: The inverse of the Cholesky factor of the conditional model
-        coefficient covariance matrix. Initialized with ``None``.
+    :ivar scp.sparse.csc_array | np.ndarray lvi: The inverse of the Cholesky factor of the
+        conditional model coefficient covariance matrix. Initialized with ``None``.
     :ivar np.ndarray coef:  Contains all coefficients estimated for the model. Shape of the array
         is (-1,1). Initialized with ``None``.
     :ivar [[float]] preds: The linear predictors for every parameter of ``family`` evaluated for
         each observation in the training data (after removing NaNs). Initialized with ``None``.
     :ivar [[float]] mus: The predicted means for every parameter of ``family`` evaluated for each
         observation in the training data (after removing NaNs). Initialized with ``None``.
-    :ivar scp.sparse.csc_array hessian:  Estimated hessian of the log-likelihood (will correspond
-        to ``hessian - diag*eps`` if ``self.info.eps > 0`` after fitting).
+    :ivar scp.sparse.csc_array | np.ndarray hessian:  Estimated hessian of the log-likelihood (will
+        correspond to ``hessian - diag*eps`` if ``self.info.eps > 0`` after fitting).
         Initialized with ``None``.
     :ivar float edf: The model estimated degrees of freedom as a float. Initialized with ``None``.
     :ivar float edf1: The model estimated degrees of freedom as a float corrected for smoothness
@@ -2652,8 +2653,8 @@ class GAMM(GAMMLSS):
     :param family: A distribution implementing the :class:`Family` class.
     :type family: Family
     :ivar [Formula] formulas: A list including the formula passed to the constructor.
-    :ivar scp.sparse.csc_array lvi: The inverse of the Cholesky factor of the conditional model
-        coefficient covariance matrix. Initialized with ``None``.
+    :ivar scp.sparse.csc_array | np.ndarray lvi: The inverse of the Cholesky factor of the
+        conditional model coefficient covariance matrix. Initialized with ``None``.
     :ivar np.ndarray coef:  Contains all coefficients estimated for the model. Shape of the array
         is (-1,1). Initialized with ``None``.
     :ivar [[float]] preds: The first index corresponds to the linear predictors for the mean of the
@@ -2662,8 +2663,9 @@ class GAMM(GAMMLSS):
     :ivar [[float]] mus: The first index corresponds to the estimated value of the mean of the
         family evaluated for each observation in the training data (after removing NaNs).
         Initialized with ``None``.
-    :ivar scp.sparse.csc_array hessian: Estimated hessian of the log-likelihood used during
-        fitting - will be the expected hessian for non-canonical models. Initialized with ``None``.
+    :ivar scp.sparse.csc_array | np.ndarray hessian: Estimated hessian of the log-likelihood used
+        during fitting - will be the expected hessian for non-canonical models. Initialized with
+        ``None``.
     :ivar float edf: The model estimated degrees of freedom as a float. Initialized with ``None``.
     :ivar float edf1: The model estimated degrees of freedom as a float corrected for smoothness
         bias. Set by the :func:`approx_smooth_p_values` function, the first time it is called.
@@ -2685,8 +2687,8 @@ class GAMM(GAMMLSS):
         the Fisher weights at convergence. Initialized with ``None``.
     :ivar scp.sparse.csc_array WN: For generalized models a diagonal matrix holding the Newton
         weights at convergence. Initialized with ``None``.
-    :ivar scp.sparse.csc_array hessian_obs: Observed hessian of the log-likelihood at final
-        coefficient estimate. Not updated for strictly additive models (i.e., Gaussian with
+    :ivar scp.sparse.csc_array | np.ndarray hessian_obs: Observed hessian of the log-likelihood at
+        final coefficient estimate. Not updated for strictly additive models (i.e., Gaussian with
         identity link). Initialized with ``None``.
     :ivar float rho: Optional auto-correlation at lag 1 parameter used during estimation.
         Initialized with ``None``.
@@ -2703,7 +2705,7 @@ class GAMM(GAMMLSS):
 
         self.Wr: scp.sparse.csc_array | None = None
         self.WN: scp.sparse.csc_array | None = None
-        self.hessian_obs: scp.sparse.csc_array | None = None
+        self.hessian_obs: scp.sparse.csc_array | np.ndarray | None = None
         self.rho: float | None = None
         self.res_ar: np.ndarray | None = None
         self.transform_X: Callable | None = None
