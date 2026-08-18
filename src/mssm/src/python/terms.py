@@ -1196,10 +1196,6 @@ class f(GammTerm):
             by_levels = factor_levels[self.by]
             n_coef *= len(by_levels)
 
-        # Adjust for dropped coef.
-        if self.drop_coef is not None:
-            n_coef -= len(self.drop_coef)
-
         # Calculate smooth term for corresponding covariate
 
         # Handle identifiability constraints for every basis and
@@ -1315,33 +1311,18 @@ class f(GammTerm):
             for by_level in range(len(by_levels)):
                 by_cidx = by_cov == by_level
                 for m_coli in range(m_cols):
-                    if self.drop_coef is None or m_coli_by not in self.drop_coef:
-                        term_ridx.append(ridx[by_cidx,])
+                    term_ridx.append(ridx[by_cidx,])
                     m_coli_by += 1
 
         # Handle optional binary keyword
         elif self.binary is not None:
-
             by_cov = cov_flat[:, var_map[self.binary[0]]]
             by_cidx = by_cov == self.binary_level
-
-            if self.drop_coef is None:
-                term_ridx = [ridx[by_cidx,] for _ in range(m_cols)]
-            else:
-                term_ridx = [
-                    ridx[by_cidx,]
-                    for m_coli in range(m_cols)
-                    if m_coli not in self.drop_coef
-                ]
+            term_ridx = [ridx[by_cidx,] for _ in range(m_cols)]
 
         # No by or binary just use rows/cols as they are
         else:
-            if self.drop_coef is None:
-                term_ridx = [ridx[:] for _ in range(m_cols)]
-            else:
-                term_ridx = [
-                    ridx[:] for m_coli in range(m_cols) if m_coli not in self.drop_coef
-                ]
+            term_ridx = [ridx[:] for _ in range(m_cols)]
 
         f_cols = len(term_ridx)
 
@@ -1350,17 +1331,19 @@ class f(GammTerm):
 
         # Find basis elements > 0 and collect correspondings elements and row indices
         for m_coli in range(f_cols):
-            final_ridx = term_ridx[m_coli]
-            final_col = matrix_term[final_ridx, m_coli % m_cols]
 
-            # Tolerance row index for this columns
-            cidx = abs(final_col) > tol
-            if use_only is None or ti in use_only:
-                new_elements.extend(final_col[cidx])
-                new_rows.extend(final_ridx[cidx])
-                new_cols.extend([ci for _ in range(len(final_ridx[cidx]))])
-            new_ci += 1
-            ci += 1
+            if self.drop_coef is None or m_coli not in self.drop_coef:
+                final_ridx = term_ridx[m_coli]
+                final_col = matrix_term[final_ridx, m_coli % m_cols]
+
+                # Tolerance row index for this columns
+                cidx = abs(final_col) > tol
+                if use_only is None or ti in use_only:
+                    new_elements.extend(final_col[cidx])
+                    new_rows.extend(final_ridx[cidx])
+                    new_cols.extend([ci for _ in range(len(final_ridx[cidx]))])
+                new_ci += 1
+                ci += 1
             term_ridx[m_coli] = None
 
         return new_elements, new_rows, new_cols, new_ci
