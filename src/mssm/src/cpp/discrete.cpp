@@ -303,7 +303,7 @@ Eigen::VectorXd A6(py::list uMatsA,
                                 l
                             );
 
-        f = f.array() + (C(indexC,l).array() * Al.array());
+        f = (f.array() + (C(indexC,l).array() * Al.array())).matrix();
     }
     return f;
 }
@@ -495,13 +495,13 @@ Eigen::MatrixXd XTWXA(
     if (hasQj)
     {
         XTWX = Qj.transpose() * XTWX;
-        XTWX = XTWX(cidxj, Eigen::all); // Can now drop columns from j
+        XTWX = XTWX(cidxj, Eigen::all).eval(); // Can now drop columns from j
     }
 
     if(hasQk)
     {
         XTWX = XTWX * Qk;
-        XTWX = XTWX(Eigen::all, cidxk); // Can now drop columns from k
+        XTWX = XTWX(Eigen::all, cidxk).eval(); // Can now drop columns from k
     }
 
     return XTWX;

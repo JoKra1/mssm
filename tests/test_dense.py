@@ -29,7 +29,6 @@ mssm.src.python.exp_fam.GAMMALS.init_lambda = init_penalties_tests_gammlss
 mssm.src.python.exp_fam.MULNOMLSS.init_lambda = init_penalties_tests_gammlss
 mssm.src.python.exp_fam.PropHaz.init_lambda = init_penalties_tests_gsmm
 mssm.src.python.utils.GAMLSSGSMMFamily.init_lambda = init_penalties_tests_gsmm
-mssm.src.python.utils.GAMLSSGSMMFamily.init_coef = init_coef_gsmmgammlss
 
 ################################################################## Tests ##################################################################
 
@@ -620,7 +619,7 @@ class Test_dropGSMM:
     def test_edf2(self):
         np.testing.assert_allclose(
             self.res2[5],
-            20.50840353814276,
+            20.510520758763946,
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.03),
         )

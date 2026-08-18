@@ -13,12 +13,16 @@ from .defaults import (
     default_gsmm_test_kwargs,
     max_atol,
     max_rtol,
+    init_coef_gaumlss_tests,
+    init_coef_gammals_tests,
     init_penalties_tests_gammlss,
     init_penalties_tests_gsmm,
     init_coef_gsmmgammlss,
 )
 from mssm.src.python.mcmc import sample_mssm
 
+mssm.src.python.exp_fam.GAUMLSS.init_coef = init_coef_gaumlss_tests
+mssm.src.python.exp_fam.GAMMALS.init_coef = init_coef_gammals_tests
 mssm.src.python.exp_fam.GAUMLSS.init_lambda = init_penalties_tests_gammlss
 mssm.src.python.exp_fam.GAMMALS.init_lambda = init_penalties_tests_gammlss
 mssm.src.python.exp_fam.MULNOMLSS.init_lambda = init_penalties_tests_gammlss
