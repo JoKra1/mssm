@@ -1293,8 +1293,7 @@ class f(GammTerm):
 
             if vi == 0:
                 matrix_term = matrix_term_v
-            else:
-                # ToDo: Expensive for discrete and not necessary but need correct m_cols
+            elif discrete is False:
                 matrix_term = TP_basis_calc(matrix_term, matrix_term_v)
 
             if discrete:
@@ -1305,9 +1304,8 @@ class f(GammTerm):
             if self.Z[0].type == ConstType.QR:
                 if discrete:
                     dt.Q = self.Z[0].Z
-
-                # ToDo: Expensive for discrete and not necessary but need correct m_cols
-                matrix_term = matrix_term @ self.Z[0].Z
+                else:
+                    matrix_term = matrix_term @ self.Z[0].Z
 
             elif self.Z[0].type == ConstType.DROP:
                 matrix_term = np.delete(matrix_term, self.Z[0].Z, axis=1)
@@ -1335,6 +1333,8 @@ class f(GammTerm):
                 )
 
         m_rows, m_cols = matrix_term.shape
+        if discrete:
+            m_cols = dt_n_coef
         # print(m_cols)
 
         # Multiply each row of model matrix by value in by_cont
@@ -1342,7 +1342,15 @@ class f(GammTerm):
             by_cont_cov = cov_flat[:, var_map[self.by_cont]]
 
             if discrete:
-                dt.by_cov = by_cont_cov.reshape(-1, 1)
+                # Need to rebuild first marginal and index vector
+                dt_by_cov = discrete_cov[self.by_cont][discrete_idx[self.by_cont]]
+                M = dt.unique_matrices[0][dt.indices[0], :] * dt_by_cov.reshape(-1, 1)
+
+                # ToDo: We might want to digitize here again
+                uM, indices = np.unique(M, return_inverse=True, axis=0)
+
+                dt.unique_matrices[0] = np.asfortranarray(uM)
+                dt.indices[0] = indices
             else:
                 matrix_term *= by_cont_cov.reshape(-1, 1)
 

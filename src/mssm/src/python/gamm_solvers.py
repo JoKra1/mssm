@@ -615,7 +615,8 @@ def update_PIRLS(
 
             yb = Lrhoiv.T @ yb  # Lhroi^T@Wr@z_i
             Xb = Lrhoiv.T @ Xb  # Lhroi^T@Wr@X
-            Xb.sort_indices()
+            if isinstance(X, scp.sparse.sparray):
+                Xb.sort_indices()
 
     return yb, Xb, z, Wr
 

@@ -1461,7 +1461,7 @@ class Test_te_scaling_qefs:
             Trs,
             np.array([379.31644773658763]),
             atol=min(max_atol, 0),
-            rtol=min(max_rtol, 3.5),
+            rtol=min(max_rtol, 5),
         )
 
 

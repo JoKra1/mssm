@@ -33,6 +33,163 @@ mssm.src.python.utils.GAMLSSGSMMFamily.init_lambda = init_penalties_tests_gsmm
 ################################################################## Tests ##################################################################
 
 
+class Test_ar:
+    # We simulate some data including a random smooth - but then dont include it in the model:
+    sim_dat = sim11(5000, 2, c=0, seed=20, family=Gamma(), n_ranef=20, binom_offset=0)
+
+    sim_dat = sim_dat.sort_values(["x4"], ascending=[True])
+
+    sim_formula = Formula(
+        lhs("y"),
+        [i(), f(["x0"]), f(["x1"]), f(["x2"]), f(["x3"])],
+        data=sim_dat,
+        series_id="x4",
+        discretize=True,
+    )  # Can already specify this.
+
+    model = GAMM(sim_formula, Gamma())
+    model.fit(rho=0.25, progress_bar=False, method="Chol")
+
+    def test_GAMedf(self):
+        np.testing.assert_allclose(
+            self.model.edf,
+            19.313135175313306,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_GAMsigma(self):
+        _, sigma = self.model.get_pars()
+        np.testing.assert_allclose(
+            sigma, 8.35100302829088, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+        )
+
+    def test_GAMcoef(self):
+        coef, _ = self.model.get_pars()
+        np.testing.assert_allclose(
+            np.round(coef, decimals=6),
+            np.array(
+                [
+                    [8.7168100e00],
+                    [-9.7355500e-01],
+                    [-1.1773000e-01],
+                    [5.2074200e-01],
+                    [1.0909320e00],
+                    [1.5104660e00],
+                    [1.2234120e00],
+                    [9.1791300e-01],
+                    [2.6675500e-01],
+                    [-3.6675000e-01],
+                    [-1.6541380e00],
+                    [-8.7552800e-01],
+                    [-4.7543900e-01],
+                    [4.7086000e-02],
+                    [7.9532700e-01],
+                    [1.9027800e00],
+                    [3.3956800e00],
+                    [4.7064160e00],
+                    [6.0658560e00],
+                    [-1.0898159e01],
+                    [1.5461650e00],
+                    [1.4995680e00],
+                    [-6.2810150e00],
+                    [-3.8108120e00],
+                    [-4.7128670e00],
+                    [-7.8822830e00],
+                    [-5.3751500e00],
+                    [-3.7001760e00],
+                    [9.6890000e-03],
+                    [7.4800000e-04],
+                    [-9.5810000e-03],
+                    [-2.0779000e-02],
+                    [-2.5539000e-02],
+                    [-1.8471000e-02],
+                    [3.1860000e-03],
+                    [3.7437000e-02],
+                    [7.3028000e-02],
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
+        )
+
+    def test_GAMlam(self):
+        lam = np.array([p.lam for p in self.model.overall_penalties])
+        np.testing.assert_allclose(
+            lam,
+            np.array(
+                [
+                    49.40876648625623,
+                    59.65114891702245,
+                    0.041734816670011284,
+                    7113.070883276762,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 2.5),
+        )
+
+    def test_GAMreml(self):
+        reml = self.model.get_reml()
+        np.testing.assert_allclose(
+            reml, -47070.78983904525, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+        )
+
+    def test_GAMllk(self):
+        llk = self.model.get_llk(False)
+        np.testing.assert_allclose(
+            llk, -47025.2958060189, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+        )
+
+    def test_edf1(self):
+        compute_bias_corrected_edf(self.model, overwrite=False)
+        edf1 = np.array([edf1 for edf1 in self.model.term_edf1])
+        np.testing.assert_allclose(
+            edf1,
+            np.array(
+                [
+                    4.929279678060681,
+                    4.786449840150404,
+                    8.961976246822278,
+                    1.7193061988301837,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
+        )
+
+    def test_ps(self):
+        ps = []
+        for par in range(len(self.model.formulas)):
+            pps, _ = approx_smooth_p_values(self.model, par=par)
+            ps.extend(pps)
+        np.testing.assert_allclose(
+            ps,
+            np.array([0.0, 0.0, 0.0, 0.8507391005107705]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.5),
+        )
+
+    def test_TRs(self):
+        Trs = []
+        for par in range(len(self.model.formulas)):
+            _, pTrs = approx_smooth_p_values(self.model, par=par)
+            Trs.extend(pTrs)
+        np.testing.assert_allclose(
+            Trs,
+            np.array(
+                [
+                    50.98512414086201,
+                    477.4277024095954,
+                    563.1979577943996,
+                    0.1674604521271632,
+                ]
+            ),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 1.5),
+        )
+
+
 class Test_algorithms:
     sim_dat = sim4(500, 2, family=Gamma(), seed=0)
 
@@ -549,6 +706,125 @@ class Test_algorithm5:
                 (self.mmat1.T @ self.mmat1).toarray() - self.mmat2.T @ self.mmat2
             ).max()
             < 1e-7
+        )
+
+
+class Test_algorithm6:
+    # by cov test
+    sim_dat = sim4(500, 2, family=Gamma(), seed=0)
+
+    # We again need to model the mean: \mu_i = \alpha + f(x0) + f(x1) + f_{x4}(x0)
+    sim_formula_m1 = Formula(
+        lhs("y"),
+        [i(), f(["x0", "x1"], te=True, by_cont="x2")],
+        data=sim_dat,
+        discretize=True,
+    )
+
+    _, cov_flat, _, _, _, _, _, _ = sim_formula_m1.encode_data(
+        sim_formula_m1.data, prediction=True, discretize=True
+    )
+    sim_formula_m1.cov_flat = cov_flat
+    sim_formula_m1.discretize_cov = False
+    _ = build_penalties(sim_formula_m1)
+    mmat1 = build_model_matrix(sim_formula_m1)
+
+    sim_formula_m2 = Formula(
+        lhs("y"),
+        [i(), f(["x0", "x1"], te=True, by_cont="x2")],
+        data=sim_dat,
+        discretize=True,
+    )
+    _ = build_penalties(sim_formula_m2)
+    mmat2 = build_model_matrix(sim_formula_m2)
+
+    # and the standard deviation
+    sim_formula_sd = Formula(lhs("y"), [i()], data=sim_dat)
+
+    family = GAMMALS([LOG(), LOGb(-0.0001)])
+
+    test_kwargs = copy.deepcopy(default_gsmm_test_kwargs)
+    test_kwargs["control_lambda"] = 2
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["max_outer"] = 200
+    test_kwargs["max_inner"] = 500
+    test_kwargs["method"] = "Chol"
+    test_kwargs["repara"] = True
+    test_kwargs["prefit_grad"] = True
+    test_kwargs["force_sparse"] = False
+
+    # Now define the model and fit!
+    gsmm_fam = GAMLSSGSMMFamily(2, family)
+    model1 = GSMM([sim_formula_m1, sim_formula_sd], gsmm_fam)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model1.fit(**test_kwargs)
+    model2 = GSMM([sim_formula_m1, sim_formula_sd], gsmm_fam)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model2.fit(**test_kwargs)
+
+    def test_mmat1(self):
+        assert np.abs(self.mmat1 - self.mmat2.toarray()).max() < 1e-4
+
+    def test_mmat1(self):
+        assert (
+            np.abs(self.mmat1.T @ self.mmat1 - self.mmat2.T @ self.mmat2).max() < 1e-4
+        )
+
+    def test_GAMedf(self):
+        np.testing.assert_allclose(
+            self.model1.edf,
+            self.model2.edf,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.0001),
+        )
+
+    def test_GAMcoef(self):
+        coef1 = self.model1.coef
+        coef2 = self.model2.coef
+        np.testing.assert_allclose(
+            coef1, coef2, atol=min(max_atol, 0), rtol=min(max_rtol, 0.0001)
+        )
+
+    def test_GAMreml(self):
+        reml1 = self.model1.get_reml()
+        reml2 = self.model2.get_reml()
+        np.testing.assert_allclose(
+            reml1, reml2, atol=min(max_atol, 0), rtol=min(max_rtol, 0.0001)
+        )
+
+    def test_edf1(self):
+        compute_bias_corrected_edf(self.model1, overwrite=False)
+        compute_bias_corrected_edf(self.model2, overwrite=False)
+        edf1 = np.array([edf1 for edf1 in self.model1.term_edf1])
+        edf2 = np.array([edf2 for edf2 in self.model2.term_edf1])
+        np.testing.assert_allclose(
+            edf1, edf2, atol=min(max_atol, 0), rtol=min(max_rtol, 0.0001)
+        )
+
+    def test_ps(self):
+        ps1 = []
+        ps2 = []
+        for par in range(len(self.model1.formulas)):
+            pps1, _ = approx_smooth_p_values(self.model1, par=par)
+            pps2, _ = approx_smooth_p_values(self.model2, par=par)
+            ps1.extend(pps1)
+            ps2.extend(pps2)
+        np.testing.assert_allclose(
+            ps1, ps2, atol=min(max_atol, 0), rtol=min(max_rtol, 0.0001)
+        )
+
+    def test_TRs(self):
+        Trs1 = []
+        Trs2 = []
+        for par in range(len(self.model1.formulas)):
+            _, pTrs1 = approx_smooth_p_values(self.model1, par=par)
+            _, pTrs2 = approx_smooth_p_values(self.model2, par=par)
+            Trs1.extend(pTrs1)
+            Trs2.extend(pTrs2)
+        np.testing.assert_allclose(
+            Trs1, Trs2, atol=min(max_atol, 0), rtol=min(max_rtol, 0.0001)
         )
 
 

@@ -39,7 +39,6 @@ class DiscreteTerm:
     exclude_columns: list[int] | None = None
     zero_columns: list[int] | None = None
     Q: np.ndarray | None = None
-    by_cov: np.ndarray | None = None
     total_columns: int | None = None
     n_marginals: int = 1
 
@@ -991,10 +990,6 @@ class DiscreteModelMatrix:
                 # Constraint
                 if dt.Q is not None:
                     tmat = tmat @ dt.Q
-
-            # by cov
-            if dt.by_cov is not None:
-                tmat *= dt.by_cov
 
             # Drop excluded ones
             if dt.exclude_columns is not None:
