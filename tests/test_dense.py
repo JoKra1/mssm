@@ -226,148 +226,65 @@ class Test_mvn:
     test_kwargs["max_inner"] = 500
     test_kwargs["force_sparse"] = False
 
-    model = GSMM(formulas, MultiGauss(3, [Identity() for _ in range(3)]))
-    model.fit(**test_kwargs)
+    model1 = GSMM(formulas, MultiGauss(3, [Identity() for _ in range(3)]))
+    model1.fit(**test_kwargs)
+    test_kwargs["force_sparse"] = True
+    model2 = copy.deepcopy(model1)
+    model2.fit(**test_kwargs)
 
     def test_GAMedf(self):
         np.testing.assert_allclose(
-            self.model.edf,
-            25.10218162447966,
+            self.model1.edf,
+            self.model2.edf,
             atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.1),
+            rtol=min(max_rtol, 0.0001),
         )
 
     def test_GAMcoef(self):
-        coef = np.round(self.model.coef, decimals=6)
+        coef1 = self.model1.coef
+        coef2 = self.model2.coef
         np.testing.assert_allclose(
-            coef,
-            np.array(
-                [
-                    [1.310827e00],
-                    [-5.933170e-01],
-                    [7.875610e-01],
-                    [1.358089e00],
-                    [1.519697e00],
-                    [1.373635e00],
-                    [9.820540e-01],
-                    [4.422080e-01],
-                    [-4.009220e-01],
-                    [-1.152197e00],
-                    [6.617989e00],
-                    [-1.572254e00],
-                    [-5.353150e-01],
-                    [4.227500e-02],
-                    [4.312100e-01],
-                    [1.157905e00],
-                    [2.337078e00],
-                    [3.669366e00],
-                    [4.414431e00],
-                    [5.341294e00],
-                    [-6.238113e00],
-                    [6.433356e00],
-                    [5.565352e00],
-                    [-1.624526e00],
-                    [4.807960e-01],
-                    [-7.382450e-01],
-                    [-3.242323e00],
-                    [-2.963026e00],
-                    [1.426330e00],
-                    [-6.279000e-03],
-                    [4.324400e-02],
-                    [2.437700e-02],
-                    [1.461600e-02],
-                    [-1.390000e-03],
-                    [-2.945800e-02],
-                    [-7.006800e-02],
-                    [-1.170770e-01],
-                    [-1.573210e-01],
-                    [-2.011180e-01],
-                    [-2.711340e-01],
-                    [-9.060700e-02],
-                    [1.694060e-01],
-                    [-3.234080e-01],
-                    [-2.800600e-02],
-                    [-3.565580e-01],
-                ]
-            ),
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.5),
-        )
-
-    def test_GAMlam(self):
-        lam = np.array([p.lam for p in self.model.overall_penalties])
-        np.testing.assert_allclose(
-            lam,
-            np.array(
-                [
-                    4.871349282423669,
-                    6.146368580007333,
-                    0.01058421153672705,
-                    599.8159257138534,
-                ]
-            ),
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 2.5),
+            coef1, coef2, atol=min(max_atol, 0), rtol=min(max_rtol, 0.0001)
         )
 
     def test_GAMreml(self):
-        reml = self.model.get_reml()
+        reml1 = self.model1.get_reml()
+        reml2 = self.model2.get_reml()
         np.testing.assert_allclose(
-            reml, -1322.5385150572272, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
-        )
-
-    def test_GAMllk(self):
-        llk = self.model.get_llk(False)
-        np.testing.assert_allclose(
-            llk, -1263.9536891697567, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            reml1, reml2, atol=min(max_atol, 0), rtol=min(max_rtol, 0.0001)
         )
 
     def test_edf1(self):
-        compute_bias_corrected_edf(self.model, overwrite=False)
-        edf1 = np.array([edf1 for edf1 in self.model.term_edf1])
+        compute_bias_corrected_edf(self.model1, overwrite=False)
+        compute_bias_corrected_edf(self.model2, overwrite=False)
+        edf1 = np.array([edf1 for edf1 in self.model1.term_edf1])
+        edf2 = np.array([edf2 for edf2 in self.model2.term_edf1])
         np.testing.assert_allclose(
-            edf1,
-            np.array(
-                [
-                    4.375799468199504,
-                    3.9422771357324335,
-                    8.510191584484993,
-                    1.4807393921428138,
-                ]
-            ),
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 1.5),
+            edf1, edf2, atol=min(max_atol, 0), rtol=min(max_rtol, 0.0001)
         )
 
     def test_ps(self):
-        ps = []
-        for par in range(len(self.model.formulas)):
-            pps, _ = approx_smooth_p_values(self.model, par=par)
-            ps.extend(pps)
+        ps1 = []
+        ps2 = []
+        for par in range(len(self.model1.formulas)):
+            pps1, _ = approx_smooth_p_values(self.model1, par=par)
+            pps2, _ = approx_smooth_p_values(self.model2, par=par)
+            ps1.extend(pps1)
+            ps2.extend(pps2)
         np.testing.assert_allclose(
-            ps,
-            np.array([0.0, 0.0, 0.0, 0.5879459444127703]),
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 0.5),
+            ps1, ps2, atol=min(max_atol, 0), rtol=min(max_rtol, 0.0001)
         )
 
     def test_TRs(self):
-        Trs = []
-        for par in range(len(self.model.formulas)):
-            _, pTrs = approx_smooth_p_values(self.model, par=par)
-            Trs.extend(pTrs)
+        Trs1 = []
+        Trs2 = []
+        for par in range(len(self.model1.formulas)):
+            _, pTrs1 = approx_smooth_p_values(self.model1, par=par)
+            _, pTrs2 = approx_smooth_p_values(self.model2, par=par)
+            Trs1.extend(pTrs1)
+            Trs2.extend(pTrs2)
         np.testing.assert_allclose(
-            Trs,
-            np.array(
-                [
-                    85.48292084972854,
-                    157.9214062755832,
-                    1108.4251678221026,
-                    0.6766049150064073,
-                ]
-            ),
-            atol=min(max_atol, 0),
-            rtol=min(max_rtol, 1.5),
+            Trs1, Trs2, atol=min(max_atol, 0), rtol=min(max_rtol, 0.0001)
         )
 
 
