@@ -33,6 +33,14 @@ mssm.src.python.custom_types module
    :undoc-members:
    :show-inheritance:
 
+mssm.src.python.discrete module
+----------------------------------
+
+.. automodule:: mssm.src.python.discrete
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 mssm.src.python.exp\_fam module
 -------------------------------
 

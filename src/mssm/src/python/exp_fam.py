@@ -2639,12 +2639,12 @@ class GAMLSSFamily(ABC):
 
         If ``order == DerivOrder.d2m``, ``dpars(y,*mus,i,order)`` returns up to
         ``n_par*(n_par-1)/2`` mixed partial second derivatives as follows
-         - ``i=0`` = :math:`\\partial l/\\partial \\mu_1 \\partial \\mu_2`,
-         - ``i=1`` = :math:`\\partial l/\\partial \\mu_1 \\partial \\mu_3`,
+         - ``i=0`` = :math:`\\partial^2 l/\\partial \\mu_1 \\partial \\mu_2`,
+         - ``i=1`` = :math:`\\partial^2 l/\\partial \\mu_1 \\partial \\mu_3`,
          - ...
-         - ``i=n_par-1`` = :math:`\\partial l/\\partial \\mu_1 \\partial \\mu_{n_{par}}`,
-         - ``i=n_par`` = :math:`\\partial l/\\partial \\mu_2 \\partial \\mu_3`,
-         - ``i=n_par+1`` = :math:`\\partial l/\\partial \\mu_2 \\partial \\mu_4`, ... .
+         - ``i=n_par-1`` = :math:`\\partial^2 l/\\partial \\mu_1 \\partial \\mu_{n_{par}}`,
+         - ``i=n_par`` = :math:`\\partial^2 l/\\partial \\mu_2 \\partial \\mu_3`,
+         - ``i=n_par+1`` = :math:`\\partial^2 l/\\partial \\mu_2 \\partial \\mu_4`,
          - ...
 
         :param y: A numpy array of shape (-1,1) containing each observed value.
@@ -2900,14 +2900,13 @@ class GAUMLSS(GAMLSSFamily):
             raise ValueError("No Derivative > order d2m exists.")
 
     def rvs(self, *mus: np.ndarray, size: int = 1, seed: int | None = 0) -> np.ndarray:
-        """Returns ``size`` random samples for each of the distributions parameterized by ``mu``
-        and ``sigma``.
+        """Returns ``size`` random samples for each of the distributions parameterized by ``mus``.
 
         References:
          - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
             Edition (2nd ed.).
 
-       :param mus: 2 np arrays - one for the mean and one for the standard deviation for the
+        :param mus: 2 np arrays - one for the mean and one for the standard deviation for the
             response distribution corresponding to each of N observations. Each numpy array is of
             shape (N,1).
         :type mus: np.ndarray

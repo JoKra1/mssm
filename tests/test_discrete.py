@@ -218,6 +218,8 @@ class Test_algorithms:
     )
     pen = build_penalties(sim_formula_m2)
     mmat2 = build_model_matrix(sim_formula_m2)
+    mmat2S = mmat2.copy()
+    mmat2S.return_sparse = True
 
     C = np.random.rand(mmat2.shape[1] * 30).reshape(mmat2.shape[1], 30)
     D = np.random.rand(500 * 30).reshape(30, 500)
@@ -225,9 +227,83 @@ class Test_algorithms:
     test_coef2 = np.random.rand(2 * mmat2.shape[1]).reshape(-1, 2)
 
     mmat3 = mmat2 @ C
+    mmat3S = mmat3.copy()
+    mmat3S.return_sparse = True
     mmat4 = D @ mmat2
     mmat5 = mmat2
     mmat6 = mmat2[:, :20]
+    mmat7 = mmat4 @ C
+    mmat8 = mmat2 * 3.5
+
+    def testIndexDXC(self):
+        assert (
+            np.abs(
+                self.mmat7[:20, 10:30].toarray()
+                - (self.D @ self.mmat1 @ self.C)[:20, 10:30]
+            ).max()
+            < 1e-7
+        )
+
+    def testIndexDXCT(self):
+        assert (
+            np.abs(
+                self.mmat7.T[:20, 10:30].toarray()
+                - (self.D @ self.mmat1 @ self.C).T[:20, 10:30]
+            ).max()
+            < 1e-7
+        )
+
+    def testIndexXT(self):
+        assert (
+            np.abs(self.mmat2.T[:20, 10:30].toarray() - self.mmat1.T[:20, 10:30]).max()
+            < 1e-7
+        )
+
+    def testIndexXC(self):
+        assert np.abs(self.mmat3[:, :10] - (self.mmat1 @ self.C)[:, :10]).max() < 1e-7
+
+    def testIndexCTXT(self):
+        assert (
+            np.abs(self.mmat3.T[:, :10] - (self.mmat1 @ self.C).T[:, :10]).max() < 1e-7
+        )
+
+    def testIndexXCS(self):
+        assert np.abs(self.mmat3S[:, :10] - (self.mmat1 @ self.C)[:, :10]).max() < 1e-7
+
+    def testIndexCTXTS(self):
+        assert (
+            np.abs(self.mmat3S.T[:, :10] - (self.mmat1 @ self.C).T[:, :10]).max() < 1e-7
+        )
+
+    def testCOOXS(self):
+        assert isinstance(self.mmat2S[:, 0], scp.sparse.coo_array)
+
+    def testCOOXb(self):
+        assert isinstance(
+            self.mmat2S @ scp.sparse.coo_array(self.test_coef.flatten()),
+            scp.sparse.coo_array,
+        )
+
+    def testCOOXTy(self):
+        assert isinstance(
+            self.mmat2S.T @ scp.sparse.coo_array(self.sim_formula_m2.y_flat.flatten()),
+            scp.sparse.coo_array,
+        )
+
+    def testCSCXb(self):
+        assert isinstance(
+            self.mmat2S @ scp.sparse.csc_array(self.test_coef),
+            scp.sparse.csc_array,
+        )
+
+    def testCSCXTy(self):
+        assert isinstance(
+            self.mmat2S.T @ scp.sparse.csc_array(self.sim_formula_m2.y_flat),
+            scp.sparse.csc_array,
+        )
+
+    def testMulFloat(self):
+        assert np.abs(self.mmat8.toarray() - (self.mmat1 * 3.5)).max() < 1e-7
 
     def testIndexC(self):
         assert np.abs(self.mmat2[:50, 0:3] - self.mmat1[:50, 0:3]).max() < 1e-7
@@ -708,6 +784,15 @@ class Test_algorithm5:
             < 1e-7
         )
 
+    def colTnoQIdx(self):
+        assert (
+            np.abs(
+                self.mmat2[:, self.sim_formula_m2.coef_idx_per_term[4][10]]
+                - self.mmat1[:, self.sim_formula_m2.coef_idx_per_term[4][10]]
+            ).max()
+            < 1e-9
+        )
+
 
 class Test_algorithm6:
     # by cov test
@@ -825,6 +910,53 @@ class Test_algorithm6:
             Trs2.extend(pTrs2)
         np.testing.assert_allclose(
             Trs1, Trs2, atol=min(max_atol, 0), rtol=min(max_rtol, 0.0001)
+        )
+
+
+class Test_algorithm7:
+    sim_dat = sim13(500, 2, c=0, seed=0, family=Gaussian(), binom_offset=0, n_ranef=25)
+
+    sim_formula_m1 = Formula(
+        lhs("y"),
+        [
+            i(),
+            l(["x6"]),
+            f(["x0"]),
+            f(["x0"], binary=["x5", "l5.2"]),
+        ],
+        data=sim_dat,
+        discretize=True,
+    )
+
+    _, cov_flat, _, _, _, _, _, _ = sim_formula_m1.encode_data(
+        sim_formula_m1.data, prediction=True, discretize=True
+    )
+    sim_formula_m1.cov_flat = cov_flat
+    sim_formula_m1.discretize_cov = False
+    _ = build_penalties(sim_formula_m1)
+    mmat1 = build_model_matrix(sim_formula_m1)
+
+    sim_formula_m2 = Formula(
+        lhs("y"),
+        [
+            i(),
+            l(["x6"]),
+            f(["x0"]),
+            f(["x0"], binary=["x5", "l5.2"]),
+        ],
+        data=sim_dat,
+        discretize=True,
+    )
+
+    pen = build_penalties(sim_formula_m2)
+    mmat2 = build_model_matrix(sim_formula_m2)
+
+    def test_cross(self):
+        assert (
+            np.abs(
+                (self.mmat1.T @ self.mmat1).toarray() - self.mmat2.T @ self.mmat2
+            ).max()
+            < 1e-7
         )
 
 

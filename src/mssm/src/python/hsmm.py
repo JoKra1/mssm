@@ -1284,11 +1284,11 @@ class HSMMFamily(GSMMFamily):
         :param log: Boolena indicating whether to compute probabilities or log-probabilities.
             Defaults to ``True`` - meaning log-probabilities are computed.
         :type log: bool, optional
-        :return:Ttwo arrays, first
-            dimension of both is of size ``n_S``, corresponding to the number of latent states.
-            First array has three dimensions, holds (log)-probabilities of all observations per
-            state (second dimension) and signal recorded (third dimension), second array is
-            two-dimensional, holds (log)-probabilities of all possible stage durations per state.
+        :return: Two arrays, first dimension of both is of size ``n_S``, corresponding to the number
+            of latent states. First array has three dimensions, holds (log)-probabilities of all
+            observations per state (second dimension) and signal recorded (third dimension), second
+            array is two-dimensional, holds (log)-probabilities of all possible stage durations per
+            state.
         :rtype: tuple[np.ndarray,np.ndarray]
         """
 
@@ -2995,11 +2995,11 @@ class HSMMFamily(GSMMFamily):
             transformed to standard normal easily. This parameter controls whether that should
             happen.
         :type transform_to_normal: bool, optional
-        :param n_samples: Number of state sequences to sample when ``resid_type=="posterior_dur".
+        :param n_samples: Number of state sequences to sample when ``resid_type=="posterior_dur"``.
         :type n_samples: int
-        :param seed: An optional seed to initialize the sampler when ``resid_type=="posterior_dur".
-            **Note**: A value < 0 means random initialization is used. Thus set to >= 0 for
-            reproducable results. Defaults to 0
+        :param seed: An optional seed to initialize the sampler when
+            ``resid_type=="posterior_dur"``. **Note**: A value < 0 means random initialization is
+            used. Thus set to >= 0 for reproducable results. Defaults to 0
         :type seed: int, optional
         :param sid: Optional Array holding the first sample of each series in the data. Is used
             to split the observation vectors and model matrices into time-series specific versions.

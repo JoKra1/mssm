@@ -21,6 +21,7 @@ from .defaults import (
 
 from mssm.src.python.mcmc import sample_mssm
 from mssm.src.python.formula import build_model_matrix, build_penalties
+from mssm.src.python.matrix_solvers import cpp_qrr, cpp_dqrr, cpp_backsolve_tr
 
 mssm.src.python.exp_fam.GAUMLSS.init_coef = init_coef_gaumlss_tests
 mssm.src.python.exp_fam.GAMMALS.init_coef = init_coef_gammals_tests
@@ -31,6 +32,105 @@ mssm.src.python.exp_fam.PropHaz.init_lambda = init_penalties_tests_gsmm
 mssm.src.python.utils.GAMLSSGSMMFamily.init_lambda = init_penalties_tests_gsmm
 
 ################################################################## Tests ##################################################################
+
+
+class Test_mcmc1:
+    dat = sim3(5000, 10, family=Gaussian(), seed=20, binom_offset=0)
+
+    formula = Formula(lhs("y"), [i(), f(["x0"])], data=dat)
+
+    model = GAMM(formula, Gaussian())
+    model.fit(force_sparse=False)
+
+    chains = sample_mssm(
+        model,
+        n_iter=1000,
+        n_steps=20,
+        auto_converge=True,
+        M_adapt=20,
+        parallelize_chains=True,
+        sample_rho=False,
+        n_chains=4,
+        make_proper=True,
+        max_j=10,
+        max_j_adapt=5,
+        seed=0,
+    )
+
+    def test_posterior_coef(self):
+        np.testing.assert_allclose(
+            np.mean(self.chains.coefs, axis=(0, 1)),
+            np.array(
+                [
+                    7.87102704,
+                    -0.14598898,
+                    0.0287429,
+                    0.13639691,
+                    0.20602392,
+                    0.23358137,
+                    0.20313417,
+                    0.12258971,
+                    -0.02604826,
+                    -0.17868644,
+                ]
+            ),
+            atol=min(max_atol, 0.2),
+            rtol=min(max_rtol, 0.1),
+        )
+
+
+class Test_mcmc2:
+    dat = sim3(5000, 10, family=ScaledT(), seed=20, binom_offset=0)
+
+    formula = Formula(lhs("y"), [i(), f(["x0"])], data=dat)
+
+    model = GAMM(formula, ScaledT())
+    model.fit(force_sparse=False)
+
+    chains = sample_mssm(
+        model,
+        n_iter=1000,
+        n_steps=20,
+        auto_converge=True,
+        M_adapt=20,
+        parallelize_chains=True,
+        sample_rho=False,
+        n_chains=4,
+        make_proper=True,
+        max_j=10,
+        max_j_adapt=5,
+        seed=0,
+        phi_theta_lambda_0=[0.1, 1e4],
+    )
+
+    def test_posterior_coef(self):
+        np.testing.assert_allclose(
+            np.mean(self.chains.coefs, axis=(0, 1)),
+            np.array(
+                [
+                    7.90475281,
+                    -1.25490882,
+                    0.78857454,
+                    1.55199865,
+                    1.9824139,
+                    2.57401646,
+                    2.54974376,
+                    1.18429815,
+                    -1.55393733,
+                    -4.45522181,
+                ]
+            ),
+            atol=min(max_atol, 0.2),
+            rtol=min(max_rtol, 0.1),
+        )
+
+    def test_posterior_thetas(self):
+        np.testing.assert_allclose(
+            np.mean(self.chains.thetas, axis=(0, 1)),
+            np.array([2.19475925, 0.00484811]),
+            atol=min(max_atol, 0.2),
+            rtol=min(max_rtol, 0.1),
+        )
 
 
 class Test_hazard:
@@ -485,6 +585,9 @@ class Test_dropGSMM:
     test_kwargs["force_sparse"] = False
     model.fit(**test_kwargs)
 
+    R, p, r, code = cpp_qrr(model.hessian)
+    R2, p2, r2 = cpp_dqrr(model.hessian)
+
     # More extensive selection + posterior sim checks
     res = correct_VB(
         model,
@@ -524,6 +627,48 @@ class Test_dropGSMM:
         prior=None,
         Vp_fidiff=False,
     )
+
+    def test_QR(self):
+        np.testing.assert_allclose(
+            self.R,
+            self.R2,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.001),
+        )
+
+    def test_backsolve1(self):
+        IR2 = cpp_backsolve_tr(self.R2, np.identity(self.R2.shape[1]))
+
+        np.testing.assert_allclose(
+            np.diag(self.R2 @ IR2),
+            np.ones(self.R2.shape[1]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.001),
+        )
+
+    def test_backsolve2(self):
+        IR2 = cpp_backsolve_tr(
+            self.R2, scp.sparse.csc_array(np.identity(self.R2.shape[1]))
+        )
+
+        np.testing.assert_allclose(
+            np.diag(self.R2 @ IR2),
+            np.ones(self.R2.shape[1]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.001),
+        )
+
+    def test_backsolve3(self):
+        IR2 = cpp_backsolve_tr(
+            scp.sparse.csc_array(self.R2), np.identity(self.R2.shape[1])
+        )
+
+        np.testing.assert_allclose(
+            np.diag(self.R2 @ IR2),
+            np.ones(self.R2.shape[1]),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.001),
+        )
 
     def test_edf1(self):
         np.testing.assert_allclose(
@@ -727,3 +872,37 @@ class Test_dropGAMM:
         np.testing.assert_allclose(
             self.res2[2], self.Vp2, atol=min(max_atol, 0), rtol=min(max_rtol, 1e-7)
         )
+
+
+class Test_big_gamm:
+    sim_dat = sim13(
+        100 * 250, 2, c=0, seed=0, family=Gaussian(), binom_offset=0, n_ranef=400
+    )
+
+    formula = Formula(
+        lhs("y"),
+        [
+            i(),
+            l(["x5"]),
+            l(["x6"]),
+            f(["x0"]),
+            fs(["x0"], rf="x4"),
+        ],
+        data=sim_dat,
+    )
+
+    test_kwargs = copy.deepcopy(default_gamm_test_kwargs)
+    test_kwargs["max_inner"] = 1
+    test_kwargs["max_outer"] = 1
+    test_kwargs["control_lambda"] = 2
+    test_kwargs["extend_lambda"] = False
+    test_kwargs["progress_bar"] = True
+    test_kwargs["method"] = "Chol"
+    test_kwargs["force_dense"] = True
+    test_kwargs["force_sparse"] = False
+    test_kwargs["n_cores"] = 4
+    model = GAMM(formula, Gaussian())
+    model.fit(**test_kwargs)
+
+    def test_parallelL(self):
+        assert int(self.model.hessian.shape[1] / 2000) > 1

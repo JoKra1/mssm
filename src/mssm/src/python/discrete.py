@@ -145,7 +145,7 @@ class DiscreteModelMatrix:
         for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. Journal of the\
         American Statistical Association, 112(519), 1199–1210.\
         https://doi.org/10.1080/01621459.2016.1195744
-    
+
     :param dTerms: List of term matrices that make up this model matrix.
     :type dTerms: list[DiscreteTerm]
     :ivar scp.sparse.csc_array | np.ndarray | None preM: Any matrix by which to pre-multiply self
@@ -539,7 +539,7 @@ class DiscreteModelMatrix:
         A column of zeros is returned if the column has been zeroed.
 
         Relies on the algorithms by Wood, Shaddick & Augustin (2017).
-        
+
         References:
          - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models\
             for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. Journal of the\
@@ -622,7 +622,7 @@ class DiscreteModelMatrix:
         """Extracts a slice from ``X``.
 
         Relies on the algorithms by Wood, Shaddick & Augustin (2017).
-                
+
         References:
          - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models\
             for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. Journal of the\
@@ -850,7 +850,7 @@ class DiscreteModelMatrix:
         """Computes ``X@other``.
 
         Relies on the algorithms by Wood, Shaddick & Augustin (2017).
-                
+
         References:
          - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models\
             for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. Journal of the\
@@ -1008,7 +1008,7 @@ class DiscreteModelMatrix:
         """Computes ``other@X``.
 
         Relies on the algorithms by Wood, Shaddick & Augustin (2017).
-                
+
         References:
          - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models\
             for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. Journal of the\
@@ -1073,7 +1073,7 @@ class DiscreteModelMatrix:
         """Computes ``X * other``.
 
         Relies on the algorithms by Wood, Shaddick & Augustin (2017).
-                
+
         References:
          - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models\
             for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. Journal of the\
@@ -1092,8 +1092,7 @@ class DiscreteModelMatrix:
         ):
             newS = copy.deepcopy(self)
             for dti, dt in enumerate(newS.terms):
-                for mi in range(len(dt.unique_matrices)):
-                    dt.unique_matrices[mi] *= other
+                dt.unique_matrices[0] *= other
             return newS
         elif isinstance(other, np.ndarray):
             # Have to evaluate.. Not very efficient.
@@ -1109,9 +1108,9 @@ class DiscreteModelMatrix:
 
     def __rmul__(self, other: float | int | np.ndarray) -> np.ndarray | TDiscreteMatrix:
         """Computes ``other * X``.
-        
+
         Relies on the algorithms by Wood, Shaddick & Augustin (2017).
-                
+
         References:
          - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models\
             for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. Journal of the\
