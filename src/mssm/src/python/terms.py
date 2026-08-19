@@ -138,8 +138,11 @@ class i(GammTerm):
             terms not included in this list a zero matrix will be returned. Can be set to ``None``
             so that no terms are excluded.
         :type use_only: [int]
-        :return: matrix data, matrix row indices, matrix column indices, added columns
-        :rtype: tuple[list[float],list[int],list[int],int]
+        :param discrete: Whether to return the matrix as a class`DiscreteTerm`.
+        :type discrete: bool
+        :return: matrix data, matrix row indices, matrix column indices, added columns or
+            list of :class:`DiscreteTerm`s
+        :rtype: tuple[list[float], list[int], list[int], int] | list[DiscreteTerm]
         """
         n_y = len(ridx)
 
@@ -1199,8 +1202,19 @@ class f(GammTerm):
         :param tol: A tolerance that can be used to prune the term matrix from values close to zero
             rather than absolutely zero. Defaults to strictly zero.
         :type tol: int, optional
-        :return: matrix data, matrix row indices, matrix column indices, added columns
-        :rtype: tuple[list[float],list[int],list[int],int]
+        :param discrete: Whether to return the matrix as a class`DiscreteTerm`. Setting this
+            to True requires the next two arguments to be specified.
+        :type discrete: bool
+        :param cov_bins: Optional dictionary with ``cov_bins[c]`` containing the unique discretized
+            covariate values for covariate ``c``. Defaults to None.
+        :type cov_bins: dict | None, optional
+        :param cov_bin_idxs: Optional dictionary containing index vectors for each covariate so that
+            ``cov_bins[c][cov_bin_idxs[c]]`` returns the full vector (after excluding NaNs) of the
+            discretized covariate ``c``. Defaults to None
+        :type cov_bin_idxs: dict | None, optional
+        :return: matrix data, matrix row indices, matrix column indices, added columns or
+            list of :class:`DiscreteTerm`s
+        :rtype: tuple[list[float], list[int], list[int], int] | list[DiscreteTerm]
         """
         vars = self.variables
         term_ridx = []
@@ -1799,8 +1813,19 @@ class fs(f):
         :param tol: A tolerance that can be used to prune the term matrix from values close to zero
             rather than absolutely zero. Defaults to strictly zero.
         :type tol: int, optional
-        :return: matrix data, matrix row indices, matrix column indices, added columns
-        :rtype: tuple[list[float],list[int],list[int],int]
+        :param discrete: Whether to return the matrix as a class`DiscreteTerm`. Setting this
+            to True requires the next two arguments to be specified.
+        :type discrete: bool
+        :param cov_bins: Optional dictionary with ``cov_bins[c]`` containing the unique discretized
+            covariate values for covariate ``c``. Defaults to None.
+        :type cov_bins: dict | None, optional
+        :param cov_bin_idxs: Optional dictionary containing index vectors for each covariate so that
+            ``cov_bins[c][cov_bin_idxs[c]]`` returns the full vector (after excluding NaNs) of the
+            discretized covariate ``c``. Defaults to None
+        :type cov_bin_idxs: dict | None, optional
+        :return: matrix data, matrix row indices, matrix column indices, added columns or
+            list of :class:`DiscreteTerm`s
+        :rtype: tuple[list[float], list[int], list[int], int] | list[DiscreteTerm]
         """
         return super().build_matrix(
             ci,
@@ -2587,8 +2612,11 @@ class ri(GammTerm):
             terms not included in this list a zero matrix will be returned. Can be set to ``None``
             so that no terms are excluded.
         :type use_only: [int]
+        :param discrete: Whether to return the matrix as a class`DiscreteTerm`.
+        :type discrete: bool
         :return: matrix data, matrix row indices, matrix column indices, added columns
-        :rtype: tuple[list[float],list[int],list[int],int]
+        :rtype: tuple[list[float],list[int],list[int],int] or
+            list of :class:`DiscreteTerm`s
         """
         vars = self.variables
         n_y = len(ridx)
@@ -2759,8 +2787,11 @@ class l(GammTerm):  # noqa: E742
             terms not included in this list a zero matrix will be returned. Can be set to
             ``None`` so that no terms are excluded.
         :type use_only: [int]
-        :return: matrix data, matrix row indices, matrix column indices, added columns
-        :rtype: tuple[list[float],list[int],list[int],int]
+        :param discrete: Whether to return the matrix as a class`DiscreteTerm`. Defaults to False
+        :type discrete: bool, optional
+        :return: matrix data, matrix row indices, matrix column indices, added columns or
+            list of :class:`DiscreteTerm`s
+        :rtype: tuple[list[float], list[int], list[int], int] | list[DiscreteTerm]
         """
         return build_linear_term(
             self,
@@ -3064,8 +3095,11 @@ class rs(GammTerm):
             terms not included in this list a zero matrix will be returned. Can be set to ``None``
             so that no terms are excluded.
         :type use_only: [int]
-        :return: matrix data, matrix row indices, matrix column indices, added columns
-        :rtype: tuple[list[float],list[int],list[int],int]
+        :param discrete: Whether to return the matrix as a class`DiscreteTerm`.
+        :type discrete: bool
+        :return: matrix data, matrix row indices, matrix column indices, added columns or
+            list of :class:`DiscreteTerm`s
+        :rtype: tuple[list[float], list[int], list[int], int] | list[DiscreteTerm]
         """
 
         new_elements = []
@@ -3277,8 +3311,11 @@ def build_linear_term(
         not included in this list a zero matrix will be returned. Can be set to ``None`` so that
         no terms are excluded.
     :type use_only: [int]
-    :return: matrix data, matrix row indices, matrix column indices, added columns
-    :rtype: tuple[list[float],list[int],list[int],int]
+    :param discrete: Whether to return the matrix as a class`DiscreteTerm`.
+    :type discrete: bool
+    :return: matrix data, matrix row indices, matrix column indices, added columns or
+        list of :class:`DiscreteTerm`s
+    :rtype: tuple[list[float], list[int], list[int], int] | list[DiscreteTerm]
     """
     new_elements = []
     new_rows = []

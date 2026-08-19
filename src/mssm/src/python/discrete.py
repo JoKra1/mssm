@@ -3,6 +3,7 @@ import scipy as scp
 from dataclasses import dataclass
 import copy
 from typing import TypeVar
+from collections.abc import Callable
 from .smooths import TP_basis_calc
 from .matrix_solvers import map_csc_to_eigen
 import discrete
@@ -25,11 +26,16 @@ class DiscreteTerm:
         of this term. Initialized with ``None``.
     :ivar int | None end_idx: Column index in the overal model matrix containing the last column
         of this term. Initialized with ``None``.
+    :ivar list[int] | None exclude_columns: List of indices indicating which columns of this term
+            should be considered dropped (e.g., after indexing). Initialized with ``None``.
     :ivar list[int] | None zero_columns: List of indices indicating which columns of this term
         should be set to zero (e.g. ignored for the purpose of predictions). Initialized with
         ``None``.
     :ivar np.ndarray | None Q: Constraint matrix as 2D array for tensor terms (to be
         post-multiplied after computing the tensor product). Initialized with ``None``.
+    :ivar int total_columns: Total columns of this term **after absorbing any constraints**.
+        Initialized with 1.
+    :ivar int n_marginals: Number of marginals this term has. Initialized with 1.
     """
 
     unique_matrices: list[np.ndarray] | None = None
@@ -39,7 +45,7 @@ class DiscreteTerm:
     exclude_columns: list[int] | None = None
     zero_columns: list[int] | None = None
     Q: np.ndarray | None = None
-    total_columns: int | None = None
+    total_columns: int = 1
     n_marginals: int = 1
 
 
@@ -48,8 +54,36 @@ def _XjTWXk(
     dtk: DiscreteTerm,
     hasW: bool,
     W: list,
-    alg,
+    alg: Callable,
 ) -> np.ndarray:
+    """Computes cross product between term matrix ``dtj`` and ``dtk``. Optionally,
+    the cross-product can involve an inner matrix ``W``.
+
+    Relies on a slightly modified version of the cross-product algorithm by Wood, Shaddick &
+    Augustin (2017) which can take into account for terms ``dtj`` and ``dtk`` having different
+    dimensions.
+
+    References:
+     - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models\
+        for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. Journal of the\
+        American Statistical Association, 112(519), 1199–1210.\
+        https://doi.org/10.1080/01621459.2016.1195744
+
+
+    :param dtj: Term matrix for some term j
+    :type dtj: DiscreteTerm
+    :param dtk: Term matrix for some term k
+    :type dtk: DiscreteTerm
+    :param hasW: Whether the cross-product should involve an inner matrix ``W``.
+    :type hasW: bool
+    :param W: Inner matrix ``W`` either as a list including a single dense matrix or a
+        list obtained from calling :func:`map_csc_to_eigen` on a sparse matrix ``W``.
+    :type W: list
+    :param alg: The c++ algorithm to use depending on dense/sparse matrix ``W``
+    :type alg: Callable
+    :return: A 2d numpy array containing the evaluated cross-product
+    :rtype: np.ndarray
+    """
     # Extract all quantities needed
     psj = np.array([mat.shape[1] for mat in dtj.unique_matrices], dtype=np.int64)
     psk = np.array([mat.shape[1] for mat in dtk.unique_matrices], dtype=np.int64)
@@ -86,6 +120,47 @@ def _XjTWXk(
 
 
 class DiscreteModelMatrix:
+    """A compact representation for model matrices with discretized covariates.
+
+    Relies on modified versions of the algorithms developed by Wood, Shaddick & Augustin (2017) to
+    implement many matrix (vector) products and slicing/indexing operations. Specifically,
+    the :class:`DiscreteModelMatrix` class implements ``X.T@Y``, ``Y@X.T``, ``X@B``, ``B@X``,
+    and ``X.T@W@Z`` where ``Y``, ``B``, and ``W`` can be sparse or dense matrices or vectors and
+    ``X`` and ``Z`` are instances of :class:`DiscreteModelMatrix`. The final kind of cross-product
+    as well as operations involving sufficiently small matrices ``Y`` and ``B`` are evaluated
+    explicitly.
+
+    Specifically, if the resulting matrix has fewer than ``self.max_slize_size`` columns
+    or fewer (or equal) rows than ``X`` has columns the matrix is returned as a numpy array or
+    scipy sparse csc_array (depending on ``self.return_sparse``). Otherwise, the product is
+    represented implcitily (i.e., these operations return a modified version of ``X`` as an instance
+    of :class:`DiscreteModelMatrix`) and only evaluated if a future operation meets these conditions
+    or when calling ``X.eval()`` (or the ``toarray()`` method directly).
+
+    The same rules apply when indexing/slicing ``X``: Slices that are too big are again returned as
+    a modified version of ``X`` as an instance of :class:`DiscreteModelMatrix`.
+
+    References:
+     - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models\
+        for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. Journal of the\
+        American Statistical Association, 112(519), 1199–1210.\
+        https://doi.org/10.1080/01621459.2016.1195744
+    
+    :param dTerms: List of term matrices that make up this model matrix.
+    :type dTerms: list[DiscreteTerm]
+    :ivar scp.sparse.csc_array | np.ndarray | None preM: Any matrix by which to pre-multiply self
+        when evaluating the matrix. Initialized with ``None``.
+    :ivar scp.sparse.csc_array | np.ndarray | None postM: Any matrix by which to post-multiply self
+        when evaluating the matrix. Initialized with ``None``.
+    :ivar max_slize_size int: Maximum number of columns at which a slice/product is evaluated
+        explicitly. Initialized with 10.
+    :ivar id int: An identifier used internally to decide whether a cross-product involves two
+        of the same matrices. Do not change this unless you know what you're doing.
+        Initialized with ``id(self)``.
+    :ivar return_sparse bool: Whether to return a sparse array or a dense one. Initialized with
+        False.
+    :ivar tuple[int, int] shape: The shape of self. Initialized based on ``dTerms``.
+    """
 
     def __init__(self, dTerms: list[DiscreteTerm]):
         self.terms: list[DiscreteTerm] = dTerms
@@ -106,11 +181,15 @@ class DiscreteModelMatrix:
     def __prepareW(
         self, otherpreM: scp.sparse.csc_array | np.ndarray | None
     ) -> tuple[list | np.ndarray, bool, bool]:
-        """_summary_
+        """Internal function to compute any diagonal matrix W involved in a cross-product
 
-        :param otherpreM: _description_
+        :param otherpreM: Matrix to be pre-multiplied with ``other`` (another instance of
+            :class:`DiscreteModelMatrix`) or None.
         :type otherpreM: scp.sparse.csc_array | np.ndarray | None
-        :return: _description_
+        :return: Inner matrix ``W`` (if it exists else None) either as single dense matrix or a
+            list obtained from calling :func:`map_csc_to_eigen` on a sparse matrix ``W``.
+            Additionally a bool saying whether ``W`` exists at all and another one indicating
+            whether it is sparse.
         :rtype: tuple[list | np.ndarray, bool, bool]
         """
         # Check for W
@@ -140,11 +219,20 @@ class DiscreteModelMatrix:
         return W, hasW, W_is_sparse
 
     def __XTWZ(self, other: TDiscreteMatrix) -> np.ndarray:
-        """_summary_
+        """Compute cross-product between two different instances of :class:`DiscreteModelMatrix`.
 
-        :param other: _description_
+        Relies on a slightly modified version of the cross-product algorithm by Wood, Shaddick &
+        Augustin (2017).
+
+        References:
+         - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models\
+            for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. Journal of the\
+            American Statistical Association, 112(519), 1199–1210.\
+            https://doi.org/10.1080/01621459.2016.1195744
+
+        :param other: Another :class:`DiscreteModelMatrix`
         :type other: DiscreteModelMatrix
-        :return: _description_
+        :return: The cross-product as a 2D numpy array
         :rtype: np.ndarray
         """
         # Check for W
@@ -191,11 +279,21 @@ class DiscreteModelMatrix:
         return XTWZ
 
     def __XTWX(self, otherpreM: scp.sparse.csc_array | np.ndarray | None) -> np.ndarray:
-        """_summary_
+        """Compute cross-product between the same (up to differen ``preM`` and ``postM``) instance
+        of :class:`DiscreteModelMatrix`.
 
-        :param otherpreM: _description_
+        Relies on the cross-product algorithm by Wood, Shaddick & Augustin (2017).
+
+        References:
+         - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models\
+            for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. Journal of the\
+            American Statistical Association, 112(519), 1199–1210.\
+            https://doi.org/10.1080/01621459.2016.1195744
+
+        :param otherpreM: Matrix to be pre-multiplied with ``other`` (same instance of
+            :class:`DiscreteModelMatrix`) or None
         :type otherpreM: scp.sparse.csc_array | np.ndarray | None
-        :return: _description_
+        :return: The cross-product as a 2D numpy array
         :rtype: np.ndarray
         """
 
@@ -246,11 +344,19 @@ class DiscreteModelMatrix:
         return XTWX
 
     def __XTy(self, y: np.ndarray) -> np.ndarray:
-        """_summary_
+        """Compute ``X.T@y``, where ``X`` is a :class:`DiscreteModelMatrix`.
 
-        :param y: _description_
-        :type y: np.ndarray | scp.sparse.sparray
-        :return: _description_
+        Relies on the algorithms by Wood, Shaddick & Augustin (2017).
+
+        References:
+         - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models\
+            for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. Journal of the\
+            American Statistical Association, 112(519), 1199–1210.\
+            https://doi.org/10.1080/01621459.2016.1195744
+
+        :param y: Vector for which to evaluate the product
+        :type y: np.ndarray
+        :return: The matrix vector product evaluated
         :rtype: np.ndarray
         """
 
@@ -294,11 +400,19 @@ class DiscreteModelMatrix:
         return np.concatenate(res, axis=0)
 
     def __Xb(self, b: np.ndarray) -> np.ndarray:
-        """_summary_
+        """Compute ``X@b``, where ``X`` is a :class:`DiscreteModelMatrix`.
 
-        :param b: _description_
+        Relies on the algorithms by Wood, Shaddick & Augustin (2017).
+
+        References:
+         - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models\
+            for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. Journal of the\
+            American Statistical Association, 112(519), 1199–1210.\
+            https://doi.org/10.1080/01621459.2016.1195744
+
+        :param b: Vector for which to evaluate the product
         :type b: np.ndarray
-        :return: _description_
+        :return: The matrix vector product evaluated
         :rtype: np.ndarray
         """
 
@@ -360,9 +474,9 @@ class DiscreteModelMatrix:
 
         Columns that are zeroed have zero values in place.
 
-        :param row: _description_
+        :param row: Row index to extract
         :type row: int
-        :return: _description_
+        :return: Row of ``X`` after excluding any dropped columns
         :rtype: np.ndarray
         """
         c_shape = self.shape
@@ -424,9 +538,17 @@ class DiscreteModelMatrix:
 
         A column of zeros is returned if the column has been zeroed.
 
-        :param col: _description_
+        Relies on the algorithms by Wood, Shaddick & Augustin (2017).
+        
+        References:
+         - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models\
+            for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. Journal of the\
+            American Statistical Association, 112(519), 1199–1210.\
+            https://doi.org/10.1080/01621459.2016.1195744
+
+        :param col: Column index to extract
         :type col: int
-        :return: _description_
+        :return: The column extraced
         :rtype: np.ndarray
         """
 
@@ -494,7 +616,24 @@ class DiscreteModelMatrix:
 
                     return Xj
 
-    def __getitem__(self, key) -> np.ndarray | scp.sparse.sparray | TDiscreteMatrix:
+    def __getitem__(
+        self, key: int | list | np.ndarray | slice | np.integer
+    ) -> np.ndarray | scp.sparse.sparray | TDiscreteMatrix:
+        """Extracts a slice from ``X``.
+
+        Relies on the algorithms by Wood, Shaddick & Augustin (2017).
+                
+        References:
+         - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models\
+            for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. Journal of the\
+            American Statistical Association, 112(519), 1199–1210.\
+            https://doi.org/10.1080/01621459.2016.1195744
+
+        :param key: The key determining how to slice ``X``
+        :type key: int | list | np.ndarray | slice | np.integer
+        :return: The required slice either evaluated explicitly or implicitly
+        :rtype: np.ndarray | scp.sparse.sparray | TDiscreteMatrix
+        """
 
         # print(key)
         advanced = False
@@ -708,7 +847,21 @@ class DiscreteModelMatrix:
         self,
         other: np.ndarray | scp.sparse.sparray | scp.sparse.spmatrix | TDiscreteMatrix,
     ) -> np.ndarray | scp.sparse.sparray | TDiscreteMatrix:
-        # print("__matmul__", other.shape, type(other), self.id)
+        """Computes ``X@other``.
+
+        Relies on the algorithms by Wood, Shaddick & Augustin (2017).
+                
+        References:
+         - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models\
+            for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. Journal of the\
+            American Statistical Association, 112(519), 1199–1210.\
+            https://doi.org/10.1080/01621459.2016.1195744
+
+        :param other: The other matrix/vector involved in the product
+        :type other: np.ndarray | scp.sparse.sparray | scp.sparse.spmatrix | TDiscreteMatrix
+        :return: The product evaluated either explicitly or implicitly
+        :rtype: np.ndarray | scp.sparse.sparray | TDiscreteMatrix
+        """
         flatten = False
         if len(other.shape) == 1:
             other = other.reshape(-1, 1)
@@ -852,7 +1005,21 @@ class DiscreteModelMatrix:
     def __rmatmul__(
         self, other: np.ndarray | scp.sparse.sparray | scp.sparse.spmatrix
     ) -> np.ndarray | scp.sparse.sparray | TDiscreteMatrix:
-        # print("__rmatmul__", other.shape, type(other), self.id)
+        """Computes ``other@X``.
+
+        Relies on the algorithms by Wood, Shaddick & Augustin (2017).
+                
+        References:
+         - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models\
+            for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. Journal of the\
+            American Statistical Association, 112(519), 1199–1210.\
+            https://doi.org/10.1080/01621459.2016.1195744
+
+        :param other: The other matrix/vector involved in the product
+        :type other: np.ndarray | scp.sparse.sparray | scp.sparse.spmatrix
+        :return: The desired product evaluated either explicitly or implicitly.
+        :rtype: np.ndarray | scp.sparse.sparray | TDiscreteMatrix
+        """
 
         flatten = False
         if len(other.shape) == 1:
@@ -902,8 +1069,22 @@ class DiscreteModelMatrix:
 
     __array_priority__ = 10000
 
-    def __mul__(self, other: float | int | np.ndarray) -> TDiscreteMatrix:
-        # print("__mul__", other, type(other), self.id)
+    def __mul__(self, other: float | int | np.ndarray) -> np.ndarray | TDiscreteMatrix:
+        """Computes ``X * other``.
+
+        Relies on the algorithms by Wood, Shaddick & Augustin (2017).
+                
+        References:
+         - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models\
+            for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. Journal of the\
+            American Statistical Association, 112(519), 1199–1210.\
+            https://doi.org/10.1080/01621459.2016.1195744
+
+        :param other: The other float/int/vector involved in the product
+        :type other: float | int | np.ndarray
+        :return: Returns the desired product either evaluated explicitly or implicitly.
+        :rtype: np.ndarray | TDiscreteMatrix
+        """
         if (
             isinstance(other, float)
             or isinstance(other, int)
@@ -926,8 +1107,22 @@ class DiscreteModelMatrix:
                 )
             )
 
-    def __rmul__(self, other):
-        # print("__rmul__", other, type(other), self.id)
+    def __rmul__(self, other: float | int | np.ndarray) -> np.ndarray | TDiscreteMatrix:
+        """Computes ``other * X``.
+        
+        Relies on the algorithms by Wood, Shaddick & Augustin (2017).
+                
+        References:
+         - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models\
+            for Gigadata: Modeling the U.K. Black Smoke Network Daily Data. Journal of the\
+            American Statistical Association, 112(519), 1199–1210.\
+            https://doi.org/10.1080/01621459.2016.1195744
+
+        :param other: The other float/int/vector involved in the product
+        :type other: float | int | np.ndarray
+        :return: Returns the desired product either evaluated explicitly or implicitly.
+        :rtype: np.ndarray | TDiscreteMatrix
+        """
         return self.__mul__(other)
 
     def is_transposed(self) -> bool:
@@ -937,7 +1132,7 @@ class DiscreteModelMatrix:
     def T(self) -> TDiscreteMatrix:
         """Returns transpose. Data is not copied.
 
-        :return: _description_
+        :return: View of transpose of self
         :rtype: TDiscreteMatrix
         """
         return self.transpose()
@@ -945,7 +1140,7 @@ class DiscreteModelMatrix:
     def transpose(self) -> TDiscreteMatrix:
         """Returns transpose. Data is not copied.
 
-        :return: _description_
+        :return: View of transpose of self
         :rtype: TDiscreteMatrix
         """
 
@@ -968,13 +1163,17 @@ class DiscreteModelMatrix:
     def copy(self) -> TDiscreteMatrix:
         """Return copy of self.
 
-        :return: _description_
+        :return: Copy of self
         :rtype: TDiscreteMatrix
         """
         return copy.deepcopy(self)
 
     def toarray(self) -> np.ndarray:
-        """Represents discrete matrix explicitly as a 2D numpy array."""
+        """Return self as a numpy array.
+
+        :return: Self evaluated as numpy array
+        :rtype: np.ndarray
+        """
 
         mat = []
         for dt in self.terms:
@@ -1020,7 +1219,7 @@ class DiscreteModelMatrix:
         """Explicitly returns matrix either as np.array or as scp.sparse.csc_array
         depending on ``self.return_sparse``
 
-        :return: _description_
+        :return: Self evaluated as dense or sparse matrix
         :rtype: np.ndarray | scp.sparse.csc_array
         """
 
@@ -1031,7 +1230,11 @@ class DiscreteModelMatrix:
         )
 
     def drop_rows(self, rows: list[int]) -> None:
+        """Excludes rows from the model matrix.
 
+        :param rows: Rows to exclude
+        :type rows: list[int]
+        """
         ridx = np.arange(self.terms[0].indices[0].shape[0])
         new_ridx = ridx[~np.isin(ridx, rows)]
 
@@ -1040,6 +1243,11 @@ class DiscreteModelMatrix:
                 dt.indices[idx] = dt.indices[idx][new_ridx]
 
     def drop_columns(self, cols: list[int]) -> None:
+        """Exclude columns from the model matrix.
+
+        :param cols: Columns to exclude
+        :type cols: list[int]
+        """
 
         # Sort cols
         cols = np.unique(cols)

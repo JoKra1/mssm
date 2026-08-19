@@ -277,6 +277,10 @@ class Formula:
         iteratively (if ``data`` is ``None`` and ``file_paths`` is a non-empty list).
         Defaults to ``{"header":0,"index_col":False}``.
     :type file_loading_kwargs: dict,optional
+    :param discretize: Whether to discretize the covariates of the model. This enables very
+        efficient matrix operations even for otherwise dense models.
+        See :class:`DiscreteModelMatrix`. Defaults to False
+    :type discretize: bool, optional
     :ivar lhs lhs: The left-hand side object of the regression formula passed to the constructor.
         Initialized at construction.
     :ivar [GammTerm] terms: The list of terms passed to the constructor. Initialized at
@@ -927,8 +931,8 @@ class Formula:
             ``self.series_id``) and finally a dictionary ``cov_bin_idxs`` with the discretized
             indices for covariates ``c`` so that ``self.cov_bins[c][cov_bin_idxs[c]]``
             yields the discretized version of covariate ``c``.
-        :rtype: (np.ndarray|None, np.ndarray, np.ndarray|None, list[np.ndarray]|None,
-            list[np.ndarray]|None, list[np.ndarray]|None, np.ndarray|None)
+        :rtype: tuple[np.ndarray | None, np.ndarray, np.ndarray | None, list[np.ndarray] | None,
+            list[np.ndarray] | None, list[np.ndarray] | None, np.ndarray | None, dict | None]
         """
         # Build NA index
         var_map = self.get_var_map()
@@ -2617,7 +2621,7 @@ def build_sparse_matrix_from_formula(
     cov_bins: dict | None = None,
     cov_bin_idxs: dict | None = None,
     dense: bool = False,
-) -> scp.sparse.csc_array:
+) -> scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix:
     """Build model matrix from formula properties.
 
     This function is used internally to construct model matrices from :class:`Formula` objects.
@@ -2661,8 +2665,21 @@ def build_sparse_matrix_from_formula(
     :param tol: Optional tolerance. Absolute values in the model matrix smaller than this are set
         to actual zeroes, defaults to 0
     :type tol: float, optional
+    :param discrete: Whether to return the matrix as a class`DiscreteModelMatrix`. Setting this
+        to True requires the next two arguments to be specified.
+    :type discrete: bool, optional
+    :param cov_bins: Optional dictionary with ``cov_bins[c]`` containing the unique discretized
+        covariate values for covariate ``c``. Defaults to None.
+    :type cov_bins: dict | None, optional
+    :param cov_bin_idxs: Optional dictionary containing index vectors for each covariate so that
+        ``cov_bins[c][cov_bin_idxs[c]]`` returns the full vector (after excluding NaNs) of the
+        discretized covariate ``c``. Defaults to None
+    :type cov_bin_idxs: dict | None, optional
+    :param dense: Whether to return the matrix as a dense numpy array or a scipy sparse csc array.
+        Defaults to False (return is sparse)
+    :type dense: bool, optional
     :return: The model matrix implied by a :class:`Formula`  and ``cov_flat``.
-    :rtype: scp.sparse.csc_array
+    :rtype: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix
     """
     n_y = cov_flat.shape[0]
     elements = []
@@ -2843,7 +2860,7 @@ def build_model_matrix(
     use_only: list[int] | None = None,
     tol: float = 0,
     dense: bool = False,
-) -> scp.sparse.csc_array:
+) -> scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix:
     """Function to build the model matrix implied by ``formula``.
 
     **Important:** A small selection of smooth terms, requires that the penalty matrices are built
@@ -2882,12 +2899,15 @@ def build_model_matrix(
     :param tol: Optional tolerance. Absolute values in the model matrix smaller than this are set
         to actual zeroes, defaults to 0
     :type tol: float, optional
+    :param dense: Whether to return the matrix as a dense numpy array or a scipy sparse csc array.
+        Defaults to False (return is sparse)
+    :type dense: bool, optional
     :raises ValueError: If ``formula.built_penalties == False`` - i.e., it is required that
         ``build_penalties(formula)`` was called before calling ``build_model_matrix(formula)``.
     :raises NotImplementedError: If the ``formula`` was set up to read data from file, rather
         than from a pd.Dataframe.
     :return: The model matrix implied by a :class:`Formula`  and ``cov_flat``.
-    :rtype: scp.sparse.csc_array
+    :rtype: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix
     """
 
     if formula.built_penalties is False:
