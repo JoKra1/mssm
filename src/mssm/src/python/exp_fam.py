@@ -2664,16 +2664,12 @@ class GAMLSSFamily(ABC):
         pass
 
     @abstractmethod
-    def rvs(
-        self, *mus: np.ndarray, size: int = 1, seed: int | None = 0
-    ) -> np.ndarray | None:
+    def rvs(self, *mus: np.ndarray, size: int = 1, seed: int | None = 0) -> np.ndarray:
         """Returns ``size`` random samples for each of the distributions parameterized by ``mus``.
 
         **Note**, the returned array - if this function is implemented - will be of size
         ``(size, mus[0].shape[0])``. I.e., ``size`` random samples will be obtained for each of
         the ``mus[0].shape[0])`` distributions, all parameterized by their individual ``mus``.
-
-        **Important:** Families for which this function is not implemented can return None.
 
         References:
          - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
@@ -2688,11 +2684,10 @@ class GAMLSSFamily(ABC):
         :param seed: Seed to use for random number generation. Defaults to 0.
         :type seed: int, optional
         :return: a numpy array of shape ``(size, mus[0].shape[0])`` containing random
-            samples from every distribution parameterized by their ``mus``. Can also return None if
-            this function is not implemented by the specific family.
+            samples from every distribution parameterized by their ``mus``.
         :rtype: np.ndarray
         """
-        return None
+        pass
 
     @abstractmethod
     def get_resid(self, y: np.ndarray, *mus: np.ndarray) -> np.ndarray | None:

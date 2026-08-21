@@ -244,9 +244,9 @@ def reparam(
             # Transform S to identity as described in Wood et al. (2013). Form inverse of root of
             # transformed S for all cells not covering a kernel function. For those simply insert 1.
             # Then post-multiply transformed X (or equivalently C) by it.
-            IRrp = [1 / s[i] ** 0.5 if s[i] > 1e-7 else 1 for i in range(S.shape[1])]
+            IRrp = [1 / s[i] ** 0.5 if s[i] > 1e-7 else 1.0 for i in range(S.shape[1])]
             Srp = scp.sparse.diags(
-                [1 if s[i] > 1e-7 else 0 for i in range(S.shape[1])],
+                [1.0 if s[i] > 1e-7 else 0.0 for i in range(S.shape[1])],
                 offsets=0,
                 format="csc",
             )

@@ -622,7 +622,7 @@ class Test_Overlap_GAMM:
 
     # Simulate time-series based on two events that elicit responses which vary in their overlap.
     # The summed responses + a random intercept + noise is then the signal.
-    overlap_dat, onsets1, onsets2 = sim7(100, 1, 2, seed=20)
+    overlap_dat, onsets1, onsets2 = sim7(100, 2, 1, seed=20)
 
     # Model below tries to recover the shape of the two responses + the random intercepts:
     overlap_formula = Formula(
