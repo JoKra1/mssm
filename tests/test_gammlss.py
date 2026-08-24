@@ -21,6 +21,7 @@ from .defaults import (
     init_coef_gsmmgammlss,
 )
 from mssm.src.python.mcmc import sample_mssm
+from mssm.src.python.gamm_solvers import compute_S_emb_pinv_det, restart_coef_gammlss
 
 mssm.src.python.exp_fam.GAUMLSS.init_coef = init_coef_gaumlss_tests
 mssm.src.python.exp_fam.GAMMALS.init_coef = init_coef_gammals_tests
@@ -282,6 +283,57 @@ class Test_GAMMALS:
         scale=(1 / beta.flatten()),
         random_state=seed,
     )
+
+    def test_restartcoef1(self):
+        S_emb, _, _, _ = compute_S_emb_pinv_det(
+            self.model.hessian.shape[1], self.model.overall_penalties, "svd"
+        )
+        coef, split_coef, c_llk, c_pen_llk, etas, mus = restart_coef_gammlss(
+            self.model.coef,
+            np.split(self.model.coef, self.model.coef_split_idx),
+            self.model.get_llk(False),
+            self.model.get_llk(),
+            self.model.preds,
+            self.model.mus,
+            self.model.coef.shape[0],
+            self.model.coef_split_idx,
+            self.model.get_ys(),
+            self.model.get_mmat(),
+            S_emb,
+            self.model.family,
+            0,
+            0,
+        )
+
+        assert not np.isnan(c_llk)
+
+    def test_restartcoef2(self):
+        S_emb, _, _, _ = compute_S_emb_pinv_det(
+            self.model.hessian.shape[1], self.model.overall_penalties, "svd"
+        )
+        coef, split_coef, c_llk, c_pen_llk, etas, mus = restart_coef_gammlss(
+            self.model.coef,
+            np.split(self.model.coef, self.model.coef_split_idx),
+            self.model.get_llk(False),
+            self.model.get_llk(),
+            self.model.preds,
+            self.model.mus,
+            self.model.coef.shape[0],
+            self.model.coef_split_idx,
+            self.model.get_ys(),
+            self.model.get_mmat(),
+            S_emb,
+            self.model.family,
+            0,
+            0,
+        )
+
+        np.testing.assert_allclose(
+            split_coef,
+            np.split(coef, self.model.coef_split_idx),
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.03),
+        )
 
     def test_GAMedf(self):
         assert round(self.model.edf, ndigits=3) == 12.268
@@ -1809,12 +1861,12 @@ class Test_no_pen:
             ((self.model.coef - self.gammlss.coef[:-1]) / self.gammlss.coef[:-1]),
             np.array(
                 [
-                    [6.37717963e-13],
-                    [9.18159142e-13],
-                    [5.95314480e-13],
-                    [6.56263861e-13],
-                    [5.39571809e-12],
-                    [1.23518307e-12],
+                    [6.37132005e-13],
+                    [9.17327099e-13],
+                    [5.94785938e-13],
+                    [6.54828732e-13],
+                    [5.39162348e-12],
+                    [1.23308404e-12],
                 ]
             ),
             atol=min(max_atol, 0.01),

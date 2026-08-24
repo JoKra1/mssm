@@ -11,7 +11,7 @@ from ..python.gamm_solvers import (
     map_csc_to_eigen,
 )
 
-from .custom_types import SamplerResult
+from .custom_types import SamplerResult, LambdaTerm
 from .utils import sample_MVN, estimateVp, GAMLSSGSMMFamily, RhoPrior, MVUniformRhoPrior
 
 from ...models import (
@@ -21,6 +21,7 @@ from ...models import (
     Family,
     ExtendedFamily,
     GAMLSSFamily,
+    GSMMFamily,
     fs,
     embed_shared_penalties,
     build_penalties,
@@ -29,18 +30,12 @@ from ...models import (
 
 from ..python.repara import reparam
 from collections.abc import Callable
+from .discrete import DiscreteModelMatrix
 
 import mcmc
 from tqdm import tqdm
 
-HAS_MP = True
-try:
-    import multiprocess as mp
-except ImportError:
-    warnings.warn(
-        "Multi-processing mcmc computations will require the `multiprocess` package."
-    )
-    HAS_MP = False
+import multiprocessing as mp
 
 HAS_ARVIZ = True
 try:
@@ -205,6 +200,180 @@ def check_convergence(
     return np.array(ess_sel), np.array(rhat_sel), np.array(mcse_sel)
 
 
+class MCMCModel:
+    """Internal proxy model representing a GSMM.
+
+    Defines functions for the joint log-likelihood and gradient of the coefficients and log lambda
+    parameters.
+
+    Is set up automatically by :func:`sample_mssm`.
+    """
+
+    def __init__(
+        self,
+        deriv_fam: GSMMFamily,
+        n_coef: int,
+        n_scale: int,
+        n_theta: int,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
+        S_emb: scp.sparse.csc_array,
+        S_f_emb: scp.sparse.csc_array | None,
+        MLT: scp.sparse.csc_array | np.ndarray,
+        r_pen: list[LambdaTerm],
+        sample_rho: bool,
+        make_proper: bool,
+        rho_prior: RhoPrior,
+    ):
+        self.deriv_fam = deriv_fam
+        self.n_coef = n_coef
+        self.n_scale = n_scale
+        self.n_theta = n_theta
+        self.coef_split_idx = coef_split_idx
+        self.ys = ys
+        self.Xs = Xs
+        self.S_emb = S_emb
+        self.S_f_emb = S_f_emb
+        self.MLT = MLT
+        self.r_pen = r_pen
+        self.sample_rho = sample_rho
+        self.make_proper = make_proper
+        self.rho_prior = rho_prior
+
+    # Can now define wrappers for the joint log-likelihood and gradient + a function to sample
+    # momentum variables.
+    def llk_wrapper(self, c: np.ndarray):
+
+        # Split up theta correctly
+        coef = c[: self.n_coef + self.n_scale + self.n_theta]
+
+        # Compute log-likelihood
+        c_llk = self.deriv_fam.llk(coef, self.coef_split_idx, self.ys, self.Xs)
+
+        if self.sample_rho:
+            rho = c[self.n_coef + self.n_scale + self.n_theta :]  # noqa: E203
+        else:
+
+            # log joint is simply proportional to penalized log-likelihood
+            penalty = coef.T @ self.S_emb @ coef
+            return c_llk - 0.5 * penalty[0, 0]
+
+        # At this point we know we're sampling rho as well
+        # Need: pseudo-determinant of penalty on coef and prior on lam/rho
+        for lami, lrho in enumerate(rho):
+            self.r_pen[lami].lam = np.exp(lrho[0])
+
+        S_embr, _, _, _ = compute_S_emb_pinv_det(
+            self.n_coef + self.n_scale + self.n_theta,
+            self.r_pen,
+            "svd",
+        )
+
+        # Re-parameterize as shown in Wood (2011) to enable stable computation of log(|S_\\lambda|+)
+        Sj_reps, _, _, _, S_reps, SJ_term_idx, S_idx, S_coefs, Q_reps, Mp = reparam(
+            None, self.r_pen, None, option=4, n_c=1
+        )
+
+        # Now we need to compute log(|S_\\lambda|+), Wood shows that after the re-parameterization
+        # log(|S_\\lambda|) can be computed separately from the diagonal or R if Q@R=S_reps[i] for
+        # all terms i. Below we compute from the diagonal of the cholesky of the term specific
+        # S_reps[i], applying conditioning as shown in Appendix B of Wood (2011).
+        lgdetS = 0
+        for Si, S_rep in enumerate(S_reps):
+            Sdiag = np.power(np.abs((S_rep).diagonal()), 0.5)
+            PI = scp.sparse.diags(1 / Sdiag, format="csc")
+            P = scp.sparse.diags(Sdiag, format="csc")
+
+            L, code = cpp_chol(PI @ (S_rep) @ PI)
+
+            if code == 0:
+                # fmt: off
+                ldetSI = (2 * np.log((L @ P).diagonal()).sum()) * Sj_reps[SJ_term_idx[Si][0]].rep_sj
+                # fmt: on
+            else:
+                warnings.warn(
+                    "Cholesky for log-determinant to compute REML failed. Falling back on QR."
+                )
+                R = np.linalg.qr(S_rep.toarray(), mode="r")
+                ldetSI = (
+                    np.log(np.abs(R.diagonal())).sum()
+                    * Sj_reps[SJ_term_idx[Si][0]].rep_sj
+                )
+
+            lgdetS += ldetSI
+
+        # Adjust penalty matrix for proper prior
+        if self.make_proper:
+            S_embr += self.S_f_emb
+
+        # Now adjust c_llk for prior on rho
+        c_llk += self.rho_prior.logpdf(rho.T)[0]
+
+        return (c_llk - 0.5 * coef.T @ S_embr @ coef + 0.5 * lgdetS)[0, 0]
+
+    def grad_wrapper(self, c: np.ndarray):
+        # Split up theta correctly
+        coef = c[: self.n_coef + self.n_scale + self.n_theta]
+
+        # Compute gradient
+        grad = self.deriv_fam.gradient(coef, self.coef_split_idx, self.ys, self.Xs)
+
+        if self.sample_rho:
+            rho = c[self.n_coef + self.n_scale + self.n_theta :]  # noqa: E203
+
+            # At this point we know we're sampling rho as well
+            # Need: pseudo-determinant of penalty on coef and prior on lam/rho
+            for lami, lrho in enumerate(rho):
+                self.r_pen[lami].lam = np.exp(lrho[0])
+
+            S_embr, SJ_pinv, _, FS_use_rank = compute_S_emb_pinv_det(
+                self.n_coef + self.n_scale + self.n_theta,
+                self.r_pen,
+                "svd",
+            )
+
+            # Adjust penalty matrix for proper prior
+            if self.make_proper:
+                S_embr += self.S_f_emb
+
+            pgrad = np.array(
+                [grad[i] - (S_embr[[i], :] @ coef)[0] for i in range(len(grad))]
+            ).reshape(-1, 1)
+
+        else:
+            # Can compute pgrad directly from S_emb
+            pgrad = np.array(
+                [grad[i] - (self.S_emb[[i], :] @ coef)[0] for i in range(len(grad))]
+            ).reshape(-1, 1)
+
+            # Can return here if not sampling rho
+            return pgrad
+
+        # Now grad with respect to rhos
+        pen_grads = []
+        prior_grad = self.rho_prior.dlpdrho(rho.T).T
+        for lami in range(len(rho)):
+            lv = self.r_pen[lami].lam
+            if FS_use_rank[lami]:
+                tr = self.r_pen[lami].rank / lv
+            else:
+                tr = (self.r_pen[lami].S_J_emb @ SJ_pinv).trace()
+
+            pen_grad = -0.5 * lv * coef.T @ self.r_pen[lami].S_J_emb @ coef
+            det_grad = 0.5 * lv * tr
+            pen_grads.extend(pen_grad + det_grad)
+
+        # Adjust for prior gradient
+        pen_grads = np.array(pen_grads) + prior_grad
+        pgrad = np.append(pgrad, pen_grads, axis=0)
+        return pgrad
+
+    def r_sampler(self, seed):
+        # Function to sample momentum variables
+        return sample_MVN(1, 0, scale=1, P=None, L=None, LI=self.MLT, seed=seed)
+
+
 def advance_chain_mssm(
     chain_id: int,
     chain_seed: int,
@@ -218,7 +387,7 @@ def advance_chain_mssm(
     epsilonbar: float,
     Hbar: float,
     mu: float,
-    Minv: scp.sparse.csc_array | None,
+    Minv: scp.sparse.csc_array | np.ndarray | None,
     Mrows: int | None,
     address_Mdat: str | None,
     address_Mptr: str | None,
@@ -275,7 +444,7 @@ def advance_chain_mssm(
         the Nuts sampler
     :type mu: float
     :param Minv: Inverse of the metric used by the sampler (see Betancourt; 2013, 2018)
-    :type Minv: scp.sparse.csc_array | None
+    :type Minv: scp.sparse.csc_array | np.ndarray | None
     :param Mrows: Rows of ``Minv``
     :type Mrows: int | None
     :param address_Mdat: Address to buffer holding data of ``Minv``
@@ -312,27 +481,38 @@ def advance_chain_mssm(
     :type r_sampler: Callable
     """
 
+    is_dense = False
+    alg = mcmc.advance_chainS
     if Minv is None:
-        Mdat_shared = mp.shared_memory.SharedMemory(name=address_Mdat, create=False)
-        Mptr_shared = mp.shared_memory.SharedMemory(name=address_Mptr, create=False)
-        Midx_shared = mp.shared_memory.SharedMemory(name=address_Midx, create=False)
+        if address_Mptr is None:
+            is_dense = True
+            alg = mcmc.advance_chainD
+            Mdat_shared = mp.shared_memory.SharedMemory(name=address_Mdat, create=False)
+            Minv = np.ndarray(shape_Mdat, dtype=np.double, buffer=Mdat_shared.buf)
+        else:
+            Mdat_shared = mp.shared_memory.SharedMemory(name=address_Mdat, create=False)
+            Mptr_shared = mp.shared_memory.SharedMemory(name=address_Mptr, create=False)
+            Midx_shared = mp.shared_memory.SharedMemory(name=address_Midx, create=False)
 
-        Mdata = np.ndarray(shape_Mdat, dtype=np.double, buffer=Mdat_shared.buf)
-        Mindptr = np.ndarray(shape_Mptr, dtype=np.int64, buffer=Mptr_shared.buf)
-        Mindices = np.ndarray(shape_Mdat, dtype=np.int64, buffer=Midx_shared.buf)
+            Mdata = np.ndarray(shape_Mdat, dtype=np.double, buffer=Mdat_shared.buf)
+            Mindptr = np.ndarray(shape_Mptr, dtype=np.int64, buffer=Mptr_shared.buf)
+            Mindices = np.ndarray(shape_Mdat, dtype=np.int64, buffer=Midx_shared.buf)
 
-        Minv = scp.sparse.csc_array(
-            (Mdata, Mindices, Mindptr), shape=(Mrows, Mrows), copy=False
-        )
+            Minv = scp.sparse.csc_array(
+                (Mdata, Mindices, Mindptr), shape=(Mrows, Mrows), copy=False
+            )
+    elif isinstance(Minv, np.ndarray):
+        is_dense = True
+        alg = mcmc.advance_chainD
 
-    llks, omegas, epsilon, epsilonbar, Hbar = mcmc.advance_chain(
+    llks, omegas, epsilon, epsilonbar, Hbar = alg(
         chain_seed,  # To seed the c++ side
         iter,
         M_adapt,
         steps,
         cllk,
         omega,
-        *map_csc_to_eigen(Minv),
+        *([Minv] if is_dense else map_csc_to_eigen(Minv)),
         epsilon,
         epsilonbar,
         Hbar,
@@ -550,7 +730,7 @@ def sample_mssm(
         from all chains.
     :rtype: SamplerResult
     """
-
+    # ToDo: Need dense case
     np_gen = np.random.default_rng(seed)
 
     # Make sure model has been estimated
@@ -567,15 +747,6 @@ def sample_mssm(
 
     # Makes no sense to parallelize
     if parallelize_chains and n_chains == 1:
-        parallelize_chains = False
-
-    if HAS_MP is False and parallelize_chains:
-        warnings.warn(
-            (
-                "Multi-processing mcmc computations requires the `multiprocess` package. "
-                "Ignoring the ``parallelize_chains`` argument."
-            )
-        )
         parallelize_chains = False
 
     # Create managers for parallelization
@@ -597,13 +768,18 @@ def sample_mssm(
     orig_theta = None
     n_lam = len(model.overall_penalties)
     r_pen = copy.deepcopy(model.overall_penalties)
+    is_dense = (
+        (not model._uses_sparse_matrices)
+        or isinstance(model.lvi, np.ndarray)
+        or init_unconditional
+    )
 
     # Now get ys and Xs
     if isinstance(family, Family):
         y = model.get_ys()
 
         ys = [y]
-        Xs = [model.get_mmat()]
+        Xs = [model.get_mmat(dense=not model._uses_sparse_matrices)]
 
         if family.twopar:
             # Sample scale parameter as well
@@ -623,13 +799,13 @@ def sample_mssm(
             ys = [y]
             for _ in range(1, family.n_par):
                 ys.append(None)
-            Xs = model.get_mmat()
+            Xs = model.get_mmat(dense=not model._uses_sparse_matrices)
 
             deriv_fam = GAMLSSGSMMFamily(family.n_par, family)
 
         else:
             ys = model.get_ys(drop_NA=drop_NA)
-            Xs = model.get_mmat(drop_NA=drop_NA)
+            Xs = model.get_mmat(drop_NA=drop_NA, dense=not model._uses_sparse_matrices)
             deriv_fam = family
 
         coef_split_idx = model.coef_split_idx
@@ -647,7 +823,10 @@ def sample_mssm(
             keep_drop = (keep, model.info.dropped)  # noqa
 
     # Can now start building Minv and MLT so that MLT.T@MLT = inv(Minv)
-    Minv = (model.lvi.T @ model.lvi).tocsc() * orig_scale
+    Minv = (model.lvi.T @ model.lvi) * orig_scale
+
+    if isinstance(Minv, np.ndarray) is False:
+        Minv = Minv.tocsc()
 
     # Approximate covariance matrix for log lambda parameters - might be needed here to
     # modify covariance matrix for coefficients.
@@ -659,7 +838,11 @@ def sample_mssm(
             Vc = Vpr @ dBetadRhos.T
             Vc = Vc.T @ Vc
 
-            Minv = scp.sparse.csc_array(Vc + Minv)
+            Minv = Vc + Minv
+
+            if isinstance(Minv, np.matrix):
+                # Adding sparse to dense -> matrix
+                Minv = Minv.A
 
     Lp, Pr, _ = cpp_cholP(Minv)
     Lpinv = compute_Linv(Lp, n_c=n_chains)
@@ -688,14 +871,34 @@ def sample_mssm(
         # And invert
         V_scale = 1 / nH_scale
 
-        MLT = scp.sparse.block_array(
-            [[MLT, None], [None, np.identity(n_scale) * np.sqrt(nH_scale)]],
-            format="csc",
-        )
+        if is_dense:
+            MLT = np.block(
+                [
+                    [MLT, np.zeros((MLT.shape[0], n_scale))],
+                    [
+                        np.zeros((n_scale, MLT.shape[0])),
+                        np.identity(n_scale) * np.sqrt(nH_scale),
+                    ],
+                ]
+            )
+            Minv = np.block(
+                [
+                    [Minv, np.zeros((Minv.shape[0], n_scale))],
+                    [
+                        np.zeros((n_scale, Minv.shape[0])),
+                        np.identity(n_scale) * np.sqrt(V_scale),
+                    ],
+                ]
+            )
+        else:
+            MLT = scp.sparse.block_array(
+                [[MLT, None], [None, np.identity(n_scale) * np.sqrt(nH_scale)]],
+                format="csc",
+            )
 
-        Minv = scp.sparse.block_array(
-            [[Minv, None], [None, np.identity(n_scale) * V_scale]], format="csc"
-        )
+            Minv = scp.sparse.block_array(
+                [[Minv, None], [None, np.identity(n_scale) * V_scale]], format="csc"
+            )
 
     if n_theta > 0:
 
@@ -729,8 +932,25 @@ def sample_mssm(
         # ... and build root Re_theta so that Re_theta.T@Re_theta = inv(inH_theta) = nH_theta
         Re_theta = np.diag([np.sqrt(e) for e in eig]) @ U.T
 
-        MLT = scp.sparse.block_array([[MLT, None], [None, Re_theta]], format="csc")
-        Minv = scp.sparse.block_array([[Minv, None], [None, inH_theta]], format="csc")
+        if is_dense:
+            MLT = np.block(
+                [
+                    [MLT, np.zeros((MLT.shape[0], n_theta))],
+                    [np.zeros((n_theta, MLT.shape[0])), Re_theta],
+                ]
+            )
+            Minv = np.block(
+                [
+                    [Minv, np.zeros((Minv.shape[0], n_theta))],
+                    [np.zeros((n_theta, Minv.shape[0])), inH_theta],
+                ]
+            )
+        else:
+
+            MLT = scp.sparse.block_array([[MLT, None], [None, Re_theta]], format="csc")
+            Minv = scp.sparse.block_array(
+                [[Minv, None], [None, inH_theta]], format="csc"
+            )
 
     # Modify covariance matrix to account for log lambda parameters
     if sample_rho:
@@ -763,30 +983,57 @@ def sample_mssm(
         # Now stack onto Minv and MLT
 
         # MLT.T@MLT = inv(Minv) defined below
-        MLT = scp.sparse.block_array([[MLT, None], [None, Ri]], format="csc")
+        if is_dense:
+            MLT = np.block(
+                [
+                    [MLT, np.zeros((MLT.shape[0], ep.shape[0]))],
+                    [np.zeros((ep.shape[0], MLT.shape[0])), Ri],
+                ]
+            )
+            Minv = np.block(
+                [
+                    [Minv, np.zeros((Minv.shape[0], ep.shape[0]))],
+                    [np.zeros((ep.shape[0], Minv.shape[0])), Vpreg],
+                ]
+            )
+        else:
+            MLT = scp.sparse.block_array([[MLT, None], [None, Ri]], format="csc")
 
-        Minv = scp.sparse.block_array([[Minv, None], [None, Vpreg]], format="csc")
+            Minv = scp.sparse.block_array([[Minv, None], [None, Vpreg]], format="csc")
 
     # Optionally create shared memory object for parallelization of Minv
     if parallelize_chains:
-        Mrows, _, _, Mdata, Mindptr, Mindices = map_csc_to_eigen(Minv)
-        shape_Mdat = Mdata.shape
-        shape_Mptr = Mindptr.shape
-
         # Start memory manager
         mem_manager.start()
 
-        dat_mem = mem_manager.SharedMemory(Mdata.nbytes)
-        dat_shared = np.ndarray(Mdata.shape, dtype=np.double, buffer=dat_mem.buf)
-        dat_shared[:] = Mdata[:]
+        if is_dense:
+            # Only need buffer for dat
+            Mrows = Minv.shape[0]
+            shape_Mdat = Minv.shape
+            shape_Mptr = None
+            ptr_mem = None
+            idx_mem = None
 
-        ptr_mem = mem_manager.SharedMemory(Mindptr.nbytes)
-        ptr_shared = np.ndarray(Mindptr.shape, dtype=np.int64, buffer=ptr_mem.buf)
-        ptr_shared[:] = Mindptr[:]
+            dat_mem = mem_manager.SharedMemory(Minv.nbytes)
+            dat_shared = np.ndarray(shape_Mdat, dtype=np.double, buffer=dat_mem.buf)
+            dat_shared[:] = Minv[:]
 
-        idx_mem = mem_manager.SharedMemory(Mindices.nbytes)
-        idx_shared = np.ndarray(Mindices.shape, dtype=np.int64, buffer=idx_mem.buf)
-        idx_shared[:] = Mindices[:]
+        else:
+            Mrows, _, _, Mdata, Mindptr, Mindices = map_csc_to_eigen(Minv)
+            shape_Mdat = Mdata.shape
+            shape_Mptr = Mindptr.shape
+
+            dat_mem = mem_manager.SharedMemory(Mdata.nbytes)
+            dat_shared = np.ndarray(Mdata.shape, dtype=np.double, buffer=dat_mem.buf)
+            dat_shared[:] = Mdata[:]
+
+            ptr_mem = mem_manager.SharedMemory(Mindptr.nbytes)
+            ptr_shared = np.ndarray(Mindptr.shape, dtype=np.int64, buffer=ptr_mem.buf)
+            ptr_shared[:] = Mindptr[:]
+
+            idx_mem = mem_manager.SharedMemory(Mindices.nbytes)
+            idx_shared = np.ndarray(Mindices.shape, dtype=np.int64, buffer=idx_mem.buf)
+            idx_shared[:] = Mindices[:]
 
     # Sample initial coefs for chains (n_coef,n_chains)
     init_coef = sample_MVN(
@@ -854,6 +1101,7 @@ def sample_mssm(
     # Get initial penalty matrix
     S_emb, _, _, _ = compute_S_emb_pinv_det(n_coef + n_scale + n_theta, r_pen, "svd")
 
+    S_f_emb = None
     if make_proper:
         # If the overall prior should be proper, we need vague priors on all un-penalized coef
         fcols = []
@@ -940,135 +1188,22 @@ def sample_mssm(
 
     # Can now define wrappers for the joint log-likelihood and gradient + a function to sample
     # momentum variables.
-    def llk_wrapper(c: np.ndarray):
-
-        # Split up theta correctly
-        coef = c[: n_coef + n_scale + n_theta]
-
-        # Compute log-likelihood
-        c_llk = deriv_fam.llk(coef, coef_split_idx, ys, Xs)
-
-        if sample_rho:
-            rho = c[n_coef + n_scale + n_theta :]  # noqa: E203
-        else:
-
-            # log joint is simply proportional to penalized log-likelihood
-            penalty = coef.T @ S_emb @ coef
-            return c_llk - 0.5 * penalty[0, 0]
-
-        # At this point we know we're sampling rho as well
-        # Need: pseudo-determinant of penalty on coef and prior on lam/rho
-        for lami, lrho in enumerate(rho):
-            r_pen[lami].lam = np.exp(lrho[0])
-
-        S_embr, _, _, _ = compute_S_emb_pinv_det(
-            n_coef + n_scale + n_theta,
-            r_pen,
-            "svd",
-        )
-
-        # Re-parameterize as shown in Wood (2011) to enable stable computation of log(|S_\\lambda|+)
-        Sj_reps, _, _, _, S_reps, SJ_term_idx, S_idx, S_coefs, Q_reps, Mp = reparam(
-            None, r_pen, None, option=4, n_c=1
-        )
-
-        # Now we need to compute log(|S_\\lambda|+), Wood shows that after the re-parameterization
-        # log(|S_\\lambda|) can be computed separately from the diagonal or R if Q@R=S_reps[i] for
-        # all terms i. Below we compute from the diagonal of the cholesky of the term specific
-        # S_reps[i], applying conditioning as shown in Appendix B of Wood (2011).
-        lgdetS = 0
-        for Si, S_rep in enumerate(S_reps):
-            Sdiag = np.power(np.abs((S_rep).diagonal()), 0.5)
-            PI = scp.sparse.diags(1 / Sdiag, format="csc")
-            P = scp.sparse.diags(Sdiag, format="csc")
-
-            L, code = cpp_chol(PI @ (S_rep) @ PI)
-
-            if code == 0:
-                # fmt: off
-                ldetSI = (2 * np.log((L @ P).diagonal()).sum()) * Sj_reps[SJ_term_idx[Si][0]].rep_sj
-                # fmt: on
-            else:
-                warnings.warn(
-                    "Cholesky for log-determinant to compute REML failed. Falling back on QR."
-                )
-                R = np.linalg.qr(S_rep.toarray(), mode="r")
-                ldetSI = (
-                    np.log(np.abs(R.diagonal())).sum()
-                    * Sj_reps[SJ_term_idx[Si][0]].rep_sj
-                )
-
-            lgdetS += ldetSI
-
-        # Adjust penalty matrix for proper prior
-        if make_proper:
-            S_embr += S_f_emb
-
-        # Now adjust c_llk for prior on rho
-        c_llk += rho_prior.logpdf(rho.T)[0]
-
-        return (c_llk - 0.5 * coef.T @ S_embr @ coef + 0.5 * lgdetS)[0, 0]
-
-    def grad_wrapper(c: np.ndarray):
-        # Split up theta correctly
-        coef = c[: n_coef + n_scale + n_theta]
-
-        # Compute gradient
-        grad = deriv_fam.gradient(coef, coef_split_idx, ys, Xs)
-
-        if sample_rho:
-            rho = c[n_coef + n_scale + n_theta :]  # noqa: E203
-
-            # At this point we know we're sampling rho as well
-            # Need: pseudo-determinant of penalty on coef and prior on lam/rho
-            for lami, lrho in enumerate(rho):
-                r_pen[lami].lam = np.exp(lrho[0])
-
-            S_embr, SJ_pinv, _, FS_use_rank = compute_S_emb_pinv_det(
-                n_coef + n_scale + n_theta,
-                r_pen,
-                "svd",
-            )
-
-            # Adjust penalty matrix for proper prior
-            if make_proper:
-                S_embr += S_f_emb
-
-            pgrad = np.array(
-                [grad[i] - (S_embr[[i], :] @ coef)[0] for i in range(len(grad))]
-            ).reshape(-1, 1)
-
-        else:
-            # Can compute pgrad directly from S_emb
-            pgrad = np.array(
-                [grad[i] - (S_emb[[i], :] @ coef)[0] for i in range(len(grad))]
-            ).reshape(-1, 1)
-
-            # Can return here if not sampling rho
-            return pgrad
-
-        # Now grad with respect to rhos
-        pen_grads = []
-        prior_grad = rho_prior.dlpdrho(rho.T).T
-        for lami in range(len(rho)):
-            lv = r_pen[lami].lam
-            if FS_use_rank[lami]:
-                tr = r_pen[lami].rank / lv
-            else:
-                tr = (r_pen[lami].S_J_emb @ SJ_pinv).trace()
-
-            pen_grad = -0.5 * lv * coef.T @ r_pen[lami].S_J_emb @ coef
-            det_grad = 0.5 * lv * tr
-            pen_grads.extend(pen_grad + det_grad)
-
-        # Adjust for prior gradient
-        pen_grads = np.array(pen_grads) + prior_grad
-        pgrad = np.append(pgrad, pen_grads, axis=0)
-        return pgrad
-
-    def r_sampler(seed):
-        # Function to sample momentum variables
-        return sample_MVN(1, 0, scale=1, P=None, L=None, LI=MLT, seed=seed)
+    mcmcm_model = MCMCModel(
+        deriv_fam,
+        n_coef,
+        n_scale,
+        n_theta,
+        coef_split_idx,
+        ys,
+        Xs,
+        S_emb,
+        S_f_emb,
+        MLT,
+        r_pen,
+        sample_rho,
+        make_proper,
+        rho_prior,
+    )
 
     # Initialize samplers
     omegas = []
@@ -1077,6 +1212,9 @@ def sample_mssm(
     epsilonbars = []
     Hbars = []
     mus = []
+    init_alg = (
+        mcmc.find_reasonable_epsilonD if is_dense else mcmc.find_reasonable_epsilonS
+    )
 
     for chain in range(n_chains):
 
@@ -1096,20 +1234,20 @@ def sample_mssm(
         omegas.append(omega)
 
         # And log-likelihood
-        cLs.append(llk_wrapper(omega))
+        cLs.append(mcmcm_model.llk_wrapper(omega))
 
         chain_seed = int(np_gen.random() * 10000)
 
         # Initialize epsilon and mu per chain
         epsilons.append(
-            mcmc.find_reasonable_epsilon(
+            init_alg(
                 omega,
-                grad_wrapper(omega),
-                *map_csc_to_eigen(Minv),
+                mcmcm_model.grad_wrapper(omega),
+                *([Minv] if is_dense else map_csc_to_eigen(Minv)),
                 cLs[chain],
-                llk_wrapper,
-                grad_wrapper,
-                r_sampler,
+                mcmcm_model.llk_wrapper,
+                mcmcm_model.grad_wrapper,
+                mcmcm_model.r_sampler,
                 chain_seed,
             )
         )
@@ -1177,8 +1315,8 @@ def sample_mssm(
                 None if parallelize_chains else Minv,
                 Mrows if parallelize_chains else None,
                 dat_mem.name if parallelize_chains else None,
-                ptr_mem.name if parallelize_chains else None,
-                idx_mem.name if parallelize_chains else None,
+                ptr_mem.name if parallelize_chains and ptr_mem is not None else None,
+                idx_mem.name if parallelize_chains and idx_mem is not None else None,
                 shape_Mdat if parallelize_chains else None,
                 shape_Mptr if parallelize_chains else None,
                 delta,
@@ -1186,9 +1324,9 @@ def sample_mssm(
                 gamma,
                 t0,
                 max_j_adapt if iter < M_adapt else max_j,
-                llk_wrapper,
-                grad_wrapper,
-                r_sampler,
+                mcmcm_model.llk_wrapper,
+                mcmcm_model.grad_wrapper,
+                mcmcm_model.r_sampler,
             )
 
             if parallelize_chains:

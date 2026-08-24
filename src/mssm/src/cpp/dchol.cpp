@@ -136,7 +136,7 @@ Eigen::MatrixXd computeV2(const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen
 
 
 PYBIND11_MODULE(dChol, m) {
-    m.def("uChol", &uChol, py::arg("L").noconvert(), py::arg("U").noconvert(), py::arg("sgima"), "Perform low-rank up/down-date of L using vectors making up column of U.");
+    m.def("uChol", &uChol, py::arg("L").noconvert(), py::arg("U").noconvert(), py::arg("sigma"), "Perform low-rank up/down-date of L using vectors making up column of U.");
     m.def("dChol", &dChol, py::arg("R").noconvert(), py::arg("A").noconvert(), "Let R be the transpose of Cholesky factor of some matrix H + a*A. Function returns derivative of this sum with respect to a.");
     m.def("invdChol", &invdChol, py::arg("R").noconvert(), py::arg("Rinv").noconvert(), py::arg("A").noconvert(), "Let R be the transpose of Cholesky factor of some matrix H + a*A and Rinv be the inverse of R. Function returns derivative of inverse of this sum with respect to a.");
     m.def("computeV2", &computeV2, "Computes second term of the smoothing penalty uncertainty correction proposed by Wood, S. N., Pya, N., Saefken, B., (2016).");

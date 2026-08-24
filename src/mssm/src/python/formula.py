@@ -25,6 +25,7 @@ from .custom_types import (
     VarType,
 )
 from .matrix_solvers import translate_sparse, eigen_solvers
+from .discrete import DiscreteModelMatrix
 
 
 class lhs:
@@ -276,6 +277,10 @@ class Formula:
         iteratively (if ``data`` is ``None`` and ``file_paths`` is a non-empty list).
         Defaults to ``{"header":0,"index_col":False}``.
     :type file_loading_kwargs: dict,optional
+    :param discretize: Whether to discretize the covariates of the model. This enables very
+        efficient matrix operations even for otherwise dense models.
+        See :class:`DiscreteModelMatrix`. Defaults to False
+    :type discretize: bool, optional
     :ivar lhs lhs: The left-hand side object of the regression formula passed to the constructor.
         Initialized at construction.
     :ivar [GammTerm] terms: The list of terms passed to the constructor. Initialized at
@@ -322,6 +327,7 @@ class Formula:
         file_paths: list[str] = [],
         file_loading_nc: int = 1,
         file_loading_kwargs: dict = {"header": 0, "index_col": False},
+        discretize: bool = False,
     ) -> None:
 
         self.lhs = lhs
@@ -376,6 +382,9 @@ class Formula:
 
         # Discretization?
         self.discretize = {}
+        self.discretize_cov = discretize
+        self.cov_bins: dict | None = {} if discretize else None
+        self.cov_bin_idxs: dict | None = None
 
         # Perform input checks first for LHS/Dependent variable.
         if len(self.file_paths) == 0 and self.lhs.variable not in self.data.columns:
@@ -608,7 +617,9 @@ class Formula:
 
         # Encode data into columns usable by the model
         if len(self.file_paths) == 0 or self.keep_cov:
-            y_flat, cov_flat, NAs_flat, y, cov, NAs, sid = self.encode_data(self.data)
+            y_flat, cov_flat, NAs_flat, y, cov, NAs, sid, cov_bin_idxs = (
+                self.encode_data(self.data, discretize=True)
+            )
 
             # Store encoding
             self.y_flat = y_flat
@@ -618,6 +629,7 @@ class Formula:
             self.cov = cov
             self.NOT_NA = NAs
             self.sid = sid
+            self.cov_bin_idxs = cov_bin_idxs
 
         if len(self.discretize) > 0:
             if self.series_id is None:
@@ -662,6 +674,15 @@ class Formula:
         self.__get_coef_info()
 
         # print(self.n_coef,len(self.coef_names))
+
+        if self.discretize_cov:
+            # Re-compute cov_flat **after** computing all constraints/nested checks
+            # for discretized model so that plot functions keep on working as if no
+            # discretization happened.
+            _, cov_flat, _, _, _, _, _, _ = self.encode_data(
+                self.data, prediction=True, discretize=False
+            )
+            self.cov_flat = cov_flat
 
     def __encode_var(
         self,
@@ -873,7 +894,9 @@ class Formula:
             self.n_coef += t_total_coef
             self.unpenalized_coef += t_unpenalized_coef
 
-    def encode_data(self, data: pd.DataFrame, prediction: bool = False) -> tuple[
+    def encode_data(
+        self, data: pd.DataFrame, prediction: bool = False, discretize: bool = False
+    ) -> tuple[
         np.ndarray | None,
         np.ndarray,
         np.ndarray | None,
@@ -881,6 +904,7 @@ class Formula:
         list[np.ndarray] | None,
         list[np.ndarray] | None,
         np.ndarray | None,
+        dict | None,
     ]:
         """
         Encodes ``data``, which needs to be a ``pd.DataFrame`` and by default
@@ -892,22 +916,30 @@ class Formula:
         :param prediction: Whether or not a NA index and a column for the dependent variable should
             be generated.
         :type prediction: bool, optional
-        :return: A tuple with 7 (optional) entries: the dependent variable described by
+        :param discretize: Whether or not covariates should be discretized. Only has an effect if
+            ``self.discretize_cov is True``.
+        :type discretize: bool, optional
+        :return: A tuple with 8 (optional) entries: the dependent variable described by
             ``self.lhs``, the encoded predictor variables as a (N,k) array (number of rows matches
             the number of rows of the first entry returned, the number of columns matches the
             number of k variables present in the formula), an indication for each row whether
             the dependent variable described by ``self.lhs`` is NA, like the first entry but split
             into a list of lists by ``self.series_id``, like the second entry but split into a
-            list of lists by ``self.series_id``, ike the third entry but split into a list of lists
+            list of lists by ``self.series_id``, like the third entry but split into a list of lists
             by ``self.series_id``, start and end points for the splits used to split the previous
             three elements (identifying the start and end point of every level of
-            ``self.series_id``).
-        :rtype: (np.ndarray|None, np.ndarray, np.ndarray|None, list[np.ndarray]|None,
-            list[np.ndarray]|None, list[np.ndarray]|None, np.ndarray|None)
+            ``self.series_id``) and finally a dictionary ``cov_bin_idxs`` with the discretized
+            indices for covariates ``c`` so that ``self.cov_bins[c][cov_bin_idxs[c]]``
+            yields the discretized version of covariate ``c``.
+        :rtype: tuple[np.ndarray | None, np.ndarray, np.ndarray | None, list[np.ndarray] | None,
+            list[np.ndarray] | None, list[np.ndarray] | None, np.ndarray | None, dict | None]
         """
         # Build NA index
         var_map = self.get_var_map()
         var_keys = var_map.keys()
+        var_mins = self.get_var_mins()
+        var_maxs = self.get_var_maxs()
+        cov_bin_idxs = {} if self.discretize_cov else None
         if prediction:
             NAs = None
             NAs_flat = None
@@ -994,6 +1026,10 @@ class Formula:
             if data is not None:
                 y_flat = np.array(data[self.lhs.variable]).reshape(-1, 1)
 
+                if self.discretize_cov:
+                    n_bins = min(int(np.sqrt(data[NAs_flat].shape[0])), 1000)
+                    # print("N bins", n_bins)
+
             # Then split by seried id
             y = None
             NAs = None
@@ -1044,6 +1080,29 @@ class Formula:
                 cov_flat[:, var_map[c]] = c_code
 
             else:
+                if data is not None and self.discretize_cov:
+                    # ToDo: Check if number of unique covariate values is < n_bins
+                    if prediction is False:
+                        c_bins = np.linspace(
+                            var_mins[c],
+                            var_maxs[c],
+                            num=n_bins,
+                        )
+
+                        self.cov_bins[c] = c_bins
+
+                    cov_bin_idxs[c] = (
+                        np.digitize(
+                            c_raw if prediction else c_raw[NAs_flat], self.cov_bins[c]
+                        )
+                        - 1
+                    )
+                    if discretize:
+                        if prediction:
+                            c_raw = self.cov_bins[c][cov_bin_idxs[c]]
+                        else:
+                            c_raw[NAs_flat] = self.cov_bins[c][cov_bin_idxs[c]]
+
                 cov_flat[:, var_map[c]] = c_raw
 
         # Now split cov by series id as well
@@ -1051,7 +1110,7 @@ class Formula:
         if self.series_id is not None:
             cov = np.split(cov_flat, sid[1:], axis=0)
 
-        return y_flat, cov_flat, NAs_flat, y, cov, NAs, sid
+        return y_flat, cov_flat, NAs_flat, y, cov, NAs, sid, cov_bin_idxs
 
     def __discretize(self, sti: int) -> tuple[np.ndarray, list[str]]:
         """Internal function to discretize covariates.
@@ -1086,8 +1145,8 @@ class Formula:
                     max(self.cov_flat[:, var_map[var]]),
                     int(len(np.unique(self.cov_flat[:, var_map[var]])) ** 0.5),
                 )
-                dig_cov_flat[:, var_map[var]] = np.digitize(
-                    self.cov_flat[:, var_map[var]], values
+                dig_cov_flat[:, var_map[var]] = (
+                    np.digitize(self.cov_flat[:, var_map[var]], values) - 1
                 )
                 collected.append(var_map[var])
                 collected_vars.append(var)
@@ -2558,7 +2617,11 @@ def build_sparse_matrix_from_formula(
     pool: mp.pool.Pool | None = None,
     use_only: list[int] | None = None,
     tol: float = 0,
-) -> scp.sparse.csc_array:
+    discrete: bool = False,
+    cov_bins: dict | None = None,
+    cov_bin_idxs: dict | None = None,
+    dense: bool = False,
+) -> scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix:
     """Build model matrix from formula properties.
 
     This function is used internally to construct model matrices from :class:`Formula` objects.
@@ -2602,8 +2665,21 @@ def build_sparse_matrix_from_formula(
     :param tol: Optional tolerance. Absolute values in the model matrix smaller than this are set
         to actual zeroes, defaults to 0
     :type tol: float, optional
+    :param discrete: Whether to return the matrix as a class`DiscreteModelMatrix`. Setting this
+        to True requires the next two arguments to be specified.
+    :type discrete: bool, optional
+    :param cov_bins: Optional dictionary with ``cov_bins[c]`` containing the unique discretized
+        covariate values for covariate ``c``. Defaults to None.
+    :type cov_bins: dict | None, optional
+    :param cov_bin_idxs: Optional dictionary containing index vectors for each covariate so that
+        ``cov_bins[c][cov_bin_idxs[c]]`` returns the full vector (after excluding NaNs) of the
+        discretized covariate ``c``. Defaults to None
+    :type cov_bin_idxs: dict | None, optional
+    :param dense: Whether to return the matrix as a dense numpy array or a scipy sparse csc array.
+        Defaults to False (return is sparse)
+    :type dense: bool, optional
     :return: The model matrix implied by a :class:`Formula`  and ``cov_flat``.
-    :rtype: scp.sparse.csc_array
+    :rtype: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix
     """
     n_y = cov_flat.shape[0]
     elements = []
@@ -2617,19 +2693,24 @@ def build_sparse_matrix_from_formula(
     # when we have multiple factor variables
     has_constant = has_intercept
 
+    dts = []
     for lti in ltx:
         # Build matrix for linear terms
         lterm = terms[lti]
 
         if isinstance(lterm, i):
             # Intercept
-            new_elements, new_rows, new_cols, new_ci = lterm.build_matrix(
-                ci, lti, ridx, use_only
+            lit = lterm.build_matrix(
+                ci,
+                lti,
+                ridx,
+                use_only,
+                discrete,
             )
 
         else:
             # Linear term
-            new_elements, new_rows, new_cols, new_ci = lterm.build_matrix(
+            lit = lterm.build_matrix(
                 has_constant,
                 ci,
                 lti,
@@ -2639,6 +2720,7 @@ def build_sparse_matrix_from_formula(
                 ridx,
                 cov_flat,
                 use_only,
+                discrete,
             )
 
             # Check whether this term had a factor variable
@@ -2648,10 +2730,18 @@ def build_sparse_matrix_from_formula(
                         has_constant = True
                         break
 
-        elements.extend(new_elements)
-        rows.extend(new_rows)
-        cols.extend(new_cols)
-        ci += new_ci
+        if discrete:
+            dts.extend(lit)
+            ci = dts[-1].end_idx
+        else:
+            new_elements = lit[0]
+            new_rows = lit[1]
+            new_cols = lit[2]
+            new_ci = lit[3]
+            elements.extend(new_elements)
+            rows.extend(new_rows)
+            cols.extend(new_cols)
+            ci += new_ci
 
     for irsti in irstx:
         # Impulse response terms need to be calculate for every series individually - costly
@@ -2680,7 +2770,7 @@ def build_sparse_matrix_from_formula(
 
         sterm = terms[sti]
 
-        new_elements, new_rows, new_cols, new_ci = sterm.build_matrix(
+        st = sterm.build_matrix(
             ci,
             sti,
             var_map,
@@ -2691,32 +2781,75 @@ def build_sparse_matrix_from_formula(
             cov_flat,
             use_only,
             tol,
+            discrete,
+            cov_bins,
+            cov_bin_idxs,
         )
 
-        elements.extend(new_elements)
-        rows.extend(new_rows)
-        cols.extend(new_cols)
-        ci += new_ci
+        if discrete:
+            dts.extend(st)
+            ci = dts[-1].end_idx
+        else:
+            new_elements = st[0]
+            new_rows = st[1]
+            new_cols = st[2]
+            new_ci = st[3]
+            elements.extend(new_elements)
+            rows.extend(new_rows)
+            cols.extend(new_cols)
+            ci += new_ci
 
     for rti in rtx:
         rterm = terms[rti]
 
         if isinstance(rterm, ri):
-            new_elements, new_rows, new_cols, new_ci = rterm.build_matrix(
-                ci, rti, var_map, factor_levels, ridx, cov_flat, use_only
+            rt = rterm.build_matrix(
+                ci,
+                rti,
+                var_map,
+                factor_levels,
+                ridx,
+                cov_flat,
+                use_only,
+                discrete,
             )
 
         elif isinstance(rterm, rs):
-            new_elements, new_rows, new_cols, new_ci = rterm.build_matrix(
-                ci, rti, var_map, var_types, factor_levels, ridx, cov_flat, use_only
+            rt = rterm.build_matrix(
+                ci,
+                rti,
+                var_map,
+                var_types,
+                factor_levels,
+                ridx,
+                cov_flat,
+                use_only,
+                discrete,
             )
 
-        elements.extend(new_elements)
-        rows.extend(new_rows)
-        cols.extend(new_cols)
-        ci += new_ci
+        if discrete:
+            dts.extend(rt)
+            ci = dts[-1].end_idx
+        else:
+            new_elements = rt[0]
+            new_rows = rt[1]
+            new_cols = rt[2]
+            new_ci = rt[3]
+            elements.extend(new_elements)
+            rows.extend(new_rows)
+            cols.extend(new_cols)
+            ci += new_ci
 
+    if discrete:
+        return DiscreteModelMatrix(dts)
+
+    # Build sparse matrix
     mat = scp.sparse.csc_array((elements, (rows, cols)), shape=(n_y, ci))
+
+    if dense:
+        # ToDo: can build dense matrix directly much more
+        # efficiently.
+        mat = mat.toarray()
 
     return mat
 
@@ -2726,7 +2859,8 @@ def build_model_matrix(
     pool: mp.pool.Pool | None = None,
     use_only: list[int] | None = None,
     tol: float = 0,
-) -> scp.sparse.csc_array:
+    dense: bool = False,
+) -> scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix:
     """Function to build the model matrix implied by ``formula``.
 
     **Important:** A small selection of smooth terms, requires that the penalty matrices are built
@@ -2765,12 +2899,15 @@ def build_model_matrix(
     :param tol: Optional tolerance. Absolute values in the model matrix smaller than this are set
         to actual zeroes, defaults to 0
     :type tol: float, optional
+    :param dense: Whether to return the matrix as a dense numpy array or a scipy sparse csc array.
+        Defaults to False (return is sparse)
+    :type dense: bool, optional
     :raises ValueError: If ``formula.built_penalties == False`` - i.e., it is required that
         ``build_penalties(formula)`` was called before calling ``build_model_matrix(formula)``.
     :raises NotImplementedError: If the ``formula`` was set up to read data from file, rather
         than from a pd.Dataframe.
     :return: The model matrix implied by a :class:`Formula`  and ``cov_flat``.
-    :rtype: scp.sparse.csc_array
+    :rtype: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix
     """
 
     if formula.built_penalties is False:
@@ -2827,6 +2964,10 @@ def build_model_matrix(
         pool,
         use_only,
         tol,
+        formula.discretize_cov,
+        formula.cov_bins,
+        formula.cov_bin_idxs,
+        dense,
     )
 
     if len(irstx) > 0:

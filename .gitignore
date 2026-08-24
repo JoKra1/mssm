@@ -172,3 +172,4 @@ src/mssm/src/cpp/*.out
 src/mssm/src/cpp/*.out*
 docs/jupyter_execute/*
 .idea/*
+.positai

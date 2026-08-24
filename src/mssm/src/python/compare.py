@@ -218,12 +218,7 @@ def compare_CDL(
         numerically evaluate the expectations necessary for the uncertainty correction,
         defaults to 250
     :type nR: int, optional
-    :param n_c: Number of cores to use during parallel parts of the correction. **Note**, if you
-        want to use more than one core for more generic models it will most likely be necessary
-        to install ``mssm`` with the extra ``mp`` dependency set. This installs the ``multiprocess``
-        package, which is necessary since most general models implement at least one local function
-        that cannot be serialized by the standard ``multiprocessing`` library. To install the
-        extra dependency set simply run ``pip install -U mssm[mp]``, defaults to 1
+    :param n_c: Number of cores to use during parallel parts of the correction, defaults to 1
     :type n_c: int, optional
     :param alpha: alpha level of the GLRT. Defaults to 0.05
     :type alpha: float, optional
@@ -474,8 +469,16 @@ def compare_CDL(
                 F1 = V1 @ (-1 * model1.hessian)
                 F2 = V2 @ (-1 * model2.hessian)
 
-            ucFFd1 = F1.multiply(F1.T).sum(axis=0)
-            ucFFd2 = F2.multiply(F2.T).sum(axis=0)
+            ucFFd1 = (
+                (F1 * F1.T).sum(axis=0)
+                if isinstance(F1, np.ndarray)
+                else F1.multiply(F1.T).sum(axis=0)
+            )
+            ucFFd2 = (
+                (F2 * F2.T).sum(axis=0)
+                if isinstance(F2, np.ndarray)
+                else F2.multiply(F2.T).sum(axis=0)
+            )
 
             DOF12 = 2 * DOF1 - np.sum(ucFFd1)
             DOF22 = 2 * DOF2 - np.sum(ucFFd2)

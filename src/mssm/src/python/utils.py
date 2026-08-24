@@ -33,10 +33,7 @@ from ..python.gamm_solvers import (
 )
 from ..python.terms import fs, rs
 
-try:
-    import multiprocess as mp
-except ImportError:
-    from .file_loading import mp
+import multiprocessing as mp
 
 from .repara import reparam
 from ..python.exp_fam import (
@@ -50,9 +47,55 @@ from ..python.exp_fam import (
 )
 from ..python.formula import Formula, LambdaTerm
 from ..python.penalties import split_shared_penalties, combine_shared_penalties
+from .discrete import DiscreteModelMatrix
 import davies
 import dChol
 from collections.abc import Callable
+
+
+def computeFcolsSparsity(
+    formulas: list[Formula], extra_coef: int | None = None
+) -> tuple[list[int], float, int]:
+    """Returns a list of the columns of the Hessian associated with a 'fixed' coefficient,
+    the model sparsity ratio (number of fixed coef. by total coef.) and the total number of
+    coefficients.
+
+    **Note**: Parametric terms as well as coefficients associated with smooth functions for
+    which the penalty has a non-trivial kernel are treated as 'fixed' coefficients (what we
+    typically consider gorup-level estimates).
+
+    :param formulas: List of formulas associated with a model
+    :type formulas: list[Formula]
+    :param extra_coef: The number of extra (fixed) coefficients required by a model, defaults to
+        None
+    :type extra_coef: int | None, optional
+    :return: a list of the columns of the Hessian associated with a 'fixed' coefficient,
+        the model sparsity ratio, and the total number of coefficients required by the model.
+    :rtype: tuple[list[int],float]
+    """
+    fcols = []
+    start_idx = 0
+    for form in formulas:
+        lti = form.get_linear_term_idx()
+        irsti = form.get_ir_smooth_term_idx()
+        sti = form.get_smooth_term_idx()
+
+        for tidx in [*lti, *irsti, *sti]:
+
+            if isinstance(form.terms[tidx], fs):
+                continue
+
+            fcols.extend(form.coef_idx_per_term[tidx] + start_idx)
+
+        start_idx += form.n_coef
+
+    # Also account for extra coef that are un-penalized
+    if extra_coef is not None:
+        fcols.extend(np.arange(extra_coef) + start_idx)
+
+        start_idx += extra_coef
+
+    return fcols, len(fcols) / start_idx, start_idx
 
 
 def computeAr1Chol(formula: Formula, rho: float) -> tuple[scp.sparse.csc_array, float]:
@@ -239,7 +282,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
     ) -> float:
         """
         Function to evaluate log-likelihood of GAMM(LSS) model when estimated via GSMM.
@@ -257,7 +300,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
             their indices to save memory.
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter.
-        :type Xs: [scp.sparse.csc_array]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
         :return: The log-likelihood evaluated at ``coef``.
         :rtype: float
         """
@@ -303,7 +346,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
     ) -> np.ndarray:
         """
         Function to evaluate gradient of GAMM(LSS) model when estimated via GSMM.
@@ -321,7 +364,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
             their indices to save memory.
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter.
-        :type Xs: [scp.sparse.csc_array]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
         :return: The Gradient of the log-likelihood evaluated at ``coef`` as numpy array) of
             shape (-1,1).
         :rtype: np.ndarray
@@ -395,7 +438,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
     ) -> scp.sparse.csc_array:
         """
         Function to evaluate Hessian of GAMM(LSS) model when estimated via GSMM.
@@ -413,7 +456,7 @@ class GAMLSSGSMMFamily(GSMMFamily):
             their indices to save memory.
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter.
-        :type Xs: [scp.sparse.csc_array]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
         :return: The Hessian of the log-likelihood evaluated at ``coef``.
         :rtype: scp.sparse.csc_array
         """
@@ -447,11 +490,20 @@ class GAMLSSGSMMFamily(GSMMFamily):
             ]
 
         # Get Hessian
-        _, H = deriv_transform_eta_beta(d1eta, d2eta, d2meta, Xs, only_grad=False)
+        _, H = deriv_transform_eta_beta(
+            d1eta, d2eta, d2meta, Xs, only_grad=False, sparse=self.return_sparse
+        )
 
         return H
 
-    def get_resid(self, coef, coef_split_idx, ys, Xs, **kwargs):
+    def get_resid(
+        self,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
+        **kwargs,
+    ) -> np.ndarray:
         """
         Function to compute residuals of GAMM(LSS) model when estimated via GSMM.
 
@@ -471,9 +523,9 @@ class GAMLSSGSMMFamily(GSMMFamily):
             their indices to save memory.
         :type ys: [np.ndarray or None]
         :param Xs: A list of sparse model matrices per likelihood parameter.
-        :type Xs: [scp.sparse.csc_array]
-        :return: The Hessian of the log-likelihood evaluated at ``coef``.
-        :rtype: scp.sparse.csc_array
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
+        :return: The residuals of the model.
+        :rtype: np.ndarray
         """
 
         y = ys[0]
@@ -645,8 +697,8 @@ def sample_MVN(
     # Sample with L
     if LI is None:
         z = cpp_backsolve_tr(
-            Cs.tocsc(), scp.sparse.csc_array(z)
-        ).toarray()  # actually y
+            Cs if isinstance(Cs, np.ndarray) else Cs.toarray(), z
+        )  # actually y
 
         if isinstance(mu, int):
             return P.T @ z
@@ -1081,7 +1133,11 @@ def compute_bias_corrected_edf(model, overwrite: bool = False) -> None:
                 Fjr = F[:, S_start:S_end]
                 Fjd = F_diag[S_start:S_end]
 
-                Fjtrace = Fjc.multiply(Fjr.T).sum()
+                Fjtrace = (
+                    (Fjc * Fjr.T).sum()
+                    if isinstance(Fjc, np.ndarray)
+                    else Fjc.multiply(Fjr.T).sum()
+                )
                 t_edf1 = 2 * np.sum(Fjd) - Fjtrace
                 term_edf1.append(t_edf1)
                 edf1 += t_edf1
@@ -1266,9 +1322,11 @@ def approx_smooth_p_values(
 
                 # Extract sub-block of V_{b_j}
                 V_b_j = (
-                    (lvi[:, start_coef:end_coef].T @ lvi[:, start_coef:end_coef])
-                    * scale
-                ).toarray()
+                    lvi[:, start_coef:end_coef].T @ lvi[:, start_coef:end_coef]
+                ) * scale
+
+                if isinstance(V_b_j, np.ndarray) is False:
+                    V_b_j = V_b_j.toarray()
 
                 # Form QR of sub-block of X associated with current smooth
                 X_b_j = X[:, start_coef:end_coef]
@@ -1278,7 +1336,10 @@ def approx_smooth_p_values(
                     sel = np_gen.choice(X_b_j.shape[0], size=n_sel, replace=False)
                     X_b_j = X_b_j[sel, :]
 
-                R = np.linalg.qr(X_b_j.toarray(), mode="r")
+                R = np.linalg.qr(
+                    X_b_j if isinstance(X_b_j, np.ndarray) else X_b_j.toarray(),
+                    mode="r",
+                )
 
                 # Form generalized inverse of V_f (see Wood, 2017; section 6.12.1)
                 RVR = R @ V_b_j @ R.T
@@ -1642,7 +1703,7 @@ def adjust_CI(
 def compute_reml_candidate_GAMM(
     family: Family,
     y: np.ndarray,
-    X: scp.sparse.csc_array,
+    X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix,
     penalties: list[LambdaTerm],
     n_c: int = 10,
     offset: float | np.ndarray = 0,
@@ -1673,7 +1734,7 @@ def compute_reml_candidate_GAMM(
     :param y: vector of observations
     :type y: np.ndarray
     :param X: Model matrix
-    :type X: scp.sparse.csc_array
+    :type X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix
     :param penalties: List of penalties
     :type penalties: list[LambdaTerm]
     :param n_c: Number of cores to use, defaults to 10
@@ -1716,7 +1777,9 @@ def compute_reml_candidate_GAMM(
             eta, mu, coef, Pr, _, LP, keep, drop = update_coef(
                 y - offset, X, X, family, S_emb, S_root, n_c, None, 0
             )
-            nH = (X.T @ X).tocsc()
+            nH = X.T @ X
+            if isinstance(nH, np.ndarray) is False:
+                nH = nH.tocsc()
         else:
             # GAMM - have to repeat Newton step
             yb = y
@@ -1823,7 +1886,10 @@ def compute_reml_candidate_GAMM(
             inval = inval.flatten()
 
             W = Wr_fix @ Wr_fix
-            nH = (X.T @ W @ X).tocsc()
+            nH = X.T @ W @ X
+
+            if isinstance(nH, np.ndarray) is False:
+                nH = nH.tocsc()
 
             # Dropped some coef, needs to be reflected in nH
         if drop is not None:
@@ -1885,14 +1951,19 @@ def compute_reml_candidate_GAMM(
 
             # Dropped some terms, need to insert zero columns and rows for dropped coefficients
             if Linv.shape[1] < X.shape[1]:
-                Linvdat, Linvrow, Linvcol = translate_sparse(Linv)
+                if isinstance(Linv, np.ndarray):
+                    LinvE = np.zeros((X.shape[1], X.shape[1]))
+                    LinvE[np.ix_(keep, keep)] = Linv
+                    Linv = LinvE
+                else:
+                    Linvdat, Linvrow, Linvcol = translate_sparse(Linv)
 
-                Linvrow = keep[Linvrow]
-                Linvcol = keep[Linvcol]
+                    Linvrow = keep[Linvrow]
+                    Linvcol = keep[Linvcol]
 
-                Linv = scp.sparse.csc_array(
-                    (Linvdat, (Linvrow, Linvcol)), shape=(X.shape[1], X.shape[1])
-                )
+                    Linv = scp.sparse.csc_array(
+                        (Linvdat, (Linvrow, Linvcol)), shape=(X.shape[1], X.shape[1])
+                    )
 
         if origNH is not None:
             # Compute trace for tau2
@@ -1924,7 +1995,7 @@ def compute_reml_candidate_GAMM(
 def compute_REML_candidate_GSMM(
     family: GAMLSSFamily | GSMMFamily,
     y: np.ndarray | list[np.ndarray],
-    Xs: list[scp.sparse.csc_array],
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
     penalties: list[LambdaTerm],
     coef: np.ndarray,
     n_coef: int,
@@ -1937,6 +2008,7 @@ def compute_REML_candidate_GSMM(
     keep_drop: (
         tuple[np.typing.NDArray[np.int_], np.typing.NDArray[np.int_]] | None
     ) = None,
+    sparse: bool = True,
 ) -> tuple[float, scp.sparse.csc_array, scp.sparse.csc_array, np.ndarray, float, float]:
     """Allows to evaluate REML criterion (e.g., Wood, 2011; Wood, 2016) efficiently for a set of
     \\lambda values for a GSMM or GAMMLSS.
@@ -1951,7 +2023,7 @@ def compute_REML_candidate_GSMM(
     :param y: Vector of observations or list of vectors (for GSMM)
     :type y: np.ndarray | list[np.ndarray]
     :param Xs: List of model matrices
-    :type Xs: list[scp.sparse.csc_array]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
     :param penalties: List of penalties
     :type penalties: list[LambdaTerm]
     :param coef: Final coefficient estimate obtained from estimation - used to initialize
@@ -1975,6 +2047,8 @@ def compute_REML_candidate_GSMM(
     :type origNH: scp.sparse.csc_array | None, optional
     :param keep_drop: Set of kept and dropped coeeficients during estimation or None
     :type keep_drop: tuple[np.typing.NDArray[np.int_],np.typing.NDArray[np.int_]] | None
+    :param sparse: Whether the Hessian is sparse for GAMMLSS models, defaults to True
+    :type sparse: bool, optional
     :return: reml criterion,conditional covariance matrix of coefficients for this lambda,
         un-pivoted inverse of the pivoted Cholesky of the negative hessian of the penalized llk,
         coefficients, total edf, llk
@@ -2013,7 +2087,6 @@ def compute_REML_candidate_GSMM(
                 __old_opt.method = "qEFS"
                 __old_opt.bfgs_options = bfgs_options
                 __old_opt.sample_hessian = True
-                __old_opt.sample_hessian_method = 0
                 __old_opt.sample_hessian_options = {}
                 __old_opt.fcols = None
                 __old_opt.acols = None
@@ -2061,10 +2134,8 @@ def compute_REML_candidate_GSMM(
                     explicit=True,
                 )
 
-                H = scp.sparse.csc_array(H)
-
                 # Get Cholesky factor of approximate inverse of penalized hessian
-                pH = scp.sparse.csc_array((-1 * H) + S_emb)
+                pH = (-1 * H) + S_emb
                 Lp, Pr, _ = cpp_cholP(pH)
                 LVp0 = compute_Linv(Lp, n_c)
                 LV = apply_eigen_perm(Pr, LVp0)
@@ -2104,6 +2175,7 @@ def compute_REML_candidate_GSMM(
                     None,
                     n_c,
                     keep_drop,
+                    sparse,
                 )
             )
 
@@ -2142,7 +2214,7 @@ def compute_REML_candidate_GSMM(
             scp.sparse.csc_matrix((len(coef), len(coef))),
             scp.sparse.csc_matrix((len(coef), len(coef))),
             coef.reshape(-1, 1),
-            total_edf,
+            coef.shape[0],
             -np.inf,
         )
 
@@ -2151,7 +2223,7 @@ def compute_REML_candidate_GSMM(
 
 def REML(
     llk: float,
-    nH: scp.sparse.csc_array,
+    nH: scp.sparse.csc_array | np.ndarray,
     coef: np.ndarray,
     scale: float,
     penalties: list[LambdaTerm],
@@ -2175,7 +2247,7 @@ def REML(
     :param llk: log-likelihood of model
     :type llk: float
     :param nH: negative hessian of log-likelihood of model
-    :type nH: scp.sparse.csc_array
+    :type nH: scp.sparse.csc_array | np.ndarray
     :param coef: Estimated vector of coefficients of shape (-1,1)
     :type coef: np.ndarray
     :param scale: (Estimated) scale parameter - can be set to 1 for GAMLSS or GSMMs.
@@ -2374,12 +2446,7 @@ def estimateVp(
         set of candidates. Setting this to ``np.inf`` means a multivariate normal is used for
         sampling, defaults to 40
     :type df: int, optional
-    :param n_c: Number of cores to use during parallel parts of the correction. **Note**, if you
-        want to use more than one core for more generic models it will most likely be necessary
-        to install ``mssm`` with the extra ``mp`` dependency set. This installs the ``multiprocess``
-        package, which is necessary since most general models implement at least one local function
-        that cannot be serialized by the standard ``multiprocessing`` library. To install the
-        extra dependency set simply run ``pip install -U mssm[mp]``, defaults to 10
+    :param n_c: Number of cores to use during parallel parts of the correction, defaults to 10
     :type n_c: int, optional
     :param drop_NA: Whether to drop rows in the **model matrices** corresponding to NAs in the
         dependent variable vector. Defaults to True.
@@ -2453,7 +2520,7 @@ def estimateVp(
     if isinstance(family, Family):
         y = model.get_ys()
 
-        X = model.get_mmat()
+        X = model.get_mmat(dense=not model._uses_sparse_matrices)
 
         orig_scale = family.scale
         if family.twopar:
@@ -2461,12 +2528,12 @@ def estimateVp(
     else:
         if isinstance(family, GAMLSSFamily):
             y = model.get_ys()
-            Xs = model.get_mmat()
+            Xs = model.get_mmat(dense=not model._uses_sparse_matrices)
 
         else:
             # Need all y vectors in y, i.e., y is actually ys
             y = model.get_ys(drop_NA=drop_NA)
-            Xs = model.get_mmat(drop_NA=drop_NA)
+            Xs = model.get_mmat(drop_NA=drop_NA, dense=not model._uses_sparse_matrices)
 
         keep_drop = None
         if model.info.dropped is not None:
@@ -2515,6 +2582,7 @@ def estimateVp(
                         method=method,
                         bfgs_options=bfgs_options,
                         keep_drop=keep_drop,
+                        sparse=model._uses_sparse_matrices,
                     )
 
                 return -reml
@@ -2647,6 +2715,7 @@ def estimateVp(
             isinstance(family, Gaussian)
             and isinstance(family.link, Identity)
             and method == "Chol"
+            and model._uses_sparse_matrices
         ):  # Strictly additive case
             with (
                 managers.SharedMemoryManager() as manager,
@@ -2785,6 +2854,7 @@ def estimateVp(
                     repeat(bfgs_options),
                     repeat(origNH),
                     repeat(keep_drop),
+                    repeat(model._uses_sparse_matrices),
                 )
                 with mp.Pool(processes=n_c) as pool:
                     (
@@ -2865,6 +2935,7 @@ def estimateVp(
                         method=method,
                         bfgs_options=bfgs_options,
                         keep_drop=keep_drop,
+                        sparse=model._uses_sparse_matrices,
                     )
                 except:  # noqa: E722
                     warnings.warn(
@@ -3100,8 +3171,8 @@ def _compute_VB_corr_terms_MP(
 
 
 def compute_Vp_WPS(
-    Vbr: scp.sparse.csc_array,
-    H: scp.sparse.csc_array,
+    Vbr: scp.sparse.csc_array | np.ndarray,
+    H: scp.sparse.csc_array | np.ndarray,
     S_emb: scp.sparse.csc_array,
     penalties: list[LambdaTerm],
     coef: np.ndarray,
@@ -3131,9 +3202,9 @@ def compute_Vp_WPS(
     :param Vbr: Transpose of root for the estimate for the (unscaled) covariance matrix of
         :math:`\\boldsymbol{\\beta} | y, \\boldsymbol{\\lambda}` - the coefficients estimated
         by the model.
-    :type Vbr: scp.sparse.csc_array
+    :type Vbr: scp.sparse.csc_array | np.ndarray
     :param H: The Hessian of the log-likelihood
-    :type H: scp.sparse.csc_array
+    :type H: scp.sparse.csc_array | np.ndarray
     :param S_emb: The weighted penalty matrix.
     :type S_emb: scp.sparse.csc_array
     :param penalties: A list holding the Lambdaterms estimated for the model.
@@ -3247,23 +3318,22 @@ def compute_Vp_WPS(
             # Now second partial derivative of hessian of negative penalized likelihood with respect
             # to log(lambda) - assuming that H does not
             # depend on log(lambda)
-            t4 = (
-                0.5
-                * (penalties[peni].D_J_emb.T @ Vbr.T @ Vbr @ penalties[penj].D_J_emb)
-                .power(2)
-                .sum()
-                * penalties[peni].lam
-                * penalties[penj].lam
-            )
+            tr4 = penalties[peni].D_J_emb.T @ Vbr.T @ Vbr @ penalties[penj].D_J_emb
+            if isinstance(tr4, np.ndarray):
+                tr4 = np.power(tr4, 2).sum()
+            else:
+                tr4 = tr4.power(2).sum()
+            t4 = 0.5 * tr4 * penalties[peni].lam * penalties[penj].lam
 
             # And first
             t5 = 0
+            tr5 = Vbr @ penalties[peni].D_J_emb
+            if isinstance(tr5, np.ndarray):
+                tr5 = np.power(tr5, 2).sum()
+            else:
+                tr5 = tr5.power(2).sum()
             if gamma:
-                t5 = (
-                    0.5
-                    * (Vbr @ penalties[peni].D_J_emb).power(2).sum()
-                    * penalties[peni].lam
-                )
+                t5 = 0.5 * tr5 * penalties[peni].lam
 
             # Collect result
             Vpij = (t1 - t2 + t3 + t4 - t5)[0, 0]
@@ -3306,10 +3376,10 @@ def compute_Vp_WPS(
 
 
 def compute_Vb_corr_WPS(
-    Vbr: scp.sparse.csc_array,
-    Vpr,
-    Vr,
-    H: scp.sparse.csc_array,
+    Vbr: scp.sparse.csc_array | np.ndarray,
+    Vpr: np.ndarray,
+    Vr: np.ndarray,
+    H: scp.sparse.csc_array | np.ndarray,
     S_emb: scp.sparse.csc_array,
     penalties: list[LambdaTerm],
     coef: np.ndarray,
@@ -3333,7 +3403,7 @@ def compute_Vb_corr_WPS(
     :param Vbr: Transpose of root for the estimate for the (unscaled) covariance matrix of
         :math:`\\boldsymbol{\\beta} | y, \\boldsymbol{\\lambda}` - the coefficients estimated
         by the model.
-    :type Vbr: scp.sparse.csc_array
+    :type Vbr: scp.sparse.csc_array | np.ndarray
     :param Vpr: A (regularized) estimate of the covariance matrix of
         :math:`\\boldsymbol{\\rho}` - the log smoothing penalties.
     :type Vpr: np.ndarray
@@ -3341,7 +3411,7 @@ def compute_Vb_corr_WPS(
         :math:`\\boldsymbol{\\rho}` - the log smoothing penalties.
     :type Vr: np.ndarray
     :param H: The Hessian of the log-likelihood
-    :type H: scp.sparse.csc_array
+    :type H: scp.sparse.csc_array | np.ndarray
     :param S_emb: The weighted penalty matrix.
     :type S_emb: scp.sparse.csc_array
     :param penalties: A list holding the Lambdaterms estimated for the model.
@@ -3372,7 +3442,7 @@ def compute_Vb_corr_WPS(
     PI = scp.sparse.diags(1 / Sdiag, format="csc")
     P = scp.sparse.diags(Sdiag, format="csc")
     LP, code = cpp_chol(PI @ nH @ PI)
-    R = (P @ LP).T.toarray()
+    R = (P @ LP).T if isinstance(LP, np.ndarray) else (P @ LP).T.toarray()
     # print((R.T@R - nH).max())
 
     # Get partial derivatives of beta with respect to \rho, the log smoothing penalties
@@ -3776,12 +3846,7 @@ def correct_VB(
         set of candidates. Setting this to ``np.inf`` means a multivariate normal is used for
         sampling, defaults to 40
     :type df: int, optional
-    :param n_c: Number of cores to use during parallel parts of the correction. **Note**, if you
-        want to use more than one core for more generic models it will most likely be necessary
-        to install ``mssm`` with the extra ``mp`` dependency set. This installs the ``multiprocess``
-        package, which is necessary since most general models implement at least one local function
-        that cannot be serialized by the standard ``multiprocessing`` library. To install the
-        extra dependency set simply run ``pip install -U mssm[mp]``, defaults to 10
+    :param n_c: Number of cores to use during parallel parts of the correction, defaults to 10
     :type n_c: int, optional
     :param form_t1: Whether or not the smoothness uncertainty + smoothness bias corrected edf should
         be computed, defaults to False
@@ -3891,7 +3956,7 @@ def correct_VB(
 
     if isinstance(family, Family):
         y = model.get_ys()
-        X = model.get_mmat()
+        X = model.get_mmat(dense=not model._uses_sparse_matrices)
 
         orig_scale = family.scale
         if family.twopar:
@@ -3899,12 +3964,12 @@ def correct_VB(
     else:
         if isinstance(family, GAMLSSFamily):
             y = model.get_ys()
-            Xs = model.get_mmat()
+            Xs = model.get_mmat(dense=not model._uses_sparse_matrices)
 
         else:
             # Need all y vectors in y, i.e., y is actually ys
             y = model.get_ys(drop_NA=drop_NA)
-            Xs = model.get_mmat(drop_NA=drop_NA)
+            Xs = model.get_mmat(drop_NA=drop_NA, dense=not model._uses_sparse_matrices)
 
         keep_drop = None
         if model.info.dropped is not None:
@@ -4057,6 +4122,7 @@ def correct_VB(
                 isinstance(family, Gaussian)
                 and isinstance(family.link, Identity)
                 and method == "Chol"
+                and model._uses_sparse_matrices
             ):  # Fast Strictly additive case
                 with (
                     managers.SharedMemoryManager() as manager,
@@ -4216,6 +4282,7 @@ def correct_VB(
                         repeat(bfgs_options),
                         repeat(origNH),
                         repeat(keep_drop),
+                        repeat(model._uses_sparse_matrices),
                     )
                     with mp.Pool(processes=n_c) as pool:
                         (
@@ -4317,6 +4384,7 @@ def correct_VB(
                             method=method,
                             bfgs_options=bfgs_options,
                             keep_drop=keep_drop,
+                            sparse=model._uses_sparse_matrices,
                         )
                     except:  # noqa: E722
                         warnings.warn(
@@ -4429,7 +4497,10 @@ def correct_VB(
                         Wr_fix = Wr
 
                     W = Wr_fix @ Wr_fix
-                    nH = (X.T @ W @ X).tocsc()
+                    nH = X.T @ W @ X
+
+                    if isinstance(nH, np.ndarray) is False:
+                        nH = nH.tocsc()
 
                     # Can reset theta now:
                     if isinstance(family, ExtendedFamily) and family.est_theta:
@@ -4496,7 +4567,12 @@ def correct_VB(
 
                     # Get derivatives with respect to coef
                     _, H = deriv_transform_eta_beta(
-                        d1eta, d2eta, d2meta, Xs, only_grad=False
+                        d1eta,
+                        d2eta,
+                        d2meta,
+                        Xs,
+                        only_grad=False,
+                        sparse=model._uses_sparse_matrices,
                     )
 
                 else:  # GSMM
@@ -4505,11 +4581,16 @@ def correct_VB(
                 nH = -1 * H
 
             if verbose:
+                Hdnorm = (
+                    np.linalg.norm(nH + model.hessian)
+                    if isinstance(nH, np.ndarray)
+                    else scp.sparse.linalg.norm(nH + model.hessian)
+                )
                 print(
                     (
                         f"Recomputed negative Hessian. 2 Norm of coef. difference: "
                         f"{np.linalg.norm(mean_coef-model.coef)}. F. Norm of n. Hessian "
-                        f"difference: {scp.sparse.linalg.norm(nH + model.hessian)}"
+                        f"difference: {Hdnorm}"
                     )
                 )
 
@@ -4653,7 +4734,10 @@ def correct_VB(
         nH = -1 * model.hessian
 
     # Check V is full rank - can use LV for sampling as well..
-    LV, code = cpp_chol(scp.sparse.csc_array(V))
+    if isinstance(V, np.matrix):
+        # Might add sparse to dense in some cases which results in a matrix rather than array
+        V = V.A
+    LV, code = cpp_chol(V)
     if code != 0:
 
         # Check first whether Cholesky can be formed for set of identifiable coefficients.
@@ -4671,7 +4755,7 @@ def correct_VB(
             Vdrop = V[keep, :]
             Vdrop = Vdrop[:, keep]
 
-            LVdrop, code2 = cpp_chol(scp.sparse.csc_array(Vdrop))
+            LVdrop, code2 = cpp_chol(Vdrop)
 
             if code2 == 0:
 
@@ -4683,14 +4767,18 @@ def correct_VB(
                         "deemed identifiable during estimation."
                     )
                 )
+                if isinstance(LVdrop, np.ndarray):
+                    LVdropE = np.zeros(model.hessian.shape)
+                    LVdropE[np.ix_(keep, keep)] = LVdrop
+                    LV = LVdropE
+                else:
+                    LVdat, LVrow, LVcol = translate_sparse(LVdrop)
+                    LVrow = keep[LVrow]
+                    LVcol = keep[LVcol]
 
-                LVdat, LVrow, LVcol = translate_sparse(LVdrop)
-                LVrow = keep[LVrow]
-                LVcol = keep[LVcol]
-
-                LV = scp.sparse.csc_array(
-                    (LVdat, (LVrow, LVcol)), shape=model.hessian.shape
-                )
+                    LV = scp.sparse.csc_array(
+                        (LVdat, (LVrow, LVcol)), shape=model.hessian.shape
+                    )
 
         # V is definitely not PD..
         if code2 != 0:
@@ -4718,7 +4806,11 @@ def correct_VB(
         ucF = (model.lvi.T @ model.lvi) @ (-1 * model.hessian)
 
     # Compute upper bound
-    ucFFd = ucF.multiply(ucF.T).sum(axis=0)
+    ucFFd = (
+        (ucF * ucF.T).sum(axis=0)
+        if isinstance(ucF, np.ndarray)
+        else ucF.multiply(ucF.T).sum(axis=0)
+    )
     total_edf2 = 2 * model.edf - np.sum(ucFFd)
     edf2 = 2 * ucF.diagonal() - ucFFd
 

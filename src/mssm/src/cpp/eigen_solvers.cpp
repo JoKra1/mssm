@@ -16,6 +16,35 @@ namespace py = pybind11;
 
 typedef Eigen::Vector<long long int, Eigen::Dynamic> VectorXi64;
 
+std::tuple<
+    Eigen::MatrixXd,
+    int
+> dchol(
+    const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &A
+)
+{
+    // Compute A= LL.T for dense case
+
+    // Compute LDLT decomposition
+    Eigen::LLT<Eigen::MatrixXd> solver(A);
+
+    // Check Failure
+    if (solver.info()!=Eigen::Success)
+    {
+        Eigen::MatrixXd L(A.cols(),A.cols());
+        L.setIdentity();
+        Eigen::VectorXd d;
+        d.setZero(A.cols());
+        return std::make_tuple(std::move(L),1);
+    }
+
+    // Get the L matrix as a dense MatrixXd
+    Eigen::MatrixXd L = solver.matrixL();
+
+    return std::make_tuple(std::move(L),0);
+
+}
+
 std::tuple<Eigen::SparseMatrix<double,0,long long int>,int> chol(long long int Arows, long long int Acols, long long int Annz,
                                                  py::array_t<double, py::array::f_style | py::array::forcecast> Adata,
                                                  py::array_t<long long int, py::array::f_style | py::array::forcecast> Aidptr,
@@ -45,6 +74,44 @@ std::tuple<Eigen::SparseMatrix<double,0,long long int>,int> chol(long long int A
     Eigen::SparseMatrix<double,0,long long int> L = solver.matrixL();
     
     return std::make_tuple(std::move(L),0);
+}
+
+std::tuple<
+    Eigen::MatrixXd,
+    Eigen::VectorXd,
+    Eigen::VectorXi,
+    int
+> dcholP(
+    const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &A
+)
+{
+    // Compute A= PLDLP.T decomposition of dense matrix A and return L, D as a vector and the
+    // column indices of P.
+
+    // Compute LDLT decomposition
+    Eigen::LDLT<Eigen::MatrixXd> solver(A);
+
+    // Also get the permutation
+    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic> P(solver.transpositionsP());
+
+    // Check Failure
+    if (solver.info()!=Eigen::Success)
+    {
+        Eigen::MatrixXd L(A.cols(),A.cols());
+        L.setIdentity();
+        Eigen::VectorXd d;
+        d.setZero(A.cols());
+        return std::make_tuple(std::move(L),std::move(d),P.indices(),1);
+    }
+
+    // Get the diagonal of D as a VectorXd
+    Eigen::VectorXd d = solver.vectorD();
+
+    // Get the L matrix as a dense MatrixXd
+    Eigen::MatrixXd L = solver.matrixL();
+
+    return std::make_tuple(std::move(L),std::move(d),P.indices(),0);
+
 }
 
 std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,int> cholP(long long int Arows, long long int Acols, long long int Annz,
@@ -148,12 +215,28 @@ std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,int,int> pqrr(
     
 }
 
-std::tuple<Eigen::VectorXi,int> dpqrr(const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &A){
+std::tuple<
+    Eigen::MatrixXd,
+    Eigen::VectorXi,
+    int
+> dpqrr(
+    const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &A
+)
+{
     // Rank revealing QR decomposition of **dense** matrix A. Only pivot and rank is returned
     Eigen::ColPivHouseholderQR<Eigen::MatrixXd> solver;
     solver.compute(A);
 
-    return std::make_tuple(solver.colsPermutation().indices(),solver.rank());
+    if(solver.info()!=Eigen::Success)
+    {
+        Eigen::MatrixXd R(A.cols(),A.cols());
+        R.setIdentity();
+        return std::make_tuple(std::move(R),solver.colsPermutation().indices(),0);
+    }
+
+    Eigen::MatrixXd R = solver.matrixR().topLeftCorner(solver.rank(), solver.rank()).template triangularView<Eigen::Upper>();
+
+    return std::make_tuple(std::move(R),solver.colsPermutation().indices(),solver.rank());
 }
 
 std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64, VectorXi64, int,int> spqr(long long int Arows, long long int Acols, long long int Annz,
@@ -400,7 +483,75 @@ std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,int> solve_LXX
     return std::make_tuple(std::move(id),P.indices(),0);
 }
 
-std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,Eigen::VectorXd,int> solve_coef(Eigen::VectorXd y, long long int Xrows, long long int Xcols, long long int Xnnz,
+std::tuple<
+    Eigen::MatrixXd,
+    Eigen::VectorXd,
+    Eigen::VectorXi,
+    Eigen::VectorXd,
+    int
+> dsolve_coef(
+    const Eigen::Ref<Eigen::VectorXd> &y,
+    const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &X,
+    long long int Srows, long long int Scols, long long int Snnz,
+    py::array_t<double, py::array::f_style | py::array::forcecast> Sdata,
+    py::array_t<long long int, py::array::f_style | py::array::forcecast> Sidptr,
+    py::array_t<long long int, py::array::f_style | py::array::forcecast> Sindices
+)
+{
+    // Stability pivoted LDL for solve
+
+    // get S
+    Eigen::Map<
+        Eigen::SparseMatrix<
+            double,0,long long int
+        >
+    > S(Srows,Scols,Snnz,
+        (Eigen::SparseMatrix<double,0,long long int>::StorageIndex*) Sidptr.data(),
+        (Eigen::SparseMatrix<double,0,long long int>::StorageIndex*) Sindices.data(),
+        (Eigen::SparseMatrix<double,0,long long int>::Scalar*) Sdata.data());
+    
+
+    // Compute LDLT decomposition
+    Eigen::LDLT<Eigen::MatrixXd> solver;
+    solver.compute(X.transpose() * X + S);
+
+    // Also get the permutation
+    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic> P(solver.transpositionsP());
+
+    Eigen::VectorXd coef;
+    coef.setZero(Scols);
+
+    // Check Failure
+    if (solver.info()!=Eigen::Success)
+    {
+        Eigen::MatrixXd L(Scols,Scols);
+        L.setIdentity();
+        Eigen::VectorXd d;
+        d.setZero(Scols);
+        return std::make_tuple(std::move(L),std::move(d),P.indices(),std::move(coef),1);
+    }
+
+    // Get the diagonal of D as a VectorXd
+    Eigen::VectorXd d = solver.vectorD();
+
+    // Get the L matrix as a dense MatrixXd
+    Eigen::MatrixXd L = solver.matrixL();
+
+    // Solve for coef (see Wood & Fasiolo, 2017)
+    coef = solver.solve(X.transpose() * y);
+
+    int code = 0;
+    if (solver.info()!=Eigen::Success)
+    {
+        code = 2;
+    }
+
+    return std::make_tuple(std::move(L),std::move(d),P.indices(),std::move(coef),code);
+
+}
+
+std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,Eigen::VectorXd,int> solve_coef(const Eigen::Ref<Eigen::VectorXd> &y,
+                                                                                       long long int Xrows, long long int Xcols, long long int Xnnz,
                                                                                        py::array_t<double, py::array::f_style | py::array::forcecast> Xdata,
                                                                                        py::array_t<long long int, py::array::f_style | py::array::forcecast> Xidptr,
                                                                                        py::array_t<long long int, py::array::f_style | py::array::forcecast> Xindices,
@@ -458,7 +609,57 @@ std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,Eigen::VectorX
     return std::make_tuple(solver.matrixL(),P.indices(),std::move(coef),0);
 }
 
-std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,Eigen::VectorXd,int> solve_coefXX(Eigen::VectorXd Xy, long long int Xrows, long long int Xcols, long long int Xnnz,
+std::tuple<
+    Eigen::MatrixXd,
+    Eigen::VectorXd,
+    Eigen::VectorXi,
+    Eigen::VectorXd,
+    int
+> dsolve_coefXX(
+    const Eigen::Ref<Eigen::VectorXd> &Xy,
+    const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &XXS
+)
+{
+    // Compute LDLT decomposition
+    Eigen::LDLT<Eigen::MatrixXd> solver;
+    solver.compute(XXS);
+
+    // Also get the permutation
+    Eigen::PermutationMatrix<Eigen::Dynamic,Eigen::Dynamic> P(solver.transpositionsP());
+
+    Eigen::VectorXd coef;
+    coef.setZero(XXS.cols());
+
+    // Check Failure
+    if (solver.info()!=Eigen::Success)
+    {
+        Eigen::MatrixXd L(XXS.cols(),XXS.cols());
+        L.setIdentity();
+        Eigen::VectorXd d;
+        d.setZero(XXS.cols());
+        return std::make_tuple(std::move(L),std::move(d),P.indices(),std::move(coef),1);
+    }
+
+    // Get the diagonal of D as a VectorXd
+    Eigen::VectorXd d = solver.vectorD();
+
+    // Get the L matrix as a dense MatrixXd
+    Eigen::MatrixXd L = solver.matrixL();
+
+    // Solve for coef (see Wood & Fasiolo, 2017)
+    coef = solver.solve(Xy);
+
+    int code = 0;
+    if (solver.info()!=Eigen::Success)
+    {
+        code = 2;
+    }
+
+    return std::make_tuple(std::move(L),std::move(d),P.indices(),std::move(coef),code);
+}
+
+std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,Eigen::VectorXd,int> solve_coefXX(const Eigen::Ref<Eigen::VectorXd> &Xy,
+                                                                                         long long int Xrows, long long int Xcols, long long int Xnnz,
                                                                                          py::array_t<double, py::array::f_style | py::array::forcecast> Xdata,
                                                                                          py::array_t<long long int, py::array::f_style | py::array::forcecast> Xidptr,
                                                                                          py::array_t<long long int, py::array::f_style | py::array::forcecast> Xindices){
@@ -507,7 +708,8 @@ std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,Eigen::VectorX
     return std::make_tuple(solver.matrixL(),P.indices(),std::move(coef),0);
 }
 
-std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,Eigen::VectorXd,long long int,int> solve_coef_pqr(Eigen::VectorXd y, long long int Xrows, long long int Xcols, long long int Xnnz,
+std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,Eigen::VectorXd,long long int,int> solve_coef_pqr(const Eigen::Ref<Eigen::VectorXd> &y,
+                                                                                           long long int Xrows, long long int Xcols, long long int Xnnz,
                                                                                            py::array_t<double, py::array::f_style | py::array::forcecast> Xdata,
                                                                                            py::array_t<long long int, py::array::f_style | py::array::forcecast> Xidptr,
                                                                                            py::array_t<long long int, py::array::f_style | py::array::forcecast> Xindices,
@@ -628,7 +830,53 @@ std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,Eigen::VectorX
     return std::make_tuple(R2,P2.indices(),std::move(coef),solver2.rank(),0);
 }
 
-std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,VectorXi64,Eigen::VectorXd,long long int,int> solve_coef_pqr2(Eigen::VectorXd y, long long int Xrows, long long int Xcols, long long int Xnnz,
+std::tuple<
+    Eigen::MatrixXd,
+    Eigen::VectorXi,
+    Eigen::VectorXd,
+    long int,
+    int
+> dsolve_coef_pqr(
+    const Eigen::Ref<Eigen::VectorXd> &y,
+    const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &XE
+)
+{
+    // Variant of the stable QR approach from Wood (2011) without initial check for rank deficiency that
+    // is not a result of the choices for lambda. Matrix XE has square root of S_\lambda
+    // concatenated
+    Eigen::ColPivHouseholderQR<Eigen::MatrixXd> solver;
+    solver.compute(XE);
+
+    // Initialize coef vector
+    Eigen::VectorXd coef;
+    coef.setZero(XE.cols());
+
+    if(solver.info()!=Eigen::Success)
+    {
+        Eigen::MatrixXd R(XE.cols(),XE.cols());
+        R.setIdentity();
+        return std::make_tuple(std::move(R),solver.colsPermutation().indices(),std::move(coef),0,1);
+    }
+
+    // Extract matrix R (ideally root of X.T@X + S)
+    Eigen::MatrixXd R = solver.matrixR().topLeftCorner(solver.rank(), solver.rank()).template triangularView<Eigen::Upper>();
+
+    // And solve for coef. Here the lhs is like what is discussed in first chapter of Wood (2017)
+    // Essentially coef holds f later.
+    Eigen::VectorXd yE,Qy;
+    yE.setZero(XE.rows());
+    yE.head(y.rows()) = y;
+    Qy = solver.householderQ().adjoint() * yE;
+    coef = Qy.head(solver.rank());
+
+    // Now do the actual solve
+    R.triangularView<Eigen::Upper>().solveInPlace(coef);
+
+    return std::make_tuple(std::move(R),solver.colsPermutation().indices(),std::move(coef),solver.rank(),0);
+}
+
+std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,VectorXi64,Eigen::VectorXd,long long int,int> solve_coef_pqr2(const Eigen::Ref<Eigen::VectorXd> &y,
+                                                                                           long long int Xrows, long long int Xcols, long long int Xnnz,
                                                                                            py::array_t<double, py::array::f_style | py::array::forcecast> Xdata,
                                                                                            py::array_t<long long int, py::array::f_style | py::array::forcecast> Xidptr,
                                                                                            py::array_t<long long int, py::array::f_style | py::array::forcecast> Xindices,
@@ -717,6 +965,17 @@ std::tuple<Eigen::SparseMatrix<double,0,long long int>,VectorXi64,VectorXi64,Eig
     return std::make_tuple(R2,P1.indices(),P2.indices(),std::move(coef),solver2.rank(),0);
 }
 
+Eigen::MatrixXd dsolve_tr(
+    const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &A,
+    Eigen::MatrixXd C
+)
+{
+    // Solves A*B=C, where A is lower triangular. This can be utilized to obtain B = inv(A), when C is
+    // the identity. For dense case
+    A.triangularView<Eigen::Lower>().solveInPlace(C);
+    return C;
+}
+
 Eigen::SparseMatrix<double,0,long long int> solve_tr(long long int Arows, long long int Acols, long long int Annz,
                                      py::array_t<double, py::array::f_style | py::array::forcecast> Adata,
                                      py::array_t<long long int, py::array::f_style | py::array::forcecast> Aidptr,
@@ -733,6 +992,16 @@ Eigen::SparseMatrix<double,0,long long int> solve_tr(long long int Arows, long l
                                               (Eigen::SparseMatrix<double,0,long long int>::Scalar*) Adata.data()); 
 
     A.triangularView<Eigen::Lower>().solveInPlace(C);
+    return C;
+}
+
+Eigen::MatrixXd dbacksolve_tr(
+    const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &A,
+    Eigen::MatrixXd C
+)
+{
+    // Solves A*B=C, where A is UPPER triangular. . For dense case
+    A.triangularView<Eigen::Upper>().solveInPlace(C);
     return C;
 }
 
@@ -756,8 +1025,8 @@ Eigen::SparseMatrix<double,0,long long int> backsolve_tr(long long int Arows, lo
 }
 
 std::tuple<VectorXi64,long long int> id_dependencies(const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &X1,
-                                                                     const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &X2,
-                                                                     double tol)
+                                                     const Eigen::Ref<Eigen::MatrixXd,0,Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> &X2,
+                                                     double tol)
             {
                 /*
                 Identify linear dependencies between matrices X1 and X2, based on section 5.6.3 in Wood (2017) and
@@ -816,20 +1085,27 @@ std::tuple<VectorXi64,long long int> id_dependencies(const Eigen::Ref<Eigen::Mat
 
 PYBIND11_MODULE(eigen_solvers, m) {
     m.doc() = "cpp solvers for GAMM, GAMMLSS, and GSMM estimation";
+    m.def("dchol", &dchol, "Compute cholesky factor L of A (dense case)");
     m.def("chol", &chol, "Compute cholesky factor L of A");
     m.def("cholP", &cholP, "Compute cholesky factor L of A after applying a sparsity enhancing permutation to A");
+    m.def("dcholP", &dcholP, py::arg("A").noconvert(), "Compute LDL factorization of A with stability enhancing pivoting");
     m.def("pqr", &pqr, "Perform column pivoted QR decomposition of A");
     m.def("pqrr", &pqrr, "Perform column pivoted QR decomposition of A, but only return R.");
-    m.def("dpqrr", &dpqrr, py::arg("A").noconvert(), "Perform column pivoted QR decomposition of dense matrix A, but only return pivot and estimated rank.");
+    m.def("dpqrr", &dpqrr, py::arg("A").noconvert(), "Perform column pivoted QR decomposition of dense matrix A.");
     m.def("spqr", &spqr, "Perform column pivoted QR decomposition of symmetric matrix A, so that L - where A=L@L.T - is sparse.");
     m.def("solve_pqr", &solve_pqr, "Perform column pivoted QR decomposition of A, then solve for inverse of A");
     m.def("solve_am", &solve_am, "Solve additive model, return coefficient vector and inverse");
     m.def("solve_L", &solve_L, "Solve cholesky of XX+S");
     m.def("solve_LXX", &solve_LXX, "Solve cholesky of XX+S, but with XX + S pre-computed.");
+    m.def("dsolve_coef", &dsolve_coef, "Solve additive model coefficients (dense case)");
     m.def("solve_coef", &solve_coef, "Solve additive model coefficients");
+    m.def("dsolve_coef_pqr", &dsolve_coef_pqr, "Solve additive model coefficients, using stable QR decomposition (dense case)");
     m.def("solve_coef_pqr", &solve_coef_pqr2, "Solve additive model coefficients, using stable QR decomposition");
+    m.def("dsolve_coefXX", &dsolve_coefXX, "Solve additive model coefficients, but with XX + S and Xy pre-computed (dense case).");
     m.def("solve_coefXX", &solve_coefXX, "Solve additive model coefficients, but with XX + S and Xy pre-computed.");
+    m.def("dsolve_tr",&dsolve_tr,"Solve A*B = C, where A is lower triangular (dense case).");
     m.def("solve_tr",&solve_tr,"Solve A*B = C, where A is lower triangular.");
+    m.def("dbacksolve_tr",&dbacksolve_tr,"Solve A*B = C, where A is upper triangular (dense case).");
     m.def("backsolve_tr",&backsolve_tr,"Solve A*B = C, where A is upper triangular.");
     m.def("id_dependencies",&id_dependencies,"Identify linear dependencies between matrices X1 and X2.");
 }

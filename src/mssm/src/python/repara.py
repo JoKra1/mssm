@@ -14,12 +14,13 @@ from .penalties import (
     combine_shared_penalties,
 )
 from .custom_types import LambdaTerm
+from .discrete import DiscreteModelMatrix
 import copy
 import sys
 
 
 def reparam(
-    X: scp.sparse.csc_array | None,
+    X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None,
     S: list[LambdaTerm],
     cov: np.ndarray | None,
     option: int = 1,
@@ -123,7 +124,7 @@ def reparam(
      - mgcv source code (accessed 2024). smooth.R file, nat.param function.
 
     :param X: Model/Term matrix or None
-    :type X: scp.sparse.csc_array | None
+    :type X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None
     :param S: List of penalties
     :type S: list[LambdaTerm]
     :param cov: covariate array associated with a specific term or None
@@ -243,9 +244,9 @@ def reparam(
             # Transform S to identity as described in Wood et al. (2013). Form inverse of root of
             # transformed S for all cells not covering a kernel function. For those simply insert 1.
             # Then post-multiply transformed X (or equivalently C) by it.
-            IRrp = [1 / s[i] ** 0.5 if s[i] > 1e-7 else 1 for i in range(S.shape[1])]
+            IRrp = [1 / s[i] ** 0.5 if s[i] > 1e-7 else 1.0 for i in range(S.shape[1])]
             Srp = scp.sparse.diags(
-                [1 if s[i] > 1e-7 else 0 for i in range(S.shape[1])],
+                [1.0 if s[i] > 1e-7 else 0.0 for i in range(S.shape[1])],
                 offsets=0,
                 format="csc",
             )
@@ -719,7 +720,7 @@ def reparam_model(
     dist_up_coef: list[int],
     coef: np.ndarray,
     split_coef_idx: list[int],
-    Xs: list[scp.sparse.csc_array],
+    Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
     penalties: list[LambdaTerm],
     form_inverse: bool = True,
     form_root: bool = True,
@@ -759,7 +760,7 @@ def reparam_model(
         linear predictor.
     :type split_coef_idx: [int]
     :param Xs: List of model matrices obtained for example via ``model.get_mmat()``.
-    :type Xs: [scp.sparse.csc_array]
+    :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
     :param penalties: List of penalties for model.
     :type penalties: [LambdaTerm]
     :param form_inverse: Whether or not an inverse of the transformed penalty matrices should be

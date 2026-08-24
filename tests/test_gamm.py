@@ -3722,7 +3722,7 @@ class Test_Nuts_output:
     formula = Formula(lhs("y"), [i(), f(["x0"])], data=dat)
 
     model = GAMM(formula, Gaussian())
-    model.fit()
+    model.fit(force_sparse=True)
 
     chains = sample_mssm(
         model,

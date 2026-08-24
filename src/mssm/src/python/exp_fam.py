@@ -8,12 +8,8 @@ from collections.abc import Callable
 from .custom_types import DerivOrder
 from abc import ABC, abstractmethod
 import hazard
-
-HAS_MP = True
-try:
-    import multiprocess as mp
-except ImportError:
-    HAS_MP = False
+import multiprocessing as mp
+from .discrete import DiscreteModelMatrix
 
 
 class Link(ABC):
@@ -647,7 +643,11 @@ class Family(ABC):
         pass
 
     def dllkdcoef(
-        self, coef: np.ndarray, y: np.ndarray, X: scp.sparse.csc_array, scale: float = 1
+        self,
+        coef: np.ndarray,
+        y: np.ndarray,
+        X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix,
+        scale: float = 1,
     ) -> np.ndarray:
         """Returns vector of partial derivatives of the log-likelihood with respect to ``coef``
         evaluated at the (optional) ``scale`` parameter.
@@ -666,7 +666,7 @@ class Family(ABC):
         :param y: A numpy array of shape (-1,1) containing each observation.
         :type y: np.ndarray
         :param X: Model matrix used by a model
-        :type X: scp.sparse.csc_array
+        :type X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix
         :param scale: Optional scale parameter if ``self.twopar is True``, defaults to 1
         :type scale: float, optional
         :return: The Gradient of the log-likelihood evaluated at ``coef`` as numpy array of
@@ -691,7 +691,11 @@ class Family(ABC):
         return grad
 
     def dllkdlscale(
-        self, coef: np.ndarray, y: np.ndarray, X: scp.sparse.csc_array, scale: float = 1
+        self,
+        coef: np.ndarray,
+        y: np.ndarray,
+        X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix,
+        scale: float = 1,
     ) -> float:
         """Returns partial derivative of the log-likelihood with respect to ``log(scale)`` if this
         family has a scale parameter (i.e., if ``self.twopar is True``). Otherwise this function
@@ -709,7 +713,7 @@ class Family(ABC):
         :param y: A numpy array of shape (-1,1) containing each observation.
         :type y: np.ndarray
         :param X: Model matrix used by a model
-        :type X: scp.sparse.csc_array
+        :type X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix
         :param scale: Optional scale parameter if ``self.twopar is True``, defaults to 1
         :type scale: float, optional
         :return: The partial derivative of the log-likelihood with respect to ``log(scale)`` if
@@ -732,7 +736,11 @@ class Family(ABC):
         return 0.0
 
     def d2llkd2lscale(
-        self, coef: np.ndarray, y: np.ndarray, X: scp.sparse.csc_array, scale: float = 1
+        self,
+        coef: np.ndarray,
+        y: np.ndarray,
+        X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix,
+        scale: float = 1,
     ) -> float:
         """Returns second partial derivative of the log-likelihood with respect to ``log(scale)``
         if this family has a scale parameter (i.e., if ``self.twopar is True``). Otherwise this
@@ -750,7 +758,7 @@ class Family(ABC):
         :param y: A numpy array of shape (-1,1) containing each observation.
         :type y: np.ndarray
         :param X: Model matrix used by a model
-        :type X: scp.sparse.csc_array
+        :type X: scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix
         :param scale: Optional scale parameter if ``self.twopar is True``, defaults to 1
         :type scale: float, optional
         :return: The second partial derivative of the log-likelihood with respect to ``log(scale)``
@@ -2631,12 +2639,12 @@ class GAMLSSFamily(ABC):
 
         If ``order == DerivOrder.d2m``, ``dpars(y,*mus,i,order)`` returns up to
         ``n_par*(n_par-1)/2`` mixed partial second derivatives as follows
-         - ``i=0`` = :math:`\\partial l/\\partial \\mu_1 \\partial \\mu_2`,
-         - ``i=1`` = :math:`\\partial l/\\partial \\mu_1 \\partial \\mu_3`,
+         - ``i=0`` = :math:`\\partial^2 l/\\partial \\mu_1 \\partial \\mu_2`,
+         - ``i=1`` = :math:`\\partial^2 l/\\partial \\mu_1 \\partial \\mu_3`,
          - ...
-         - ``i=n_par-1`` = :math:`\\partial l/\\partial \\mu_1 \\partial \\mu_{n_{par}}`,
-         - ``i=n_par`` = :math:`\\partial l/\\partial \\mu_2 \\partial \\mu_3`,
-         - ``i=n_par+1`` = :math:`\\partial l/\\partial \\mu_2 \\partial \\mu_4`, ... .
+         - ``i=n_par-1`` = :math:`\\partial^2 l/\\partial \\mu_1 \\partial \\mu_{n_{par}}`,
+         - ``i=n_par`` = :math:`\\partial^2 l/\\partial \\mu_2 \\partial \\mu_3`,
+         - ``i=n_par+1`` = :math:`\\partial^2 l/\\partial \\mu_2 \\partial \\mu_4`,
          - ...
 
         :param y: A numpy array of shape (-1,1) containing each observed value.
@@ -2656,16 +2664,12 @@ class GAMLSSFamily(ABC):
         pass
 
     @abstractmethod
-    def rvs(
-        self, *mus: np.ndarray, size: int = 1, seed: int | None = 0
-    ) -> np.ndarray | None:
+    def rvs(self, *mus: np.ndarray, size: int = 1, seed: int | None = 0) -> np.ndarray:
         """Returns ``size`` random samples for each of the distributions parameterized by ``mus``.
 
         **Note**, the returned array - if this function is implemented - will be of size
         ``(size, mus[0].shape[0])``. I.e., ``size`` random samples will be obtained for each of
         the ``mus[0].shape[0])`` distributions, all parameterized by their individual ``mus``.
-
-        **Important:** Families for which this function is not implemented can return None.
 
         References:
          - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
@@ -2680,11 +2684,10 @@ class GAMLSSFamily(ABC):
         :param seed: Seed to use for random number generation. Defaults to 0.
         :type seed: int, optional
         :return: a numpy array of shape ``(size, mus[0].shape[0])`` containing random
-            samples from every distribution parameterized by their ``mus``. Can also return None if
-            this function is not implemented by the specific family.
+            samples from every distribution parameterized by their ``mus``.
         :rtype: np.ndarray
         """
-        return None
+        pass
 
     @abstractmethod
     def get_resid(self, y: np.ndarray, *mus: np.ndarray) -> np.ndarray | None:
@@ -2892,14 +2895,13 @@ class GAUMLSS(GAMLSSFamily):
             raise ValueError("No Derivative > order d2m exists.")
 
     def rvs(self, *mus: np.ndarray, size: int = 1, seed: int | None = 0) -> np.ndarray:
-        """Returns ``size`` random samples for each of the distributions parameterized by ``mu``
-        and ``sigma``.
+        """Returns ``size`` random samples for each of the distributions parameterized by ``mus``.
 
         References:
          - Wood, S. N. (2017). Generalized Additive Models: An Introduction with R, Second \
             Edition (2nd ed.).
 
-       :param mus: 2 np arrays - one for the mean and one for the standard deviation for the
+        :param mus: 2 np arrays - one for the mean and one for the standard deviation for the
             response distribution corresponding to each of N observations. Each numpy array is of
             shape (N,1).
         :type mus: np.ndarray
@@ -3579,20 +3581,25 @@ class GSMMFamily(ABC):
     :type links: [Link]
     :ivar int n_par: Value passed for ``pars``.
     :ivar list[Link] links: List passed for ``links``.
-    :ivar int, optional extra_coef: Number of extra coefficients required by specific family for
+    :ivar int extra_coef: Number of extra coefficients required by specific family for
         parameters of the log-likelihood that are constant (i.e., not a function of predictor
         variables) or ``None``. If this is not set to ``None``, ``mssm`` will automatically append
         ``extra_coef`` elements to the coefficient vector passed to the log-likelihood and gradient
         methods of this family. Additionally, ``coef_split_idx`` will be modified, so that the last
         list of the split holds the ``extra_coef``. By default set to ``None`` and changed to
         ``int`` by specific families requiring this.
-
+    :ivar bool return_sparse: Whether the family returns a sparse hessian or not (in which case
+        a 2D numpy array should be returned). Defaults to ``True`` but can be set to ``False`` by a
+        model before calling the fitting routine. In contrast, if ``self.return_sparse`` is
+        set to ``False`` before fitting it is never overwritten (Useful if the Hessian is
+        generally dense).
     """
 
     def __init__(self, pars: int, links: list[Link]) -> None:
         self.n_par: int = pars
         self.links: list[Link] = links
         self.extra_coef: int | None = None
+        self.return_sparse: bool = True
 
     @abstractmethod
     def llk(
@@ -3600,7 +3607,7 @@ class GSMMFamily(ABC):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
-        Xs: list[scp.sparse.csc_array | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     ) -> float:
         """log-probability of data under given model.
 
@@ -3628,7 +3635,7 @@ class GSMMFamily(ABC):
         :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None``
             at indices for matrices which were flagged as "do not build" via the ``build_mat``
             argument of the :func:`mssm.models.GSMM.fit` method.
-        :type Xs: list[scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :return: The log-likelihood evaluated at ``coef``.
         :rtype: float
         """
@@ -3639,7 +3646,7 @@ class GSMMFamily(ABC):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
-        Xs: list[scp.sparse.csc_array | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     ) -> np.ndarray:
         """Function to evaluate the gradient of the llk at current coefficient estimate ``coef``.
 
@@ -3671,7 +3678,7 @@ class GSMMFamily(ABC):
         :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None``
             at indices for matrices which were flagged as "do not build" via the ``build_mat``
             argument of the :func:`mssm.models.GSMM.fit` method.
-        :type Xs: list[scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :return: The Gradient of the log-likelihood evaluated at ``coef`` as numpy array of
             shape (-1,1).
         :rtype: np.ndarray
@@ -3689,7 +3696,7 @@ class GSMMFamily(ABC):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
-        Xs: list[scp.sparse.csc_array | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     ) -> np.ndarray:
         """(Optional) method to compute only column ``j`` of the Hessian of the log-likelihood.
 
@@ -3713,7 +3720,7 @@ class GSMMFamily(ABC):
         :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None``
             at indices for matrices which were flagged as "do not build" via the ``build_mat``
             argument of the :func:`mssm.models.GSMM.fit` method.
-        :type Xs: list[scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :return: Finite difference approximation of column ``j`` of the Hessian of the llk as an
             array of shape (-1,1)
         :rtype: np.ndarray
@@ -3742,9 +3749,9 @@ class GSMMFamily(ABC):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
-        Xs: list[scp.sparse.csc_array | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
         n_c: int = 1,
-    ) -> scp.sparse.csc_array:
+    ) -> scp.sparse.csc_array | np.ndarray:
         """(Optional) method to compute a sparse approximation to the Hessian of the llk, containing
         only the ``j`` columns and rows of the Hessian indexed by ``jcols``.
 
@@ -3768,14 +3775,14 @@ class GSMMFamily(ABC):
         :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None``
             at indices for matrices which were flagged as "do not build" via the ``build_mat``
             argument of the :func:`mssm.models.GSMM.fit` method.
-        :type Xs: list[scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :param n_c: Number of cores to use to parallelize computation over ``j`` cols, defaults to
             1.
         :type n_c: int, optional
         :return: Finite difference approximation matrix which is symmetric sparse matrix with
             ``jcols`` rows and columns set to finite difference approximation of columns of
             Hessian of llk
-        :rtype: scp.sparse.csc_array
+        :rtype: scp.sparse.csc_array | np.ndarray
         """
 
         ccols = []
@@ -3786,7 +3793,9 @@ class GSMMFamily(ABC):
 
         Hdim = len(coef)
 
-        if HAS_MP and n_c > 1:
+        Ha = None if self.return_sparse else np.zeros((Hdim, Hdim))
+
+        if n_c > 1:
             # Compute columns in parallel
             args = zip(
                 jcols,
@@ -3801,7 +3810,7 @@ class GSMMFamily(ABC):
 
         for ji, j in enumerate(jcols):
 
-            if HAS_MP and n_c > 1:
+            if n_c > 1:
                 # Simply extract
                 Hj = Hjs[ji].flatten()
             else:
@@ -3809,28 +3818,34 @@ class GSMMFamily(ABC):
                 # Entire column j of negative hessian
                 Hj = self.jcolhessian(j, coef, coef_split_idx, ys, Xs).flatten()
 
-            # Take out elements previously computed
-            Hjrows = np.arange(Hdim)
-            Hjc = np.delete(Hj, ccols)
-            Hjrows = np.delete(Hjrows, ccols)
+            if self.return_sparse is False:
+                # Dense case
+                Ha[:, j] = Hj
+                Ha[j, :] = Hj
+            else:
+                # Take out elements previously computed
+                Hjrows = np.arange(Hdim)
+                Hjc = np.delete(Hj, ccols)
+                Hjrows = np.delete(Hjrows, ccols)
 
-            Hdat.extend(Hjc)
-            Hrows.extend(Hjrows)
-            Hcols.extend(np.tile(j, len(Hjrows)))
+                Hdat.extend(Hjc)
+                Hrows.extend(Hjrows)
+                Hcols.extend(np.tile(j, len(Hjrows)))
 
-            # Keep symmetric - remove element on diagonal
-            ccols.append(j)
+                # Keep symmetric - remove element on diagonal
+                ccols.append(j)
 
-            Hjcols = np.arange(Hdim)
-            Hjr = np.delete(Hj, ccols)
-            Hjcols = np.delete(Hjcols, ccols)
+                Hjcols = np.arange(Hdim)
+                Hjr = np.delete(Hj, ccols)
+                Hjcols = np.delete(Hjcols, ccols)
 
-            Hdat.extend(Hjr)
-            Hcols.extend(Hjcols)
-            Hrows.extend(np.tile(j, len(Hjcols)))
+                Hdat.extend(Hjr)
+                Hcols.extend(Hjcols)
+                Hrows.extend(np.tile(j, len(Hjcols)))
 
-        # Build sparse hessian approximation
-        Ha = scp.sparse.csc_array((Hdat, (Hrows, Hcols)), shape=(Hdim, Hdim))
+        if self.return_sparse:
+            # Build sparse hessian approximation
+            Ha = scp.sparse.csc_array((Hdat, (Hrows, Hcols)), shape=(Hdim, Hdim))
 
         return Ha
 
@@ -3839,8 +3854,8 @@ class GSMMFamily(ABC):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
-        Xs: list[scp.sparse.csc_array | None],
-    ) -> scp.sparse.csc_array:
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
+    ) -> scp.sparse.csc_array | np.ndarray:
         """Function to evaluate the hessian of the llk at current coefficient estimate ``coef``.
 
         Only has to be implemented if full Newton is to be used to estimate coefficients. If the
@@ -3871,9 +3886,9 @@ class GSMMFamily(ABC):
         :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None``
             at indices for matrices which were flagged as "do not build" via the ``build_mat``
             argument of the :func:`mssm.models.GSMM.fit` method.
-        :type Xs: list[scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :return: The Hessian of the log-likelihood evaluated at ``coef``.
-        :rtype: scp.sparse.csc_array
+        :rtype: scp.sparse.csc_array | np.ndarray
         """
         return self.jhessian(np.arange(len(coef)), coef, coef_split_idx, ys, Xs)
 
@@ -3883,7 +3898,7 @@ class GSMMFamily(ABC):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray | None],
-        Xs: list[scp.sparse.csc_array | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     ) -> np.ndarray | None:
         """Get standardized residuals for a GSMM model.
 
@@ -3915,7 +3930,7 @@ class GSMMFamily(ABC):
         :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None``
             at indices for matrices which were flagged as "do not build" via the ``build_mat``
             argument of the :func:`mssm.models.GSMM.fit` method.
-        :type Xs: list[scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :return: a vector of shape (-1,1) containing standardized residuals under the current model
             (**Note**, the first axis will not necessarily match the dimension of any of the
             response vectors (this will depend on the specific Family's implementation)) or None in
@@ -4016,6 +4031,7 @@ class PropHaz(GSMMFamily):
         self.__hs = None
         self.__qs = None
         self.__avs = None
+        self.return_sparse = False
 
         # Create index vectors ri for ut and r
         idx = np.arange(len(self.r), dtype=np.int64)
@@ -4028,7 +4044,7 @@ class PropHaz(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
     ) -> float:
         """Log-likelihood function as defined by Wood, Pya, & Säfken (2016).
 
@@ -4047,7 +4063,7 @@ class PropHaz(GSMMFamily):
             description of the model family.
         :type ys: [np.ndarray]
         :param Xs: A list containing the sparse model matrix at the first and only index.
-        :type Xs: [scp.sparse.csc_array]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
         :return: The log-likelihood evaluated at ``coef``.
         :rtype: float
         """
@@ -4056,7 +4072,7 @@ class PropHaz(GSMMFamily):
         delta = ys[0]
         ut = self.ut
         nt = len(ut)
-        X = Xs[0].toarray()
+        X = Xs[0] if isinstance(Xs[0], np.ndarray) else Xs[0].toarray()
         eta = X @ coef
 
         with warnings.catch_warnings():  # Overflow, etc.
@@ -4075,7 +4091,7 @@ class PropHaz(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
     ) -> np.ndarray:
         """Gradient as defined by Wood, Pya, & Säfken (2016).
 
@@ -4094,7 +4110,7 @@ class PropHaz(GSMMFamily):
             description of the model family.
         :type ys: [np.ndarray]
         :param Xs: A list containing the sparse model matrix at the first and only index.
-        :type Xs: [scp.sparse.csc_array]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
         :return: The Gradient of the log-likelihood evaluated at ``coef`` as numpy array of
             shape (-1,1).
         :rtype: np.ndarray
@@ -4104,7 +4120,7 @@ class PropHaz(GSMMFamily):
         delta = ys[0]
         ut = self.ut
         nt = len(ut)
-        X = Xs[0].toarray()
+        X = Xs[0] if isinstance(Xs[0], np.ndarray) else Xs[0].toarray()
         eta = X @ coef
 
         with warnings.catch_warnings():  # Overflow, etc.
@@ -4123,8 +4139,8 @@ class PropHaz(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array],
-    ) -> scp.sparse.csc_array:
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
+    ) -> np.ndarray:
         """Hessian as defined by Wood, Pya, & Säfken (2016).
 
         References:
@@ -4142,16 +4158,16 @@ class PropHaz(GSMMFamily):
             description of the model family.
         :type ys: [np.ndarray]
         :param Xs: A list containing the sparse model matrix at the first and only index.
-        :type Xs: [scp.sparse.csc_array]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
         :return: The Hessian of the log-likelihood evaluated at ``coef``.
-        :rtype: scp.sparse.csc_array
+        :rtype: np.ndarray
         """
 
         # Extract and define all variables defined by WPS (2016)
         delta = ys[0]
         ut = self.ut
         nt = len(ut)
-        X = Xs[0].toarray()
+        X = Xs[0] if isinstance(Xs[0], np.ndarray) else Xs[0].toarray()
         eta = X @ coef
 
         with warnings.catch_warnings():  # Overflow
@@ -4161,14 +4177,14 @@ class PropHaz(GSMMFamily):
             # Compute hessian in cpp
             H = hazard.hessian(nt, gamma.flatten(), delta.flatten(), self.__ris, X)
 
-        return scp.sparse.csc_array(H)
+        return H
 
     def get_resid(
         self,
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
         resid_type: str = "Martingale",
         reorder: np.ndarray | None = None,
     ) -> np.ndarray:
@@ -4193,7 +4209,7 @@ class PropHaz(GSMMFamily):
             description of the model family.
         :type ys: [np.ndarray]
         :param Xs: A list containing the sparse model matrix at the first and only index.
-        :type Xs: [scp.sparse.csc_array]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
         :param resid_type: The type of residual to compute, supported are "Martingale" and
             "Deviance".
         :type resid_type: str, optional
@@ -4218,7 +4234,7 @@ class PropHaz(GSMMFamily):
         # Following based on derivation by Wood, Pya, and Säfken (2016)
         res = np.zeros(X.shape[0])
         for idx, tidx in enumerate(r):
-            Xi = X[idx, :].toarray()
+            Xi = X[idx, :] if isinstance(X, np.ndarray) else X[idx, :].toarray()
             ti = ut[tidx]
             di = delta[idx]
             Si, _ = self.get_survival(coef, Xs, delta, ti, Xi, None, compute_var=False)
@@ -4241,7 +4257,10 @@ class PropHaz(GSMMFamily):
         return res.reshape(-1, 1)
 
     def __prepare_predictions(
-        self, coef: np.ndarray, delta: np.ndarray, Xs: list[scp.sparse.csc_array]
+        self,
+        coef: np.ndarray,
+        delta: np.ndarray,
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
     ) -> None:
         """Computes all the quantities defined by Wood, Pya, & Säfken (2016) that are necessary for
         predictions.
@@ -4261,7 +4280,7 @@ class PropHaz(GSMMFamily):
         :type delta: np.ndarray
         :param Xs: The list of model matrices (here holding a single model matrix) obtained from
             :func:`mssm.models.GAMMLSS.get_mmat`.
-        :type Xs: [scp.sparse.csc_array]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
         """
         # Extract and define all variables defined by WPS (2016)
         ut = self.ut
@@ -4327,7 +4346,10 @@ class PropHaz(GSMMFamily):
         self.__avs = avs
 
     def get_baseline_hazard(
-        self, coef: np.ndarray, delta: np.ndarray, Xs: list[scp.sparse.csc_array]
+        self,
+        coef: np.ndarray,
+        delta: np.ndarray,
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
     ) -> np.ndarray:
         """Get the cumulative baseline hazard function as defined by Wood, Pya, & Säfken (2016).
 
@@ -4381,7 +4403,7 @@ class PropHaz(GSMMFamily):
         :type coef: np.ndarray
         :param Xs: The list of model matrices (here holding a single model matrix) obtained from
             :func:`mssm.models.GAMMLSS.get_mmat`.
-        :type Xs: [scp.sparse.csc_array]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
         :param delta: Dependent variable passed to :func:`mssm.src.python.formula.Formula`, holds
             (for each row in ``Xs[0``]) a value in ``{0,1}``, indicating whether for that
             observation the event was observed or not.
@@ -4398,7 +4420,7 @@ class PropHaz(GSMMFamily):
     def get_survival(
         self,
         coef: np.ndarray,
-        Xs: list[scp.sparse.csc_array],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix],
         delta: np.ndarray,
         t: int,
         x: np.ndarray | scp.sparse.csc_array,
@@ -4507,7 +4529,7 @@ class PropHaz(GSMMFamily):
         :type coef: np.ndarray
         :param Xs: The list of model matrices (here holding a single model matrix) obtained from
             :func:`mssm.models.GAMMLSS.get_mmat`.
-        :type Xs: [scp.sparse.csc_array]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix]
         :param delta: Dependent variable passed to :func:`mssm.src.python.formula.Formula`, holds
             (for each row in ``Xs[0``]) a value in ``{0,1}``, indicating whether for that
             observation the event was observed or not.
@@ -4710,7 +4732,7 @@ class MultiGauss(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     ) -> float:
         """Computes the log-likelihood under a multivariate normal given coefficients in the
         additive models of the mean and the log(variance) and co-variance parameters.
@@ -4735,7 +4757,7 @@ class MultiGauss(GSMMFamily):
             structure as the first mean we can set ``build_mat[idx] = False``. The code then
             automatically assigns ``X[idx] = X[0]``. See the :func:`GSMM.fit` documentation for
             more details.
-        :type Xs: [scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         """
 
         # Extract extra info and fix model matrices, then compute mu and theta
@@ -4759,7 +4781,7 @@ class MultiGauss(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     ) -> np.ndarray:
         """Computes gradient of a multivariate normal containing partial derivatives with
         respect to coefficients in the additive models of the mean and the log(variance) and
@@ -4785,7 +4807,7 @@ class MultiGauss(GSMMFamily):
             structure as the first mean we can set ``build_mat[idx] = False``. The code then
             automatically assigns ``X[idx] = X[0]``. See the :func:`GSMM.fit` documentation for
             more details.
-        :type Xs: [scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :return: The gradient at the current parameters estimates in a numpy array of shape (-1,1)
         :rtype: np.ndarray
         """
@@ -4879,7 +4901,7 @@ class MultiGauss(GSMMFamily):
         :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None``
             at indices for matrices which were flagged as "do not build" via the ``build_mat``
             argument of the :func:`mssm.models.GSMM.fit` method.
-        :type Xs: list[scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :return: Column ``j`` of the Hessian of the llk as an array of shape (-1,1)
         :rtype: np.ndarray
         """
@@ -4930,9 +4952,11 @@ class MultiGauss(GSMMFamily):
                 parj_idx += 1
 
             coef_j_idx = j if parj_idx == 0 else j - par_n_coef[parj_idx - 1]
+
+            xbarj = Xfix[parj_idx][:, coef_j_idx]
             xbarj = scp.sparse.csc_array(
                 (
-                    Xfix[parj_idx][:, coef_j_idx].toarray(),
+                    xbarj if isinstance(xbarj, np.ndarray) else xbarj.toarray(),
                     (np.tile(parj_idx, n_obs), np.arange(n_obs)),
                 ),
                 shape=(self.n_par, n_obs),
@@ -4988,7 +5012,7 @@ class MultiGauss(GSMMFamily):
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray],
-        Xs: list[scp.sparse.csc_array | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
         mean: int | None = None,
     ) -> np.ndarray:
         """Computes Deviance residuals of a multivariate normal model given coefficients in the
@@ -5050,7 +5074,7 @@ class MultiGauss(GSMMFamily):
             structure as the first mean we can set ``build_mat[idx] = False``. The code then
             automatically assigns ``X[idx] = X[0]``. See the :func:`GSMM.fit` documentation for
             more details.
-        :type Xs: [scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :param mean: Optionally, the index of a specific mean for which to extract the residuals.
             This allows to extract univariate residuals for a specific mean. Setting this to
             ``None`` means the ``(N * self.n_par)`` residual matrix is returned where ``N`` is the
@@ -5078,7 +5102,7 @@ class MultiGauss(GSMMFamily):
         self,
         coef: np.ndarray,
         coef_split_idx: list[int],
-        Xs: list[scp.sparse.csc_array | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     ) -> tuple[np.ndarray, np.ndarray]:
         """Gets the predicted means, variance, and co-variance parameters for given coefficients
         and model matrices.
@@ -5132,7 +5156,7 @@ class MultiGauss(GSMMFamily):
             structure as the first mean we can set ``build_mat[idx] = False``. The code then
             automatically assigns ``X[idx] = X[0]``. See the :func:`GSMM.fit` documentation for
             more details.
-        :type Xs: [scp.sparse.csc_array | None]
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :return: The predicted means as a ``(N, self.n_par)`` numpy array and the theta vector (as
             a flattened numpy array), holding the variance and covariance parameters.
         :rtype: tuple[np.ndarray, np.ndarray]
