@@ -2087,7 +2087,6 @@ def compute_REML_candidate_GSMM(
                 __old_opt.method = "qEFS"
                 __old_opt.bfgs_options = bfgs_options
                 __old_opt.sample_hessian = True
-                __old_opt.sample_hessian_method = 0
                 __old_opt.sample_hessian_options = {}
                 __old_opt.fcols = None
                 __old_opt.acols = None

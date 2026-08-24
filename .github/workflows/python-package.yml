@@ -114,6 +114,9 @@ jobs:
         run: |
           pip install pytest pytest-cov mssmViz==0.1.52 numdifftools arviz>=0.23.0
           pytest ./tests --cov=mssm --cov-report=xml --cov-report=html
+      - name: Setup tmate session
+        if: ${{ failure() }}
+        uses: mxschmitt/action-tmate@v3
       - name: Upload coverage reports to Codecov with GitHub Action
         uses: codecov/codecov-action@v6
         env:

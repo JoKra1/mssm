@@ -777,8 +777,10 @@ class Test_Vb_corrections:
         model, grid_type="JJJ1", verbose=True, seed=20, df=2
     )
 
-    _, LI, _, _, _, total_edf2, _, _, _, _ = correct_VB(
-        model2, grid_type="JJJ2", verbose=True, seed=20, df=2
+    Vp3, _, _, _, _, _ = estimateVp(model2, grid_type="JJJ2", seed=20)
+
+    _, LI, Vp4, _, _, total_edf2, _, _, _, _ = correct_VB(
+        model2, grid_type="JJJ2", verbose=True, seed=20, df=2, VP_grid_type="JJJ2"
     )
 
     def test_Vp1(self):
@@ -801,4 +803,7 @@ class Test_Vb_corrections:
         assert np.round(self.total_edf, decimals=3) == 22.15
 
     def test_edf2(self):
-        assert np.round(self.total_edf2, decimals=3) == 16.857
+        assert np.round(self.total_edf2, decimals=3) == 16.124
+
+    def test_Vp3(self):
+        assert np.allclose(self.Vp3, self.Vp4)

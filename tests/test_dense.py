@@ -21,7 +21,14 @@ from .defaults import (
 
 from mssm.src.python.mcmc import sample_mssm
 from mssm.src.python.formula import build_model_matrix, build_penalties
-from mssm.src.python.matrix_solvers import cpp_qrr, cpp_dqrr, cpp_backsolve_tr
+from mssm.src.python.matrix_solvers import (
+    cpp_qrr,
+    cpp_dqrr,
+    cpp_backsolve_tr,
+    cpp_cholP,
+    compute_B,
+)
+from mssm.src.python.gamm_solvers import compute_S_emb_pinv_det, compute_eigen_perm
 
 mssm.src.python.exp_fam.GAUMLSS.init_coef = init_coef_gaumlss_tests
 mssm.src.python.exp_fam.GAMMALS.init_coef = init_coef_gammals_tests
@@ -906,3 +913,41 @@ class Test_big_gamm:
 
     def test_parallelL(self):
         assert int(self.model.hessian.shape[1] / 2000) > 1
+
+    def test_solveB1(self):
+        lTerm = self.model.overall_penalties[0]
+        S_emb, _, _, _ = compute_S_emb_pinv_det(
+            self.model.hessian.shape[1], self.model.overall_penalties, "svd"
+        )
+        B1 = np.power(self.model.lvi @ lTerm.D_J_emb, 2).sum()
+        LP, Pr, _ = cpp_cholP((-self.model.scale * self.model.hessian) + S_emb)
+        B2 = compute_B(LP, compute_eigen_perm(Pr), lTerm, 4, self.model.info.dropped)
+
+        np.testing.assert_allclose(
+            B1,
+            B2,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.03),
+        )
+
+    def test_solveB2(self):
+        lTerm = self.model.overall_penalties[0]
+        S_emb, _, _, _ = compute_S_emb_pinv_det(
+            self.model.hessian.shape[1], self.model.overall_penalties, "svd"
+        )
+        B1 = np.power(self.model.lvi @ lTerm.D_J_emb, 2).sum()
+        LP, Pr, _ = cpp_cholP((-self.model.scale * self.model.hessian) + S_emb)
+        B2 = compute_B(
+            scp.sparse.csc_array(LP),
+            compute_eigen_perm(Pr),
+            lTerm,
+            4,
+            self.model.info.dropped,
+        )
+
+        np.testing.assert_allclose(
+            B1,
+            B2,
+            atol=min(max_atol, 0),
+            rtol=min(max_rtol, 0.03),
+        )

@@ -6640,61 +6640,6 @@ def correct_coef_step_gen_smooth(
     return next_coef, next_llk, next_pen_llk, a
 
 
-def back_track_alpha(
-    coef: np.ndarray,
-    step: np.ndarray,
-    llk_fun: Callable,
-    grad_fun: Callable,
-    *llk_args,
-    alpha_max: float = 1,
-    c1: float = 1e-4,
-    max_iter: int = 100,
-) -> float | None:
-    """Simple step-size backtracking function that enforces Armijo condition
-    (Nocedal & Wright, 2004)
-
-    References:
-       - Nocedal & Wright (2006). Numerical Optimization. Springer New York.
-
-    :param coef: coefficient estimate
-    :type coef: np.ndarray
-    :param step: step to take to update coefficients
-    :type step: np.ndarray
-    :param llk_fun: llk function
-    :type llk_fun: Callable
-    :param grad_fun: function to evaluate gradient of llk
-    :type grad_fun: Callable
-    :param alpha_max: Parameter by Nocedal & Wright, defaults to 1
-    :type alpha_max: float, optional
-    :param c1: 2nd Parameter by Nocedal & Wright, defaults to 1e-4
-    :type c1: float, optional
-    :param max_iter: Number of maximum iterations, defaults to 100
-    :type max_iter: int, optional
-    :return: The step-length meeting the Armijo condition or None in case none such was found
-    :rtype: float | None
-    """
-    #
-    c_llk = llk_fun(coef.flatten(), *llk_args)
-    c_grad = grad_fun(coef.flatten(), *llk_args).reshape(-1, 1)
-
-    c_alpha = alpha_max
-
-    for _ in range(max_iter):
-        # Test Armijo condition
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            n_llk = llk_fun((coef + c_alpha * step).flatten(), *llk_args)
-
-        armijo = n_llk <= c_llk + c_alpha * c1 * c_grad.T @ step
-
-        if armijo and (not np.isnan(n_llk[0, 0]) and not np.isinf(n_llk[0, 0])):
-            return c_alpha
-
-        c_alpha /= 2
-
-    return None
-
-
 def check_drop_valid_gensmooth(
     ys: list[np.ndarray | None],
     coef: np.ndarray,
@@ -7047,7 +6992,6 @@ def sample_ys_qefs(
     coef_split_idx: list[int],
     S_emb: scp.sparse.csc_array,
     maxcor: int,
-    method: int,
     seed: int,
     H0: scp.sparse.csc_array,
     sample_kwargs: dict,
@@ -7056,20 +7000,15 @@ def sample_ys_qefs(
     """Function to sample the limited-memory quasi-Newton approximation at estimate ``coef``,
     based on Berahas et al. (2021).
 
-    ``method`` determines whether to use version 1 (``method==0``) or version 2 (``method==1``) of
-    their sampling algorithm. Note, that we have modified version 1 to automatically determine
+    Note, that we have modified the method by Berahas et al. (2021) to automatically determine
     the radius of the sampled pertubation based on computing the Metropolis Hastings acceptance
     ratio for the proposed pertubation and the penalized log-likelihood. If the radius is not
     accepted (stochastically) it is reduced via dual averaging of Hoffman and Gelman (2014).
-
-    Finite differencing is used to approximate the Hessian vector product required when
-    ``method==1`` (see Pearlmutter).
 
     References:
       - Berahas, A. S., Jahani, M., Richtárik, P., & Takáč, M. (2022). Quasi-Newton methods for\
         machine learning: Forget the past, just sample.\
         https://doi.org/10.1080/10556788.2021.1977806
-      - Pearlmutter, B. A., (1993) Fast Exact Multiplication by the Hessian.
       - Kirkpatrick, S., Gelatt, C. D., & Vecchi, M. P. (1983). Optimization by Simulated Annealing\
         . https://doi.org/10.1126/science.220.4598.671
       - Hoffman, M. D., & Gelman, A. (2014). The No-U-Turn Sampler: Adaptively Setting Path Lengths\
@@ -7091,17 +7030,13 @@ def sample_ys_qefs(
     :param maxcor: Maximum number of update vectors to retain as part of the limited memory
         approximations to the hessian/inverse.
     :type maxcor: int
-    :param method: Which (modified) method of Berahas et al. (2021) to use to sample the Hessian
-        approximations. ``method==0`` will generally be faster, but ``method==1`` might work better
-        for some models.
-    :type method: int
     :param seed: Seed to use to generate random permutations
     :type seed: int
     :param H0: A provided approximation to the negative hessian of the llk, used to sample curvature
         vectors. Typically, a identity matrix scaled by some scalar.
     :type H0: scp.sparse.csc_array
     :param sample_kwargs: A dictionary with optional alternative values for hyper-parameters used by
-        the two sampling methods. If ``method==0``, this can contain values for ``T`` (the
+        the two sampling methods. This can contain values for ``T`` (the
         temperature as a float used when computing the acceptance probability of a permutation,
         defaults to 1), ``init_r`` (the initial
         multiplication factor applied to a random gaussian permutation with mean zero and covariance
@@ -7112,9 +7047,7 @@ def sample_ys_qefs(
         defaults to 100), and ``delta`` (the targeted metropolis average acceptance ratio for the
         the deviations from the final coefficient estimate sampled from
         :math:`N(\\mathbf{0},r*(\\mathbf{H}_{0} + \\mathbf{S}_{\\lambda})^{-1}`, defaults to
-        0.8). If ``method==1``, this dictionary is passed to
-        ``scp.differentiate.jacobian``, which is used to approximate the Hessian vector product.
-        You can check the scipy documentation to see which keyword arguments are supported.
+        0.8).
     :type sample_kwargs: dict
     :param n_c: Number of cores to use, defaults to 10
     :type n_c: int, optional
@@ -7132,85 +7065,46 @@ def sample_ys_qefs(
     updates = 0
     omega = 1
 
-    if method == 0:
+    init_r = sample_kwargs["init_r"] if "init_r" in sample_kwargs else 10
+    adapt_r = sample_kwargs["adapt_r"] if "adapt_r" in sample_kwargs else True
+    add_pen = sample_kwargs["add_pen"] if "add_pen" in sample_kwargs else True
+    T = sample_kwargs["T"] if "T" in sample_kwargs else 1
+    Madapt = sample_kwargs["Madapt"] if "Madapt" in sample_kwargs else 100
+    delta = sample_kwargs["delta"] if "delta" in sample_kwargs else 0.8
 
-        init_r = sample_kwargs["init_r"] if "init_r" in sample_kwargs else 10
-        adapt_r = sample_kwargs["adapt_r"] if "adapt_r" in sample_kwargs else True
-        add_pen = sample_kwargs["add_pen"] if "add_pen" in sample_kwargs else True
-        T = sample_kwargs["T"] if "T" in sample_kwargs else 1
-        Madapt = sample_kwargs["Madapt"] if "Madapt" in sample_kwargs else 100
-        delta = sample_kwargs["delta"] if "delta" in sample_kwargs else 0.8
+    # Optionally overwrite from externals
+    if "n_samples" in sample_kwargs:
+        maxcor = sample_kwargs["n_samples"]
 
-        # Optionally overwrite from externals
-        if "n_samples" in sample_kwargs:
-            maxcor = sample_kwargs["n_samples"]
+    if "H0" in sample_kwargs:
+        H0 = sample_kwargs["H0"]
 
-        if "H0" in sample_kwargs:
-            H0 = sample_kwargs["H0"]
+    # Get gradient and pen. llk at maximizer. This will always be the end-point of
+    # the random steps!
+    grad = family.gradient(coef, coef_split_idx, ys, Xs)
+    c_llk = family.llk(coef, coef_split_idx, ys, Xs)
+    c_pen_llk = c_llk - 0.5 * coef.T @ S_emb @ coef
 
-        # Get gradient and pen. llk at maximizer. This will always be the end-point of
-        # the random steps!
-        grad = family.gradient(coef, coef_split_idx, ys, Xs)
-        c_llk = family.llk(coef, coef_split_idx, ys, Xs)
-        c_pen_llk = c_llk - 0.5 * coef.T @ S_emb @ coef
+    # Build diagonal approximation to penalized hessian used for sampling
+    Lp, Pr, code = cpp_cholP((H0 + S_emb) if add_pen else H0)  # noqa: F405
 
-        # Build diagonal approximation to penalized hessian used for sampling
-        Lp, Pr, code = cpp_cholP((H0 + S_emb) if add_pen else H0)  # noqa: F405
+    if code == 0:
+        LVp = compute_Linv(Lp, n_c)  # noqa: F405
+        LV = apply_eigen_perm(Pr, LVp)  # noqa: F405
+    else:
+        LV = scp.sparse.identity(S_emb.shape[1], format="csc")
 
-        if code == 0:
-            LVp = compute_Linv(Lp, n_c)  # noqa: F405
-            LV = apply_eigen_perm(Pr, LVp)  # noqa: F405
-        else:
-            LV = scp.sparse.identity(S_emb.shape[1], format="csc")
+    # Optionally find good value for r via dual averaging of Hoffman and Gelman (2014)
+    r = init_r
+    if adapt_r:
+        rbar = 1
+        mu = np.log(10 * r)
+        t0 = 10
+        gamma = 0.05
+        Hbar = 0.0
+        kappa = 0.75
 
-        # Optionally find good value for r via dual averaging of Hoffman and Gelman (2014)
-        r = init_r
-        if adapt_r:
-            rbar = 1
-            mu = np.log(10 * r)
-            t0 = 10
-            gamma = 0.05
-            Hbar = 0.0
-            kappa = 0.75
-
-            for t in range(1, Madapt + 1):
-
-                # Sample random pertubation
-                # step0 = scp.stats.norm.rvs(size=len(coef), random_state=np_gen).reshape(
-                #    -1, 1
-                # )
-
-                step0 = LV.T @ scp.stats.norm.rvs(
-                    size=len(coef), random_state=np_gen
-                ).reshape(-1, 1)
-
-                # Compute step length
-                sk = r * step0
-
-                # Make sure to subtract step from coef to get n_coef, so that n_coef + sk = coef.
-                n_coef = coef - sk
-
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    n_llk = family.llk(n_coef, coef_split_idx, ys, Xs)
-                    n_pen_llk = n_llk - 0.5 * n_coef.T @ S_emb @ n_coef
-
-                    # Compute Metropolis acceptance
-                    acc = min(1, np.exp((n_pen_llk - c_pen_llk) / T))
-
-                Hbar += delta - acc
-
-                # Now update r and rbar
-                etat = np.power(t, -kappa)
-                logr = mu - (np.sqrt(t) / gamma) * (1 / (t + t0)) * Hbar
-                r = np.exp(logr)
-
-                rbar = np.exp(etat * logr + (1 - etat) * np.log(rbar))
-
-            # Set final radius
-            r = rbar
-
-        for _ in range(maxcor):
+        for t in range(1, Madapt + 1):
 
             # Sample random pertubation
             # step0 = scp.stats.norm.rvs(size=len(coef), random_state=np_gen).reshape(
@@ -7221,80 +7115,71 @@ def sample_ys_qefs(
                 size=len(coef), random_state=np_gen
             ).reshape(-1, 1)
 
-            # Compute step
+            # Compute step length
             sk = r * step0
 
             # Make sure to subtract step from coef to get n_coef, so that n_coef + sk = coef.
             n_coef = coef - sk
 
-            # Compute gradient at n_coef
-            n_grad = family.gradient(n_coef, coef_split_idx, ys, Xs)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                n_llk = family.llk(n_coef, coef_split_idx, ys, Xs)
+                n_pen_llk = n_llk - 0.5 * n_coef.T @ S_emb @ n_coef
 
-            # Collect update - **careful**, must pass grad in position of n_grad here!
-            yks, sks, rhos, omega, skip = update_ys_qefs(
-                None,
-                None,
-                None,
-                yks,
-                sks,
-                rhos,
-                n_grad,
-                grad,
-                step0,
-                r,
-                False,
-                maxcor,
-            )
+                # Compute Metropolis acceptance
+                acc = min(1, np.exp((n_pen_llk - c_pen_llk) / T))
 
-            # Check if update was accepted
-            if skip is False:
-                updates += 1
+            Hbar += delta - acc
 
-    elif method == 1:
+            # Now update r and rbar
+            etat = np.power(t, -kappa)
+            logr = mu - (np.sqrt(t) / gamma) * (1 / (t + t0)) * Hbar
+            r = np.exp(logr)
 
-        for _ in range(maxcor):
+            rbar = np.exp(etat * logr + (1 - etat) * np.log(rbar))
 
-            # Sample random pertubation
-            sk = scp.stats.norm.rvs(size=len(coef), random_state=np_gen).reshape(-1, 1)
+        # Set final radius
+        r = rbar
 
-            # Pearlmutter:
-            def __pearlmutter(r):
-                # Function to evaluate Hessian vector product via Pearlmutter's algorithm
-                # taking derivative of gradient with respect to permutation r of sk at r=0
-                n_coef = coef + r[0] * sk
+    for _ in range(maxcor):
 
-                n_grad = family.gradient(n_coef, coef_split_idx, ys, Xs)
+        # Sample random pertubation
+        # step0 = scp.stats.norm.rvs(size=len(coef), random_state=np_gen).reshape(
+        #    -1, 1
+        # )
 
-                return -1 * n_grad.flatten()
+        step0 = LV.T @ scp.stats.norm.rvs(size=len(coef), random_state=np_gen).reshape(
+            -1, 1
+        )
 
-            def vectorized_pearl(r):
-                return np.apply_along_axis(__pearlmutter, axis=0, arr=r)
+        # Compute step
+        sk = r * step0
 
-            nHsk = scp.differentiate.jacobian(
-                vectorized_pearl, np.array([0]), **sample_kwargs
-            )
-            yk = nHsk.df
-            rhok = 1 / (yk.T @ sk)
+        # Make sure to subtract step from coef to get n_coef, so that n_coef + sk = coef.
+        n_coef = coef - sk
 
-            # Collect update vectors
-            yks, sks, rhos, omega, skip = update_ys_qefs(
-                yk,
-                sk,
-                rhok,
-                yks,
-                sks,
-                rhos,
-                None,
-                None,
-                None,
-                None,
-                False,
-                maxcor,
-            )
+        # Compute gradient at n_coef
+        n_grad = family.gradient(n_coef, coef_split_idx, ys, Xs)
 
-            # Check if update was accepted
-            if skip is False:
-                updates += 1
+        # Collect update - **careful**, must pass grad in position of n_grad here!
+        yks, sks, rhos, omega, skip = update_ys_qefs(
+            None,
+            None,
+            None,
+            yks,
+            sks,
+            rhos,
+            n_grad,
+            grad,
+            step0,
+            r,
+            False,
+            maxcor,
+        )
+
+        # Check if update was accepted
+        if skip is False:
+            updates += 1
 
     return yks, sks, rhos, omega, updates
 
@@ -7404,7 +7289,6 @@ def init_qEFS_storage(
     coef: np.ndarray,
     bfgs_options: dict,
     sample_hessian: bool,
-    sample_hessian_method: int,
     sample_hessian_options: dict,
     fcols: np.ndarray,
     sqEFS_options: dict,
@@ -7421,9 +7305,6 @@ def init_qEFS_storage(
     :param sample_hessian: Whether or not to sample the quasi-Newton approximation of the negative
         Hessians of the penalized log-likelihood and log-likelihood.
     :type sample_hessian: bool
-    :param sample_hessian_method: Method to use for hessian sampling step. See
-        :func:`sample_ys_qefs` docstring for details.
-    :type sample_hessian_method: int
     :param sample_hessian_options: Optional key-word arguments determining behavior of hessian
         sampling step. See :func:`sample_ys_qefs` docstring for details.
     :type sample_hessian_options: dict
@@ -7459,7 +7340,6 @@ def init_qEFS_storage(
     opt_storage.method = "qEFS"
     opt_storage.bfgs_options = bfgs_options
     opt_storage.sample_hessian = sample_hessian
-    opt_storage.sample_hessian_method = sample_hessian_method
     opt_storage.sample_hessian_options = sample_hessian_options
     opt_storage.fcols = fcols
     opt_storage.acols = None
@@ -7874,7 +7754,6 @@ def sampleHcoef(
 
     # Determine whether linopH was sampled
     sample_hessian = linopH.sample_hessian
-    sample_hessian_method = linopH.sample_hessian_method
     sample_hessian_options = linopH.sample_hessian_options
     fcols = linopH.fcols
     n_coef = coef.shape[0]
@@ -7952,7 +7831,6 @@ def sampleHcoef(
             coef_split_idx,
             S_emb,
             linopH.bfgs_options["maxcor"],
-            sample_hessian_method,
             seed,
             H0,
             sample_hessian_options,
@@ -8131,7 +8009,6 @@ def update_coef_gen_smooth(
 
         # Sampling options
         sample_hessian = opt_raw.sample_hessian
-        sample_hessian_method = opt_raw.sample_hessian_method
         sample_hessian_options = opt_raw.sample_hessian_options
 
         # Structured options
@@ -8362,7 +8239,6 @@ def update_coef_gen_smooth(
                     coef_split_idx,
                     S_emb,
                     maxcor,
-                    sample_hessian_method,
                     outer + attempts,
                     H0,
                     sample_hessian_options,
@@ -8530,7 +8406,6 @@ def update_coef_gen_smooth(
         LV.nit = opt["nit"]
         LV.method = "qEFS"
         LV.sample_hessian = sample_hessian
-        LV.sample_hessian_method = sample_hessian_method
         LV.sample_hessian_options = sample_hessian_options
         LV.fcols = fcols
         LV.acols = acols
@@ -9216,7 +9091,6 @@ def solve_generalSmooth_sparse(
     },
     global_opt_qefs: bool = False,
     sample_hessian: bool = False,
-    sample_hessian_method: int = 0,
     sample_hessian_options: dict = {},
     fcols: np.ndarray | None = None,
     sqEFS_options: dict = {},
@@ -9357,9 +9231,6 @@ def solve_generalSmooth_sparse(
     :param sample_hessian: Whether or not to sample the quasi-Newton approximation of the negative
         Hessians of the penalized log-likelihood and log-likelihood. Defaults to False
     :type sample_hessian: bool, optional
-    :param sample_hessian_method: Method to use for hessian sampling step. See
-        :func:`sample_ys_qefs` docstring for details. Defaults to 0
-    :type sample_hessian_method: int, optional
     :param sample_hessian_options: Optional key-word arguments determining behavior of hessian
         sampling step. See :func:`sample_ys_qefs` docstring for details. Defaults to ``{}``
     :type sample_hessian_options: dict, optional
@@ -9502,7 +9373,6 @@ def solve_generalSmooth_sparse(
             coef,
             bfgs_options,
             sample_hessian,
-            sample_hessian_method,
             sample_hessian_options,
             fcols,
             sqEFS_options,

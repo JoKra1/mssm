@@ -20,6 +20,7 @@ from .defaults import (
     init_coef_gsmmgammlss,
 )
 from mssm.src.python.mcmc import sample_mssm
+from mssm.src.python.gamm_solvers import restart_coef, compute_S_emb_pinv_det
 
 mssm.src.python.exp_fam.GAUMLSS.init_coef = init_coef_gaumlss_tests
 mssm.src.python.exp_fam.GAMMALS.init_coef = init_coef_gammals_tests
@@ -164,6 +165,26 @@ class Test_qefs_final_budget:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         model.fit(**test_kwargs)
+
+    def test_restartCoef(self):
+        S_emb, _, _, _ = compute_S_emb_pinv_det(
+            self.model.hessian.shape[1], self.model.overall_penalties, "svd"
+        )
+        coef, c_llk, c_pen_llk = restart_coef(
+            self.model.coef,
+            self.model.get_llk(False),
+            self.model.get_llk(),
+            self.model.coef.shape[0],
+            self.model.coef_split_idx,
+            self.model.get_ys(),
+            self.model.get_mmat(),
+            S_emb,
+            self.model.family,
+            0,
+            0,
+        )
+
+        assert not np.isnan(c_llk)
 
     def test_sksize(self):
         assert self.model.lvi_linop.sk.shape[0] == self.model.lvi_linop.sk.shape[1]

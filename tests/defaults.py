@@ -97,7 +97,6 @@ default_gsmm_test_kwargs = {
     "repara": False,
     "global_opt_qefs": False,
     "sample_hessian": False,
-    "sample_hessian_method": 0,
     "sample_hessian_options": {"n_samples": 30},
     "structured_qefs": True,
     "structured_qefs_budget": 100,

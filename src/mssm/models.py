@@ -739,7 +739,6 @@ class GSMM:
         bfgs_options: dict | None = None,
         global_opt_qefs: bool = False,
         sample_hessian: bool = True,
-        sample_hessian_method: int = 0,
         sample_hessian_options: dict | None = None,
         structured_qefs: bool = True,
         structured_qefs_budget: float | int | list[int] = 1.0,
@@ -909,9 +908,6 @@ class GSMM:
         :param sample_hessian: Whether or not to sample the quasi-Newton approximation of the
             negative Hessians of the penalized log-likelihood and log-likelihood. Defaults to True
         :type sample_hessian: bool, optional
-        :param sample_hessian_method: Method to use for hessian sampling step. See
-            :func:`mssm.src.python.gamm_solvers.sample_ys_qefs` docstring for details. Defaults to 0
-        :type sample_hessian_method: int, optional
         :param sample_hessian_options: Optional key-word arguments determining behavior of hessian
             sampling step. See :func:`mssm.src.python.gamm_solvers.sample_ys_qefs` docstring for
             details. Defaults to None, which means that appropriate default values are selected
@@ -1234,7 +1230,6 @@ class GSMM:
                 bfgs_options,
                 global_opt_qefs,
                 sample_hessian,
-                sample_hessian_method,
                 sample_hessian_options,
                 qfcols,
                 sqEFS_options,
