@@ -3601,6 +3601,31 @@ class GSMMFamily(ABC):
         self.extra_coef: int | None = None
         self.return_sparse: bool = True
 
+    def prefit_setup(
+        self,
+        ys: list[np.ndarray | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
+    ):
+        """Setup function called before a model is fit. Arguments are the response
+        variables and list of model matrices prepared by mssm.
+
+        Provides families access to the response variables and model matrices used for fitting
+        just before starting the fitting iteration. Families can use this to pre-compute
+        quantities needed during fitting which just need to be evaluated once.
+
+        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
+            ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the
+            actual observed data is passed along via the first formula (so it is stored in
+            ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula,
+            then ``ys`` contains ``None`` at their indices to save memory.
+        :type ys: list[np.ndarray | None]
+        :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None``
+            at indices for matrices which were flagged as "do not build" via the ``build_mat``
+            argument of the :func:`mssm.models.GSMM.fit` method.
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
+        """
+        pass
+
     @abstractmethod
     def llk(
         self,

@@ -1269,6 +1269,13 @@ class HSMMFamily(GSMMFamily):
         self.is_hmp = event_template is not None
         self.hmp_location = hmp_location
         self.fast_hmp = fast_hmp
+        self.cross_cor = None
+
+        if self.fast_hmp and (self.is_hmp is False):
+            warnings.warn(
+                "``fast_hmp`` is True but model is not a hmp model. Ignoring ``fast_hmp``."
+            )
+            self.fast_hmp = False
 
         if (T is None and pi is not None) or (T is not None and pi is None):
             raise ValueError(
@@ -1288,6 +1295,124 @@ class HSMMFamily(GSMMFamily):
 
         # Check for time-varying duration, state transition, initial state models
         self.tvdtpi = tvdtpi
+
+        self.__fit_split_id = None
+        self.__fit_y_split = None
+        self.__fit_X_split = None
+
+    def prefit_setup(
+        self,
+        ys: list[np.ndarray | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
+    ):
+        """Pre-fit setup for a HSMM.
+
+        Sets up the cross correlation data for HMP-like models if ``self.fast_hmp is True``.
+        Cross-correlation is computed as outlined by Weindel, van Maanen, and Borst (2024).
+
+        References:
+         - Weindel, G., van Maanen, L., & Borst, J. P. (2024). Trial-by-trial detection of\
+            cognitive events in neural time-series. Imaging Neuroscience, 2, 1–28.\
+            https://doi.org/10.1162/imag_a_00400
+
+        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
+            ``lhs.variable`` to the formulas for single series. **Note**: by convention ``mssm``
+            expectes that the actual observed data is passed along via the first formula (so it is
+            stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first
+            formula, then ``ys`` contains ``None`` at their indices to save memory.
+        :type ys: [np.ndarray or None]
+        :param Xs: A list of sparse model matrices per likelihood parameter for single series.
+            Can contain None for indices for which model matrix should not be formed explicitly.
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
+        """
+        if self.fast_hmp:
+            self.cross_cor = []
+            normed_template = self.llkargs[-2] / np.sum(self.llkargs[-2] ** 2)
+            # print(normed_template)
+
+            n_S = self.llkargs[0]
+            obs_fams = self.llkargs[1]
+            d_fams = self.llkargs[2]
+            sid = self.llkargs[3]
+            tid = self.llkargs[4]
+            M = self.llkargs[6]
+            starts_with_first = self.llkargs[7]
+            shared_pars = self.llkargs[12]
+            shared_m = self.llkargs[13]
+            Lrhoi = self.llkargs[16]
+
+            if tid is None:
+                tid = sid
+
+            # Split up ys, Xs
+            split_Ys, _ = _split_matrices(
+                ys,
+                Xs,
+                shared_pars,
+                shared_m,
+                obs_fams,
+                d_fams,
+                sid,
+                tid,
+                n_S,
+                M,
+                False,
+                False,
+                starts_with_first,
+                Lrhoi,
+            )
+
+            idx = 0  # Keep track of indices for ys and Xs
+
+            # First check for part of models shared between states (and m)
+            for par in shared_pars:
+
+                midx = 1
+                if shared_m is False:
+                    midx = M
+
+                for m in range(midx):
+                    if ys[idx] is None:
+                        self.cross_cor.append(None)
+                    else:
+                        tpc = []
+                        for yss in split_Ys[idx]:
+                            # Compute cross-correlation as in HMP
+                            tpc.extend(
+                                scp.signal.correlate(
+                                    yss.flatten(),
+                                    normed_template,
+                                    mode="same",
+                                    method="direct",
+                                )
+                            )
+                        self.cross_cor.append(np.array(tpc).reshape(-1, 1))
+                    idx += 1
+
+            # Now individual parts
+            n_events = (n_S - 1) // 2
+            for yi in range(len(ys)):
+                if ys[idx] is None:
+                    self.cross_cor.append(None)
+                elif yi < (n_events * M):
+                    tpc = []
+                    for yss in split_Ys[idx]:
+                        # Compute cross-correlation as in HMP
+                        tpc.extend(
+                            scp.signal.correlate(
+                                yss.flatten(),
+                                normed_template,
+                                mode="same",
+                                method="direct",
+                            )
+                        )
+                    self.cross_cor.append(np.array(tpc).reshape(-1, 1))
+                    # print(yi, ys[idx].flatten()[:5])
+                    # print(yi, tpc[:5])
+                else:
+                    # Duration variables
+                    self.cross_cor.append(ys[idx])
+                idx += 1
 
     def series_log_prob(
         self,
@@ -3431,7 +3556,7 @@ class HSMMFamily(GSMMFamily):
 
         # Split up ys, Xs
         split_Ys, split_Xs = _split_matrices(
-            ys,
+            ys if self.fast_hmp is False else self.cross_cor,
             Xs,
             shared_pars,
             shared_m,
@@ -4550,8 +4675,8 @@ class HSMMFamily(GSMMFamily):
                     )
                     dconvdcoef[t, gdidx] += np.sum(
                         forward[tt].reshape(-1, 1)
-                        * pmf_deriv[
-                            t - tt, gdidx[gains_deriv.shape[1] :]  # noqa: E203
+                        * pmf_deriv[:, gdidx[gains_deriv.shape[1] :]][
+                            t - tt, :
                         ].reshape(t + 1, -1),
                         axis=0,
                     )
@@ -4830,7 +4955,7 @@ class HSMMFamily(GSMMFamily):
 
         # Split up ys, Xs
         split_Ys, split_Xs = _split_matrices(
-            ys,
+            ys if self.fast_hmp is False else self.cross_cor,
             Xs,
             shared_pars,
             shared_m,
