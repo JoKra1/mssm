@@ -249,6 +249,7 @@ def _compute_series_probs(
     hmp_fam: str = "Exponential",
     rho: float | None = None,
     tvdtpi: bool = False,
+    hmp_fast: bool = False,
 ) -> tuple[
     np.ndarray,
     np.ndarray,
@@ -332,6 +333,10 @@ def _compute_series_probs(
     :param tvdtpi: Whether the hsmm has time-varying models for the state duration,
         state transition, and initial state distributions. Defaults to False
     :type tvdtpi: bool, optional
+    :param hmp_fast: Whether the hmp propoabilities should be computed for use with conventional
+        hsmm algorithms (False) or for use with the fast hmp code for estimation (True). Only
+        has an effect when ``is_hmp is True``. Defaults to False
+    :type hmp_fast: bool, optional
     :raises ValueError: _description_
     :return: Returns ``y_mat`` (a (n_T,M) array holding the observations from all signals),
         ``mus`` (a (n_T,M,n_S) array holding the state-specific expected value of each observation
@@ -364,7 +369,9 @@ def _compute_series_probs(
         ds = np.zeros((D - 1, n_S * (1 if starts_with_first else 2), n_T), order="F")
     else:
         ds = np.zeros((D - 1, n_S * (1 if starts_with_first else 2)), order="F")
-    d_val = np.arange(1, D).reshape(-1, 1)
+    d_val = (
+        np.arange(D - 1).reshape(-1, 1) if hmp_fast else np.arange(1, D).reshape(-1, 1)
+    )
 
     # We can also pre-compute the observation probabilities
     y_mat = None
@@ -381,6 +388,11 @@ def _compute_series_probs(
         jbs = np.zeros((n_T, n_S, M), order="F") - np.inf
         cbs = np.zeros((n_T, n_S, M), order="F") - np.inf
         bs = np.zeros((n_T, n_S), order="F")
+    elif hmp_fast:
+        n_events = (n_S - 1) // 2
+        n_flats = n_events + 1
+        mus = np.zeros((n_T, M, n_events), order="F")
+        ds = np.zeros((D - 1, n_flats), order="F")
     else:
         jbs = np.zeros((n_T, M, event_width, n_S), order="F") - np.inf
         cbs = np.zeros((n_T, M, event_width, n_S), order="F") - np.inf
@@ -396,7 +408,7 @@ def _compute_series_probs(
 
     # First observation probabilities #
 
-    if is_hmp:
+    if is_hmp and hmp_fast is False:
         # Initialize some density/probability functions for hmp-like models
         hmp_code = 2 if hmp_fam == "Gaussian" else 1
 
@@ -442,7 +454,7 @@ def _compute_series_probs(
     thetas = split_coef[-1].flatten()
     theta_idx = 0
 
-    for j in range(n_S):
+    for j in range(n_S if hmp_fast is False else n_events):
 
         # Multivariate gaussian emission
         if isinstance(obs_fams[j][0], MultiGauss):
@@ -556,7 +568,7 @@ def _compute_series_probs(
                 else:
 
                     # Bumps
-                    if j % 2 == 1:  #
+                    if hmp_fast or j % 2 == 1:  #
 
                         yJM = ys[idx]
 
@@ -572,41 +584,47 @@ def _compute_series_probs(
                         musbjm = etasbjm  # Assume identity link
                         mus[:, m, j] = musbjm[0][:, 0]
 
-                        for d in range(event_width):
+                        if hmp_fast:
+                            if j == 0:
+                                y_mat[:, m] = yJM[:, 0]
 
-                            # Expected bump for every time-point given dur d in bump
-                            Ebump = event_template[d] * mus[:, m, j]
+                        else:
 
-                            if rho is not None:
+                            for d in range(event_width):
 
-                                if d > 0:
-                                    # Previous mean was mu at previous time weighted by sine at
-                                    # previous dur
-                                    Ebump = d0 * Ebump + d1 * (
-                                        event_template[d - 1]
-                                        * np.concatenate(([0], mus[:-1, m, j]))
-                                    )
-                                else:
-                                    # Previous mean was 0 (last time-point of preceding flat)
-                                    Ebump = d0 * Ebump
+                                # Expected bump for every time-point given dur d in bump
+                                Ebump = event_template[d] * mus[:, m, j]
 
-                            jbs[:, m, d, j] = ld_wrapper(
-                                y_mat[:, m],
-                                Ebump,
-                                scale,
-                            )
-                            cbs[:, m, d, j] = lcp_wrapper(
-                                y_mat[:, m],
-                                Ebump,
-                                scale,
-                            )
+                                if rho is not None:
 
-                            bs[:, d, j] += jbs[:, m, d, j]
+                                    if d > 0:
+                                        # Previous mean was mu at previous time weighted by sine at
+                                        # previous dur
+                                        Ebump = d0 * Ebump + d1 * (
+                                            event_template[d - 1]
+                                            * np.concatenate(([0], mus[:-1, m, j]))
+                                        )
+                                    else:
+                                        # Previous mean was 0 (last time-point of preceding flat)
+                                        Ebump = d0 * Ebump
 
-                            if log is False:
-                                # Transform log probs to probs
-                                jbs[:, m, d, j] = np.exp(jbs[:, m, d, j])
-                                cbs[:, m, d, j] = np.exp(cbs[:, m, d, j])
+                                jbs[:, m, d, j] = ld_wrapper(
+                                    y_mat[:, m],
+                                    Ebump,
+                                    scale,
+                                )
+                                cbs[:, m, d, j] = lcp_wrapper(
+                                    y_mat[:, m],
+                                    Ebump,
+                                    scale,
+                                )
+
+                                bs[:, d, j] += jbs[:, m, d, j]
+
+                                if log is False:
+                                    # Transform log probs to probs
+                                    jbs[:, m, d, j] = np.exp(jbs[:, m, d, j])
+                                    cbs[:, m, d, j] = np.exp(cbs[:, m, d, j])
 
                         idx += 1
 
@@ -648,17 +666,19 @@ def _compute_series_probs(
                             jbs[:, m, :, j] = np.exp(jbs[:, m, :, j])
                             cbs[:, m, :, j] = np.exp(cbs[:, m, :, j])
 
-        if log is False:
+        if log is False and bs is not None:
             if is_hmp is False:
                 bs[:, j] = np.exp(bs[:, j])
             else:
                 bs[:, :, j] = np.exp(bs[:, :, j])
 
     # Now state duration probabilities #
+    f_idx = 0
+    for j in range(
+        (n_S if hmp_fast is False else n_flats) * (1 if starts_with_first else 2)
+    ):
 
-    for j in range(n_S * (1 if starts_with_first else 2)):
-
-        jdFam = d_fams[j]
+        jdFam = d_fams[j if hmp_fast is False else f_idx]
         if jdFam is not None:
 
             etasdj = []
@@ -679,6 +699,9 @@ def _compute_series_probs(
                 lpd = jdFam.lp(d_val, *musdj)
 
             mus_d.append(musdj)
+
+            if hmp_fast:
+                f_idx += 2
 
         else:
             if j % 2 == 1:
@@ -1172,6 +1195,13 @@ class HSMMFamily(GSMMFamily):
         , and state durations must be specified for data having the same number of rows as the data
         used by the formulas of the observation models. Defaults to False
     :type tvdtpi: bool, optional
+    :param hmp_location: Sample location array for a HMP-like model. Typically extracted from
+        the HMP toolbox by Weindel et al. Defaults to None
+    :type hmp_location: np.ndarray, optional
+    :param fast_hmp: Whether to use fast hmp code. This requires the model to be strictly serial
+        (left-to-right). However, skipped states for some series are still possible (i.e., group
+        models). Defaults to False
+    :type fast_hmp: bool, optional
     :raises ValueError: if either ``T`` or ``pi`` have a value other than None but not both.
     :raises ValueError: if ``starts_with_first is False`` and the model is HMP-like (i.e.,
         ``event_template is not None``).
@@ -1202,6 +1232,8 @@ class HSMMFamily(GSMMFamily):
         event_template: np.ndarray | None = None,
         hmp_fam: str = "Exponential",
         tvdtpi: bool = False,
+        hmp_location: np.ndarray | None = None,
+        fast_hmp: bool = False,
     ) -> None:
 
         super().__init__(
@@ -1235,6 +1267,8 @@ class HSMMFamily(GSMMFamily):
 
         self.extra_coef = 0
         self.is_hmp = event_template is not None
+        self.hmp_location = hmp_location
+        self.fast_hmp = fast_hmp
 
         if (T is None and pi is not None) or (T is not None and pi is None):
             raise ValueError(
@@ -1342,6 +1376,7 @@ class HSMMFamily(GSMMFamily):
             hmp_fam,
             rho,
             tvdtpi,
+            False,
         )
         bs[(np.isnan(bs) | np.isinf(bs))] = -np.inf if log else 0
         ds[(np.isnan(ds) | np.isinf(ds))] = -np.inf if log else 0
@@ -1567,6 +1602,7 @@ class HSMMFamily(GSMMFamily):
                 starts_with_first,
                 build_mat_idx,
                 tvdtpi=tvdtpi,
+                hmp_fast=False,
             )
 
         elif isinstance(T, list) and isinstance(pi, list):
@@ -1843,6 +1879,7 @@ class HSMMFamily(GSMMFamily):
             hmp_fam,
             rho,
             tvdtpi,
+            False,
         )
 
         if fix_T_pi:
@@ -2224,6 +2261,7 @@ class HSMMFamily(GSMMFamily):
             hmp_fam,
             rho,
             tvdtpi,
+            False,
         )
 
         if fix_T_pi:
@@ -2512,6 +2550,7 @@ class HSMMFamily(GSMMFamily):
             hmp_fam,
             rho,
             tvdtpi,
+            False,
         )
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
@@ -2812,6 +2851,7 @@ class HSMMFamily(GSMMFamily):
             hmp_fam,
             rho,
             tvdtpi,
+            False,
         )
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
@@ -3202,7 +3242,7 @@ class HSMMFamily(GSMMFamily):
 
         # We can pre-compute the bs and ds - i.e., observation probabilities and
         # duration probabilities
-        _, _, _, _, _, bs, ds, Ts, pis = _compute_series_probs(
+        cross_corr, mus, _, _, _, bs, ds, Ts, pis = _compute_series_probs(
             coef,
             coef_split_idx,
             shared_pars,
@@ -3226,6 +3266,7 @@ class HSMMFamily(GSMMFamily):
             hmp_fam,
             rho,
             tvdtpi,
+            self.fast_hmp,
         )
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
@@ -3239,7 +3280,7 @@ class HSMMFamily(GSMMFamily):
         if np.any(np.isnan(ds) | np.isinf(ds)):
             return -np.inf
 
-        if np.any(np.isnan(bs) | np.isinf(bs)):
+        if self.fast_hmp is False and np.any(np.isnan(bs) | np.isinf(bs)):
             return -np.inf
 
         if np.any(np.isnan(pis) | np.isinf(pis)):
@@ -3248,29 +3289,73 @@ class HSMMFamily(GSMMFamily):
         if np.any(np.isnan(Ts) | np.isinf(Ts)):
             return -np.inf
 
-        # Now compute llk #
-        if is_hmp:
-            hmp_code = 1
-        else:
-            hmp_code = 0
+        # Now compute llk
+        if self.fast_hmp:
 
-        llk = hsmm.llk(
-            bs,
-            ds,
-            Ts,
-            pis,
-            event_template if hmp_code != 0 else np.zeros(1),
-            scale if hmp_code != 0 else 1,
-            n_T,
-            D,
-            n_S,
-            event_width if hmp_code != 0 else 0,
-            starts_with_first,
-            ends_with_last,
-            ends_in_last,
-            hmp_code,
-            tvdtpi,
-        )
+            # The following computes the log-likelihood of a HMP model as described by
+            # Weindel, van Maanen and Borst (2024). Code taken & modified from:
+            # https://github.com/GWeindel/hmp/blob/devel/hmp/models/event.py
+            # print(cross_corr.shape, n_T)
+            n_events = (n_S - 1) // 2
+            n_flats = n_events + 1
+            gains = np.zeros((n_T, n_events), dtype=np.float64)
+
+            for i in range(cross_corr.shape[1]):
+                # computes the gains, i.e. the log of the likelihood ratio between
+                # event present and absent.
+                gains = (
+                    gains + cross_corr[:, [i]] * mus[:, i, :] - mus[:, i, :] ** 2 / 2
+                )
+            gains = np.exp(gains)
+
+            # pmf for each flat with appropriate zeroing to prevent overlap between events
+            pmf = np.zeros([n_T, n_flats], dtype=np.float64)
+            end = min(n_T, D - 1)
+            for stage in range(n_flats):
+                pmf[:end, stage] = ds[:end, stage]
+                pmf[: self.hmp_location[stage], stage] = 0
+
+            # Now modified forward pass
+            forward = np.zeros((n_T, n_events), dtype=np.float64)
+            forward[:, 0] = pmf[:, 0] * gains[:, 0]
+
+            for event in np.arange(1, n_events):
+                # convolution between pmf and previous forward multiplied by gain
+                forward[:, event] = (
+                    np.convolve(forward[:, event - 1], pmf[:, event])[:n_T]
+                    * gains[:, event]
+                )
+
+            # Account for final distribution
+            forward[:end, -1] *= np.flip(pmf[:end, -1])
+
+            # Compute trial llk.
+            forward = np.clip(forward, 0, None)
+            llk = np.log(forward[:, -1].sum())
+
+        else:
+            if is_hmp:
+                hmp_code = 1
+            else:
+                hmp_code = 0
+
+            llk = hsmm.llk(
+                bs,
+                ds,
+                Ts,
+                pis,
+                event_template if hmp_code != 0 else np.zeros(1),
+                scale if hmp_code != 0 else 1,
+                n_T,
+                D,
+                n_S,
+                event_width if hmp_code != 0 else 0,
+                starts_with_first,
+                ends_with_last,
+                ends_in_last,
+                hmp_code,
+                tvdtpi,
+            )
         return llk
 
     def llk(
@@ -3497,31 +3582,41 @@ class HSMMFamily(GSMMFamily):
 
         # We can pre-compute the bs and ds - i.e., observation probabilities and duration
         # probabilities - and their gradients
-        if is_hmp:
-            y_mat = np.zeros((n_T, M), order="F")
-            mus = np.zeros((n_T, M, n_S), order="F")
-            bs = np.zeros((n_T, event_width, n_S), order="F")
-
-            # Compute weights from rho
-            if rho is not None:
-
-                d0 = 1 / np.sqrt(1 - np.power(rho, 2))  # weight current mean
-                d1 = -rho / np.sqrt(1 - np.power(rho, 2))  # weight previous mean
-
-        else:
-            y_mat = None
-            mus = None
-            bs = np.zeros((n_T, n_S), order="F")
-
         if tvdtpi:
             ds = np.zeros(
                 (D - 1, n_S * (1 if starts_with_first else 2), n_T), order="F"
             )
         else:
             ds = np.zeros((D - 1, n_S * (1 if starts_with_first else 2)), order="F")
-        d_val = np.arange(1, D).reshape(-1, 1)
+        d_val = (
+            np.arange(D - 1).reshape(-1, 1)
+            if self.fast_hmp
+            else np.arange(1, D).reshape(-1, 1)
+        )
+
         state_vals = np.arange(0, n_S - 1).reshape(-1, 1)
         pi_vals = np.arange(0, n_S).reshape(-1, 1)
+
+        if is_hmp is False:
+            mus = None
+            cross_corr = None
+            bs = np.zeros((n_T, n_S), order="F")
+        else:
+            cross_corr = np.zeros((n_T, M), order="F")
+            if self.fast_hmp:
+                n_events = (n_S - 1) // 2
+                n_flats = n_events + 1
+                mus = np.zeros((n_T, M, n_events), order="F")
+                ds = np.zeros((D - 1, n_flats), order="F")
+            else:
+                mus = np.zeros((n_T, M, n_S), order="F")
+                bs = np.zeros((n_T, event_width, n_S), order="F")
+
+                # Compute weights from rho
+                if rho is not None:
+
+                    d0 = 1 / np.sqrt(1 - np.power(rho, 2))  # weight current mean
+                    d1 = -rho / np.sqrt(1 - np.power(rho, 2))  # weight previous mean
 
         b_grad = None
         d_grad = None
@@ -3572,7 +3667,7 @@ class HSMMFamily(GSMMFamily):
         # Will need to keep track of position of theta gradients
         # since they will need to be moved to the end
         theta_grad_idx = []
-        for j in range(n_S):
+        for j in range(n_S if self.fast_hmp is False else n_events):
 
             iterM = M
             # If emission model is multivariate Gaussian, then it has M n_par!
@@ -3722,11 +3817,14 @@ class HSMMFamily(GSMMFamily):
                         # state j and signal m
                         if b_grad is None:
                             b_grad = grad_par
-                            j_idx_grad = np.zeros(grad_par.shape[1]) + j
+                            j_idx_grad = np.zeros(grad_par.shape[1], dtype=np.int32) + j
                         else:
                             b_grad = np.concatenate([b_grad, grad_par], axis=1)
                             j_idx_grad = np.concatenate(
-                                [j_idx_grad, np.zeros(grad_par.shape[1]) + j]
+                                [
+                                    j_idx_grad,
+                                    np.zeros(grad_par.shape[1], dtype=np.int32) + j,
+                                ]
                             )
 
                     # Have gradients with respect to coef but need gradients with respect
@@ -3755,7 +3853,7 @@ class HSMMFamily(GSMMFamily):
                                     [b_grad, dldtheta.reshape(-1, 1)], axis=1
                                 )
                                 j_idx_grad = np.concatenate(
-                                    [j_idx_grad, np.zeros(1) + j]
+                                    [j_idx_grad, np.zeros(1, dtype=np.int32) + j]
                                 )
 
                                 # Reset partial of R
@@ -3775,8 +3873,7 @@ class HSMMFamily(GSMMFamily):
                 # Assume HMP/HSMMMVPA pattern for observation model - response variable has to
                 # be cross-correlation between pca components and pattern
                 else:
-
-                    if j % 2 == 1:
+                    if self.fast_hmp or j % 2 == 1:
                         # Only first y associated with state j and signal m is not None
                         yJM = ys[idx]
 
@@ -3819,6 +3916,9 @@ class HSMMFamily(GSMMFamily):
                         total_coef += Xs[idx].shape[1]
                         mus[:, m, j] = musbjm[0][:, 0]
 
+                        if self.fast_hmp and j == 0:
+                            cross_corr[:, m] = yJM[:, 0]
+
                         # Get partial derivative of lpb with respect to coef
                         if 0 in shared_pars:
                             # Can now complete step 2) for shared model component!
@@ -3845,15 +3945,21 @@ class HSMMFamily(GSMMFamily):
 
                         if b_grad is None:
                             b_grad = grad_par
-                            m_idx_grad = np.zeros(grad_par.shape[1]) + m
-                            j_idx_grad = np.zeros(grad_par.shape[1]) + j
+                            m_idx_grad = np.zeros(grad_par.shape[1], dtype=np.int32) + m
+                            j_idx_grad = np.zeros(grad_par.shape[1], dtype=np.int32) + j
                         else:
                             b_grad = np.concatenate([b_grad, grad_par], axis=1)
                             m_idx_grad = np.concatenate(
-                                [m_idx_grad, np.zeros(grad_par.shape[1]) + m]
+                                [
+                                    m_idx_grad,
+                                    np.zeros(grad_par.shape[1], dtype=np.int32) + m,
+                                ]
                             )
                             j_idx_grad = np.concatenate(
-                                [j_idx_grad, np.zeros(grad_par.shape[1]) + j]
+                                [
+                                    j_idx_grad,
+                                    np.zeros(grad_par.shape[1], dtype=np.int32) + j,
+                                ]
                             )
 
                         idx += 1
@@ -3863,7 +3969,7 @@ class HSMMFamily(GSMMFamily):
                         yJM = ys[m]
                         mus[:, m, j] = 0
                         if j == 0:
-                            y_mat[:, m] = yJM[:, 0]
+                            cross_corr[:, m] = yJM[:, 0]
 
             if is_hmp is False:
                 # Turn log-probs into probs again
@@ -3873,9 +3979,13 @@ class HSMMFamily(GSMMFamily):
 
         # Now state duration probabilities ##
         # print("DUR:")
-        for j in range(n_S * (1 if starts_with_first else 2)):
+        f_idx = 0
+        for j in range(
+            (n_S if self.fast_hmp is False else n_flats)
+            * (1 if starts_with_first else 2)
+        ):
 
-            jdFam = d_fams[j]
+            jdFam = d_fams[j if self.fast_hmp is False else f_idx]
             if jdFam is not None:
 
                 etasdj = []
@@ -4029,8 +4139,11 @@ class HSMMFamily(GSMMFamily):
                         d_grad = np.concatenate([d_grad, grad_par], axis=1)
 
                     j_idx_grad = np.concatenate(
-                        [j_idx_grad, np.zeros(grad_par.shape[1]) + j]
+                        [j_idx_grad, np.zeros(grad_par.shape[1], dtype=np.int32) + j]
                     )
+
+                if self.fast_hmp:
+                    f_idx += 2
 
             else:
                 if j % 2 == 1:
@@ -4172,7 +4285,10 @@ class HSMMFamily(GSMMFamily):
 
                         # Again update j_idx_grad but only at first iter!
                         j_idx_grad = np.concatenate(
-                            [j_idx_grad, np.zeros(grad_par.shape[1]) + j]
+                            [
+                                j_idx_grad,
+                                np.zeros(grad_par.shape[1], dtype=np.int32) + j,
+                            ]
                         )
 
                     # Collect final state transition probabilities
@@ -4315,6 +4431,167 @@ class HSMMFamily(GSMMFamily):
                 n_S > 2,
                 tvdtpi,
             )
+        elif self.fast_hmp:
+            # Now for hmp..
+
+            # def llk_wrap(x: np.ndarray) -> float:
+            #    return self.series_llk(series, x.reshape(-1, 1), coef_split_idx, ys, Xs)
+
+            # grad2 = scp.optimize.approx_fprime(coef.flatten(), llk_wrap)
+
+            # The following computes gradient of the log-likelihood of a HMP model as
+            # described by Weindel, van Maanen and Borst (2024). Code taken & modified from:
+            # https://github.com/GWeindel/hmp/blob/devel/hmp/models/event.py
+            n_events = (n_S - 1) // 2
+            n_flats = n_events + 1
+            gains = np.zeros((n_T, n_events), dtype=np.float64)
+
+            # Holds derivatives of gains with respect to coef
+            gains_deriv = np.zeros((n_T, b_grad.shape[1]), dtype=np.float64)
+
+            for m in range(cross_corr.shape[1]):
+                # computes the gains, i.e. the log of the likelihood ratio between
+                # event present and absent.
+                m_gain = cross_corr[:, [m]] * mus[:, m, :] - mus[:, m, :] ** 2 / 2
+                gains += m_gain
+
+                # deriv of m_gain with respect to mus shape: (n_T, n_events)
+                dgdmu = cross_corr[:, [m]] - mus[:, m, :]
+
+                # Index coefficients associated with channel m
+                gidx = m_idx_grad == m
+
+                # Get corresponding event index for all coef associated with
+                # channel m
+                gjidx = j_idx_grad[: b_grad.shape[1]][gidx]
+
+                # Compute derivatives of m_gain with respect to coef
+                gains_deriv[:, gidx] = dgdmu[:, gjidx] * b_grad[:, gidx]
+
+            gains = np.exp(gains)  # = exp(m_gain[0]) * exp(m_gain[1]), ...
+
+            # Now finalize deriv of gains with respect to coef
+            gains_deriv *= gains[:, j_idx_grad[: b_grad.shape[1]]]
+
+            # Done with emissions part, clean up b_grad
+            b_grad = None
+
+            # pmf for each flat with appropriate zeroing to prevent overlap between events
+            pmf = np.zeros([n_T, n_flats], dtype=np.float64)
+            pmf_deriv = np.zeros([n_T, d_grad.shape[1]], dtype=np.float64)
+            end = min(n_T, D - 1)
+            for stage in range(n_flats):
+                pmf[:end, stage] = ds[:end, stage]
+                pmf[: self.hmp_location[stage], stage] = 0
+
+                # Get coefficients associated with pmf of stage
+                gidx = (j_idx_grad == stage)[gains_deriv.shape[1] :]  # noqa: E203
+
+                # deriv of pmf of stage with respect to coef
+                pmf_deriv[:end, gidx] = d_grad[:end, gidx]
+                pmf_deriv[: self.hmp_location[stage], gidx] = 0
+            # print(pmf)
+            # Done with durations part clean up d_grad
+            d_grad = None
+
+            # Now modified forward pass
+            forward = pmf[:, 0] * gains[:, 0]
+
+            # Deriv of forward with respect to coefficients (no cross dependencies
+            # between emission and latent process in a hmp model)
+            tgrad = np.zeros((n_T, total_coef), dtype=np.float64)
+
+            # Start with coefs associated with gain[0]
+            ggidx = j_idx_grad == 0
+            ggidx[gains_deriv.shape[1] :] = False  # noqa: E203
+            tgrad[:, ggidx] = (
+                gains_deriv[:, ggidx[: gains_deriv.shape[1]]] * pmf[:, [0]]
+            )
+
+            # Now coef associated with pmf[0]
+            gdidx = j_idx_grad == 0
+            gdidx[: gains_deriv.shape[1]] = False
+            tgrad[:, gdidx] = (
+                pmf_deriv[:, gdidx[gains_deriv.shape[1] :]]  # noqa: E203
+                * gains[:, [0]]
+            )
+
+            for event in np.arange(1, n_events):
+                # convolution between pmf and previous forward multiplied by gain
+                conv = np.convolve(forward, pmf[:, event])[:n_T]
+                nextforward = conv * gains[:, event]
+
+                # derivative of nextforward is
+                # dconvdcoef * gains[:, event] + conv * dgains[event]dcoef
+
+                # dconvdcoef
+                dconvdcoef = np.zeros_like(tgrad)
+                gdidx = j_idx_grad == event
+                ggidx = gdidx.copy()
+                gdidx[: gains_deriv.shape[1]] = False
+                ggidx[gains_deriv.shape[1] :] = False  # noqa: E203
+                for t in range(n_T):
+
+                    tt = np.arange(0, t + 1)
+                    """
+                    naive:
+                    for tt in range(0, t + 1):
+                        # deriv of nextforward[t] = forward[tt] * pmf[t - tt, event]
+                        # is dforward[tt]dcoef * pmf[t - tt, event] +
+                        # forward[tt] * dpmf[t - tt, event]dcoef (only for pmf coef)
+                        dconvdcoef[t, :] += tgrad[tt, :] * pmf[t - tt, event]
+                        dconvdcoef[t, gdidx] += (
+                            forward[tt]
+                            * pmf_deriv[t - tt, gdidx[gains_deriv.shape[1] :]]
+                        )
+                    """
+                    dconvdcoef[t, :] += np.sum(
+                        tgrad[tt, :] * pmf[t - tt, event].reshape(-1, 1), axis=0
+                    )
+                    dconvdcoef[t, gdidx] += np.sum(
+                        forward[tt].reshape(-1, 1)
+                        * pmf_deriv[
+                            t - tt, gdidx[gains_deriv.shape[1] :]  # noqa: E203
+                        ].reshape(t + 1, -1),
+                        axis=0,
+                    )
+
+                tgrad = dconvdcoef * gains[:, [event]]
+                tgrad[:, ggidx] += (
+                    conv.reshape(-1, 1) * gains_deriv[:, ggidx[: gains_deriv.shape[1]]]
+                )
+
+                forward = nextforward
+
+            # Account for final distribution. Need derivative of:
+            # forward[:end] = forward[:end] * np.flip(pmf[:end, -1])
+
+            # Start with gain
+            tgrad[:end, : gains_deriv.shape[1]] *= np.flip(pmf[:end, -1]).reshape(-1, 1)
+
+            # Also 2 cases for pmf: coef associated with pmf[:end, -1] and those not.
+            # First case is special. forward[:end] does not depend on coef and for
+            # the pmf deriv we need to account for the flip. Deriv is:
+            gdidx = j_idx_grad == (n_flats - 1)
+            gdidx[: gains_deriv.shape[1]] = False
+
+            tgrad[:end, gdidx] = pmf_deriv[
+                :end, gdidx[gains_deriv.shape[1] :]  # noqa: E203
+            ] * np.flip(forward[:end]).reshape(-1, 1)
+
+            # Second case is just like gain case
+            gdidx = j_idx_grad != (n_flats - 1)
+            gdidx[: gains_deriv.shape[1]] = False
+            tgrad[:end, gdidx] *= np.flip(pmf[:end, -1]).reshape(-1, 1)
+
+            # Now update forward one last time
+            forward[:end] *= np.flip(pmf[:end, -1])
+
+            # Get grad
+            tgrad = np.sum(tgrad, axis=0)
+            grad = tgrad / np.sum(forward)
+
+            # print(np.abs(grad2 - grad).max())
         else:
             # Still not done for hmp
             if is_hmp:
@@ -4363,12 +4640,14 @@ class HSMMFamily(GSMMFamily):
                                         # flat)
                                         Ebump = d0 * Ebump
 
-                                lbs[:, m, d, j] = ld_wrapper(y_mat[:, m], Ebump, scale)
+                                lbs[:, m, d, j] = ld_wrapper(
+                                    cross_corr[:, m], Ebump, scale
+                                )
 
                                 bs[:, d, j] += lbs[:, m, d, j]
                         else:
                             # flat
-                            lbs[:, m, 0, j] = ld_wrapper(y_mat[:, m], 0, scale)
+                            lbs[:, m, 0, j] = ld_wrapper(cross_corr[:, m], 0, scale)
 
                             if rho is not None and j > 0:
                                 # Handle time-lag of last sample of previous bump into current
@@ -4378,7 +4657,7 @@ class HSMMFamily(GSMMFamily):
                                 )
 
                                 lbs[:, m, 1, j] = ld_wrapper(
-                                    y_mat[:, m], d1 * Ebump, scale
+                                    cross_corr[:, m], d1 * Ebump, scale
                                 )
                             else:
                                 lbs[:, m, 1, j] = lbs[:, m, 0, j]
@@ -4399,7 +4678,7 @@ class HSMMFamily(GSMMFamily):
 
             grad = hsmm.llkFTPgrad(
                 bs,
-                y_mat,
+                cross_corr,
                 mus,
                 ds,
                 Ts,
