@@ -201,11 +201,15 @@ def _vstack_s_matrices(
         for _ in range(n_S - 1):
             X_split = None
             if Xs[idx] is not None:
-                X_split = Xs[idx][tidx0 : (tidx0 + 1), :]
+                X_split = Xs[idx][tidx0 : (tidx0 + 1), :]  # noqa: E203
 
             y_split = None
             if ys[idx] is not None:
-                y_split = ys[idx][tidx0 : (tidx0 + 1)] if ys[idx] is not None else None
+                y_split = (
+                    ys[idx][tidx0 : (tidx0 + 1)]  # noqa: E203
+                    if ys[idx] is not None
+                    else None
+                )
 
             split_Xs.append(X_split)
             split_Ys.append(y_split)
@@ -3576,6 +3580,12 @@ class HSMMFamily(GSMMFamily):
                 split_Xs,
             )
 
+            # No need to copy cross_cor
+            orig_cross_cor = None
+            if self.cross_cor is not None:
+                orig_cross_cor = self.cross_cor
+                self.cross_cor = None
+
             with warnings.catch_warnings():  # Supress warnings
                 warnings.simplefilter("ignore")
                 with mp.Pool(processes=n_cores) as pool:
@@ -3583,6 +3593,9 @@ class HSMMFamily(GSMMFamily):
                     llks = pool.starmap(self.series_llk, args)
 
                 llk = np.sum(llks)
+
+            if orig_cross_cor is not None:
+                self.cross_cor = orig_cross_cor
 
         if np.isnan(llk):
             llk = -np.inf
@@ -4530,9 +4543,7 @@ class HSMMFamily(GSMMFamily):
             n_flats = n_events + 1
             gains = np.zeros((n_T, n_events), dtype=np.float64)
 
-            # Holds derivatives of gains with respect to coef
-            gains_deriv = np.zeros((n_T, b_grad.shape[1]), dtype=np.float64)
-
+            # Derivatives of gains with respect to coef
             for m in range(cross_corr.shape[1]):
                 # computes the gains, i.e. the log of the likelihood ratio between
                 # event present and absent.
@@ -4550,36 +4561,40 @@ class HSMMFamily(GSMMFamily):
                 gjidx = j_idx_grad[: b_grad.shape[1]][gidx]
 
                 # Compute derivatives of m_gain with respect to coef
-                gains_deriv[:, gidx] = dgdmu[:, gjidx] * b_grad[:, gidx]
+                b_grad[:, gidx] *= dgdmu[:, gjidx]
 
             gains = np.exp(gains)  # = exp(m_gain[0]) * exp(m_gain[1]), ...
 
             # Now finalize deriv of gains with respect to coef
-            gains_deriv *= gains[:, j_idx_grad[: b_grad.shape[1]]]
+            b_grad *= gains[:, j_idx_grad[: b_grad.shape[1]]]
 
-            # Done with emissions part, clean up b_grad
-            b_grad = None
+            # Done with emissions part
 
             # pmf for each flat with appropriate zeroing to prevent overlap between events
-            pmf = np.zeros([n_T, n_flats], dtype=np.float64)
-            pmf_deriv = np.zeros([n_T, d_grad.shape[1]], dtype=np.float64)
             end = min(n_T, D - 1)
+            if n_T > d_grad.shape[0]:
+                d_grad = np.concatenate(
+                    (d_grad, np.zeros((n_T - d_grad.shape[0], d_grad.shape[1]))), axis=0
+                )
+                ds = np.concatenate(
+                    (ds, np.zeros((n_T - ds.shape[0], ds.shape[1]))), axis=0
+                )
+            elif d_grad.shape[0] > end:
+                d_grad = d_grad[:end, :]
+                ds = ds[:end, :]
+
+            # Zero grads accordingly as well
             for stage in range(n_flats):
-                pmf[:end, stage] = ds[:end, stage]
-                pmf[: self.hmp_location[stage], stage] = 0
-
                 # Get coefficients associated with pmf of stage
-                gidx = (j_idx_grad == stage)[gains_deriv.shape[1] :]  # noqa: E203
+                gidx = (j_idx_grad == stage)[b_grad.shape[1] :]  # noqa: E203
 
-                # deriv of pmf of stage with respect to coef
-                pmf_deriv[:end, gidx] = d_grad[:end, gidx]
-                pmf_deriv[: self.hmp_location[stage], gidx] = 0
-            # print(pmf)
-            # Done with durations part clean up d_grad
-            d_grad = None
+                ds[: self.hmp_location[stage], stage] = 0
+                d_grad[: self.hmp_location[stage], gidx] = 0
+
+            # Done with durations part
 
             # Now modified forward pass
-            forward = pmf[:, 0] * gains[:, 0]
+            forward = ds[:, 0] * gains[:, 0]
 
             # Deriv of forward with respect to coefficients (no cross dependencies
             # between emission and latent process in a hmp model)
@@ -4587,22 +4602,19 @@ class HSMMFamily(GSMMFamily):
 
             # Start with coefs associated with gain[0]
             ggidx = j_idx_grad == 0
-            ggidx[gains_deriv.shape[1] :] = False  # noqa: E203
-            tgrad[:, ggidx] = (
-                gains_deriv[:, ggidx[: gains_deriv.shape[1]]] * pmf[:, [0]]
-            )
+            ggidx[b_grad.shape[1] :] = False  # noqa: E203
+            tgrad[:, ggidx] = b_grad[:, ggidx[: b_grad.shape[1]]] * ds[:, [0]]
 
             # Now coef associated with pmf[0]
             gdidx = j_idx_grad == 0
-            gdidx[: gains_deriv.shape[1]] = False
+            gdidx[: b_grad.shape[1]] = False
             tgrad[:, gdidx] = (
-                pmf_deriv[:, gdidx[gains_deriv.shape[1] :]]  # noqa: E203
-                * gains[:, [0]]
+                d_grad[:, gdidx[b_grad.shape[1] :]] * gains[:, [0]]  # noqa: E203
             )
 
             for event in np.arange(1, n_events):
                 # convolution between pmf and previous forward multiplied by gain
-                conv = np.convolve(forward, pmf[:, event])[:n_T]
+                conv = np.convolve(forward, ds[:, event])[:n_T]
                 nextforward = conv * gains[:, event]
 
                 # derivative of nextforward is
@@ -4612,29 +4624,18 @@ class HSMMFamily(GSMMFamily):
                 dconvdcoef = np.zeros_like(tgrad)
                 gdidx = j_idx_grad == event
                 ggidx = gdidx.copy()
-                gdidx[: gains_deriv.shape[1]] = False
-                ggidx[gains_deriv.shape[1] :] = False  # noqa: E203
+                gdidx[: b_grad.shape[1]] = False
+                ggidx[b_grad.shape[1] :] = False  # noqa: E203
                 for t in range(n_T):
 
                     tt = np.arange(0, t + 1)
-                    """
-                    naive:
-                    for tt in range(0, t + 1):
-                        # deriv of nextforward[t] = forward[tt] * pmf[t - tt, event]
-                        # is dforward[tt]dcoef * pmf[t - tt, event] +
-                        # forward[tt] * dpmf[t - tt, event]dcoef (only for pmf coef)
-                        dconvdcoef[t, :] += tgrad[tt, :] * pmf[t - tt, event]
-                        dconvdcoef[t, gdidx] += (
-                            forward[tt]
-                            * pmf_deriv[t - tt, gdidx[gains_deriv.shape[1] :]]
-                        )
-                    """
+
                     dconvdcoef[t, :] += np.sum(
-                        tgrad[tt, :] * pmf[t - tt, event].reshape(-1, 1), axis=0
+                        tgrad[tt, :] * ds[t - tt, event].reshape(-1, 1), axis=0
                     )
                     dconvdcoef[t, gdidx] += np.sum(
                         forward[tt].reshape(-1, 1)
-                        * pmf_deriv[:, gdidx[gains_deriv.shape[1] :]][
+                        * d_grad[:, gdidx[b_grad.shape[1] :]][  # noqa: E203
                             t - tt, :
                         ].reshape(t + 1, -1),
                         axis=0,
@@ -4642,7 +4643,7 @@ class HSMMFamily(GSMMFamily):
 
                 tgrad = dconvdcoef * gains[:, [event]]
                 tgrad[:, ggidx] += (
-                    conv.reshape(-1, 1) * gains_deriv[:, ggidx[: gains_deriv.shape[1]]]
+                    conv.reshape(-1, 1) * b_grad[:, ggidx[: b_grad.shape[1]]]
                 )
 
                 forward = nextforward
@@ -4651,25 +4652,25 @@ class HSMMFamily(GSMMFamily):
             # forward[:end] = forward[:end] * np.flip(pmf[:end, -1])
 
             # Start with gain
-            tgrad[:end, : gains_deriv.shape[1]] *= np.flip(pmf[:end, -1]).reshape(-1, 1)
+            tgrad[:end, : b_grad.shape[1]] *= np.flip(ds[:end, -1]).reshape(-1, 1)
 
             # Also 2 cases for pmf: coef associated with pmf[:end, -1] and those not.
             # First case is special. forward[:end] does not depend on coef and for
             # the pmf deriv we need to account for the flip. Deriv is:
             gdidx = j_idx_grad == (n_flats - 1)
-            gdidx[: gains_deriv.shape[1]] = False
+            gdidx[: b_grad.shape[1]] = False
 
-            tgrad[:end, gdidx] = pmf_deriv[
-                :end, gdidx[gains_deriv.shape[1] :]  # noqa: E203
+            tgrad[:end, gdidx] = d_grad[
+                :end, gdidx[b_grad.shape[1] :]  # noqa: E203
             ] * np.flip(forward[:end]).reshape(-1, 1)
 
             # Second case is just like gain case
             gdidx = j_idx_grad != (n_flats - 1)
-            gdidx[: gains_deriv.shape[1]] = False
-            tgrad[:end, gdidx] *= np.flip(pmf[:end, -1]).reshape(-1, 1)
+            gdidx[: b_grad.shape[1]] = False
+            tgrad[:end, gdidx] *= np.flip(ds[:end, -1]).reshape(-1, 1)
 
             # Now update forward one last time
-            forward[:end] *= np.flip(pmf[:end, -1])
+            forward[:end] *= np.flip(ds[:end, -1])
 
             # Get grad
             tgrad = np.sum(tgrad, axis=0)
@@ -4959,6 +4960,12 @@ class HSMMFamily(GSMMFamily):
                 split_Xs,
             )
 
+            # No need to copy cross_cor!
+            orig_cross_cor = None
+            if self.cross_cor is not None:
+                orig_cross_cor = self.cross_cor
+                self.cross_cor = None
+
             with warnings.catch_warnings():  # Supress warnings
                 warnings.simplefilter("ignore")
                 with mp.Pool(processes=n_cores) as pool:
@@ -4966,5 +4973,8 @@ class HSMMFamily(GSMMFamily):
                     grads = pool.starmap(self.series_grad, args)
 
                 grad = np.sum(grads, axis=0)
+
+            if orig_cross_cor is not None:
+                self.cross_cor = orig_cross_cor
 
         return grad
