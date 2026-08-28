@@ -4683,8 +4683,8 @@ class HSMMFamily(GSMMFamily):
             gdidx = j_idx_grad == stages[0]
             gdidx[: b_grad.shape[1]] = False
             tgrad[:, gdidx] = (
-                d_grad[:, gdidx[b_grad.shape[1] :]]
-                * gains[:, [events[0]]]  # noqa: E203
+                d_grad[:, gdidx[b_grad.shape[1] :]]  # noqa: E203
+                * gains[:, [events[0]]]
             )
 
             for evidx in np.arange(1, n_events):
@@ -4728,7 +4728,7 @@ class HSMMFamily(GSMMFamily):
 
             # Start with gain
             ggidx = np.isin(j_idx_grad, events)
-            ggidx[b_grad.shape[1] :] = False
+            ggidx[b_grad.shape[1] :] = False  # noqa: E203
             tgrad[:end, ggidx] *= np.flip(ds[:end, stages[-1]]).reshape(-1, 1)
 
             # Also 2 cases for pmf: coef associated with pmf[:end, -1] and those not.
