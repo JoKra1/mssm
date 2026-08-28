@@ -3410,7 +3410,9 @@ class HSMMFamily(GSMMFamily):
                 # computes the gains, i.e. the log of the likelihood ratio between
                 # event present and absent.
                 gains = (
-                    gains + cross_corr[:, [i]] * mus[:, i, :] - mus[:, i, :] ** 2 / 2
+                    gains
+                    + cross_corr[:, [i]] * mus[:, i, :]
+                    - mus[:, i, :] ** 2 / scale
                 )
             gains = np.exp(gains)
 
@@ -4547,11 +4549,11 @@ class HSMMFamily(GSMMFamily):
             for m in range(cross_corr.shape[1]):
                 # computes the gains, i.e. the log of the likelihood ratio between
                 # event present and absent.
-                m_gain = cross_corr[:, [m]] * mus[:, m, :] - mus[:, m, :] ** 2 / 2
+                m_gain = cross_corr[:, [m]] * mus[:, m, :] - mus[:, m, :] ** 2 / scale
                 gains += m_gain
 
                 # deriv of m_gain with respect to mus shape: (n_T, n_events)
-                dgdmu = cross_corr[:, [m]] - mus[:, m, :]
+                dgdmu = (2 * (cross_corr[:, [m]] - mus[:, m, :])) / scale
 
                 # Index coefficients associated with channel m
                 gidx = m_idx_grad == m
