@@ -16,6 +16,204 @@ from itertools import repeat
 from .discrete import DiscreteModelMatrix
 
 
+def _vstack_s_matrices(
+    sidx: int,
+    ys: list[np.ndarray | None],
+    Xs: list[scp.sparse.csc_array | np.ndarray | None],
+    shared_pars: list[int],
+    shared_m: bool,
+    obs_fams: list[list[GAMLSSFamily | MultiGauss | None]],
+    d_fams: list[GAMLSSFamily | None],
+    sid: np.ndarray,
+    tid: np.ndarray,
+    n_S: int,
+    M: int,
+    model_T: bool,
+    model_pi: bool,
+    starts_with_first: bool,
+) -> tuple[list[np.ndarray | None], list[scp.sparse.csc_array | np.ndarray | None]]:
+    """Fill two lists with row blocks in ``ys`` and ``Xs`` associated with series ``sidx``.
+
+    :param sidx: Series index
+    :type sidx: int
+    :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
+        ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the
+        actual observed data is passed along via the first formula (so it is stored in ``ys[0]``).
+        If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys``
+        contains ``None`` at their indices to save memory.
+    :type ys: [np.ndarray or None]
+    :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
+        indices for which model matrix should not be formed explicitly.
+    :type Xs: list[scp.sparse.csc_array | np.ndarray| None]
+    :param shared_pars: A list containing indices of emission distribution parameters for which
+        at least one (in case ``shared_m is False`` one for each of the ``M`` signals) formula
+        has been provided containing terms to be shared between the ``n_S`` states.
+    :type shared_pars: list[int]
+    :param shared_m: Bool indicating whether the shared terms are not just shared between states but
+        also between the ``M`` signals.
+    :type shared_m: bool
+    :param obs_fams: Distribution of emissions - one list per state containing the specific families
+        (can be multiple if ``M>1`` or a single class:`MultiGauss`). The state-specific list can
+        also include multiple Nones, in case of a HMP-like model.
+    :type obs_fams: list[list[GAMLSSFamily | MultiGauss | None]]
+    :param d_fams: Distribution of state durations - one per state. Can also contain None for the
+        'bump states' of a HMP-like model, which have a fixed duration.
+    :type d_fams: list[GAMLSSFamily | None]
+    :param sid: Array holding the index corresponding to the first sample of each series in the
+        data. Needed to split the observation vectors and model matrices into time-series
+        specific versions
+    :type sid: np.ndarray
+    :param tid: Often, the model matrices for the models of the duration distribution, state
+        transition, and initial state distribution parameters will have fewer rows than those of the
+        observation models (because covariates only vary with trials). The optional array ``tid``
+        can then hold indices corresponding to the onset of a row-block of a new trial in the model
+        matrices of the duration models. Then used to split the duration model matrices into trial
+        specific versions.
+    :type tid: np.ndarray
+    :param n_S: Number of latent states.
+    :type n_S: int
+    :param M: Number of signals recorded if the HSMM is multivariate.
+    :type M: int
+    :param model_T: Whether to model the transition matrix or not
+    :type model_T: bool
+    :param model_pi: Whether to model the initial distribution of states or not.
+    :type model_pi: bool
+    :param starts_with_first: Whether the first state starts with the first observation or might
+        have been going on for a max duration of ``D``.
+    :type starts_with_first: bool
+    :param Lrhoi: Inverse of transpose of Cholesky of banded covariance matrix of an ar model of the
+        residuals for a HMP-like HSMM. Defaults to None - indicating no ar model.
+    :type Lrhoi: scp.sparse.csc_array | None, optional
+    :return: Two lists with row blocks in ``ys`` and ``Xs`` associated with series ``sidx``
+    :rtype: tuple[list[np.ndarray | None],list[scp.sparse.csc_array | np.ndarray | None]]
+    """
+    n_series = len(sid)
+    sidx0 = sid[sidx]
+    sidx1 = sid[sidx + 1] if sidx < (n_series - 1) else Xs[0].shape[0]
+
+    split_Xs = []
+    split_Ys = []
+
+    idx = 0  # Keep track of indices for ys and Xs
+
+    # First check for part of models shared between states (and m)
+    for par in shared_pars:
+
+        midx = 1
+        if shared_m is False:
+            midx = M
+
+        # Only need to collect Xs for all par and m. For ys we only need first par and m
+        # since functions expect first observation vector to be not None to identify number
+        # of time-points.
+        for m in range(midx):
+            X_split = None
+            if Xs[idx] is not None:
+                X_split = Xs[idx][sidx0:sidx1, :]
+
+            y_split = None
+            if par == 0 and m == 0:
+                y_split = ys[0][sidx0:sidx1]
+
+            split_Xs.append(X_split)
+            split_Ys.append(y_split)
+            idx += 1
+
+    # Now state specific models
+    for j in range(n_S):
+
+        iterM = M
+
+        # If emission model is multivariate Gaussian, then it has M n_par!
+        if isinstance(obs_fams[j][0], MultiGauss):
+            iterM = 1
+
+        for m in range(iterM):
+
+            jmbFam = obs_fams[j][m]  # Get family associated with state j and signal m
+
+            if jmbFam is not None:
+
+                for _ in range(jmbFam.n_par):
+
+                    X_split = None
+                    if Xs[idx] is not None:
+                        X_split = Xs[idx][sidx0:sidx1, :]
+
+                    y_split = None
+                    if ys[idx] is not None:
+                        y_split = ys[idx][sidx0:sidx1]
+
+                    split_Xs.append(X_split)
+                    split_Ys.append(y_split)
+                    idx += 1
+
+            else:
+                # Only have observation models for events = n_S-1
+                if j % 2 == 1:
+                    X_split = None
+                    if Xs[idx] is not None:
+                        X_split = Xs[idx][sidx0:sidx1, :]
+
+                    y_split = None
+                    if ys[idx] is not None:
+                        y_split = ys[idx][sidx0:sidx1]
+
+                    split_Xs.append(X_split)
+                    split_Ys.append(y_split)
+                    idx += 1
+
+    # Now state duration probabilities #
+    tidx0 = tid[sidx]
+    tidx1 = tid[sidx + 1] if sidx < (n_series - 1) else Xs[idx].shape[0]
+    for j in range(n_S * (1 if starts_with_first else 2)):
+        jdFam = d_fams[j]
+
+        if jdFam is not None:
+            for _ in range(jdFam.n_par):
+                X_split = None
+                if Xs[idx] is not None:
+                    X_split = Xs[idx][tidx0:tidx1, :]
+
+                y_split = ys[idx][tidx0:tidx1] if ys[idx] is not None else None
+                split_Xs.append(X_split)
+                split_Ys.append(y_split)
+                idx += 1
+
+    # Now state transition probabilities #
+    if model_T and n_S > 2:
+        for j in range(n_S):
+
+            for _ in range(n_S - 2):
+                X_split = None
+                if Xs[idx] is not None:
+                    X_split = Xs[idx][tidx0:tidx1, :]
+
+                y_split = ys[idx][tidx0:tidx1] if ys[idx] is not None else None
+                split_Xs.append(X_split)
+                split_Ys.append(y_split)
+                idx += 1
+
+    # Now initial state probabilities #
+    # For pi we need to remember that we really only need trial-level model matrices
+    # even if tid = sid
+    if model_pi:
+        for _ in range(n_S - 1):
+            X_split = None
+            if Xs[idx] is not None:
+                X_split = Xs[idx][tidx0 : (tidx0 + 1), :]
+
+            y_split = None
+            if ys[idx] is not None:
+                y_split = ys[idx][tidx0 : (tidx0 + 1)] if ys[idx] is not None else None
+
+            split_Xs.append(X_split)
+            split_Ys.append(y_split)
+            idx += 1
+
+    return split_Ys, split_Xs
+
+
 def _split_matrices(
     ys: list[np.ndarray | None],
     Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
@@ -93,135 +291,37 @@ def _split_matrices(
     # Split up ys, Xs
     split_Xs = []
     split_Ys = []
+    n_series = len(sid)
 
-    idx = 0  # Keep track of indices for ys and Xs
+    # Rho idx for hmp
+    rho_idx = (len(shared_pars) * (1 if shared_m else M)) + (((n_S - 1) // 2) * M)
 
-    # First check for part of models shared between states (and m)
-    for par in shared_pars:
+    yfix = [
+        ys[idx] if Lrhoi is None or idx >= rho_idx else Lrhoi.T @ ys[idx]
+        for idx in range(len(ys))
+    ]
 
-        midx = 1
-        if shared_m is False:
-            midx = M
+    for sidx in range(n_series):
+        y_split_s, X_split_s = _vstack_s_matrices(
+            sidx,
+            yfix,
+            Xs,
+            shared_pars,
+            shared_m,
+            obs_fams,
+            d_fams,
+            sid,
+            tid,
+            n_S,
+            M,
+            model_T,
+            model_pi,
+            starts_with_first,
+        )
+        split_Ys.append(y_split_s)
+        split_Xs.append(X_split_s)
 
-        # Only need to collect Xs for all par and m. For ys we only need first par and m
-        # since functions expect first observation vector to be not None to identify number
-        # of time-points.
-        for m in range(midx):
-            X_split = None
-            if Xs[idx] is not None:
-                Xidx = np.arange(Xs[idx].shape[0])
-                Xmj = Xs[idx]
-                X_split = [Xmj[split, :] for split in np.split(Xidx, sid[1:])]
-
-            y_split = None
-            if par == 0 and m == 0:
-                ymj = ys[0] if Lrhoi is None else Lrhoi.T @ ys[0]
-                y_split = np.split(ymj, sid[1:])
-
-            split_Xs.append(X_split)
-            split_Ys.append(y_split)
-            idx += 1
-
-    # Now state specific models
-    for j in range(n_S):
-
-        iterM = M
-
-        # If emission model is multivariate Gaussian, then it has M n_par!
-        if isinstance(obs_fams[j][0], MultiGauss):
-            iterM = 1
-
-        for m in range(iterM):
-
-            jmbFam = obs_fams[j][m]  # Get family associated with state j and signal m
-
-            if jmbFam is not None:
-
-                for _ in range(jmbFam.n_par):
-
-                    X_split = None
-                    if Xs[idx] is not None:
-                        Xidx = np.arange(Xs[idx].shape[0])
-                        Xmj = Xs[idx]
-                        X_split = [Xmj[split, :] for split in np.split(Xidx, sid[1:])]
-
-                    y_split = None
-                    if ys[idx] is not None:
-                        ymj = ys[idx] if Lrhoi is None else Lrhoi.T @ ys[idx]
-                        y_split = np.split(ymj, sid[1:])
-
-                    split_Xs.append(X_split)
-                    split_Ys.append(y_split)
-                    idx += 1
-
-            else:
-                # Only have observation models for events = n_S-1
-                if j % 2 == 1:
-                    X_split = None
-                    if Xs[idx] is not None:
-                        Xidx = np.arange(Xs[idx].shape[0])
-                        Xmj = Xs[idx]
-                        X_split = [Xmj[split, :] for split in np.split(Xidx, sid[1:])]
-
-                    y_split = None
-                    if ys[idx] is not None:
-                        ymj = ys[idx] if Lrhoi is None else Lrhoi.T @ ys[idx]
-                        y_split = np.split(ymj, sid[1:])
-
-                    split_Xs.append(X_split)
-                    split_Ys.append(y_split)
-                    idx += 1
-
-    # Now state duration probabilities #
-    for j in range(n_S * (1 if starts_with_first else 2)):
-        jdFam = d_fams[j]
-
-        if jdFam is not None:
-            for _ in range(jdFam.n_par):
-                X_split = None
-                if Xs[idx] is not None:
-                    Xidx = np.arange(Xs[idx].shape[0])
-                    X_split = [Xs[idx][split, :] for split in np.split(Xidx, tid[1:])]
-
-                y_split = np.split(ys[idx], tid[1:]) if ys[idx] is not None else None
-                split_Xs.append(X_split)
-                split_Ys.append(y_split)
-                idx += 1
-
-    # Now state transition probabilities #
-    if model_T and n_S > 2:
-        for j in range(n_S):
-
-            for _ in range(n_S - 2):
-                X_split = None
-                if Xs[idx] is not None:
-                    Xidx = np.arange(Xs[idx].shape[0])
-                    X_split = [Xs[idx][split, :] for split in np.split(Xidx, tid[1:])]
-
-                y_split = np.split(ys[idx], tid[1:]) if ys[idx] is not None else None
-                split_Xs.append(X_split)
-                split_Ys.append(y_split)
-                idx += 1
-
-    # Now initial state probabilities #
-    # For pi we need to remember that we really only need trial-level model matrices
-    # even if tid = sid
-    if model_pi:
-        for _ in range(n_S - 1):
-            X_split = None
-            if Xs[idx] is not None:
-                Xidx = np.arange(Xs[idx].shape[0])
-                X_split = [Xs[idx][[split[0]], :] for split in np.split(Xidx, tid[1:])]
-
-            y_split = None
-            if ys[idx] is not None:
-                yidx = np.arange(ys[idx].shape[0])
-                y_split = [ys[idx][[split[0]], :] for split in np.split(yidx, tid[1:])]
-
-            split_Xs.append(X_split)
-            split_Ys.append(y_split)
-            idx += 1
-
+    # print(split_Xs, split_Ys)
     return split_Ys, split_Xs
 
 
@@ -1331,36 +1431,15 @@ class HSMMFamily(GSMMFamily):
             # print(normed_template)
 
             n_S = self.llkargs[0]
-            obs_fams = self.llkargs[1]
-            d_fams = self.llkargs[2]
             sid = self.llkargs[3]
             tid = self.llkargs[4]
             M = self.llkargs[6]
-            starts_with_first = self.llkargs[7]
             shared_pars = self.llkargs[12]
             shared_m = self.llkargs[13]
             Lrhoi = self.llkargs[16]
 
             if tid is None:
                 tid = sid
-
-            # Split up ys, Xs
-            split_Ys, _ = _split_matrices(
-                ys,
-                Xs,
-                shared_pars,
-                shared_m,
-                obs_fams,
-                d_fams,
-                sid,
-                tid,
-                n_S,
-                M,
-                False,
-                False,
-                starts_with_first,
-                Lrhoi,
-            )
 
             idx = 0  # Keep track of indices for ys and Xs
 
@@ -1372,11 +1451,14 @@ class HSMMFamily(GSMMFamily):
                     midx = M
 
                 for m in range(midx):
-                    if ys[idx] is None:
+                    if ys[idx] is None or par != 0 or m != 0:
                         self.cross_cor.append(None)
                     else:
                         tpc = []
-                        for yss in split_Ys[idx]:
+                        split_Ys = np.split(
+                            Lrhoi.T @ ys[idx] if Lrhoi is not None else ys[idx], sid[1:]
+                        )
+                        for yss in split_Ys:
                             # Compute cross-correlation as in HMP
                             tpc.extend(
                                 scp.signal.correlate(
@@ -1396,7 +1478,10 @@ class HSMMFamily(GSMMFamily):
                     self.cross_cor.append(None)
                 elif yi < (n_events * M):
                     tpc = []
-                    for yss in split_Ys[idx]:
+                    split_Ys = np.split(
+                        Lrhoi.T @ ys[idx] if Lrhoi is not None else ys[idx], sid[1:]
+                    )
+                    for yss in split_Ys:
                         # Compute cross-correlation as in HMP
                         tpc.extend(
                             scp.signal.correlate(
@@ -1607,14 +1692,8 @@ class HSMMFamily(GSMMFamily):
                 bss, dss = self.series_log_prob(
                     coef,
                     coef_split_idx,
-                    [
-                        y_split[series] if y_split is not None else None
-                        for y_split in split_Ys
-                    ],
-                    [
-                        X_split[series] if X_split is not None else None
-                        for X_split in split_Xs
-                    ],
+                    split_Ys[series],
+                    split_Xs[series],
                     log,
                 )
 
@@ -1625,20 +1704,8 @@ class HSMMFamily(GSMMFamily):
             args = zip(
                 repeat(coef),
                 repeat(coef_split_idx),
-                [
-                    [
-                        y_split[series] if y_split is not None else None
-                        for y_split in split_Ys
-                    ]
-                    for series in range(n_series)
-                ],
-                [
-                    [
-                        X_split[series] if X_split is not None else None
-                        for X_split in split_Xs
-                    ]
-                    for series in range(n_series)
-                ],
+                split_Ys,
+                split_Xs,
                 repeat(log),
             )
 
@@ -1841,14 +1908,8 @@ class HSMMFamily(GSMMFamily):
                     series,
                     coef,
                     coef_split_idx,
-                    [
-                        y_split[series] if y_split is not None else None
-                        for y_split in split_Ys
-                    ],
-                    [
-                        X_split[series] if X_split is not None else None
-                        for X_split in split_Xs
-                    ],
+                    split_Ys[series],
+                    split_Xs[series],
                 )
 
                 ps.append([T, pi])
@@ -1859,20 +1920,8 @@ class HSMMFamily(GSMMFamily):
                 [s for s in range(n_series)],
                 repeat(coef),
                 repeat(coef_split_idx),
-                [
-                    [
-                        y_split[series] if y_split is not None else None
-                        for y_split in split_Ys
-                    ]
-                    for series in range(n_series)
-                ],
-                [
-                    [
-                        X_split[series] if X_split is not None else None
-                        for X_split in split_Xs
-                    ]
-                    for series in range(n_series)
-                ],
+                split_Ys,
+                split_Xs,
             )
 
             with mp.Pool(processes=n_cores) as pool:
@@ -2242,14 +2291,8 @@ class HSMMFamily(GSMMFamily):
                         series,
                         coef,
                         coef_split_idx,
-                        [
-                            y_split[series] if y_split is not None else None
-                            for y_split in split_Ys
-                        ],
-                        [
-                            X_split[series] if X_split is not None else None
-                            for X_split in split_Xs
-                        ],
+                        split_Ys[series],
+                        split_Xs[series],
                         seed,
                         n_samples,
                         scale,
@@ -2263,20 +2306,8 @@ class HSMMFamily(GSMMFamily):
                 [s for s in range(n_series)],
                 repeat(coef),
                 repeat(coef_split_idx),
-                [
-                    [
-                        y_split[series] if y_split is not None else None
-                        for y_split in split_Ys
-                    ]
-                    for series in range(n_series)
-                ],
-                [
-                    [
-                        X_split[series] if X_split is not None else None
-                        for X_split in split_Xs
-                    ]
-                    for series in range(n_series)
-                ],
+                split_Ys,
+                split_Xs,
                 repeat(seed),
                 repeat(n_samples),
                 repeat(scale),
@@ -2533,14 +2564,8 @@ class HSMMFamily(GSMMFamily):
                         series,
                         coef,
                         coef_split_idx,
-                        [
-                            y_split[series] if y_split is not None else None
-                            for y_split in split_Ys
-                        ],
-                        [
-                            X_split[series] if X_split is not None else None
-                            for X_split in split_Xs
-                        ],
+                        split_Ys[series],
+                        split_Xs[series],
                     )
 
                     states.append([edss, statess])
@@ -2551,20 +2576,8 @@ class HSMMFamily(GSMMFamily):
                 [s for s in range(n_series)],
                 repeat(coef),
                 repeat(coef_split_idx),
-                [
-                    [
-                        y_split[series] if y_split is not None else None
-                        for y_split in split_Ys
-                    ]
-                    for series in range(n_series)
-                ],
-                [
-                    [
-                        X_split[series] if X_split is not None else None
-                        for X_split in split_Xs
-                    ]
-                    for series in range(n_series)
-                ],
+                split_Ys,
+                split_Xs,
             )
 
             with warnings.catch_warnings():  # Supress warnings
@@ -2830,14 +2843,8 @@ class HSMMFamily(GSMMFamily):
                     series,
                     coef,
                     coef_split_idx,
-                    [
-                        y_split[series] if y_split is not None else None
-                        for y_split in split_Ys
-                    ],
-                    [
-                        X_split[series] if X_split is not None else None
-                        for X_split in split_Xs
-                    ],
+                    split_Ys[series],
+                    split_Xs[series],
                     seed,
                     n_samples,
                 )
@@ -2850,20 +2857,8 @@ class HSMMFamily(GSMMFamily):
                 [s for s in range(n_series)],
                 repeat(coef),
                 repeat(coef_split_idx),
-                [
-                    [
-                        y_split[series] if y_split is not None else None
-                        for y_split in split_Ys
-                    ]
-                    for series in range(n_series)
-                ],
-                [
-                    [
-                        X_split[series] if X_split is not None else None
-                        for X_split in split_Xs
-                    ]
-                    for series in range(n_series)
-                ],
+                split_Ys,
+                split_Xs,
                 repeat(seed),
                 repeat(n_samples),
             )
@@ -3245,14 +3240,8 @@ class HSMMFamily(GSMMFamily):
                         series,
                         coef,
                         coef_split_idx,
-                        [
-                            y_split[series] if y_split is not None else None
-                            for y_split in split_Ys
-                        ],
-                        [
-                            X_split[series] if X_split is not None else None
-                            for X_split in split_Xs
-                        ],
+                        split_Ys[series],
+                        split_Xs[series],
                         resid_type,
                         seed,
                         n_samples,
@@ -3268,20 +3257,8 @@ class HSMMFamily(GSMMFamily):
                 [s for s in range(n_series)],
                 repeat(coef),
                 repeat(coef_split_idx),
-                [
-                    [
-                        y_split[series] if y_split is not None else None
-                        for y_split in split_Ys
-                    ]
-                    for series in range(n_series)
-                ],
-                [
-                    [
-                        X_split[series] if X_split is not None else None
-                        for X_split in split_Xs
-                    ]
-                    for series in range(n_series)
-                ],
+                split_Ys,
+                split_Xs,
                 repeat(resid_type),
                 repeat(seed),
                 repeat(n_samples),
@@ -3569,7 +3546,7 @@ class HSMMFamily(GSMMFamily):
             False if fix_T_pi else True,
             False if fix_T_pi else True,
             starts_with_first,
-            Lrhoi,
+            None if self.fast_hmp else Lrhoi,
         )
 
         # Now compute llk for every individual series and then sum up
@@ -3583,14 +3560,8 @@ class HSMMFamily(GSMMFamily):
                         series,
                         coef,
                         coef_split_idx,
-                        [
-                            y_split[series] if y_split is not None else None
-                            for y_split in split_Ys
-                        ],
-                        [
-                            X_split[series] if X_split is not None else None
-                            for X_split in split_Xs
-                        ],
+                        split_Ys[series],
+                        split_Xs[series],
                     )
 
                     llk += llks
@@ -3601,20 +3572,8 @@ class HSMMFamily(GSMMFamily):
                 [s for s in range(n_series)],
                 repeat(coef),
                 repeat(coef_split_idx),
-                [
-                    [
-                        y_split[series] if y_split is not None else None
-                        for y_split in split_Ys
-                    ]
-                    for series in range(n_series)
-                ],
-                [
-                    [
-                        X_split[series] if X_split is not None else None
-                        for X_split in split_Xs
-                    ]
-                    for series in range(n_series)
-                ],
+                split_Ys,
+                split_Xs,
             )
 
             with warnings.catch_warnings():  # Supress warnings
@@ -4968,7 +4927,7 @@ class HSMMFamily(GSMMFamily):
             False if fix_T_pi else True,
             False if fix_T_pi else True,
             starts_with_first,
-            Lrhoi,
+            None if self.fast_hmp else Lrhoi,
         )
 
         # Now compute grad for every individual series and then sum up
@@ -4981,14 +4940,8 @@ class HSMMFamily(GSMMFamily):
                         series,
                         coef,
                         coef_split_idx,
-                        [
-                            y_split[series] if y_split is not None else None
-                            for y_split in split_Ys
-                        ],
-                        [
-                            X_split[series] if X_split is not None else None
-                            for X_split in split_Xs
-                        ],
+                        split_Ys[series],
+                        split_Xs[series],
                     )
                 # print(grads)
                 if grad is None:
@@ -5002,20 +4955,8 @@ class HSMMFamily(GSMMFamily):
                 [s for s in range(n_series)],
                 repeat(coef),
                 repeat(coef_split_idx),
-                [
-                    [
-                        y_split[series] if y_split is not None else None
-                        for y_split in split_Ys
-                    ]
-                    for series in range(n_series)
-                ],
-                [
-                    [
-                        X_split[series] if X_split is not None else None
-                        for X_split in split_Xs
-                    ]
-                    for series in range(n_series)
-                ],
+                split_Ys,
+                split_Xs,
             )
 
             with warnings.catch_warnings():  # Supress warnings
