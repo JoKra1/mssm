@@ -3442,23 +3442,47 @@ class HSMMFamily(GSMMFamily):
             # pmf for each flat with appropriate zeroing to prevent overlap between events
             pmf = np.zeros([n_T, n_flats], dtype=np.float64)
             end = min(n_T, D - 1)
-            for stage in range(n_flats):
+
+            # Figure out which transitions are actually happening on this trial.
+            # Needs translation from bump/flat world to event/stage world.
+            flat = np.argmax(pi)
+            stage = flat // 2
+            # Handle first stage here, rest in loop over transitions below
+            pmf[:end, stage] = ds[:end, stage]
+            pmf[: self.hmp_location[stage], stage] = 0
+            sidx = 0 if flat == 0 else T[:flat, :].sum().astype(int) // 2
+            eidx = T.sum().astype(int) // 2
+            stages = [stage]
+            events = []
+            n_events = 0
+
+            # Loop over transitions
+            for _ in range(sidx, eidx):
+                bump = np.argmax(T[flat, :])
+                event = bump // 2
+                flat = bump + 1
+                stage = flat // 2
+
                 pmf[:end, stage] = ds[:end, stage]
                 pmf[: self.hmp_location[stage], stage] = 0
 
+                stages.append(stage)
+                events.append(event)
+                n_events += 1
+
             # Now modified forward pass
             forward = np.zeros((n_T, n_events), dtype=np.float64)
-            forward[:, 0] = pmf[:, 0] * gains[:, 0]
+            forward[:, 0] = pmf[:, stages[0]] * gains[:, events[0]]
 
-            for event in np.arange(1, n_events):
+            for evidx in np.arange(1, n_events):
                 # convolution between pmf and previous forward multiplied by gain
-                forward[:, event] = (
-                    np.convolve(forward[:, event - 1], pmf[:, event])[:n_T]
-                    * gains[:, event]
+                forward[:, evidx] = (
+                    np.convolve(forward[:, evidx - 1], pmf[:, stages[evidx]])[:n_T]
+                    * gains[:, events[evidx]]
                 )
 
             # Account for final distribution
-            forward[:end, -1] *= np.flip(pmf[:end, -1])
+            forward[:end, -1] *= np.flip(pmf[:end, stages[-1]])
 
             # Compute trial llk.
             forward = np.clip(forward, 0, None)
@@ -4608,47 +4632,73 @@ class HSMMFamily(GSMMFamily):
                 d_grad = d_grad[:end, :]
                 ds = ds[:end, :]
 
+            # Figure out which transitions are actually happening on this trial.
+            # Needs translation from bump/flat world to event/stage world.
+            flat = np.argmax(pi)
+            stage = flat // 2
+            # Handle first stage here, rest in loop over transitions below
+            # Get coefficients associated with pmf of stage
+            gidx = (j_idx_grad == stage)[b_grad.shape[1] :]  # noqa: E203
+            ds[: self.hmp_location[stage], stage] = 0
             # Zero grads accordingly as well
-            for stage in range(n_flats):
+            d_grad[: self.hmp_location[stage], gidx] = 0
+            sidx = 0 if flat == 0 else T[:flat, :].sum().astype(int) // 2
+            eidx = T.sum().astype(int) // 2
+            stages = [stage]
+            events = []
+            n_events = 0
+
+            # Loop over transitions
+            for _ in range(sidx, eidx):
+                bump = np.argmax(T[flat, :])
+                event = bump // 2
+                flat = bump + 1
+                stage = flat // 2
+
                 # Get coefficients associated with pmf of stage
                 gidx = (j_idx_grad == stage)[b_grad.shape[1] :]  # noqa: E203
 
                 ds[: self.hmp_location[stage], stage] = 0
                 d_grad[: self.hmp_location[stage], gidx] = 0
 
+                stages.append(stage)
+                events.append(event)
+                n_events += 1
+
             # Done with durations part
 
             # Now modified forward pass
-            forward = ds[:, 0] * gains[:, 0]
+            forward = ds[:, stages[0]] * gains[:, events[0]]
 
             # Deriv of forward with respect to coefficients (no cross dependencies
             # between emission and latent process in a hmp model)
             tgrad = np.zeros((n_T, total_coef), dtype=np.float64)
 
             # Start with coefs associated with gain[0]
-            ggidx = j_idx_grad == 0
+            ggidx = j_idx_grad == events[0]
             ggidx[b_grad.shape[1] :] = False  # noqa: E203
-            tgrad[:, ggidx] = b_grad[:, ggidx[: b_grad.shape[1]]] * ds[:, [0]]
+            tgrad[:, ggidx] = b_grad[:, ggidx[: b_grad.shape[1]]] * ds[:, [stages[0]]]
 
             # Now coef associated with pmf[0]
-            gdidx = j_idx_grad == 0
+            gdidx = j_idx_grad == stages[0]
             gdidx[: b_grad.shape[1]] = False
             tgrad[:, gdidx] = (
-                d_grad[:, gdidx[b_grad.shape[1] :]] * gains[:, [0]]  # noqa: E203
+                d_grad[:, gdidx[b_grad.shape[1] :]]
+                * gains[:, [events[0]]]  # noqa: E203
             )
 
-            for event in np.arange(1, n_events):
+            for evidx in np.arange(1, n_events):
                 # convolution between pmf and previous forward multiplied by gain
-                conv = np.convolve(forward, ds[:, event])[:n_T]
-                nextforward = conv * gains[:, event]
+                conv = np.convolve(forward, ds[:, stages[evidx]])[:n_T]
+                nextforward = conv * gains[:, events[evidx]]
 
                 # derivative of nextforward is
                 # dconvdcoef * gains[:, event] + conv * dgains[event]dcoef
 
                 # dconvdcoef
                 dconvdcoef = np.zeros_like(tgrad)
-                gdidx = j_idx_grad == event
-                ggidx = gdidx.copy()
+                gdidx = j_idx_grad == stages[evidx]
+                ggidx = j_idx_grad == events[evidx]
                 gdidx[: b_grad.shape[1]] = False
                 ggidx[b_grad.shape[1] :] = False  # noqa: E203
                 for t in range(n_T):
@@ -4656,7 +4706,7 @@ class HSMMFamily(GSMMFamily):
                     tt = np.arange(0, t + 1)
 
                     dconvdcoef[t, :] += np.sum(
-                        tgrad[tt, :] * ds[t - tt, event].reshape(-1, 1), axis=0
+                        tgrad[tt, :] * ds[t - tt, stages[evidx]].reshape(-1, 1), axis=0
                     )
                     dconvdcoef[t, gdidx] += np.sum(
                         forward[tt].reshape(-1, 1)
@@ -4666,7 +4716,7 @@ class HSMMFamily(GSMMFamily):
                         axis=0,
                     )
 
-                tgrad = dconvdcoef * gains[:, [event]]
+                tgrad = dconvdcoef * gains[:, [events[evidx]]]
                 tgrad[:, ggidx] += (
                     conv.reshape(-1, 1) * b_grad[:, ggidx[: b_grad.shape[1]]]
                 )
@@ -4677,12 +4727,14 @@ class HSMMFamily(GSMMFamily):
             # forward[:end] = forward[:end] * np.flip(pmf[:end, -1])
 
             # Start with gain
-            tgrad[:end, : b_grad.shape[1]] *= np.flip(ds[:end, -1]).reshape(-1, 1)
+            ggidx = np.isin(j_idx_grad, events)
+            ggidx[b_grad.shape[1] :] = False
+            tgrad[:end, ggidx] *= np.flip(ds[:end, stages[-1]]).reshape(-1, 1)
 
             # Also 2 cases for pmf: coef associated with pmf[:end, -1] and those not.
             # First case is special. forward[:end] does not depend on coef and for
             # the pmf deriv we need to account for the flip. Deriv is:
-            gdidx = j_idx_grad == (n_flats - 1)
+            gdidx = j_idx_grad == stages[-1]
             gdidx[: b_grad.shape[1]] = False
 
             tgrad[:end, gdidx] = d_grad[
@@ -4690,12 +4742,12 @@ class HSMMFamily(GSMMFamily):
             ] * np.flip(forward[:end]).reshape(-1, 1)
 
             # Second case is just like gain case
-            gdidx = j_idx_grad != (n_flats - 1)
+            gdidx = (j_idx_grad != stages[-1]) & np.isin(j_idx_grad, stages)
             gdidx[: b_grad.shape[1]] = False
-            tgrad[:end, gdidx] *= np.flip(ds[:end, -1]).reshape(-1, 1)
+            tgrad[:end, gdidx] *= np.flip(ds[:end, stages[-1]]).reshape(-1, 1)
 
             # Now update forward one last time
-            forward[:end] *= np.flip(ds[:end, -1])
+            forward[:end] *= np.flip(ds[:end, stages[-1]])
 
             # Get grad
             tgrad = np.sum(tgrad, axis=0)
