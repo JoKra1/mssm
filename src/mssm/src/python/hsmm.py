@@ -1431,7 +1431,7 @@ class HSMMFamily(GSMMFamily):
         """
         if self.fast_hmp:
             self.cross_cor = []
-            normed_template = self.llkargs[-2] / np.sum(self.llkargs[-2] ** 2)
+            normed_template = self.llkargs[-2].copy()
             # print(normed_template)
 
             n_S = self.llkargs[0]
@@ -1444,6 +1444,29 @@ class HSMMFamily(GSMMFamily):
 
             if tid is None:
                 tid = sid
+
+            if Lrhoi is not None:
+                rho = np.sqrt(-1 * (np.power(1 / Lrhoi[1, 1], 2) - 1))
+
+                d0 = 1 / np.sqrt(1 - np.power(rho, 2))  # weight current mean
+                d1 = -rho / np.sqrt(1 - np.power(rho, 2))  # weight previous mean
+
+                # Adjust pattern for ar1 model
+                ar_template = np.zeros(normed_template.shape[0] + 1)
+
+                for pidx in range(normed_template.shape[0]):
+                    if pidx > 0:
+                        ar_template[pidx] = (
+                            d0 * normed_template[pidx] + d1 * normed_template[pidx - 1]
+                        )
+                    else:
+                        ar_template[pidx] = d0 * normed_template[pidx]
+
+                ar_template[-1] = d1 * normed_template[-1]
+                normed_template = ar_template
+
+            # Normalize template
+            normed_template /= np.sum(normed_template**2)
 
             idx = 0  # Keep track of indices for ys and Xs
 
@@ -2144,7 +2167,7 @@ class HSMMFamily(GSMMFamily):
                                 # Previous mean was 0 (last time-point of preceding flat)
                                 Ebump = d0 * Ebump
 
-                        emission_samples[t, m, sample] += Ebump
+                        emission_samples[t, m, sample] += Ebump[0]
 
                 # Update time and dur
                 t += 1
