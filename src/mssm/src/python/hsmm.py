@@ -16,6 +16,38 @@ from itertools import repeat
 from .discrete import DiscreteModelMatrix
 
 
+def _check_shared(
+    j: int,
+    par: int,
+    shared_pars: list[int],
+    shared_j_dict: dict | None,
+) -> bool:
+    """Checks whether state ``j`` has a shared set of coefficients in model with index ``par``.
+
+    :param j: State for which to check whether it has at least one shared set of coefficients.
+    :type j: int
+    :param par: Index to paramter of the emission family
+    :type par: int
+    :param shared_pars: A list containing indices of emission distribution parameters for which
+        at least one (in case ``shared_m is False`` one for each of the ``M`` signals) formula
+        has been provided containing terms to be shared between the ``n_S`` states.
+    :type shared_pars: list[int]
+    :param shared_j_dict: Dict with states that have at least one shared eta. Value is another dict
+        with pars for keys and lists for values. Each list contains indices in shared_eta[par]
+        associated with the key state.
+    :type shared_j_dict: dict | None
+    :return: Whether state ``j`` has a shared set of coefficients in model with index ``par``.
+    :rtype: bool
+    """
+
+    if par in shared_pars:
+        if shared_j_dict is None:
+            return True
+        return par in shared_j_dict[j]
+
+    return False
+
+
 def _vstack_s_matrices(
     sidx: int,
     ys: list[np.ndarray | None],
@@ -97,7 +129,7 @@ def _vstack_s_matrices(
     idx = 0  # Keep track of indices for ys and Xs
 
     # First check for part of models shared between states (and m)
-    for par in shared_pars:
+    for pari, par in enumerate(shared_pars):
 
         midx = 1
         if shared_m is False:
@@ -112,7 +144,7 @@ def _vstack_s_matrices(
                 X_split = Xs[idx][sidx0:sidx1, :]
 
             y_split = None
-            if par == 0 and m == 0:
+            if pari == 0 and m == 0:
                 y_split = ys[0][sidx0:sidx1]
 
             split_Xs.append(X_split)
@@ -333,6 +365,7 @@ def _compute_series_probs(
     coef: np.ndarray,
     coef_split_idx: list[int],
     shared_pars: list[int],
+    shared_j: list[list[int]] | None,
     shared_m: bool,
     ys: list[np.ndarray | None],
     Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
@@ -380,6 +413,9 @@ def _compute_series_probs(
         at least one (in case ``shared_m is False`` one for each of the ``M`` signals) formula
         has been provided containing terms to be shared between the ``n_S`` states.
     :type shared_pars: list[int]
+    :param shared_j: A List of same length as shared_pars or None. Elements are lists with state
+        indices for states that should share the corresponding predictor for par in shared_pars.
+    :type shared_j: list[list[int]] | None
     :param shared_m: Bool indicating whether the shared terms are not just shared between states but
         also between the ``M`` signals.
     :type shared_m: bool
@@ -541,23 +577,37 @@ def _compute_series_probs(
 
     # First check for part of emission models shared between states (and m)
     shared_eta = []  # Holds list per par, each list contains at least one eta vector.
-    for par in shared_pars:
+
+    # Dict with states that have at least one shared eta. value is another dict with pars for
+    # keys and lists for values. Each list contains indices in shared_eta[par] associated with
+    # the key state.
+    shared_j_dict = None if shared_j is None else {}
+    for pari, par in enumerate(shared_pars):
 
         midx = 1
         if shared_m is False:
             midx = M
 
         shared_eta.append([])
+        if shared_j is not None:
+            for j in shared_j[pari]:
+                if j not in shared_j_dict:
+                    shared_j_dict[j] = {}
+                if par not in shared_j_dict[j]:
+                    shared_j_dict[j][par] = []
 
         # Compute shared part of eta per parameter and m
         for m in range(midx):
+            if shared_j is not None:
+                for j in shared_j[pari]:
+                    shared_j_dict[j][par].append(len(shared_eta[par]))
             shared_eta[par].append(Xs[idx] @ split_coef[idx])
             idx += 1
 
     # Extract (potential) thetas for multivariate observation models
     thetas = split_coef[-1].flatten()
     theta_idx = 0
-
+    evidx = 1
     for j in range(n_S if hmp_fast is False else n_events):
 
         # Multivariate gaussian emission
@@ -577,11 +627,20 @@ def _compute_series_probs(
                 etasbjm.append(Xs[idx] @ split_coef[idx])
 
                 # Add shared eta to etasbjm
-                if 0 in shared_pars:
-                    if shared_m:
-                        etasbjm[-1] += shared_eta[0][0]
-                    else:
-                        etasbjm[-1] += shared_eta[0][par]
+                if _check_shared(j, 0, shared_pars, shared_j_dict):
+                    if shared_j is None:
+                        if shared_m:
+                            etasbjm[-1] += shared_eta[0][0]
+                        else:
+                            etasbjm[-1] += shared_eta[0][par]
+                    elif j in shared_j_dict:
+                        shared_j_it = len(shared_j_dict[j][0])
+                        if shared_m is False:
+                            shared_j_it //= jmbFam.n_par
+                        eidx = 0 if shared_m else par
+                        for _ in range(shared_j_it):
+                            etasbjm[-1] += shared_eta[0][shared_j_dict[j][0][eidx]]
+                            eidx += 1 if shared_m else jmbFam.n_par
 
                 musbjm.append(jmbFam.links[par].fi(etasbjm[-1]))
                 idx += 1
@@ -641,11 +700,22 @@ def _compute_series_probs(
                         etasbjm.append(Xs[idx] @ split_coef[idx])
 
                         # Add shared eta to etasbjm
-                        if par in shared_pars:
-                            if shared_m is False:
-                                etasbjm[-1] += shared_eta[par][m]
-                            else:
-                                etasbjm[-1] += shared_eta[par][0]
+                        if _check_shared(j, par, shared_pars, shared_j_dict):
+                            if shared_j is None:
+                                if shared_m is False:
+                                    etasbjm[-1] += shared_eta[par][m]
+                                else:
+                                    etasbjm[-1] += shared_eta[par][0]
+                            elif j in shared_j_dict:
+                                shared_j_it = len(shared_j_dict[j][par])
+                                if shared_m is False:
+                                    shared_j_it //= M
+                                eidx = 0 if shared_m else m
+                                for _ in range(shared_j_it):
+                                    etasbjm[-1] += shared_eta[par][
+                                        shared_j_dict[j][par][eidx]
+                                    ]
+                                    eidx += 1 if shared_m else M
 
                         musbjm.append(jmbFam.links[par].fi(etasbjm[-1]))
                         idx += 1
@@ -679,11 +749,23 @@ def _compute_series_probs(
                         etasbjm = [Xs[idx] @ split_coef[idx]]
 
                         # Add shared eta to etasbjm
-                        if 0 in shared_pars:
-                            if shared_m is False:
-                                etasbjm[-1] += shared_eta[0][m]
-                            else:
-                                etasbjm[-1] += shared_eta[0][0]
+                        j_sidx = evidx if hmp_fast else j
+                        if _check_shared(j_sidx, 0, shared_pars, shared_j_dict):
+                            if shared_j is None:
+                                if shared_m is False:
+                                    etasbjm[-1] += shared_eta[0][m]
+                                else:
+                                    etasbjm[-1] += shared_eta[0][0]
+                            elif j_sidx in shared_j_dict:
+                                shared_j_it = len(shared_j_dict[j_sidx][0])
+                                if shared_m is False:
+                                    shared_j_it //= M
+                                eidx = 0 if shared_m else m
+                                for _ in range(shared_j_it):
+                                    etasbjm[-1] += shared_eta[0][
+                                        shared_j_dict[j_sidx][0][eidx]
+                                    ]
+                                    eidx += 1 if shared_m else M
 
                         musbjm = etasbjm  # Assume identity link
                         mus[:, m, j] = musbjm[0][:, 0]
@@ -731,6 +813,8 @@ def _compute_series_probs(
                                     cbs[:, m, d, j] = np.exp(cbs[:, m, d, j])
 
                         idx += 1
+                        if m == (M - 1):
+                            evidx += 2
 
                     # Flats
                     else:
@@ -829,6 +913,12 @@ def _compute_series_probs(
                 ds[:, j, :] = np.log(ds[:, j, :])
         else:
             ds[:, j] = np.exp(lpd.flatten())
+
+            # Fix nans/infs before normalizing
+            if hmp_fast and np.any(np.isnan(ds[:, j]) | np.isinf(ds[:, j])):
+                # print("problem with ds",j)
+                ds[(np.isnan(ds[:, j]) | np.isinf(ds[:, j])), j] = 0
+
             ds[:, j] /= np.sum(ds[:, j])
 
             if log:
@@ -917,6 +1007,7 @@ def _sample_series_emissions(
     coef: np.ndarray,
     coef_split_idx: list[int],
     shared_pars: list[int],
+    shared_j: list[list[int]] | None,
     shared_m: bool,
     Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     n_S: int,
@@ -943,6 +1034,9 @@ def _sample_series_emissions(
         at least one (in case ``shared_m is False`` one for each of the ``M`` signals) formula
         has been provided containing terms to be shared between the ``n_S`` states.
     :type shared_pars: list[int]
+    :param shared_j: A List of same length as shared_pars or None. Elements are lists with state
+        indices for states that should share the corresponding predictor for par in shared_pars.
+    :type shared_j: list[list[int]] | None
     :param shared_m: Bool indicating whether the shared terms are not just shared between states but
         also between the ``M`` signals.
     :type shared_m: bool
@@ -1023,16 +1117,30 @@ def _sample_series_emissions(
 
     # Holds list per par, each list contains at least one eta vector.
     shared_eta = []
-    for par in shared_pars:
+
+    # Dict with states that have at least one shared eta. value is another dict with pars for
+    # keys and lists for values. Each list contains indices in shared_eta[par] associated with
+    # the key state.
+    shared_j_dict = None if shared_j is None else {}
+    for pari, par in enumerate(shared_pars):
 
         midx = 1
         if shared_m is False:
             midx = M
 
         shared_eta.append([])
+        if shared_j is not None:
+            for j in shared_j[pari]:
+                if j not in shared_j_dict:
+                    shared_j_dict[j] = {}
+                if par not in shared_j_dict[j]:
+                    shared_j_dict[j][par] = []
 
         # Compute shared part of eta per parameter and m
         for m in range(midx):
+            if shared_j is not None:
+                for j in shared_j[pari]:
+                    shared_j_dict[j][par].append(len(shared_eta[par]))
             shared_eta[par].append(Xs[idx] @ split_coef[idx])
             idx += 1
 
@@ -1056,11 +1164,20 @@ def _sample_series_emissions(
                 etasbjm.append(Xs[idx] @ split_coef[idx])
 
                 # Add shared eta to etasbjm
-                if 0 in shared_pars:
-                    if shared_m:
-                        etasbjm[-1] += shared_eta[0][0]
-                    else:
-                        etasbjm[-1] += shared_eta[0][par]
+                if _check_shared(j, 0, shared_pars, shared_j_dict):
+                    if shared_j is None:
+                        if shared_m:
+                            etasbjm[-1] += shared_eta[0][0]
+                        else:
+                            etasbjm[-1] += shared_eta[0][par]
+                    elif j in shared_j_dict:
+                        shared_j_it = len(shared_j_dict[j][0])
+                        if shared_m is False:
+                            shared_j_it //= jmbFam.n_par
+                        eidx = 0 if shared_m else par
+                        for _ in range(shared_j_it):
+                            etasbjm[-1] += shared_eta[0][shared_j_dict[j][0][eidx]]
+                            eidx += 1 if shared_m else jmbFam.n_par
 
                 musbjm.append(jmbFam.links[par].fi(etasbjm[-1]))
                 idx += 1
@@ -1100,11 +1217,22 @@ def _sample_series_emissions(
                         etasbjm.append(Xs[idx] @ split_coef[idx])
 
                         # Add shared eta to etasbjm
-                        if par in shared_pars:
-                            if shared_m is False:
-                                etasbjm[-1] += shared_eta[par][m]
-                            else:
-                                etasbjm[-1] += shared_eta[par][0]
+                        if _check_shared(j, par, shared_pars, shared_j_dict):
+                            if shared_j is None:
+                                if shared_m is False:
+                                    etasbjm[-1] += shared_eta[par][m]
+                                else:
+                                    etasbjm[-1] += shared_eta[par][0]
+                            elif j in shared_j_dict:
+                                shared_j_it = len(shared_j_dict[j][par])
+                                if shared_m is False:
+                                    shared_j_it //= M
+                                eidx = 0 if shared_m else m
+                                for _ in range(shared_j_it):
+                                    etasbjm[-1] += shared_eta[par][
+                                        shared_j_dict[j][par][eidx]
+                                    ]
+                                    eidx += 1 if shared_m else M
 
                         musbjm.append(jmbFam.links[par].fi(etasbjm[-1]))
                         idx += 1
@@ -1271,6 +1399,9 @@ class HSMMFamily(GSMMFamily):
         at least one (in case ``shared_m is False`` one for each of the ``M`` signals) formula
         has been provided containing terms to be shared between the ``n_S`` states.
     :type shared_pars: list[int]
+    :param shared_j: A List of same length as shared_pars or None. Elements are lists with state
+        indices for states that should share the corresponding predictor for par in shared_pars.
+    :type shared_j: list[list[int]] | None
     :param shared_m: Bool indicating whether the shared terms are not just shared between states but
         also between the ``M`` signals.
     :type shared_m: bool
@@ -1328,6 +1459,7 @@ class HSMMFamily(GSMMFamily):
         n_cores=1,
         build_mat_idx: list[int] | None = None,
         shared_pars: list[int] = [],
+        shared_j: list[list[int]] | None = None,
         shared_m: bool = False,
         T: list[np.ndarray] | np.ndarray | None = None,
         pi: list[np.ndarray] | np.ndarray | None = None,
@@ -1374,6 +1506,7 @@ class HSMMFamily(GSMMFamily):
         self.hmp_location = hmp_location
         self.fast_hmp = fast_hmp
         self.cross_cor = None
+        self.shared_j = shared_j
 
         if self.fast_hmp and (self.is_hmp is False):
             warnings.warn(
@@ -1471,14 +1604,14 @@ class HSMMFamily(GSMMFamily):
             idx = 0  # Keep track of indices for ys and Xs
 
             # First check for part of models shared between states (and m)
-            for par in shared_pars:
+            for pari in range(len(shared_pars)):
 
                 midx = 1
                 if shared_m is False:
                     midx = M
 
                 for m in range(midx):
-                    if ys[idx] is None or par != 0 or m != 0:
+                    if ys[idx] is None or pari != 0 or m != 0:
                         self.cross_cor.append(None)
                     else:
                         tpc = []
@@ -1500,7 +1633,7 @@ class HSMMFamily(GSMMFamily):
 
             # Now individual parts
             n_events = (n_S - 1) // 2
-            for yi in range(len(ys)):
+            for yi in range(len(ys) - idx):
                 if ys[idx] is None:
                     self.cross_cor.append(None)
                 elif yi < (n_events * M):
@@ -1593,6 +1726,7 @@ class HSMMFamily(GSMMFamily):
             coef,
             coef_split_idx,
             shared_pars,
+            self.shared_j,
             shared_m,
             ys,
             Xs,
@@ -1804,6 +1938,7 @@ class HSMMFamily(GSMMFamily):
                 coef,
                 coef_split_idx,
                 shared_pars,
+                self.shared_j,
                 shared_m,
                 ys,
                 Xs,
@@ -2037,6 +2172,7 @@ class HSMMFamily(GSMMFamily):
             coef,
             coef_split_idx,
             shared_pars,
+            self.shared_j,
             shared_m,
             Xs,
             n_S,
@@ -2060,6 +2196,7 @@ class HSMMFamily(GSMMFamily):
             coef,
             coef_split_idx,
             shared_pars,
+            self.shared_j,
             shared_m,
             ys,
             Xs,
@@ -2424,6 +2561,7 @@ class HSMMFamily(GSMMFamily):
             coef,
             coef_split_idx,
             shared_pars,
+            self.shared_j,
             shared_m,
             ys,
             Xs,
@@ -2695,6 +2833,7 @@ class HSMMFamily(GSMMFamily):
             coef,
             coef_split_idx,
             shared_pars,
+            self.shared_j,
             shared_m,
             ys,
             Xs,
@@ -2978,6 +3117,7 @@ class HSMMFamily(GSMMFamily):
             coef,
             coef_split_idx,
             shared_pars,
+            self.shared_j,
             shared_m,
             ys,
             Xs,
@@ -3375,6 +3515,7 @@ class HSMMFamily(GSMMFamily):
             coef,
             coef_split_idx,
             shared_pars,
+            self.shared_j,
             shared_m,
             ys,
             Xs,
@@ -3697,6 +3838,7 @@ class HSMMFamily(GSMMFamily):
         ends_in_last = self.llkargs[9]
         build_mat_idx = self.llkargs[11]
         shared_pars = self.llkargs[12]
+        shared_j = self.shared_j
         shared_m = self.llkargs[13]
         T = self.llkargs[14]
         pi = self.llkargs[15]
@@ -3785,11 +3927,15 @@ class HSMMFamily(GSMMFamily):
         # be filled with duplicate coefficient indices
         shared_eta = []
         shared_X = []
-        shared_coef_idx = []
+        shared_coef_idx = {}
+        # Dict with states that have at least one shared eta. value is another dict with pars for
+        # keys and lists for values. Each list contains indices in shared_eta[par] associated with
+        # the key state.
+        shared_j_dict = None if shared_j is None else {}
 
         # List below holds indices of all duplicated coef so that we can later exclude them
         shared_coef_idx_flat = []
-        for par in shared_pars:
+        for pari, par in enumerate(shared_pars):
 
             midx = 1
             if shared_m is False:
@@ -3797,11 +3943,21 @@ class HSMMFamily(GSMMFamily):
 
             shared_eta.append([])
             shared_X.append([])
-            shared_coef_idx.append([])
+            if par not in shared_coef_idx:
+                shared_coef_idx[par] = []
+            if shared_j is not None:
+                for j in shared_j[pari]:
+                    if j not in shared_j_dict:
+                        shared_j_dict[j] = {}
+                    if par not in shared_j_dict[j]:
+                        shared_j_dict[j][par] = []
 
             # Compute shared part of eta per parameter and m and collect
             # X index + add list to be populated with duplicated/shared coef
             for m in range(midx):
+                if shared_j is not None:
+                    for j in shared_j[pari]:
+                        shared_j_dict[j][par].append(len(shared_eta[par]))
                 shared_eta[par].append(Xs[idx] @ split_coef[idx])
                 shared_X[par].append(idx)
                 shared_coef_idx[par].append([])
@@ -3813,6 +3969,7 @@ class HSMMFamily(GSMMFamily):
         # Will need to keep track of position of theta gradients
         # since they will need to be moved to the end
         theta_grad_idx = []
+        evidx = 1
         for j in range(n_S if self.fast_hmp is False else n_events):
 
             iterM = M
@@ -3852,6 +4009,10 @@ class HSMMFamily(GSMMFamily):
                         # print(j,split_coef[idx])
                         etasbjm.append(Xs[idx] @ split_coef[idx])
 
+                        # Can alrady update total coef, but needs to be modified
+                        # below in case of shared coef
+                        total_coef += Xs[idx].shape[1]
+
                         # Now handle any shared model component:
                         # 1) add shared eta to etasbjm
                         # 2) expand Xsj[-1] column-wise by shared model matrix
@@ -3861,43 +4022,61 @@ class HSMMFamily(GSMMFamily):
                         if isinstance(jmbFam, MultiGauss):
                             shared_par_idx = 0
 
-                        if shared_par_idx in shared_pars:
-                            midx = 0
+                        if _check_shared(j, shared_par_idx, shared_pars, shared_j_dict):
+                            eidx = 0
+                            shared_j_it = (
+                                1
+                                if shared_j is None
+                                else len(shared_j_dict[j][shared_par_idx])
+                            )
                             if shared_m is False:
-                                midx = m
+                                eidx = m
                                 if isinstance(jmbFam, MultiGauss):
-                                    midx = par
+                                    eidx = par
 
-                            # 1)
-                            etasbjm[-1] += shared_eta[shared_par_idx][midx]
+                                if shared_j is not None:
+                                    shared_j_it //= M
 
-                            # 2)
-                            Xsj[-1] = scp.sparse.hstack(
-                                (Xsj[-1], Xs[shared_X[shared_par_idx][midx]])
-                            )
+                            for _ in range(shared_j_it):
+                                seidx = (
+                                    eidx
+                                    if shared_j is None
+                                    else shared_j_dict[j][shared_par_idx][eidx]
+                                )
 
-                            # 3)
-                            start_idx = total_coef + Xs[idx].shape[1]
-                            stop_idx = (
-                                total_coef
-                                + Xs[idx].shape[1]
-                                + Xs[shared_X[shared_par_idx][midx]].shape[1]
-                            )
+                                # 1)
+                                etasbjm[-1] += shared_eta[shared_par_idx][seidx]
 
-                            # Make sure total coef reflects duplicated coef
-                            total_coef += Xs[shared_X[shared_par_idx][midx]].shape[1]
+                                # 2)
+                                Xsj[-1] = scp.sparse.hstack(
+                                    (Xsj[-1], Xs[shared_X[shared_par_idx][seidx]])
+                                )
 
-                            shared_idx = np.arange(
-                                start_idx,
-                                stop_idx,
-                            )
+                                # 3)
+                                start_idx = total_coef
+                                stop_idx = (
+                                    total_coef
+                                    + Xs[shared_X[shared_par_idx][seidx]].shape[1]
+                                )
 
-                            shared_coef_idx[shared_par_idx][midx].append(shared_idx)
+                                # Make sure total coef reflects duplicated coef
+                                total_coef += Xs[shared_X[shared_par_idx][seidx]].shape[
+                                    1
+                                ]
 
-                            shared_coef_idx_flat.extend(shared_idx)
+                                shared_idx = np.arange(
+                                    start_idx,
+                                    stop_idx,
+                                )
+
+                                shared_coef_idx[shared_par_idx][seidx].append(
+                                    shared_idx
+                                )
+
+                                shared_coef_idx_flat.extend(shared_idx)
+                                eidx += 1 if shared_m else M
 
                         musbjm.append(jmbFam.links[par].fi(etasbjm[-1]))
-                        total_coef += Xs[idx].shape[1]
                         idx += 1
 
                     if isinstance(jmbFam, MultiGauss):
@@ -4022,62 +4201,67 @@ class HSMMFamily(GSMMFamily):
                     if self.fast_hmp or j % 2 == 1:
                         # Only first y associated with state j and signal m is not None
                         yJM = ys[idx]
+                        grad_par = Xs[idx]
 
                         etasbjm = [Xs[idx] @ split_coef[idx]]
+
+                        total_coef += Xs[idx].shape[1]
 
                         # Now handle any shared model component:
                         # 1) add shared eta to etasbjm
                         # 2) expand Xsj[-1] column-wise by shared model matrix - this happens
                         #    later!
                         # 3) collect indices of duplicated coefficients
-                        if len(shared_pars) > 0:
-                            midx = 0
+                        j_sidx = evidx if self.fast_hmp else j
+
+                        if _check_shared(j_sidx, 0, shared_pars, shared_j_dict):
+                            eidx = 0
+                            shared_j_it = (
+                                1 if shared_j is None else len(shared_j_dict[j_sidx][0])
+                            )
                             if shared_m is False:
-                                midx = m
+                                eidx = m
+                                if shared_j is not None:
+                                    shared_j_it //= M
 
-                            # 1)
-                            etasbjm[-1] += shared_eta[0][midx]
+                            for _ in range(shared_j_it):
+                                seidx = (
+                                    eidx
+                                    if shared_j is None
+                                    else shared_j_dict[j_sidx][0][eidx]
+                                )
 
-                            # 3)
-                            start_idx = total_coef + Xs[idx].shape[1]
-                            stop_idx = (
-                                total_coef
-                                + Xs[idx].shape[1]
-                                + Xs[shared_X[0][midx]].shape[1]
-                            )
+                                # 1)
+                                etasbjm[-1] += shared_eta[0][seidx]
 
-                            # Again make sure that total coef reflects duplicates
-                            total_coef += Xs[shared_X[0][midx]].shape[1]
+                                # 2)
+                                grad_par = scp.sparse.hstack(
+                                    (grad_par, Xs[shared_X[0][seidx]])
+                                )
 
-                            shared_idx = np.arange(
-                                start_idx,
-                                stop_idx,
-                            )
+                                # 3)
+                                start_idx = total_coef
+                                stop_idx = total_coef + Xs[shared_X[0][seidx]].shape[1]
 
-                            shared_coef_idx[0][midx].append(shared_idx)
+                                # Again make sure that total coef reflects duplicates
+                                total_coef += Xs[shared_X[0][seidx]].shape[1]
 
-                            shared_coef_idx_flat.extend(shared_idx)
+                                shared_idx = np.arange(
+                                    start_idx,
+                                    stop_idx,
+                                )
+                                # print(evidx, j, m, eidx, seidx, shared_idx)
+
+                                shared_coef_idx[0][seidx].append(shared_idx)
+                                shared_coef_idx_flat.extend(shared_idx)
+                                eidx += 1 if shared_m else M
 
                         musbjm = etasbjm  # Assume identity link
-                        total_coef += Xs[idx].shape[1]
+
                         mus[:, m, j] = musbjm[0][:, 0]
 
                         if self.fast_hmp and j == 0:
                             cross_corr[:, m] = yJM[:, 0]
-
-                        # Get partial derivative of lpb with respect to coef
-                        if 0 in shared_pars:
-                            # Can now complete step 2) for shared model component!
-                            if shared_m is False:
-                                grad_par = scp.sparse.hstack(
-                                    (Xs[idx], Xs[shared_X[0][m]])
-                                )
-                            else:
-                                grad_par = scp.sparse.hstack(
-                                    (Xs[idx], Xs[shared_X[0][0]])
-                                )
-                        else:
-                            grad_par = Xs[idx]
 
                         # Cast to array
                         grad_par = (
@@ -4109,6 +4293,8 @@ class HSMMFamily(GSMMFamily):
                             )
 
                         idx += 1
+                        if m == (M - 1):
+                            evidx += 2
 
                     # Flat state has no bump and simply gets p(y == zero|\beta) for all obs
                     else:
@@ -4257,6 +4443,9 @@ class HSMMFamily(GSMMFamily):
 
                     else:
                         rds = np.exp(lpd)  # p(rds[:,j])
+                        # Fix nans/infs before normalizing
+                        if np.any(np.isnan(rds) | np.isinf(rds)):
+                            rds[np.isnan(rds) | np.isinf(rds)] = 0
                         grad_par_d = rds * grad_par
 
                         # To get partial derivatives of normalized probabilities
@@ -4316,11 +4505,13 @@ class HSMMFamily(GSMMFamily):
 
             else:
                 ds[:, j] = np.exp(lpd.flatten())
-                ds[:, j] /= np.sum(ds[:, j])
 
+                # Fix nans/infs before normalizing
                 if np.any(np.isnan(ds[:, j]) | np.isinf(ds[:, j])):
                     # print("problem with ds",j)
                     ds[(np.isnan(ds[:, j]) | np.isinf(ds[:, j])), j] = 0
+
+                ds[:, j] /= np.sum(ds[:, j])
 
         # Done at this point for models with fixed T and pi
         if fix_T_pi is False:
@@ -4600,7 +4791,7 @@ class HSMMFamily(GSMMFamily):
                 gains += m_gain
 
                 # deriv of m_gain with respect to mus shape: (n_T, n_events)
-                dgdmu = (2 * (cross_corr[:, [m]] - mus[:, m, :])) / scale
+                dgdmu = cross_corr[:, [m]] - 2 * mus[:, m, :] / scale
 
                 # Index coefficients associated with channel m
                 gidx = m_idx_grad == m
@@ -4872,19 +5063,13 @@ class HSMMFamily(GSMMFamily):
             shared_coef_idx_flat.extend(theta_grad_idx)
             idx = 0  # Reset index
             grad2 = []  # Unique grad
-            for par in shared_pars:
-
-                midx = 1
-                if shared_m is False:
-                    midx = M
+            for par in shared_coef_idx.keys():
 
                 # Compute shared part of grad by summing over shared coef indices
-                for m in range(midx):
+                for m in range(len(shared_coef_idx[par])):
                     grad_shared = np.zeros(Xs[idx].shape[1])
-
                     for shared_idx in shared_coef_idx[par][m]:
                         grad_shared += grad[shared_idx]
-
                     grad2.extend(grad_shared)
 
                     idx += 1
