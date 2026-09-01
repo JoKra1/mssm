@@ -387,6 +387,7 @@ def _compute_series_probs(
     rho: float | None = None,
     tvdtpi: bool = False,
     hmp_fast: bool = False,
+    hmp_d_offset: bool = False,
 ) -> tuple[
     np.ndarray,
     np.ndarray,
@@ -886,12 +887,21 @@ def _compute_series_probs(
                     lpdd = jdFam.lp(d.reshape(-1, 1), *musdj)
                     lpd.append(lpdd)
             else:
-                lpd = jdFam.lp(d_val, *musdj)
+                if hmp_d_offset and is_hmp:
+                    shift = (
+                        event_width // 2
+                        if (f_idx == 0 or f_idx == (n_S - 1))
+                        else event_width
+                    )
+                    d_shift = d_val + shift
+                    lpd = jdFam.lp(d_shift, *musdj)
+                else:
+                    d_shift = d_val
+                lpd = jdFam.lp(d_shift, *musdj)
 
             mus_d.append(musdj)
 
-            if hmp_fast:
-                f_idx += 2
+            f_idx += 2
 
         else:
             if j % 2 == 1:
@@ -1440,6 +1450,13 @@ class HSMMFamily(GSMMFamily):
         (left-to-right). However, skipped states for some series are still possible (i.e., group
         models). Defaults to False
     :type fast_hmp: bool, optional
+    :param hmp_d_offset: Whether to compute stage durations based on event peak to peak time
+        (as in HMP) or as the time between the offset of the previous event and the onset of the
+        next event (``hmp_d_offset=False``). Setting this to None means it is set to True if
+        ``fast_hmp is True`` (because then the non fitting related functions produce the correct
+        output despite the difference in fitting algorithms used) and otherwise to False. Defaults
+        to None.
+    :type hmp_d_offset: bool | None, optional
     :raises ValueError: if either ``T`` or ``pi`` have a value other than None but not both.
     :raises ValueError: if ``starts_with_first is False`` and the model is HMP-like (i.e.,
         ``event_template is not None``).
@@ -1473,6 +1490,7 @@ class HSMMFamily(GSMMFamily):
         tvdtpi: bool = False,
         hmp_location: np.ndarray | None = None,
         fast_hmp: bool = False,
+        hmp_d_offset: bool | None = None,
     ) -> None:
 
         super().__init__(
@@ -1510,6 +1528,7 @@ class HSMMFamily(GSMMFamily):
         self.fast_hmp = fast_hmp
         self.cross_cor = None
         self.shared_j = shared_j
+        self.hmp_d_offset = hmp_d_offset
 
         if self.fast_hmp and (self.is_hmp is False):
             warnings.warn(
@@ -1532,6 +1551,12 @@ class HSMMFamily(GSMMFamily):
         for state_obs in obs_fams:
             if isinstance(state_obs[0], MultiGauss):
                 self.extra_coef += state_obs[0].extra_coef
+
+        if self.hmp_d_offset is None:
+            if self.fast_hmp:
+                self.hmp_d_offset = True
+            else:
+                self.hmp_d_offset = False
 
         # Check for time-varying duration, state transition, initial state models
         self.tvdtpi = tvdtpi
@@ -1751,6 +1776,7 @@ class HSMMFamily(GSMMFamily):
             rho,
             tvdtpi,
             False,
+            self.hmp_d_offset,
         )
         bs[(np.isnan(bs) | np.isinf(bs))] = -np.inf if log else 0
         ds[(np.isnan(ds) | np.isinf(ds))] = -np.inf if log else 0
@@ -1960,6 +1986,7 @@ class HSMMFamily(GSMMFamily):
                 build_mat_idx,
                 tvdtpi=tvdtpi,
                 hmp_fast=False,
+                hmp_d_offset=self.hmp_d_offset,
             )
 
         elif isinstance(T, list) and isinstance(pi, list):
@@ -2221,6 +2248,7 @@ class HSMMFamily(GSMMFamily):
             rho,
             tvdtpi,
             False,
+            self.hmp_d_offset,
         )
 
         if fix_T_pi:
@@ -2586,6 +2614,7 @@ class HSMMFamily(GSMMFamily):
             rho,
             tvdtpi,
             False,
+            self.hmp_d_offset,
         )
 
         if fix_T_pi:
@@ -2858,6 +2887,7 @@ class HSMMFamily(GSMMFamily):
             rho,
             tvdtpi,
             False,
+            self.hmp_d_offset,
         )
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
@@ -3142,6 +3172,7 @@ class HSMMFamily(GSMMFamily):
             rho,
             tvdtpi,
             False,
+            self.hmp_d_offset,
         )
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
@@ -3540,6 +3571,7 @@ class HSMMFamily(GSMMFamily):
             rho,
             tvdtpi,
             self.fast_hmp,
+            False if self.fast_hmp else self.hmp_d_offset,
         )
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
@@ -4346,7 +4378,16 @@ class HSMMFamily(GSMMFamily):
                         lpdd = jdFam.lp(d.reshape(-1, 1), *musdj)
                         lpd.append(lpdd)
                 else:
-                    lpd = jdFam.lp(d_val, *musdj)
+                    if is_hmp and (self.fast_hmp is False) and self.hmp_d_offset:
+                        shift = (
+                            event_width // 2
+                            if (f_idx == 0 or f_idx == (n_S - 1))
+                            else event_width
+                        )
+                        d_shift = d_val + shift
+                    else:
+                        d_shift = d_val
+                    lpd = jdFam.lp(d_shift, *musdj)
                 # lpd[np.isnan(lpd) | np.isinf(lpd)] = -np.inf
                 # print(lpd[1])
                 # print(jdFam.lp(d_val[1],musdj[0][0],musdj[1][0]))
@@ -4364,7 +4405,16 @@ class HSMMFamily(GSMMFamily):
                             )
                             d1eta.append(d1etad)
                     else:
-                        d1eta, _, _ = deriv_transform_mu_eta(d_val, musdj, jdFam)
+                        if is_hmp and (self.fast_hmp is False) and self.hmp_d_offset:
+                            shift = (
+                                event_width // 2
+                                if (f_idx == 0 or f_idx == (n_S - 1))
+                                else event_width
+                            )
+                            d_shift = d_val + shift
+                        else:
+                            d_shift = d_val
+                        d1eta, _, _ = deriv_transform_mu_eta(d_shift, musdj, jdFam)
                 else:
                     if tvdtpi:
                         d1eta = []
@@ -4380,9 +4430,18 @@ class HSMMFamily(GSMMFamily):
                             ]
                             d1eta.append(d1etad)
                     else:
+                        if is_hmp and (self.fast_hmp is False) and self.hmp_d_offset:
+                            shift = (
+                                event_width // 2
+                                if (f_idx == 0 or f_idx == (n_S - 1))
+                                else event_width
+                            )
+                            d_shift = d_val + shift
+                        else:
+                            d_shift = d_val
                         d1eta = [
                             jdFam.dpars(
-                                d_val,
+                                d_shift,
                                 *musdj,
                                 index=d1i,
                                 order=DerivOrder.d1,
@@ -4482,8 +4541,7 @@ class HSMMFamily(GSMMFamily):
                         [j_idx_grad, np.zeros(grad_par.shape[1], dtype=np.int32) + j]
                     )
 
-                if self.fast_hmp:
-                    f_idx += 2
+                f_idx += 2
 
             else:
                 if j % 2 == 1:
