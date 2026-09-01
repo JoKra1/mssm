@@ -43,7 +43,7 @@ def _check_shared(
     if par in shared_pars:
         if shared_j_dict is None:
             return True
-        return par in shared_j_dict[j]
+        return (j in shared_j_dict) and (par in shared_j_dict[j])
 
     return False
 
@@ -576,7 +576,10 @@ def _compute_series_probs(
     idx = 0  # Keep track of indices for ys and Xs
 
     # First check for part of emission models shared between states (and m)
-    shared_eta = []  # Holds list per par, each list contains at least one eta vector.
+    # Holds list per par, each list contains at least one eta vector.
+    shared_eta = [
+        [] for _ in range(1 if obs_fams[0][0] is None else obs_fams[0][0].n_par)
+    ]
 
     # Dict with states that have at least one shared eta. value is another dict with pars for
     # keys and lists for values. Each list contains indices in shared_eta[par] associated with
@@ -588,7 +591,6 @@ def _compute_series_probs(
         if shared_m is False:
             midx = M
 
-        shared_eta.append([])
         if shared_j is not None:
             for j in shared_j[pari]:
                 if j not in shared_j_dict:
@@ -1116,7 +1118,9 @@ def _sample_series_emissions(
     # First check for part of emission models shared between states (and m)
 
     # Holds list per par, each list contains at least one eta vector.
-    shared_eta = []
+    shared_eta = [
+        [] for _ in range(1 if obs_fams[0][0] is None else obs_fams[0][0].n_par)
+    ]
 
     # Dict with states that have at least one shared eta. value is another dict with pars for
     # keys and lists for values. Each list contains indices in shared_eta[par] associated with
@@ -1128,7 +1132,6 @@ def _sample_series_emissions(
         if shared_m is False:
             midx = M
 
-        shared_eta.append([])
         if shared_j is not None:
             for j in shared_j[pari]:
                 if j not in shared_j_dict:
@@ -3925,8 +3928,12 @@ class HSMMFamily(GSMMFamily):
 
         # Lists below hold list per par. Each list contains at least one eta/X index/list to
         # be filled with duplicate coefficient indices
-        shared_eta = []
-        shared_X = []
+        shared_eta = [
+            [] for _ in range(1 if obs_fams[0][0] is None else obs_fams[0][0].n_par)
+        ]
+        shared_X = [
+            [] for _ in range(1 if obs_fams[0][0] is None else obs_fams[0][0].n_par)
+        ]
         shared_coef_idx = {}
         # Dict with states that have at least one shared eta. value is another dict with pars for
         # keys and lists for values. Each list contains indices in shared_eta[par] associated with
@@ -3941,8 +3948,6 @@ class HSMMFamily(GSMMFamily):
             if shared_m is False:
                 midx = M
 
-            shared_eta.append([])
-            shared_X.append([])
             if par not in shared_coef_idx:
                 shared_coef_idx[par] = []
             if shared_j is not None:
