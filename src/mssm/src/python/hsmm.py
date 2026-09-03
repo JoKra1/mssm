@@ -63,7 +63,12 @@ def _vstack_s_matrices(
     model_T: bool,
     model_pi: bool,
     starts_with_first: bool,
-) -> tuple[list[np.ndarray | None], list[scp.sparse.csc_array | np.ndarray | None]]:
+    drop_coef: bool,
+) -> tuple[
+    list[np.ndarray | None],
+    list[scp.sparse.csc_array | np.ndarray | None],
+    list[list[bool] | None],
+]:
     """Fill two lists with row blocks in ``ys`` and ``Xs`` associated with series ``sidx``.
 
     :param sidx: Series index
@@ -113,11 +118,15 @@ def _vstack_s_matrices(
     :param starts_with_first: Whether the first state starts with the first observation or might
         have been going on for a max duration of ``D``.
     :type starts_with_first: bool
-    :param Lrhoi: Inverse of transpose of Cholesky of banded covariance matrix of an ar model of the
-        residuals for a HMP-like HSMM. Defaults to None - indicating no ar model.
-    :type Lrhoi: scp.sparse.csc_array | None, optional
-    :return: Two lists with row blocks in ``ys`` and ``Xs`` associated with series ``sidx``
-    :rtype: tuple[list[np.ndarray | None],list[scp.sparse.csc_array | np.ndarray | None]]
+    :param drop_coef: Whether or not coefficients not associated with series ``sidx`` should be
+        dropped from the model matrices.
+    :type drop_coef: bool
+    :return: Three lists. First two have row blocks in ``ys`` and ``Xs`` associated with series
+        ``sidx``. Final one has per ``X`` in Xs`` a boolean index array indiacting coef kept.
+        Lists on the first level might contain Nones, in case a specific model matrix has been
+        requested not to be accumulated explicitly.
+    :rtype: tuple[list[np.ndarray | None], list[scp.sparse.csc_array | np.ndarray | None],
+        list[list[bool] | None]]
     """
     n_series = len(sid)
     sidx0 = sid[sidx]
@@ -129,6 +138,7 @@ def _vstack_s_matrices(
     idx = 0  # Keep track of indices for ys and Xs
 
     # First check for part of models shared between states (and m)
+    keep = []
     for pari, par in enumerate(shared_pars):
 
         midx = 1
@@ -142,6 +152,12 @@ def _vstack_s_matrices(
             X_split = None
             if Xs[idx] is not None:
                 X_split = Xs[idx][sidx0:sidx1, :]
+                if drop_coef:
+                    keep_idx = abs(X_split).sum(axis=0) > 0
+                    X_split = X_split[:, keep_idx]
+                    keep.append(keep_idx)
+            elif drop_coef:
+                keep.append(None)
 
             y_split = None
             if pari == 0 and m == 0:
@@ -171,6 +187,12 @@ def _vstack_s_matrices(
                     X_split = None
                     if Xs[idx] is not None:
                         X_split = Xs[idx][sidx0:sidx1, :]
+                        if drop_coef:
+                            keep_idx = abs(X_split).sum(axis=0) > 0
+                            X_split = X_split[:, keep_idx]
+                            keep.append(keep_idx)
+                    elif drop_coef:
+                        keep.append(None)
 
                     y_split = None
                     if ys[idx] is not None:
@@ -186,6 +208,12 @@ def _vstack_s_matrices(
                     X_split = None
                     if Xs[idx] is not None:
                         X_split = Xs[idx][sidx0:sidx1, :]
+                        if drop_coef:
+                            keep_idx = abs(X_split).sum(axis=0) > 0
+                            X_split = X_split[:, keep_idx]
+                            keep.append(keep_idx)
+                    elif drop_coef:
+                        keep.append(None)
 
                     y_split = None
                     if ys[idx] is not None:
@@ -206,6 +234,12 @@ def _vstack_s_matrices(
                 X_split = None
                 if Xs[idx] is not None:
                     X_split = Xs[idx][tidx0:tidx1, :]
+                    if drop_coef:
+                        keep_idx = abs(X_split).sum(axis=0) > 0
+                        X_split = X_split[:, keep_idx]
+                        keep.append(keep_idx)
+                elif drop_coef:
+                    keep.append(None)
 
                 y_split = ys[idx][tidx0:tidx1] if ys[idx] is not None else None
                 split_Xs.append(X_split)
@@ -220,6 +254,12 @@ def _vstack_s_matrices(
                 X_split = None
                 if Xs[idx] is not None:
                     X_split = Xs[idx][tidx0:tidx1, :]
+                    if drop_coef:
+                        keep_idx = abs(X_split).sum(axis=0) > 0
+                        X_split = X_split[:, keep_idx]
+                        keep.append(keep_idx)
+                elif drop_coef:
+                    keep.append(None)
 
                 y_split = ys[idx][tidx0:tidx1] if ys[idx] is not None else None
                 split_Xs.append(X_split)
@@ -234,6 +274,12 @@ def _vstack_s_matrices(
             X_split = None
             if Xs[idx] is not None:
                 X_split = Xs[idx][tidx0 : (tidx0 + 1), :]  # noqa: E203
+                if drop_coef:
+                    keep_idx = abs(X_split).sum(axis=0) > 0
+                    X_split = X_split[:, keep_idx]
+                    keep.append(keep_idx)
+            elif drop_coef:
+                keep.append(None)
 
             y_split = None
             if ys[idx] is not None:
@@ -247,7 +293,7 @@ def _vstack_s_matrices(
             split_Ys.append(y_split)
             idx += 1
 
-    return split_Ys, split_Xs
+    return split_Ys, split_Xs, keep
 
 
 def _split_matrices(
@@ -265,7 +311,12 @@ def _split_matrices(
     model_pi: bool,
     starts_with_first: bool,
     Lrhoi: scp.sparse.csc_array | None = None,
-) -> tuple[list[np.ndarray | None], list[scp.sparse.csc_array | None]]:
+    drop_coef: bool = False,
+) -> tuple[
+    list[list[np.ndarray | None]],
+    list[list[scp.sparse.csc_array | None]],
+    list[list[list[bool] | None]],
+]:
     """Splits the model matrices and vectors of observations into series-specific versions.
 
     Internal function.
@@ -318,15 +369,21 @@ def _split_matrices(
     :param Lrhoi: Inverse of transpose of Cholesky of banded covariance matrix of an ar model of the
         residuals for a HMP-like HSMM. Defaults to None - indicating no ar model.
     :type Lrhoi: scp.sparse.csc_array | None, optional
-    :return: A tuple holding lists of series-specific splits of ``ys`` and ``Xs``. Lists might
-        contain Nones, in case a specific model matrix has been requested not to be accumulated
-        explicitly.
-    :rtype: tuple[list[np.ndarray|None],list[scp.sparse.csc_array|None]]
+    :param drop_coef: Whether or not coefficients not associated with series ``sidx`` should be
+        dropped from the model matrices. Defaults to False.
+    :type drop_coef: bool, optional
+    :return: A tuple holding lists of series-specific splits of ``ys`` and ``Xs`` as well
+        as ``keep_idx_s``. The latter is a boolean index vector indicating which coefficients to
+        retain per series when computing the gradient. Lists on the second level might contain
+        Nones, in case a specific model matrix has been requested not to be accumulated explicitly.
+    :rtype: tuple[list[list[np.ndarray | None]], list[list[scp.sparse.csc_array | None]],
+        list[list[list[bool] | None]]]
     """
 
     # Split up ys, Xs
     split_Xs = []
     split_Ys = []
+    keep_idxs = []
     n_series = len(sid)
 
     # Rho idx for hmp
@@ -338,7 +395,7 @@ def _split_matrices(
     ]
 
     for sidx in range(n_series):
-        y_split_s, X_split_s = _vstack_s_matrices(
+        y_split_s, X_split_s, keep_idx_s = _vstack_s_matrices(
             sidx,
             yfix,
             Xs,
@@ -353,12 +410,14 @@ def _split_matrices(
             model_T,
             model_pi,
             starts_with_first,
+            drop_coef,
         )
         split_Ys.append(y_split_s)
         split_Xs.append(X_split_s)
+        keep_idxs.append(keep_idx_s)
 
     # print(split_Xs, split_Ys)
-    return split_Ys, split_Xs
+    return split_Ys, split_Xs, keep_idxs
 
 
 def _compute_series_probs(
@@ -1864,7 +1923,7 @@ class HSMMFamily(GSMMFamily):
             tid = sid
 
         # Split up ys, Xs
-        split_Ys, split_Xs = _split_matrices(
+        split_Ys, split_Xs, _ = _split_matrices(
             ys,
             Xs,
             shared_pars,
@@ -2082,7 +2141,7 @@ class HSMMFamily(GSMMFamily):
             tid = sid
 
         # Split up ys, Xs
-        split_Ys, split_Xs = _split_matrices(
+        split_Ys, split_Xs, _ = _split_matrices(
             ys,
             Xs,
             shared_pars,
@@ -2465,7 +2524,7 @@ class HSMMFamily(GSMMFamily):
             tid = sid
 
         # Split up ys, Xs
-        split_Ys, split_Xs = _split_matrices(
+        split_Ys, split_Xs, _ = _split_matrices(
             ys,
             Xs,
             shared_pars,
@@ -2740,7 +2799,7 @@ class HSMMFamily(GSMMFamily):
             tid = sid
 
         # Split up ys, Xs
-        split_Ys, split_Xs = _split_matrices(
+        split_Ys, split_Xs, _ = _split_matrices(
             ys,
             Xs,
             shared_pars,
@@ -3021,7 +3080,7 @@ class HSMMFamily(GSMMFamily):
             tid = sid
 
         # Split up ys, Xs
-        split_Ys, split_Xs = _split_matrices(
+        split_Ys, split_Xs, _ = _split_matrices(
             ys,
             Xs,
             shared_pars,
@@ -3420,7 +3479,7 @@ class HSMMFamily(GSMMFamily):
             tid = sid
 
         # Split up ys, Xs
-        split_Ys, split_Xs = _split_matrices(
+        split_Ys, split_Xs, _ = _split_matrices(
             ys,
             Xs,
             shared_pars,
@@ -3768,7 +3827,7 @@ class HSMMFamily(GSMMFamily):
             llc = np.log(d0[d0 != 1]).sum()
 
         # Split up ys, Xs
-        split_Ys, split_Xs = _split_matrices(
+        split_Ys, split_Xs, _ = _split_matrices(
             ys if self.fast_hmp is False else self.cross_cor,
             Xs,
             shared_pars,
@@ -3844,6 +3903,7 @@ class HSMMFamily(GSMMFamily):
         coef_split_idx: list[int],
         ys: list[np.ndarray],
         Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
+        keep_idx: list[bool],
     ) -> np.ndarray:
         """Computes gradient of log-likelihood of model for a single series.
 
@@ -3864,6 +3924,9 @@ class HSMMFamily(GSMMFamily):
         :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
             indices for which model matrix should not be formed explicitly.
         :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
+        :param keep_idx: A boolean index list indicating which coefficients in ``coef`` are
+            dependent on this series.
+        :type keep_idx: list[bool]
         :return:  Gradient as array of shape (-1,1)
         :rtype: np.ndarray
         """
@@ -3905,6 +3968,22 @@ class HSMMFamily(GSMMFamily):
             X if X is not None else Xs[build_mat_idx[xi]] for xi, X in enumerate(Xs)
         ]
         Xs = Xfix
+
+        # Drop from coef
+        full_coef = coef.shape[0] - self.extra_coef
+
+        # First get theta
+        split_coef = np.split(coef, coef_split_idx)
+        thetas = split_coef[-1].flatten()
+
+        # Now re-compute split_coef
+        split_coef_kept = []
+        keep_coef = []
+        for xi, keep_idxX in enumerate(keep_idx):
+            cidx = keep_idxX if keep_idxX is not None else keep_idx[build_mat_idx[xi]]
+            keep_coef.extend(cidx)
+            split_coef_kept.append(split_coef[xi][cidx])
+        split_coef = split_coef_kept
 
         # Extract some extra info and define storage
         n_T = len(ys[0])  # Number of time-points in this series
@@ -3956,9 +4035,7 @@ class HSMMFamily(GSMMFamily):
         j_idx_grad = None
         m_idx_grad = None
 
-        split_coef = np.split(coef, coef_split_idx)
-        total_coef = 0  # total number of coef
-        coef_kept = []  # index vector with True for coef kept for this series
+        total_coef = 0  # total number of coef (after dropping)
 
         # First observation probabilities #
 
@@ -4009,7 +4086,6 @@ class HSMMFamily(GSMMFamily):
                 idx += 1
 
         # print("OBS:")
-        thetas = split_coef[-1].flatten()
         theta_idx = 0
         # Will need to keep track of position of theta gradients
         # since they will need to be moved to the end
@@ -4852,11 +4928,6 @@ class HSMMFamily(GSMMFamily):
         elif self.fast_hmp:
             # Now for hmp..
 
-            # def llk_wrap(x: np.ndarray) -> float:
-            #    return self.series_llk(series, x.reshape(-1, 1), coef_split_idx, ys, Xs)
-
-            # grad2 = scp.optimize.approx_fprime(coef.flatten(), llk_wrap)
-
             # The following computes gradient of the log-likelihood of a HMP model as
             # described by Weindel, van Maanen and Borst (2024). Code taken & modified from:
             # https://github.com/GWeindel/hmp/blob/devel/hmp/models/event.py
@@ -5025,7 +5096,6 @@ class HSMMFamily(GSMMFamily):
             tgrad = np.sum(tgrad, axis=0)
             grad = tgrad / np.sum(forward)
 
-            # print(np.abs(grad2 - grad).max())
         else:
             # Still not done for hmp
             if is_hmp:
@@ -5163,12 +5233,15 @@ class HSMMFamily(GSMMFamily):
             # These can simply be appended to gradient
             grad2.extend(grad[ind_coef_idx_flat])
 
+            # Now embed in full_grad
+            full_grad = np.zeros(full_coef)
+            full_grad[keep_coef] = grad2
+
             if len(theta_grad_idx) > 0:
                 # Add theta gradients to end of grad
-                grad2.extend(grad[theta_grad_idx])
+                full_grad = np.concatenate((full_grad, grad[theta_grad_idx]))
 
-            # Cast to np array
-            grad = np.array(grad2)
+            grad = full_grad
 
         elif len(theta_grad_idx) > 0:
 
@@ -5182,13 +5255,19 @@ class HSMMFamily(GSMMFamily):
             # These need to be put first in gradient
             grad2.extend(grad[coef_idx_flat])
 
+            # Now embed in full_grad
+            full_grad = np.zeros(full_coef)
+            full_grad[keep_coef] = grad2
+
             # Add theta gradients to end of grad
-            grad2.extend(grad[theta_grad_idx])
+            grad = np.concatenate((full_grad, grad[theta_grad_idx]))
 
-            # Cast to np array
-            grad = np.array(grad2)
+        else:
+            # Simply embed grad in full grad
+            full_grad = np.zeros(full_coef)
+            full_grad[keep_coef] = grad
+            grad = full_grad
 
-        # print(llk)
         return grad.reshape(-1, 1)
 
     def gradient(
@@ -5235,6 +5314,11 @@ class HSMMFamily(GSMMFamily):
         :rtype: np.ndarray
         """
 
+        # def llk_wrap(x: np.ndarray) -> float:
+        #    return self.llk(x.reshape(-1, 1), coef_split_idx, ys, Xs)
+
+        # gradfd = scp.optimize.approx_fprime(coef.flatten(), llk_wrap).reshape(-1, 1)
+
         # Extract families, transition matrices, etc.
         n_S = self.llkargs[0]
         obs_fams = self.llkargs[1]
@@ -5257,7 +5341,11 @@ class HSMMFamily(GSMMFamily):
             tid = sid
 
         # Split up ys, Xs
-        split_Ys, split_Xs = _split_matrices(
+        (
+            split_Ys,
+            split_Xs,
+            keep_idxs,
+        ) = _split_matrices(
             ys if self.fast_hmp is False else self.cross_cor,
             Xs,
             shared_pars,
@@ -5272,6 +5360,7 @@ class HSMMFamily(GSMMFamily):
             False if fix_T_pi else True,
             starts_with_first,
             None if self.fast_hmp else Lrhoi,
+            True,
         )
 
         # Now compute grad for every individual series and then sum up
@@ -5286,6 +5375,7 @@ class HSMMFamily(GSMMFamily):
                         coef_split_idx,
                         split_Ys[series],
                         split_Xs[series],
+                        keep_idxs[series],
                     )
                 # print(grads)
                 if grad is None:
@@ -5301,6 +5391,7 @@ class HSMMFamily(GSMMFamily):
                 repeat(coef_split_idx),
                 split_Ys,
                 split_Xs,
+                keep_idxs,
             )
 
             # No need to copy cross_cor!
@@ -5320,4 +5411,5 @@ class HSMMFamily(GSMMFamily):
             if orig_cross_cor is not None:
                 self.cross_cor = orig_cross_cor
 
+        # print(np.abs(gradfd - grad).max())
         return grad
