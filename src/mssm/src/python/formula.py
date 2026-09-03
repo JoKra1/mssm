@@ -1743,6 +1743,10 @@ class Formula:
         sti = self.get_smooth_term_idx()
         sti = [ti for ti in sti if isinstance(self.terms[ti], fs) is False]
 
+        # Have only random smooths
+        if len(sti) == 0:
+            return
+
         term_var = [self.terms[ti].variables for ti in sti]
         n_term_var = [len(tvar) for tvar in term_var]
         max_var = np.max(n_term_var)

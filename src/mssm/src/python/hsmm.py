@@ -1404,6 +1404,9 @@ class HSMMFamily(GSMMFamily):
     :type ends_in_last: bool
     :param n_cores: Number of cores to use to parallelize functions, defaults to 1
     :type n_cores: int, optional
+    :param n_cores_llk: Number of cores to use to parallelize the likelihood function, defaults to
+        None which means it is said to ``n_cores``
+    :type n_cores_llk: int | None, optional
     :param build_mat_idx: If not all matrices are built explicitly, this has to be a list of indices
         per parameter modeled, pointing at the index of ``Xs`` holding the matrix that should be
         used by that parameter.
@@ -1476,7 +1479,8 @@ class HSMMFamily(GSMMFamily):
         starts_with_first: bool,
         ends_with_last: bool,
         ends_in_last: bool,
-        n_cores=1,
+        n_cores: int = 1,
+        n_cores_llk: int | None = None,
         build_mat_idx: list[int] | None = None,
         shared_pars: list[int] = [],
         shared_j: list[list[int]] | None = None,
@@ -1529,6 +1533,9 @@ class HSMMFamily(GSMMFamily):
         self.cross_cor = None
         self.shared_j = shared_j
         self.hmp_d_offset = hmp_d_offset
+        self.n_cores_llk = n_cores_llk
+        if n_cores_llk is None:
+            self.n_cores_llk = n_cores
 
         if self.fast_hmp and (self.is_hmp is False):
             warnings.warn(
@@ -3743,7 +3750,7 @@ class HSMMFamily(GSMMFamily):
             tid = self.llkargs[4]
         M = self.llkargs[6]
         starts_with_first = self.llkargs[7]
-        n_cores = self.llkargs[10]
+        n_cores = self.n_cores_llk
         shared_pars = self.llkargs[12]
         shared_m = self.llkargs[13]
         Lrhoi = self.llkargs[16]
@@ -3950,7 +3957,8 @@ class HSMMFamily(GSMMFamily):
         m_idx_grad = None
 
         split_coef = np.split(coef, coef_split_idx)
-        total_coef = 0
+        total_coef = 0  # total number of coef
+        coef_kept = []  # index vector with True for coef kept for this series
 
         # First observation probabilities #
 
@@ -4085,9 +4093,14 @@ class HSMMFamily(GSMMFamily):
                                 etasbjm[-1] += shared_eta[shared_par_idx][seidx]
 
                                 # 2)
-                                Xsj[-1] = scp.sparse.hstack(
-                                    (Xsj[-1], Xs[shared_X[shared_par_idx][seidx]])
-                                )
+                                if isinstance(Xsj[-1], np.ndarray):
+                                    Xsj[-1] = np.hstack(
+                                        (Xsj[-1], Xs[shared_X[shared_par_idx][seidx]])
+                                    )
+                                else:
+                                    Xsj[-1] = scp.sparse.hstack(
+                                        (Xsj[-1], Xs[shared_X[shared_par_idx][seidx]])
+                                    )
 
                                 # 3)
                                 start_idx = total_coef
@@ -4272,9 +4285,14 @@ class HSMMFamily(GSMMFamily):
                                 etasbjm[-1] += shared_eta[0][seidx]
 
                                 # 2)
-                                grad_par = scp.sparse.hstack(
-                                    (grad_par, Xs[shared_X[0][seidx]])
-                                )
+                                if isinstance(grad_par, np.ndarray):
+                                    grad_par = np.hstack(
+                                        (grad_par, Xs[shared_X[0][seidx]])
+                                    )
+                                else:
+                                    grad_par = scp.sparse.hstack(
+                                        (grad_par, Xs[shared_X[0][seidx]])
+                                    )
 
                                 # 3)
                                 start_idx = total_coef
