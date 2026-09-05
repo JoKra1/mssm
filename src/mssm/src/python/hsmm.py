@@ -1965,8 +1965,17 @@ class HSMMFamily(GSMMFamily):
                 repeat(log),
             )
 
+            # No need to copy cross_cor
+            orig_cross_cor = None
+            if self.cross_cor is not None:
+                orig_cross_cor = self.cross_cor
+                self.cross_cor = None
+
             with mp.Pool(processes=n_cores) as pool:
                 bs, ds = zip(*pool.starmap(self.series_log_prob, args))
+
+            if orig_cross_cor is not None:
+                self.cross_cor = orig_cross_cor
 
             ps = [[bss, dss] for bss, dss in zip(bs, ds)]
 
@@ -2182,8 +2191,17 @@ class HSMMFamily(GSMMFamily):
                 split_Xs,
             )
 
+            # No need to copy cross_cor
+            orig_cross_cor = None
+            if self.cross_cor is not None:
+                orig_cross_cor = self.cross_cor
+                self.cross_cor = None
+
             with mp.Pool(processes=n_cores) as pool:
                 Ts, pis = zip(*pool.starmap(self.series_Tpi, args))
+
+            if orig_cross_cor is not None:
+                self.cross_cor = orig_cross_cor
 
             ps = [[T, pi] for T, pi in zip(Ts, pis)]
 
@@ -2574,6 +2592,12 @@ class HSMMFamily(GSMMFamily):
                 repeat(scale),
             )
 
+            # No need to copy cross_cor
+            orig_cross_cor = None
+            if self.cross_cor is not None:
+                orig_cross_cor = self.cross_cor
+                self.cross_cor = None
+
             with warnings.catch_warnings():  # Supress warnings
                 warnings.simplefilter("ignore")
                 with mp.Pool(processes=n_cores) as pool:
@@ -2582,6 +2606,9 @@ class HSMMFamily(GSMMFamily):
                 predictions = [
                     [e_predss, s_predss] for e_predss, s_predss in zip(e_preds, s_preds)
                 ]
+
+            if orig_cross_cor is not None:
+                self.cross_cor = orig_cross_cor
 
         return predictions
 
@@ -2843,12 +2870,21 @@ class HSMMFamily(GSMMFamily):
                 split_Xs,
             )
 
+            # No need to copy cross_cor
+            orig_cross_cor = None
+            if self.cross_cor is not None:
+                orig_cross_cor = self.cross_cor
+                self.cross_cor = None
+
             with warnings.catch_warnings():  # Supress warnings
                 warnings.simplefilter("ignore")
                 with mp.Pool(processes=n_cores) as pool:
                     eds, states = zip(*pool.starmap(self.series_viterbi, args))
 
                 states = [[edss, statess] for edss, statess in zip(eds, states)]
+
+            if orig_cross_cor is not None:
+                self.cross_cor = orig_cross_cor
 
         return states
 
@@ -2927,7 +2963,7 @@ class HSMMFamily(GSMMFamily):
 
         # We can pre-compute the bs and ds - i.e., observation probabilities and
         # duration probabilities
-        _, _, _, _, _, bs, ds, Ts, pis = _compute_series_probs(
+        cross_corr, mus, _, _, _, bs, ds, Ts, pis = _compute_series_probs(
             coef,
             coef_split_idx,
             shared_pars,
@@ -2952,8 +2988,8 @@ class HSMMFamily(GSMMFamily):
             hmp_fam,
             rho,
             tvdtpi,
-            False,
-            self.hmp_d_offset,
+            self.fast_hmp,
+            False if self.fast_hmp else self.hmp_d_offset,
         )
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
@@ -2964,11 +3000,158 @@ class HSMMFamily(GSMMFamily):
                 Ts = T
                 pis = pi
 
-        bs[np.isnan(bs) | np.isinf(bs)] = 0
-        ds[np.isnan(ds) | np.isinf(ds)] = 0
+        if self.fast_hmp is False:
+            bs[np.isnan(bs) | np.isinf(bs)] = 0
+            ds[np.isnan(ds) | np.isinf(ds)] = 0
 
         # Now sample state sequences
-        if is_hmp:
+        if self.fast_hmp:
+            eds = np.zeros(n_samples)
+            states = np.zeros((n_T, n_samples), dtype=np.int64)
+            np_gen = np.random.default_rng(seed)
+            # The following computes the forward variables of a HMP model as described by
+            # Weindel, van Maanen and Borst (2024) and then uses these to back sample from the
+            # posterior of state sequences. Code taken & modified from:
+            # https://github.com/GWeindel/hmp/blob/devel/hmp/models/event.py
+            # print(cross_corr.shape, n_T)
+
+            # Can modify location since backward sampler dynamically adjusts to guarantee at least
+            # one sample per flat.
+            if rho is not None:
+                # event pattern gets appended one sample for ar1 model but this counts as next
+                # flat
+                event_width -= 1
+            sample_location = self.hmp_location.copy()
+            sample_location[:] = 0
+            sample_location[-1] = (event_width // 2) + 1
+
+            n_events = (n_S - 1) // 2
+            n_flats = n_events + 1
+            gains = np.zeros((n_T, n_events), dtype=np.float64)
+
+            for i in range(cross_corr.shape[1]):
+                # computes the gains, i.e. the log of the likelihood ratio between
+                # event present and absent.
+                gains = (
+                    gains
+                    + cross_corr[:, [i]] * mus[:, i, :]
+                    - mus[:, i, :] ** 2 / scale
+                )
+            gains = np.exp(gains)
+
+            # pmf for each flat with appropriate zeroing to prevent overlap between events
+            pmf = np.zeros([n_T, n_flats], dtype=np.float64)
+            end = min(n_T, D - 1)
+
+            # Figure out which transitions are actually happening on this trial.
+            # Needs translation from bump/flat world to event/stage world.
+            flat = np.argmax(pi)
+            stage = flat // 2
+            # Handle first stage here, rest in loop over transitions below
+            pmf[:end, stage] = ds[:end, stage]
+            pmf[: sample_location[stage], stage] = 0
+            sidx = 0 if flat == 0 else T[:flat, :].sum().astype(int) // 2
+            eidx = T.sum().astype(int) // 2
+            stages = [stage]
+            flats = [flat]
+            events = []
+            bumps = []
+            n_events = 0
+
+            # Loop over transitions
+            for _ in range(sidx, eidx):
+                bump = np.argmax(T[flat, :])
+                event = bump // 2
+                flat = bump + 1
+                stage = flat // 2
+
+                pmf[:end, stage] = ds[:end, stage]
+                pmf[: sample_location[stage], stage] = 0
+
+                stages.append(stage)
+                events.append(event)
+                bumps.append(bump)
+                flats.append(flat)
+                n_events += 1
+
+            # Now modified forward pass
+            forward = np.zeros((n_T, n_events), dtype=np.float64)
+            forward[:, 0] = pmf[:, stages[0]] * gains[:, events[0]]
+
+            for evidx in np.arange(1, n_events):
+                # convolution between pmf and previous forward multiplied by gain
+                forward[:, evidx] = (
+                    np.convolve(forward[:, evidx - 1], pmf[:, stages[evidx]])[:n_T]
+                    * gains[:, events[evidx]]
+                )
+
+            # Getting the event props only requires accounting for final distribution
+            # backward holds joint probs of all emissions and final event happening at
+            # time t.
+            backward = forward[:, -1].copy()
+            backward[:end] *= np.flip(pmf[:end, stages[-1]])
+            backward = np.clip(backward, 0, None)
+
+            # Compute trial exp(llk).
+            ellk = backward.sum()
+
+            # ellk is probs of all emissions so backward/ellk gives
+            # probs of final event happening at time t.
+            last_event_props = backward / ellk
+            left_censor = (n_events - 1) * event_width + n_events + event_width // 2
+            # print(n_events, event_width, left_censor)
+            last_event_props[:left_censor] = 0
+            last_event_props /= np.sum(last_event_props)
+
+            # Now generate samples
+            for sample in range(n_samples):
+
+                event_peaks = np.zeros(n_events, dtype=np.int64)
+                t = np.arange(n_T, dtype=np.int64)
+
+                # Can sample last event from last_event_props
+                event_peaks[-1] = np_gen.choice(t, size=None, p=last_event_props)
+
+                # Now sample remaining events backwards
+                for evidx in range(n_events - 2, -1, -1):
+                    # Model is strictly sequential so given location of event evidx + 1
+                    # prop of previous event happening at t=0:location is **proportional** to
+                    # forward[0:location,evidx]*np.flip(pmf[0:location,evidx+1])
+                    right_censor = event_peaks[evidx + 1] - ((event_width // 2) + 1)
+                    event_props = forward[:right_censor, evidx] * np.flip(
+                        pmf[:right_censor, stages[evidx + 1]]
+                    )
+
+                    left_censor = evidx * event_width + (evidx + 1) + event_width // 2
+                    event_props[:left_censor] = 0
+
+                    event_props /= np.sum(event_props)
+
+                    event_peaks[evidx] = np_gen.choice(
+                        t[:right_censor], size=None, p=event_props
+                    )
+
+                # Now fill state vector
+                sidx = 0
+                for evidx in range(n_events):
+                    states[sidx : event_peaks[evidx], sample] = flats[evidx]
+                    states[
+                        (event_peaks[evidx] - event_width // 2) : event_peaks[evidx],
+                        sample,
+                    ] = bumps[evidx]
+                    states[
+                        event_peaks[evidx] : (
+                            event_peaks[evidx] + event_width // 2 + 1
+                        ),
+                        sample,
+                    ] = bumps[evidx]
+                    sidx = event_peaks[evidx] + event_width // 2 + 1
+
+                # Handle last flat
+                states[sidx:, sample] = flats[-1]
+            return eds, states
+
+        elif is_hmp:
             hmp_code = 1
         else:
             hmp_code = 0
@@ -3128,12 +3311,21 @@ class HSMMFamily(GSMMFamily):
                 repeat(n_samples),
             )
 
+            # No need to copy cross_cor
+            orig_cross_cor = None
+            if self.cross_cor is not None:
+                orig_cross_cor = self.cross_cor
+                self.cross_cor = None
+
             with warnings.catch_warnings():  # Supress warnings
                 warnings.simplefilter("ignore")
                 with mp.Pool(processes=n_cores) as pool:
                     eds, states = zip(*pool.starmap(self.sample_posterior_series, args))
 
                 states = [[edss, statess] for edss, statess in zip(eds, states)]
+
+            if orig_cross_cor is not None:
+                self.cross_cor = orig_cross_cor
 
         return states
 
@@ -3531,6 +3723,12 @@ class HSMMFamily(GSMMFamily):
                 repeat(n_samples),
             )
 
+            # No need to copy cross_cor
+            orig_cross_cor = None
+            if self.cross_cor is not None:
+                orig_cross_cor = self.cross_cor
+                self.cross_cor = None
+
             with warnings.catch_warnings():  # Supress warnings
                 warnings.simplefilter("ignore")
                 with mp.Pool(processes=n_cores) as pool:
@@ -3538,6 +3736,9 @@ class HSMMFamily(GSMMFamily):
                     residss = pool.starmap(self.series_resid, args)
 
                 res = np.concatenate(residss, axis=0)
+
+            if orig_cross_cor is not None:
+                self.cross_cor = orig_cross_cor
 
         # Transform to normality?
         if transform_to_normal and resid_type == "forward":
