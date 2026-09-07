@@ -1024,7 +1024,7 @@ class Formula:
         else:
             # Collect entire y column
             if data is not None:
-                y_flat = np.array(data[self.lhs.variable]).reshape(-1, 1)
+                y_flat = np.array(data[self.lhs.variable], dtype=float).reshape(-1, 1)
 
                 if self.discretize_cov:
                     n_bins = min(int(np.sqrt(data[NAs_flat].shape[0])), 1000)

@@ -420,6 +420,48 @@ def _split_matrices(
     return split_Ys, split_Xs, keep_idxs
 
 
+def _group_hmp_events(
+    pi: np.ndarray, T: np.ndarray
+) -> tuple[int, list[int], list[int], list[int], list[int]]:
+    """Finds the events and stages present for a given series of a HMP model.
+
+    :param pi: Array of initial state probabilities
+    :type pi: np.ndarray
+    :param T: Array of state transition probabilities
+    :type T: np.ndarray
+    :return: Number of events implied by ``pi`` and ``T``, the event and stage
+        indices as two lists (used by fast_hmp code), and the bump and flat indices
+        (having the same information for the default code computing the hmp model like
+        a regular HSMM).
+    :rtype: tuple[int, list[int], list[int], list[int], list[int]]
+    """
+
+    # Find initial flat stage for this trial
+    flat = np.argmax(pi)
+    stage = flat // 2
+    sidx = 0 if flat == 0 else T[:flat, :].sum().astype(int) // 2
+    eidx = T.sum().astype(int) // 2
+    stages = [stage]
+    flats = [flat]
+    events = []
+    bumps = []
+    n_events = 0
+
+    # Loop over transitions
+    for _ in range(sidx, eidx):
+        bump = np.argmax(T[flat, :])
+        event = bump // 2
+        flat = bump + 1
+        stage = flat // 2
+        stages.append(stage)
+        events.append(event)
+        bumps.append(bump)
+        flats.append(flat)
+        n_events += 1
+
+    return n_events, events, stages, bumps, flats
+
+
 def _compute_series_probs(
     coef: np.ndarray,
     coef_split_idx: list[int],
@@ -447,6 +489,7 @@ def _compute_series_probs(
     tvdtpi: bool = False,
     hmp_fast: bool = False,
     hmp_d_offset: bool = False,
+    flats: list[int] | None = None,
 ) -> tuple[
     np.ndarray,
     np.ndarray,
@@ -537,6 +580,9 @@ def _compute_series_probs(
         hsmm algorithms (False) or for use with the fast hmp code for estimation (True). Only
         has an effect when ``is_hmp is True``. Defaults to False
     :type hmp_fast: bool, optional
+    :param flats: For a hmp model a list with the indices of flats present for this trial.
+        Defaults to None
+    :type flats: list[int], optional
     :raises ValueError: _description_
     :return: Returns ``y_mat`` (a (n_T,M) array holding the observations from all signals),
         ``mus`` (a (n_T,M,n_S) array holding the state-specific expected value of each observation
@@ -949,7 +995,7 @@ def _compute_series_probs(
                 if hmp_d_offset and is_hmp:
                     shift = (
                         event_width // 2
-                        if (f_idx == 0 or f_idx == (n_S - 1))
+                        if (f_idx in [flats[0], flats[-1]])
                         else event_width
                     )
                     d_shift = d_val + shift
@@ -1800,8 +1846,8 @@ class HSMMFamily(GSMMFamily):
         build_mat_idx = self.llkargs[11]
         shared_pars = self.llkargs[12]
         shared_m = self.llkargs[13]
-        # T = self.llkargs[14]
-        # pi = self.llkargs[15]
+        T = self.llkargs[14]
+        pi = self.llkargs[15]
         Lrhoi = self.llkargs[16]
         scale = self.llkargs[17]
         event_template = self.llkargs[18]
@@ -1809,6 +1855,10 @@ class HSMMFamily(GSMMFamily):
         is_hmp = self.is_hmp
         tvdtpi = self.tvdtpi
         # fix_T_pi = self.fix_T_pi
+
+        flats = None
+        if self.hmp_d_offset:
+            _, _, _, _, flats = _group_hmp_events(pi, T)
 
         rho = None
         if Lrhoi is not None:
@@ -1843,6 +1893,7 @@ class HSMMFamily(GSMMFamily):
             tvdtpi,
             False,
             self.hmp_d_offset,
+            flats,
         )
         bs[(np.isnan(bs) | np.isinf(bs))] = -np.inf if log else 0
         ds[(np.isnan(ds) | np.isinf(ds))] = -np.inf if log else 0
@@ -2037,6 +2088,10 @@ class HSMMFamily(GSMMFamily):
         fix_T_pi = self.fix_T_pi
         tvdtpi = self.tvdtpi
 
+        flats = None
+        if self.hmp_d_offset:
+            _, _, _, _, flats = _group_hmp_events(pi, T)
+
         if fix_T_pi is False:
             _, _, _, _, _, _, _, Ts, pis = _compute_series_probs(
                 coef,
@@ -2062,6 +2117,7 @@ class HSMMFamily(GSMMFamily):
                 tvdtpi=tvdtpi,
                 hmp_fast=False,
                 hmp_d_offset=self.hmp_d_offset,
+                flats=flats,
             )
 
         elif isinstance(T, list) and isinstance(pi, list):
@@ -2271,6 +2327,10 @@ class HSMMFamily(GSMMFamily):
         fix_T_pi = self.fix_T_pi
         tvdtpi = self.tvdtpi
 
+        flats = None
+        if self.hmp_d_offset:
+            _, _, _, _, flats = _group_hmp_events(pi, T)
+
         # Extract rho
         rho = None
         if Lrhoi is not None:
@@ -2333,6 +2393,7 @@ class HSMMFamily(GSMMFamily):
             tvdtpi,
             False,
             self.hmp_d_offset,
+            flats,
         )
 
         if fix_T_pi:
@@ -2667,6 +2728,10 @@ class HSMMFamily(GSMMFamily):
         fix_T_pi = self.fix_T_pi
         tvdtpi = self.tvdtpi
 
+        flats = None
+        if self.hmp_d_offset:
+            _, _, _, _, flats = _group_hmp_events(pi, T)
+
         # Must extract rho, even if ``Lrhoi`` is set to None above (happens when this method is
         # called by get_resid) - of course only if ``Lrhoi`` was provided to constructor
         rho = None
@@ -2708,6 +2773,7 @@ class HSMMFamily(GSMMFamily):
             tvdtpi,
             False,
             self.hmp_d_offset,
+            flats,
         )
 
         if fix_T_pi:
@@ -2949,6 +3015,10 @@ class HSMMFamily(GSMMFamily):
         fix_T_pi = self.fix_T_pi
         tvdtpi = self.tvdtpi
 
+        flats = None
+        if self.hmp_d_offset and self.fast_hmp is False:
+            _, _, _, _, flats = _group_hmp_events(pi, T)
+
         # Must extract rho, even if ``Lrhoi`` is set to None above (happens when this method is
         # called by get_resid) - of course only if ``Lrhoi`` was provided to constructor
         rho = None
@@ -2990,6 +3060,7 @@ class HSMMFamily(GSMMFamily):
             tvdtpi,
             self.fast_hmp,
             False if self.fast_hmp else self.hmp_d_offset,
+            flats,
         )
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
@@ -3017,13 +3088,8 @@ class HSMMFamily(GSMMFamily):
 
             # Can modify location since backward sampler dynamically adjusts to guarantee at least
             # one sample per flat.
-            if rho is not None:
-                # event pattern gets appended one sample for ar1 model but this counts as next
-                # flat
-                event_width -= 1
             sample_location = self.hmp_location.copy()
             sample_location[:] = 0
-            sample_location[-1] = (event_width // 2) + 1
 
             n_events = (n_S - 1) // 2
             n_flats = n_events + 1
@@ -3045,34 +3111,16 @@ class HSMMFamily(GSMMFamily):
 
             # Figure out which transitions are actually happening on this trial.
             # Needs translation from bump/flat world to event/stage world.
-            flat = np.argmax(pi)
-            stage = flat // 2
+            n_events, events, stages, bumps, flats = _group_hmp_events(pi, T)
+
             # Handle first stage here, rest in loop over transitions below
-            pmf[:end, stage] = ds[:end, stage]
-            pmf[: sample_location[stage], stage] = 0
-            sidx = 0 if flat == 0 else T[:flat, :].sum().astype(int) // 2
-            eidx = T.sum().astype(int) // 2
-            stages = [stage]
-            flats = [flat]
-            events = []
-            bumps = []
-            n_events = 0
+            pmf[:end, stages[0]] = ds[:end, stages[0]]
+            pmf[: sample_location[stages[0]], stages[0]] = 0
 
             # Loop over transitions
-            for _ in range(sidx, eidx):
-                bump = np.argmax(T[flat, :])
-                event = bump // 2
-                flat = bump + 1
-                stage = flat // 2
-
+            for stage in stages[1:]:
                 pmf[:end, stage] = ds[:end, stage]
                 pmf[: sample_location[stage], stage] = 0
-
-                stages.append(stage)
-                events.append(event)
-                bumps.append(bump)
-                flats.append(flat)
-                n_events += 1
 
             # Now modified forward pass
             forward = np.zeros((n_T, n_events), dtype=np.float64)
@@ -3098,8 +3146,10 @@ class HSMMFamily(GSMMFamily):
             # ellk is probs of all emissions so backward/ellk gives
             # probs of final event happening at time t.
             last_event_props = backward / ellk
+            right_censor = (event_width // 2) + 1
             left_censor = (n_events - 1) * event_width + n_events + event_width // 2
             # print(n_events, event_width, left_censor)
+            last_event_props[-right_censor:] = 0
             last_event_props[:left_censor] = 0
             last_event_props /= np.sum(last_event_props)
 
@@ -3395,6 +3445,10 @@ class HSMMFamily(GSMMFamily):
         fix_T_pi = self.fix_T_pi
         tvdtpi = self.tvdtpi
 
+        flats = None
+        if self.hmp_d_offset:
+            _, _, _, _, flats = _group_hmp_events(pi, T)
+
         # Extract rho
         rho = None
         if Lrhoi is not None:
@@ -3431,6 +3485,7 @@ class HSMMFamily(GSMMFamily):
             tvdtpi,
             False,
             self.hmp_d_offset,
+            flats,
         )
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
@@ -3801,6 +3856,10 @@ class HSMMFamily(GSMMFamily):
         fix_T_pi = self.fix_T_pi
         tvdtpi = self.tvdtpi
 
+        flats = None
+        if self.hmp_d_offset and self.fast_hmp is False:
+            _, _, _, _, flats = _group_hmp_events(pi, T)
+
         # Extract rho
         rho = None
         if Lrhoi is not None:
@@ -3839,6 +3898,7 @@ class HSMMFamily(GSMMFamily):
             tvdtpi,
             self.fast_hmp,
             False if self.fast_hmp else self.hmp_d_offset,
+            flats,
         )
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
@@ -3888,30 +3948,16 @@ class HSMMFamily(GSMMFamily):
 
             # Figure out which transitions are actually happening on this trial.
             # Needs translation from bump/flat world to event/stage world.
-            flat = np.argmax(pi)
-            stage = flat // 2
+            n_events, events, stages, _, _ = _group_hmp_events(pi, T)
+
             # Handle first stage here, rest in loop over transitions below
-            pmf[:end, stage] = ds[:end, stage]
-            pmf[: self.hmp_location[stage], stage] = 0
-            sidx = 0 if flat == 0 else T[:flat, :].sum().astype(int) // 2
-            eidx = T.sum().astype(int) // 2
-            stages = [stage]
-            events = []
-            n_events = 0
+            pmf[:end, stages[0]] = ds[:end, stages[0]]
+            pmf[: self.hmp_location[stages[0]], stages[0]] = 0
 
             # Loop over transitions
-            for _ in range(sidx, eidx):
-                bump = np.argmax(T[flat, :])
-                event = bump // 2
-                flat = bump + 1
-                stage = flat // 2
-
+            for stage in stages[1:]:
                 pmf[:end, stage] = ds[:end, stage]
                 pmf[: self.hmp_location[stage], stage] = 0
-
-                stages.append(stage)
-                events.append(event)
-                n_events += 1
 
             # Now modified forward pass
             forward = np.zeros((n_T, n_events), dtype=np.float64)
@@ -4221,6 +4267,9 @@ class HSMMFamily(GSMMFamily):
             else:
                 mus = np.zeros((n_T, M, n_S), order="F")
                 bs = np.zeros((n_T, event_width, n_S), order="F")
+
+                if self.hmp_d_offset:
+                    _, _, _, _, flats = _group_hmp_events(pi, T)
 
                 # Compute weights from rho
                 if rho is not None:
@@ -4676,7 +4725,7 @@ class HSMMFamily(GSMMFamily):
                     if is_hmp and (self.fast_hmp is False) and self.hmp_d_offset:
                         shift = (
                             event_width // 2
-                            if (f_idx == 0 or f_idx == (n_S - 1))
+                            if (f_idx in [flats[0], flats[-1]])
                             else event_width
                         )
                         d_shift = d_val + shift
@@ -4703,7 +4752,7 @@ class HSMMFamily(GSMMFamily):
                         if is_hmp and (self.fast_hmp is False) and self.hmp_d_offset:
                             shift = (
                                 event_width // 2
-                                if (f_idx == 0 or f_idx == (n_S - 1))
+                                if (f_idx in [flats[0], flats[-1]])
                                 else event_width
                             )
                             d_shift = d_val + shift
@@ -4728,7 +4777,7 @@ class HSMMFamily(GSMMFamily):
                         if is_hmp and (self.fast_hmp is False) and self.hmp_d_offset:
                             shift = (
                                 event_width // 2
-                                if (f_idx == 0 or f_idx == (n_S - 1))
+                                if (f_idx in [flats[0], flats[-1]])
                                 else event_width
                             )
                             d_shift = d_val + shift
@@ -5178,36 +5227,23 @@ class HSMMFamily(GSMMFamily):
 
             # Figure out which transitions are actually happening on this trial.
             # Needs translation from bump/flat world to event/stage world.
-            flat = np.argmax(pi)
-            stage = flat // 2
+            n_events, events, stages, _, _ = _group_hmp_events(pi, T)
+
             # Handle first stage here, rest in loop over transitions below
             # Get coefficients associated with pmf of stage
-            gidx = (j_idx_grad == stage)[b_grad.shape[1] :]  # noqa: E203
-            ds[: self.hmp_location[stage], stage] = 0
+            gidx = (j_idx_grad == stages[0])[b_grad.shape[1] :]  # noqa: E203
+            ds[: self.hmp_location[stages[0]], stages[0]] = 0
             # Zero grads accordingly as well
-            d_grad[: self.hmp_location[stage], gidx] = 0
-            sidx = 0 if flat == 0 else T[:flat, :].sum().astype(int) // 2
-            eidx = T.sum().astype(int) // 2
-            stages = [stage]
-            events = []
-            n_events = 0
+            d_grad[: self.hmp_location[stages[0]], gidx] = 0
 
             # Loop over transitions
-            for _ in range(sidx, eidx):
-                bump = np.argmax(T[flat, :])
-                event = bump // 2
-                flat = bump + 1
-                stage = flat // 2
+            for stage in stages[1:]:
 
                 # Get coefficients associated with pmf of stage
                 gidx = (j_idx_grad == stage)[b_grad.shape[1] :]  # noqa: E203
 
                 ds[: self.hmp_location[stage], stage] = 0
                 d_grad[: self.hmp_location[stage], gidx] = 0
-
-                stages.append(stage)
-                events.append(event)
-                n_events += 1
 
             # Done with durations part
 
