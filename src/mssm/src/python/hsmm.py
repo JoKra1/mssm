@@ -3086,11 +3086,6 @@ class HSMMFamily(GSMMFamily):
             # https://github.com/GWeindel/hmp/blob/devel/hmp/models/event.py
             # print(cross_corr.shape, n_T)
 
-            # Can modify location since backward sampler dynamically adjusts to guarantee at least
-            # one sample per flat.
-            sample_location = self.hmp_location.copy()
-            sample_location[:] = 0
-
             n_events = (n_S - 1) // 2
             n_flats = n_events + 1
             gains = np.zeros((n_T, n_events), dtype=np.float64)
@@ -3114,13 +3109,24 @@ class HSMMFamily(GSMMFamily):
             n_events, events, stages, bumps, flats = _group_hmp_events(pi, T)
 
             # Handle first stage here, rest in loop over transitions below
+            right_censor = n_events * event_width + n_events
             pmf[:end, stages[0]] = ds[:end, stages[0]]
-            pmf[: sample_location[stages[0]], stages[0]] = 0
+            # Min duration must account for bleed over pattern and 1 sample of flat
+            pmf[: (event_width // 2 + 1), stages[0]] = 0
+            # Need a max duration, since we always have to account for n_events of width
+            # event_width and at least 1 sample of the n_events remaining flats
+            pmf[-right_censor:, stages[0]] = 0
 
             # Loop over transitions
-            for stage in stages[1:]:
+            for sti, stage in enumerate(stages[1:]):
                 pmf[:end, stage] = ds[:end, stage]
-                pmf[: sample_location[stage], stage] = 0
+
+                if sti < (n_events - 1):
+                    pmf[: (event_width + 1), stage] = 0
+                else:
+                    pmf[: (event_width // 2 + 1), stage] = 0
+
+                pmf[-right_censor:, stage] = 0
 
             # Now modified forward pass
             forward = np.zeros((n_T, n_events), dtype=np.float64)
@@ -3137,7 +3143,7 @@ class HSMMFamily(GSMMFamily):
             # backward holds joint probs of all emissions and final event happening at
             # time t.
             backward = forward[:, -1].copy()
-            backward[:end] *= np.flip(pmf[:end, stages[-1]])
+            backward *= np.flip(pmf[:, stages[-1]])
             backward = np.clip(backward, 0, None)
 
             # Compute trial exp(llk).
@@ -3146,11 +3152,6 @@ class HSMMFamily(GSMMFamily):
             # ellk is probs of all emissions so backward/ellk gives
             # probs of final event happening at time t.
             last_event_props = backward / ellk
-            right_censor = (event_width // 2) + 1
-            left_censor = (n_events - 1) * event_width + n_events + event_width // 2
-            # print(n_events, event_width, left_censor)
-            last_event_props[-right_censor:] = 0
-            last_event_props[:left_censor] = 0
             last_event_props /= np.sum(last_event_props)
 
             # Now generate samples
@@ -3165,32 +3166,44 @@ class HSMMFamily(GSMMFamily):
                 # Now sample remaining events backwards
                 for evidx in range(n_events - 2, -1, -1):
                     # Model is strictly sequential so given location of event evidx + 1
-                    # prop of previous event happening at t=0:location is **proportional** to
+                    # prop of previous event happening at t=0:location is
                     # forward[0:location,evidx]*np.flip(pmf[0:location,evidx+1])
-                    right_censor = event_peaks[evidx + 1] - ((event_width // 2) + 1)
-                    event_props = forward[:right_censor, evidx] * np.flip(
-                        pmf[:right_censor, stages[evidx + 1]]
-                    )
 
-                    left_censor = evidx * event_width + (evidx + 1) + event_width // 2
-                    event_props[:left_censor] = 0
+                    peak_censor = event_peaks[evidx + 1] - (event_width // 2 + 1)
 
+                    # Need to re-compute the censored pmf given new end
+                    c_pmf = np.zeros(n_T)
+                    c_pmf[:end] = ds[:end, stages[evidx + 1]]
+                    c_pmf = c_pmf[:peak_censor]
+
+                    # For max duratation we need to consider that peak
+                    # has half the pattern of bleed-over
+                    right_censor = evidx * event_width + evidx + 1 + event_width // 2
+                    c_pmf[-right_censor:] = 0
+
+                    event_props = forward[:peak_censor, evidx] * np.flip(c_pmf)
                     event_props /= np.sum(event_props)
 
                     event_peaks[evidx] = np_gen.choice(
-                        t[:right_censor], size=None, p=event_props
+                        t[:peak_censor], size=None, p=event_props
                     )
 
                 # Now fill state vector
                 sidx = 0
                 for evidx in range(n_events):
-                    states[sidx : event_peaks[evidx], sample] = flats[evidx]
+                    states[sidx : event_peaks[evidx], sample] = flats[  # noqa: E203
+                        evidx
+                    ]
                     states[
-                        (event_peaks[evidx] - event_width // 2) : event_peaks[evidx],
+                        (
+                            event_peaks[evidx] - event_width // 2
+                        ) : event_peaks[  # noqa: E203
+                            evidx
+                        ],
                         sample,
                     ] = bumps[evidx]
                     states[
-                        event_peaks[evidx] : (
+                        event_peaks[evidx] : (  # noqa: E203
                             event_peaks[evidx] + event_width // 2 + 1
                         ),
                         sample,
@@ -3199,6 +3212,21 @@ class HSMMFamily(GSMMFamily):
 
                 # Handle last flat
                 states[sidx:, sample] = flats[-1]
+                """
+                unq, ctns = np.unique(states[:, sample], return_counts=True)
+                ev_ctns = [ctns[idx] for idx in range(len(ctns)) if (unq[idx] % 2 == 1)]
+                if not np.all(np.unique(ev_ctns) == 5):
+                    print(
+                        ctns,
+                        unq,
+                        ev_ctns,
+                        event_peaks,
+                        n_T,
+                        last_event_props[-((event_width // 2) + 1) :],
+                    )
+                    raise ValueError("Invalid event duration")
+                """
+
             return eds, states
 
         elif is_hmp:
@@ -3971,7 +3999,7 @@ class HSMMFamily(GSMMFamily):
                 )
 
             # Account for final distribution
-            forward[:end, -1] *= np.flip(pmf[:end, stages[-1]])
+            forward[:, -1] *= np.flip(pmf[:, stages[-1]])
 
             # Compute trial llk.
             forward = np.clip(forward, 0, None)
@@ -5304,30 +5332,30 @@ class HSMMFamily(GSMMFamily):
                 forward = nextforward
 
             # Account for final distribution. Need derivative of:
-            # forward[:end] = forward[:end] * np.flip(pmf[:end, -1])
+            # forward[:] = forward[:] * np.flip(pmf[:, -1])
 
             # Start with gain
             ggidx = np.isin(j_idx_grad, events)
             ggidx[b_grad.shape[1] :] = False  # noqa: E203
-            tgrad[:end, ggidx] *= np.flip(ds[:end, stages[-1]]).reshape(-1, 1)
+            tgrad[:, ggidx] *= np.flip(ds[:, stages[-1]]).reshape(-1, 1)
 
-            # Also 2 cases for pmf: coef associated with pmf[:end, -1] and those not.
-            # First case is special. forward[:end] does not depend on coef and for
+            # Also 2 cases for pmf: coef associated with pmf[:, -1] and those not.
+            # First case is special. forward[:] does not depend on coef and for
             # the pmf deriv we need to account for the flip. Deriv is:
             gdidx = j_idx_grad == stages[-1]
             gdidx[: b_grad.shape[1]] = False
 
-            tgrad[:end, gdidx] = d_grad[
-                :end, gdidx[b_grad.shape[1] :]  # noqa: E203
-            ] * np.flip(forward[:end]).reshape(-1, 1)
+            tgrad[:, gdidx] = d_grad[
+                :, gdidx[b_grad.shape[1] :]  # noqa: E203
+            ] * np.flip(forward[:]).reshape(-1, 1)
 
             # Second case is just like gain case
             gdidx = (j_idx_grad != stages[-1]) & np.isin(j_idx_grad, stages)
             gdidx[: b_grad.shape[1]] = False
-            tgrad[:end, gdidx] *= np.flip(ds[:end, stages[-1]]).reshape(-1, 1)
+            tgrad[:, gdidx] *= np.flip(ds[:, stages[-1]]).reshape(-1, 1)
 
             # Now update forward one last time
-            forward[:end] *= np.flip(ds[:end, stages[-1]])
+            forward[:] *= np.flip(ds[:, stages[-1]])
 
             # Get grad
             tgrad = np.sum(tgrad, axis=0)
