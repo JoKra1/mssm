@@ -390,7 +390,11 @@ def _split_matrices(
     rho_idx = (len(shared_pars) * (1 if shared_m else M)) + (((n_S - 1) // 2) * M)
 
     yfix = [
-        ys[idx] if Lrhoi is None or idx >= rho_idx else Lrhoi.T @ ys[idx]
+        (
+            ys[idx]
+            if Lrhoi is None or idx >= rho_idx or ys[idx] is None
+            else Lrhoi.T @ ys[idx]
+        )
         for idx in range(len(ys))
     ]
 
@@ -1641,6 +1645,7 @@ class HSMMFamily(GSMMFamily):
         self.n_cores_llk = n_cores_llk
         if n_cores_llk is None:
             self.n_cores_llk = n_cores
+        self._ar_template = None
 
         if self.fast_hmp and (self.is_hmp is False):
             warnings.warn(
@@ -1736,6 +1741,7 @@ class HSMMFamily(GSMMFamily):
                         ar_template[pidx] = d0 * normed_template[pidx]
 
                 ar_template[-1] = d1 * normed_template[-1]
+                self._ar_template = ar_template
                 normed_template = ar_template
 
             # Normalize template
@@ -3169,12 +3175,13 @@ class HSMMFamily(GSMMFamily):
                     # prop of previous event happening at t=0:location is
                     # forward[0:location,evidx]*np.flip(pmf[0:location,evidx+1])
 
-                    peak_censor = event_peaks[evidx + 1] - (event_width // 2 + 1)
+                    peak_censor = event_peaks[evidx + 1]
 
                     # Need to re-compute the censored pmf given new end
                     c_pmf = np.zeros(n_T)
                     c_pmf[:end] = ds[:end, stages[evidx + 1]]
                     c_pmf = c_pmf[:peak_censor]
+                    c_pmf[:(event_width)] = 0
 
                     # For max duratation we need to consider that peak
                     # has half the pattern of bleed-over
@@ -3215,6 +3222,21 @@ class HSMMFamily(GSMMFamily):
                 """
                 unq, ctns = np.unique(states[:, sample], return_counts=True)
                 ev_ctns = [ctns[idx] for idx in range(len(ctns)) if (unq[idx] % 2 == 1)]
+                iv_ctns = [ctns[idx] for idx in range(len(ctns)) if (unq[idx] % 2 == 0)]
+                if not (len(unq) == n_S and np.allclose(unq, np.arange(n_S))):
+                    print(
+                        ctns,
+                        unq,
+                        ev_ctns,
+                        iv_ctns,
+                        event_peaks,
+                        n_T,
+                        flats,
+                        bumps,
+                        last_event_props[-((event_width // 2) + 1) :],
+                    )
+                    raise ValueError("Missing state")
+
                 if not np.all(np.unique(ev_ctns) == 5):
                     print(
                         ctns,
@@ -3225,8 +3247,17 @@ class HSMMFamily(GSMMFamily):
                         last_event_props[-((event_width // 2) + 1) :],
                     )
                     raise ValueError("Invalid event duration")
+                if not np.all(np.unique(iv_ctns) > 0):
+                    print(
+                        ctns,
+                        unq,
+                        iv_ctns,
+                        event_peaks,
+                        n_T,
+                        last_event_props[-((event_width // 2) + 1) :],
+                    )
+                    raise ValueError("Invalid interval duration")
                 """
-
             return eds, states
 
         elif is_hmp:
@@ -3342,7 +3373,7 @@ class HSMMFamily(GSMMFamily):
 
         # Split up ys, Xs
         split_Ys, split_Xs, _ = _split_matrices(
-            ys,
+            ys if self.fast_hmp is False else self.cross_cor,
             Xs,
             shared_pars,
             shared_m,
@@ -3355,7 +3386,7 @@ class HSMMFamily(GSMMFamily):
             False if fix_T_pi else True,
             False if fix_T_pi else True,
             starts_with_first,
-            Lrhoi,
+            None if self.fast_hmp else Lrhoi,
         )
 
         # Now sample state sequences for every series
