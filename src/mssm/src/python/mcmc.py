@@ -1090,7 +1090,7 @@ def sample_mssm(
         # Make sure initial value for rho is valid under prior...
         init_rho = rho_prior.make_valid(init_rho)
 
-    if (n_scale + n_theta) > 0:
+    if (n_scale + n_theta) > 0 and n_lam > 0:
         # Note that scales and thetas are added to coef vector when working with ``deriv_fam``,
         # so from now on treat ``coef`` as having dimension n_coef + n_scale + n_theta
 
@@ -1099,7 +1099,15 @@ def sample_mssm(
         r_pen = [pen for pens in r_pen for pen in pens]
 
     # Get initial penalty matrix
-    S_emb, _, _, _ = compute_S_emb_pinv_det(n_coef + n_scale + n_theta, r_pen, "svd")
+    if n_lam > 0:
+        S_emb, _, _, _ = compute_S_emb_pinv_det(
+            n_coef + n_scale + n_theta, r_pen, "svd"
+        )
+    else:
+        S_emb = scp.sparse.csc_array(
+            ([], ([], [])),
+            shape=(n_coef + n_scale + n_theta, n_coef + n_scale + n_theta),
+        )
 
     S_f_emb = None
     if make_proper:
