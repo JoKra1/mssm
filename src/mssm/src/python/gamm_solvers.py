@@ -2435,6 +2435,8 @@ def correct_lambda_step(
         ]
         lam_grad = np.array(lam_grad).reshape(-1, 1)
         check = lam_grad.T @ lam_delta
+        if np.isnan(check[0, 0]):
+            check[0, 0] = -1e7
 
         # For Generalized models we theoretically should not reduce step beyond original EFS update
         # since criterion maximized is approximate REML. But we can probably relax the criterion a
@@ -5960,6 +5962,8 @@ def correct_lambda_step_gamlss(
         ]
         lam_grad = np.array(lam_grad).reshape(-1, 1)
         check = lam_grad.T @ lam_delta
+        if np.isnan(check[0]):
+            check[0] = -1e7
 
         # Now undo the acceleration if overall direction is **very** off - don't just check against
         # 0 because our criterion is approximate, so we can be more lenient (see Wood et al., 2017).
@@ -8841,6 +8845,8 @@ def correct_lambda_step_gen_smooth(
         ]
         lam_grad = np.array(lam_grad).reshape(-1, 1)
         check = lam_grad.T @ lam_delta
+        if np.isnan(check[0]):
+            check[0] = -1e7
 
         # Now undo the acceleration if overall direction is **very** off - don't just check against
         # 0 because our criterion is approximate, so we can be more lenient (see Wood et al., 2017).
