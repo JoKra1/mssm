@@ -424,48 +424,6 @@ def _split_matrices(
     return split_Ys, split_Xs, keep_idxs
 
 
-def _group_hmp_events(
-    pi: np.ndarray, T: np.ndarray
-) -> tuple[int, list[int], list[int], list[int], list[int]]:
-    """Finds the events and stages present for a given series of a HMP model.
-
-    :param pi: Array of initial state probabilities
-    :type pi: np.ndarray
-    :param T: Array of state transition probabilities
-    :type T: np.ndarray
-    :return: Number of events implied by ``pi`` and ``T``, the event and stage
-        indices as two lists (used by fast_hmp code), and the bump and flat indices
-        (having the same information for the default code computing the hmp model like
-        a regular HSMM).
-    :rtype: tuple[int, list[int], list[int], list[int], list[int]]
-    """
-
-    # Find initial flat stage for this trial
-    flat = np.argmax(pi)
-    stage = flat // 2
-    sidx = 0 if flat == 0 else T[:flat, :].sum().astype(int) // 2
-    eidx = T.sum().astype(int) // 2
-    stages = [stage]
-    flats = [flat]
-    events = []
-    bumps = []
-    n_events = 0
-
-    # Loop over transitions
-    for _ in range(sidx, eidx):
-        bump = np.argmax(T[flat, :])
-        event = bump // 2
-        flat = bump + 1
-        stage = flat // 2
-        stages.append(stage)
-        events.append(event)
-        bumps.append(bump)
-        flats.append(flat)
-        n_events += 1
-
-    return n_events, events, stages, bumps, flats
-
-
 def _compute_series_probs(
     coef: np.ndarray,
     coef_split_idx: list[int],
@@ -1530,14 +1488,22 @@ class HSMMFamily(GSMMFamily):
     :param shared_m: Bool indicating whether the shared terms are not just shared between states but
         also between the ``M`` signals.
     :type shared_m: bool
-    :param T: Optionally a fixed state transition matrix as a np.array or a list of series-specific
-        fixed state transition matrices, defaults to None indicating that the state transition
-        matrix should be estimated.
+    :param T: Optionally a fixed state transition matrix as a np.array or a list of fixed state
+        transition matrices (see the ``T_index`` argument), defaults to None indicating that the
+        state transition matrix should be estimated.
     :type T: list[np.ndarray] | np.ndarray | None, optional
     :param pi: Optionally a fixed initial state distribution matrix as a np.array or a list of
-        series-specific fixed initial state distribution matrices, defaults to None indicating that
-        the initial state distribution matrix should be estimated.
+        initial state distribution matrices (see the ``pi_index`` argument), defaults to None
+        indicating that the initial state distribution matrix should be estimated.
     :type pi: list[np.ndarray] | np.ndarray | None, optional
+    :param T_index: If ``T`` is a list, then this argument needs to be a list or numpy array holding
+        for every individual series the index corresponding to the state transition matrix in ``T``
+        that should be used for that series. Defaults to None
+    :type T_index: list[int] | np.ndarray | None, optional
+    :param pi_index: If ``pi`` is a list, then this argument needs to be a list or numpy array
+        holding for every individual series the index corresponding to the initial state
+        distribution matrix in ``pi`` that should be used for that series. Defaults to None
+    :type pi_index: list[int] | np.ndarray | None, optional
     :param Lrhoi: Optional Inverse of the transpose of the cholesky of the co-variance (before
         scaling) matrix of an ar1 model of the residuals of a HMP-like HSMM, defaults to None
     :type Lrhoi: scp.sparse.csc_array | None, optional
@@ -1596,6 +1562,8 @@ class HSMMFamily(GSMMFamily):
         shared_m: bool = False,
         T: list[np.ndarray] | np.ndarray | None = None,
         pi: list[np.ndarray] | np.ndarray | None = None,
+        T_index: np.ndarray | list[int] | None = None,
+        pi_index: np.ndarray | list[int] | None = None,
         Lrhoi: scp.sparse.csc_array | None = None,
         scale: float | None = None,
         event_template: np.ndarray | None = None,
@@ -1646,6 +1614,8 @@ class HSMMFamily(GSMMFamily):
         if n_cores_llk is None:
             self.n_cores_llk = n_cores
         self._ar_template = None
+        self.T_index = T_index
+        self.pi_index = pi_index
 
         if self.fast_hmp and (self.is_hmp is False):
             warnings.warn(
@@ -1657,6 +1627,12 @@ class HSMMFamily(GSMMFamily):
             raise ValueError(
                 "Either both ``T`` and ``pi`` must be specified or both set to None."
             )
+
+        if isinstance(T, list) and T_index is None:
+            raise ValueError("If ``T`` is a list, ``T_index`` must be specified!")
+
+        if isinstance(pi, list) and pi_index is None:
+            raise ValueError("If ``pi`` is a list, ``pi_index`` must be specified!")
 
         self.fix_T_pi = (T is not None) and (pi is not None)
 
@@ -1804,8 +1780,59 @@ class HSMMFamily(GSMMFamily):
                     self.cross_cor.append(ys[idx])
                 idx += 1
 
+    def _group_hmp_events(
+        self,
+        series: int,
+    ) -> tuple[int, list[int], list[int], list[int], list[int]]:
+        """Finds the events and stages present for a given series of a HMP model.
+
+        :param series: The series for which to determine the grouping.
+        :type series: int
+        :return: Number of events present for this series, the event and stage
+            indices as two lists (used by fast_hmp code), and the bump and flat indices
+            (having the same information for the default code computing the hmp model like
+            a regular HSMM).
+        :rtype: tuple[int, list[int], list[int], list[int], list[int]]
+        """
+        T = self.llkargs[14]
+        pi = self.llkargs[15]
+
+        if isinstance(T, list) and isinstance(pi, list):
+            Ts = T[self.T_index[series]]
+            pis = pi[self.pi_index[series]]
+
+        else:
+            Ts = T
+            pis = pi
+
+        # Find initial flat stage for this trial
+        flat = np.argmax(pis)
+        stage = flat // 2
+        sidx = 0 if flat == 0 else Ts[:flat, :].sum().astype(int) // 2
+        eidx = Ts.sum().astype(int) // 2
+        stages = [stage]
+        flats = [flat]
+        events = []
+        bumps = []
+        n_events = 0
+
+        # Loop over transitions
+        for _ in range(sidx, eidx):
+            bump = np.argmax(Ts[flat, :])
+            event = bump // 2
+            flat = flat = np.argmax(Ts[bump, :])
+            stage = flat // 2
+            stages.append(stage)
+            events.append(event)
+            bumps.append(bump)
+            flats.append(flat)
+            n_events += 1
+
+        return n_events, events, stages, bumps, flats
+
     def series_log_prob(
         self,
+        series: int,
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray],
@@ -1815,6 +1842,8 @@ class HSMMFamily(GSMMFamily):
         """Computes the (log)-probabilities of observations and stage durations under given model
         for a single series.
 
+        :param series: The series for which to compute the (log) probabilities.
+        :type series: int
         :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
             be flattened!).
         :type coef: np.ndarray
@@ -1851,8 +1880,6 @@ class HSMMFamily(GSMMFamily):
         build_mat_idx = self.llkargs[11]
         shared_pars = self.llkargs[12]
         shared_m = self.llkargs[13]
-        T = self.llkargs[14]
-        pi = self.llkargs[15]
         Lrhoi = self.llkargs[16]
         scale = self.llkargs[17]
         event_template = self.llkargs[18]
@@ -1863,7 +1890,7 @@ class HSMMFamily(GSMMFamily):
 
         flats = None
         if self.hmp_d_offset:
-            _, _, _, _, flats = _group_hmp_events(pi, T)
+            _, _, _, _, flats = self._group_hmp_events(series)
 
         rho = None
         if Lrhoi is not None:
@@ -2002,6 +2029,7 @@ class HSMMFamily(GSMMFamily):
 
             for series in range(n_series):
                 bss, dss = self.series_log_prob(
+                    series,
                     coef,
                     coef_split_idx,
                     split_Ys[series],
@@ -2014,6 +2042,7 @@ class HSMMFamily(GSMMFamily):
         else:  # Compute in parallel
 
             args = zip(
+                [s for s in range(n_series)],
                 repeat(coef),
                 repeat(coef_split_idx),
                 split_Ys,
@@ -2093,10 +2122,6 @@ class HSMMFamily(GSMMFamily):
         fix_T_pi = self.fix_T_pi
         tvdtpi = self.tvdtpi
 
-        flats = None
-        if self.hmp_d_offset:
-            _, _, _, _, flats = _group_hmp_events(pi, T)
-
         if fix_T_pi is False:
             _, _, _, _, _, _, _, Ts, pis = _compute_series_probs(
                 coef,
@@ -2122,12 +2147,12 @@ class HSMMFamily(GSMMFamily):
                 tvdtpi=tvdtpi,
                 hmp_fast=False,
                 hmp_d_offset=self.hmp_d_offset,
-                flats=flats,
+                flats=None,
             )
 
         elif isinstance(T, list) and isinstance(pi, list):
-            Ts = T[series]
-            pis = pi[series]
+            Ts = T[self.T_index[series]]
+            pis = pi[self.pi_index[series]]
 
         else:
             Ts = T
@@ -2334,7 +2359,7 @@ class HSMMFamily(GSMMFamily):
 
         flats = None
         if self.hmp_d_offset:
-            _, _, _, _, flats = _group_hmp_events(pi, T)
+            _, _, _, _, flats = self._group_hmp_events(series)
 
         # Extract rho
         rho = None
@@ -2403,8 +2428,8 @@ class HSMMFamily(GSMMFamily):
 
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
-                Ts = T[series]
-                pis = pi[series]
+                Ts = T[self.T_index[series]]
+                pis = pi[self.pi_index[series]]
 
             else:
                 Ts = T
@@ -2735,7 +2760,7 @@ class HSMMFamily(GSMMFamily):
 
         flats = None
         if self.hmp_d_offset:
-            _, _, _, _, flats = _group_hmp_events(pi, T)
+            _, _, _, _, flats = self._group_hmp_events(series)
 
         # Must extract rho, even if ``Lrhoi`` is set to None above (happens when this method is
         # called by get_resid) - of course only if ``Lrhoi`` was provided to constructor
@@ -2783,8 +2808,8 @@ class HSMMFamily(GSMMFamily):
 
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
-                lTs = np.log(T[series])
-                lpis = np.log(pi[series])
+                lTs = np.log(T[self.T_index[series]])
+                lpis = np.log(pi[self.pi_index[series]])
 
             else:
                 lTs = np.log(T)
@@ -3022,7 +3047,7 @@ class HSMMFamily(GSMMFamily):
 
         flats = None
         if self.hmp_d_offset and self.fast_hmp is False:
-            _, _, _, _, flats = _group_hmp_events(pi, T)
+            _, _, _, _, flats = self._group_hmp_events(series)
 
         # Must extract rho, even if ``Lrhoi`` is set to None above (happens when this method is
         # called by get_resid) - of course only if ``Lrhoi`` was provided to constructor
@@ -3069,8 +3094,8 @@ class HSMMFamily(GSMMFamily):
         )
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
-                Ts = T[series]
-                pis = pi[series]
+                Ts = T[self.T_index[series]]
+                pis = pi[self.pi_index[series]]
 
             else:
                 Ts = T
@@ -3111,7 +3136,7 @@ class HSMMFamily(GSMMFamily):
 
             # Figure out which transitions are actually happening on this trial.
             # Needs translation from bump/flat world to event/stage world.
-            n_events, events, stages, bumps, flats = _group_hmp_events(pi, T)
+            n_events, events, stages, bumps, flats = self._group_hmp_events(series)
 
             # Handle first stage here, rest in loop over transitions below
             pmf[:end, stages[0]] = ds[:end, stages[0]]
@@ -3453,7 +3478,7 @@ class HSMMFamily(GSMMFamily):
 
         flats = None
         if self.hmp_d_offset:
-            _, _, _, _, flats = _group_hmp_events(pi, T)
+            _, _, _, _, flats = self._group_hmp_events(series)
 
         # Extract rho
         rho = None
@@ -3495,8 +3520,8 @@ class HSMMFamily(GSMMFamily):
         )
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
-                Ts = T[series]
-                pis = pi[series]
+                Ts = T[self.T_index[series]]
+                pis = pi[self.pi_index[series]]
 
             else:
                 Ts = T
@@ -3864,7 +3889,7 @@ class HSMMFamily(GSMMFamily):
 
         flats = None
         if self.hmp_d_offset and self.fast_hmp is False:
-            _, _, _, _, flats = _group_hmp_events(pi, T)
+            _, _, _, _, flats = self._group_hmp_events(series)
 
         # Extract rho
         rho = None
@@ -3908,8 +3933,8 @@ class HSMMFamily(GSMMFamily):
         )
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
-                Ts = T[series]
-                pis = pi[series]
+                Ts = T[self.T_index[series]]
+                pis = pi[self.pi_index[series]]
 
             else:
                 Ts = T
@@ -3954,7 +3979,7 @@ class HSMMFamily(GSMMFamily):
 
             # Figure out which transitions are actually happening on this trial.
             # Needs translation from bump/flat world to event/stage world.
-            n_events, events, stages, _, _ = _group_hmp_events(pi, T)
+            n_events, events, stages, _, _ = self._group_hmp_events(series)
 
             # Handle first stage here, rest in loop over transitions below
             pmf[:end, stages[0]] = ds[:end, stages[0]]
@@ -4275,7 +4300,7 @@ class HSMMFamily(GSMMFamily):
                 bs = np.zeros((n_T, event_width, n_S), order="F")
 
                 if self.hmp_d_offset:
-                    _, _, _, _, flats = _group_hmp_events(pi, T)
+                    _, _, _, _, flats = self._group_hmp_events(series)
 
                 # Compute weights from rho
                 if rho is not None:
@@ -5136,8 +5161,8 @@ class HSMMFamily(GSMMFamily):
             # print(pi)
         else:
             if isinstance(T, list) and isinstance(pi, list):
-                Ts = T[series]
-                pis = pi[series]
+                Ts = T[self.T_index[series]]
+                pis = pi[self.pi_index[series]]
 
             else:
                 Ts = T
@@ -5233,7 +5258,7 @@ class HSMMFamily(GSMMFamily):
 
             # Figure out which transitions are actually happening on this trial.
             # Needs translation from bump/flat world to event/stage world.
-            n_events, events, stages, _, _ = _group_hmp_events(pi, T)
+            n_events, events, stages, _, _ = self._group_hmp_events(series)
 
             # Handle first stage here, rest in loop over transitions below
             # Get coefficients associated with pmf of stage
