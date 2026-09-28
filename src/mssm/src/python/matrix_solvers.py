@@ -202,7 +202,7 @@ def cpp_cholP(
             thresh = eps * np.max(np.abs(d))
             code = int(np.any(d < thresh))
             dr = np.zeros_like(d)
-            dr[d >= thresh] = np.sqrt(d[d >= thresh])
+            dr[d > 0] = np.sqrt(d[d > 0])
             L @= scp.sparse.diags_array(dr)  # Cholesky if PD
 
         return L, p, code
@@ -323,7 +323,7 @@ def cpp_solve_coef(
             thresh = eps * np.max(np.abs(d))
             code = int(np.any(d < thresh))
             dr = np.zeros_like(d)
-            dr[d >= thresh] = np.sqrt(d[d >= thresh])
+            dr[d > 0] = np.sqrt(d[d > 0])
             L @= scp.sparse.diags_array(dr)  # Cholesky if PD
 
         return L, p, b, code
@@ -424,7 +424,7 @@ def cpp_solve_coefXX(
             thresh = eps * np.max(np.abs(d))
             code = int(np.any(d < thresh))
             dr = np.zeros_like(d)
-            dr[d >= thresh] = np.sqrt(d[d >= thresh])
+            dr[d > 0] = np.sqrt(d[d > 0])
             L @= scp.sparse.diags_array(dr)  # Cholesky if PD
 
         return L, p, b, code
