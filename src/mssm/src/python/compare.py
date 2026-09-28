@@ -393,48 +393,59 @@ def compare_CDL(
             print("Correcting for uncertainty in lambda estimates...\n")
 
         # V,LV,Vp,Vpr,edf,total_edf,edf2,total_edf2,upper_edf
-        _, _, _, _, _, DOF1, _, DOF12, expected_edf1, _ = correct_VB(
-            model1,
-            nR=nR,
-            n_c=n_c,
-            form_t1=correct_t1,
-            grid_type=grid,
-            a=a,
-            b=b,
-            df=df,
-            verbose=verbose,
-            drop_NA=drop_NA,
-            method=method,
-            only_expected_edf=only_expected_edf,
-            Vp_fidiff=Vp_fidiff,
-            use_importance_weights=use_importance_weights,
-            prior=prior,
-            recompute_H=recompute_H,
-            compute_Vcc=compute_Vcc,
-            seed=seed,
-            **bfgs_options,
-        )
-        _, _, _, _, _, DOF2, _, DOF22, expected_edf2, _ = correct_VB(
-            model2,
-            nR=nR,
-            n_c=n_c,
-            form_t1=correct_t1,
-            grid_type=grid,
-            a=a,
-            b=b,
-            df=df,
-            verbose=verbose,
-            drop_NA=drop_NA,
-            method=method,
-            only_expected_edf=only_expected_edf,
-            Vp_fidiff=Vp_fidiff,
-            use_importance_weights=use_importance_weights,
-            prior=prior,
-            recompute_H=recompute_H,
-            compute_Vcc=compute_Vcc,
-            seed=seed,
-            **bfgs_options,
-        )
+        if len(model1.overall_penalties) == 0:
+            DOF1 = model1.edf
+            DOF12 = model1.edf
+            expected_edf1 = model1.edf
+        else:
+            _, _, _, _, _, DOF1, _, DOF12, expected_edf1, _ = correct_VB(
+                model1,
+                nR=nR,
+                n_c=n_c,
+                form_t1=correct_t1,
+                grid_type=grid,
+                a=a,
+                b=b,
+                df=df,
+                verbose=verbose,
+                drop_NA=drop_NA,
+                method=method,
+                only_expected_edf=only_expected_edf,
+                Vp_fidiff=Vp_fidiff,
+                use_importance_weights=use_importance_weights,
+                prior=prior,
+                recompute_H=recompute_H,
+                compute_Vcc=compute_Vcc,
+                seed=seed,
+                **bfgs_options,
+            )
+
+        if len(model2.overall_penalties) == 0:
+            DOF2 = model2.edf
+            DOF22 = model2.edf
+            expected_edf2 = model2.edf
+        else:
+            _, _, _, _, _, DOF2, _, DOF22, expected_edf2, _ = correct_VB(
+                model2,
+                nR=nR,
+                n_c=n_c,
+                form_t1=correct_t1,
+                grid_type=grid,
+                a=a,
+                b=b,
+                df=df,
+                verbose=verbose,
+                drop_NA=drop_NA,
+                method=method,
+                only_expected_edf=only_expected_edf,
+                Vp_fidiff=Vp_fidiff,
+                use_importance_weights=use_importance_weights,
+                prior=prior,
+                recompute_H=recompute_H,
+                compute_Vcc=compute_Vcc,
+                seed=seed,
+                **bfgs_options,
+            )
 
         if only_expected_edf:
             DOF1 = expected_edf1

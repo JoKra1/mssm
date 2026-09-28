@@ -7763,7 +7763,7 @@ def sampleHcoef(
     n_coef = coef.shape[0]
 
     term_edfs = None
-    total_edf = None
+    total_edf = None if len(smooth_pen) > 0 else n_coef
 
     # Build total penalty matrix
     if S_emb is None:
@@ -7773,7 +7773,6 @@ def sampleHcoef(
         else:
             # Un-penalized case
             S_emb = scp.sparse.csc_array(([], ([], [])), shape=(n_coef, n_coef))
-            total_edf = n_coef
 
     if fcols is not None:
         nHfd = -1 * family.jhessian(fcols, coef, coef_split_idx, ys, Xs, n_c=n_c)

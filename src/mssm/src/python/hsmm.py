@@ -3586,18 +3586,16 @@ class HSMMFamily(GSMMFamily):
         elif resid_type == "viterbi_dur":
 
             # Decode viterbi path
-            viterbi = self.decode_viterbi(
+            viterbi = self.series_viterbi(
+                series,
                 coef,
                 coef_split_idx,
                 ys,
                 Xs,
-                sid=np.array([0]),
-                tid=np.array([0]),
-                n_cores=1,
             )
 
             res_sep = _compute_dur_res_series(
-                viterbi[0][1], n_S, mus_d, d_fams, starts_with_first, tvdtpi
+                viterbi[1], n_S, mus_d, d_fams, starts_with_first, tvdtpi
             )
 
             # Compute residual of duration MAP under model for stage durations
@@ -3613,16 +3611,14 @@ class HSMMFamily(GSMMFamily):
             res = res.reshape(1, -1)
 
         elif resid_type == "posterior_dur":
-            state_samples = self.sample_posterior_states(
+            state_samples = self.sample_posterior_series(
+                series,
                 coef,
                 coef_split_idx,
                 ys,
                 Xs,
-                n_samples=n_samples,
                 seed=seed,
-                sid=np.array([0]),
-                tid=np.array([0]),
-                n_cores=1,
+                n_samples=n_samples,
             )
 
             res = np.zeros((1, n_S, n_samples))
@@ -3631,7 +3627,7 @@ class HSMMFamily(GSMMFamily):
 
                 # Extract durations given sampled series
                 res_sep = _compute_dur_res_series(
-                    state_samples[0][1][:, s],
+                    state_samples[1][:, s],
                     n_S,
                     mus_d,
                     d_fams,
@@ -3758,7 +3754,11 @@ class HSMMFamily(GSMMFamily):
 
         # Split up ys, Xs
         split_Ys, split_Xs, _ = _split_matrices(
-            ys,
+            (
+                ys
+                if self.fast_hmp is False or resid_type != "posterior_dur"
+                else self.cross_cor
+            ),
             Xs,
             shared_pars,
             shared_m,
@@ -3771,7 +3771,11 @@ class HSMMFamily(GSMMFamily):
             False if fix_T_pi else True,
             False if fix_T_pi else True,
             starts_with_first,
-            Lrhoi,
+            (
+                Lrhoi
+                if self.fast_hmp is False or resid_type != "posterior_dur"
+                else None
+            ),
         )
 
         # Now compute llk for every individual series and then sum up
