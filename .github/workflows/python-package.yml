@@ -97,7 +97,7 @@ jobs:
     # Runs tests for one build for which coverage is computed as well
     if: github.repository == 'JoKra1/mssm'
     needs: build
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v6
