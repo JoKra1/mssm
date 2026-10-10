@@ -3301,7 +3301,11 @@ class GAMM(GAMMLSS):
                 return_sparse = False
                 self._uses_sparse_matrices = False
 
-            if self.formulas[0].file_loading_nc == 1 or self.formulas[0].discretize_cov:
+            if (
+                self.formulas[0].file_loading_nc == 1
+                or self.formulas[0].discretize_cov
+                or self.formulas[0].has_irf
+            ):
                 model_mat = build_sparse_matrix_from_formula(
                     terms,
                     has_intercept,
@@ -3349,14 +3353,20 @@ class GAMM(GAMMLSS):
                             repeat(var_maxs),
                             repeat(factor_levels),
                             cov_split,
-                            repeat(cov),
+                            repeat(None),  # cov
+                            repeat(None),  # pool
+                            repeat(None),  # use_only
+                            repeat(0),  # tol
+                            repeat(False),  # discrete
+                            repeat(None),  # cov_bins
+                            repeat(None),  # cov_bin_idxs
                             repeat(not self._uses_sparse_matrices),
                         ),
                     )
                     if self._uses_sparse_matrices:
                         model_mat = scp.sparse.vstack(Xs, format="csc")
                     else:
-                        model_mat = np.concatenate(Xs, axis=1)
+                        model_mat = np.concatenate(Xs, axis=0)
 
             if len(irstx) > 0:
                 model_mat = model_mat[self.formulas[0].NOT_NA_flat, :]
