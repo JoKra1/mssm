@@ -2435,6 +2435,8 @@ def correct_lambda_step(
         ]
         lam_grad = np.array(lam_grad).reshape(-1, 1)
         check = lam_grad.T @ lam_delta
+        if np.isnan(check[0, 0]):
+            check[0, 0] = -1e7
 
         # For Generalized models we theoretically should not reduce step beyond original EFS update
         # since criterion maximized is approximate REML. But we can probably relax the criterion a
@@ -5960,6 +5962,8 @@ def correct_lambda_step_gamlss(
         ]
         lam_grad = np.array(lam_grad).reshape(-1, 1)
         check = lam_grad.T @ lam_delta
+        if np.isnan(check[0]):
+            check[0] = -1e7
 
         # Now undo the acceleration if overall direction is **very** off - don't just check against
         # 0 because our criterion is approximate, so we can be more lenient (see Wood et al., 2017).
@@ -7759,7 +7763,7 @@ def sampleHcoef(
     n_coef = coef.shape[0]
 
     term_edfs = None
-    total_edf = None
+    total_edf = None if len(smooth_pen) > 0 else n_coef
 
     # Build total penalty matrix
     if S_emb is None:
@@ -7769,7 +7773,6 @@ def sampleHcoef(
         else:
             # Un-penalized case
             S_emb = scp.sparse.csc_array(([], ([], [])), shape=(n_coef, n_coef))
-            total_edf = n_coef
 
     if fcols is not None:
         nHfd = -1 * family.jhessian(fcols, coef, coef_split_idx, ys, Xs, n_c=n_c)
@@ -8841,6 +8844,8 @@ def correct_lambda_step_gen_smooth(
         ]
         lam_grad = np.array(lam_grad).reshape(-1, 1)
         check = lam_grad.T @ lam_delta
+        if np.isnan(check[0]):
+            check[0] = -1e7
 
         # Now undo the acceleration if overall direction is **very** off - don't just check against
         # 0 because our criterion is approximate, so we can be more lenient (see Wood et al., 2017).

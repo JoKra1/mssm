@@ -552,6 +552,7 @@ def sample_mssm(
     rho_prior: RhoPrior = MVUniformRhoPrior(-20, 20),
     scale_cov_phi_theta: float = 1.0,
     scale_cov_rho: float = 1.0,
+    force_cov_rho_diag: bool = False,
     callback: Callable | None = None,
     n_chains: int = 2,
     parallelize_chains: bool = True,
@@ -687,6 +688,9 @@ def sample_mssm(
         show high correlation or if the sampler gets stuck it might be necessary to tune
         the default value, defaults to 1.0
     :type scale_cov_rho: float, optional
+    :param force_cov_rho_diag: Whether to force the covariance matrix of the log lambda parameters
+        to be a diagonal matrix (True) or not (False). Defaults to False
+    :type force_cov_rho_diag: bool, optional
     :param callback: An optional callback of the form ``callback(iter:int, result:SamplerResult)``
         where ``result`` is a :class:`mssm.src.python.custom_types.SamplerResult`. Called every time
         the chain was advanced, defaults to None
@@ -833,6 +837,9 @@ def sample_mssm(
     if sample_rho:
         Vp, Vpreg, Vpr, Vpregr, ep, dBetadRhos = estimateVp(model, n_c=n_chains)
 
+        if force_cov_rho_diag:
+            Vpreg = np.diag(np.diag(Vpreg))
+
         if init_unconditional:
             # Compute smoothing parameter uncertainty corrected version
             Vc = Vpr @ dBetadRhos.T
@@ -886,7 +893,7 @@ def sample_mssm(
                     [Minv, np.zeros((Minv.shape[0], n_scale))],
                     [
                         np.zeros((n_scale, Minv.shape[0])),
-                        np.identity(n_scale) * np.sqrt(V_scale),
+                        np.identity(n_scale) * V_scale,
                     ],
                 ]
             )
@@ -1090,7 +1097,7 @@ def sample_mssm(
         # Make sure initial value for rho is valid under prior...
         init_rho = rho_prior.make_valid(init_rho)
 
-    if (n_scale + n_theta) > 0:
+    if (n_scale + n_theta) > 0 and n_lam > 0:
         # Note that scales and thetas are added to coef vector when working with ``deriv_fam``,
         # so from now on treat ``coef`` as having dimension n_coef + n_scale + n_theta
 
@@ -1099,7 +1106,15 @@ def sample_mssm(
         r_pen = [pen for pens in r_pen for pen in pens]
 
     # Get initial penalty matrix
-    S_emb, _, _, _ = compute_S_emb_pinv_det(n_coef + n_scale + n_theta, r_pen, "svd")
+    if n_lam > 0:
+        S_emb, _, _, _ = compute_S_emb_pinv_det(
+            n_coef + n_scale + n_theta, r_pen, "svd"
+        )
+    else:
+        S_emb = scp.sparse.csc_array(
+            ([], ([], [])),
+            shape=(n_coef + n_scale + n_theta, n_coef + n_scale + n_theta),
+        )
 
     S_f_emb = None
     if make_proper:

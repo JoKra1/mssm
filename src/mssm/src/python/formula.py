@@ -1026,6 +1026,12 @@ class Formula:
             if data is not None:
                 y_flat = np.array(data[self.lhs.variable]).reshape(-1, 1)
 
+                # Cast correctly to 64 bit
+                if np.issubdtype(y_flat.dtype, np.integer):
+                    y_flat = y_flat.astype(np.int64)
+                elif np.issubdtype(y_flat.dtype, np.floating):
+                    y_flat = y_flat.astype(np.float64)
+
                 if self.discretize_cov:
                     n_bins = min(int(np.sqrt(data[NAs_flat].shape[0])), 1000)
                     # print("N bins", n_bins)
@@ -1040,7 +1046,7 @@ class Formula:
                 NAs = np.split(NAs_flat, sid[1:])
 
         # Now all predictor variables
-        cov_flat = np.zeros((n_y, n_var), dtype=float)
+        cov_flat = np.zeros((n_y, n_var), dtype=np.float64)
 
         for c in var_keys:
             if data is None:
@@ -1742,6 +1748,10 @@ class Formula:
         """
         sti = self.get_smooth_term_idx()
         sti = [ti for ti in sti if isinstance(self.terms[ti], fs) is False]
+
+        # Have only random smooths
+        if len(sti) == 0:
+            return
 
         term_var = [self.terms[ti].variables for ti in sti]
         n_term_var = [len(tvar) for tvar in term_var]

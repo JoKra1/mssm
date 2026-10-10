@@ -16,6 +16,286 @@ from itertools import repeat
 from .discrete import DiscreteModelMatrix
 
 
+def _check_shared(
+    j: int,
+    par: int,
+    shared_pars: list[int],
+    shared_j_dict: dict | None,
+) -> bool:
+    """Checks whether state ``j`` has a shared set of coefficients in model with index ``par``.
+
+    :param j: State for which to check whether it has at least one shared set of coefficients.
+    :type j: int
+    :param par: Index to paramter of the emission family
+    :type par: int
+    :param shared_pars: A list containing indices of emission distribution parameters for which
+        at least one (in case ``shared_m is False`` one for each of the ``M`` signals) formula
+        has been provided containing terms to be shared between the ``n_S`` states.
+    :type shared_pars: list[int]
+    :param shared_j_dict: Dict with states that have at least one shared eta. Value is another dict
+        with pars for keys and lists for values. Each list contains indices in shared_eta[par]
+        associated with the key state.
+    :type shared_j_dict: dict | None
+    :return: Whether state ``j`` has a shared set of coefficients in model with index ``par``.
+    :rtype: bool
+    """
+
+    if par in shared_pars:
+        if shared_j_dict is None:
+            return True
+        return (j in shared_j_dict) and (par in shared_j_dict[j])
+
+    return False
+
+
+def _vstack_s_matrices(
+    sidx: int,
+    ys: list[np.ndarray | None],
+    Xs: list[scp.sparse.csc_array | np.ndarray | None],
+    shared_pars: list[int],
+    shared_m: bool,
+    obs_fams: list[list[GAMLSSFamily | MultiGauss | None]],
+    d_fams: list[GAMLSSFamily | None],
+    sid: np.ndarray,
+    tid: np.ndarray,
+    n_S: int,
+    M: int,
+    model_T: bool,
+    model_pi: bool,
+    starts_with_first: bool,
+    drop_coef: bool,
+) -> tuple[
+    list[np.ndarray | None],
+    list[scp.sparse.csc_array | np.ndarray | None],
+    list[list[bool] | None],
+]:
+    """Fill two lists with row blocks in ``ys`` and ``Xs`` associated with series ``sidx``.
+
+    :param sidx: Series index
+    :type sidx: int
+    :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
+        ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the
+        actual observed data is passed along via the first formula (so it is stored in ``ys[0]``).
+        If multiple formulas have the same ``lhs.variable`` as this first formula, then ``ys``
+        contains ``None`` at their indices to save memory.
+    :type ys: [np.ndarray or None]
+    :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
+        indices for which model matrix should not be formed explicitly.
+    :type Xs: list[scp.sparse.csc_array | np.ndarray| None]
+    :param shared_pars: A list containing indices of emission distribution parameters for which
+        at least one (in case ``shared_m is False`` one for each of the ``M`` signals) formula
+        has been provided containing terms to be shared between the ``n_S`` states.
+    :type shared_pars: list[int]
+    :param shared_m: Bool indicating whether the shared terms are not just shared between states but
+        also between the ``M`` signals.
+    :type shared_m: bool
+    :param obs_fams: Distribution of emissions - one list per state containing the specific families
+        (can be multiple if ``M>1`` or a single class:`MultiGauss`). The state-specific list can
+        also include multiple Nones, in case of a HMP-like model.
+    :type obs_fams: list[list[GAMLSSFamily | MultiGauss | None]]
+    :param d_fams: Distribution of state durations - one per state. Can also contain None for the
+        'bump states' of a HMP-like model, which have a fixed duration.
+    :type d_fams: list[GAMLSSFamily | None]
+    :param sid: Array holding the index corresponding to the first sample of each series in the
+        data. Needed to split the observation vectors and model matrices into time-series
+        specific versions
+    :type sid: np.ndarray
+    :param tid: Often, the model matrices for the models of the duration distribution, state
+        transition, and initial state distribution parameters will have fewer rows than those of the
+        observation models (because covariates only vary with trials). The optional array ``tid``
+        can then hold indices corresponding to the onset of a row-block of a new trial in the model
+        matrices of the duration models. Then used to split the duration model matrices into trial
+        specific versions.
+    :type tid: np.ndarray
+    :param n_S: Number of latent states.
+    :type n_S: int
+    :param M: Number of signals recorded if the HSMM is multivariate.
+    :type M: int
+    :param model_T: Whether to model the transition matrix or not
+    :type model_T: bool
+    :param model_pi: Whether to model the initial distribution of states or not.
+    :type model_pi: bool
+    :param starts_with_first: Whether the first state starts with the first observation or might
+        have been going on for a max duration of ``D``.
+    :type starts_with_first: bool
+    :param drop_coef: Whether or not coefficients not associated with series ``sidx`` should be
+        dropped from the model matrices.
+    :type drop_coef: bool
+    :return: Three lists. First two have row blocks in ``ys`` and ``Xs`` associated with series
+        ``sidx``. Final one has per ``X`` in Xs`` a boolean index array indiacting coef kept.
+        Lists on the first level might contain Nones, in case a specific model matrix has been
+        requested not to be accumulated explicitly.
+    :rtype: tuple[list[np.ndarray | None], list[scp.sparse.csc_array | np.ndarray | None],
+        list[list[bool] | None]]
+    """
+    n_series = len(sid)
+    sidx0 = sid[sidx]
+    sidx1 = sid[sidx + 1] if sidx < (n_series - 1) else Xs[0].shape[0]
+
+    split_Xs = []
+    split_Ys = []
+
+    idx = 0  # Keep track of indices for ys and Xs
+
+    # First check for part of models shared between states (and m)
+    keep = []
+    for pari, par in enumerate(shared_pars):
+
+        midx = 1
+        if shared_m is False:
+            midx = M
+
+        # Only need to collect Xs for all par and m. For ys we only need first par and m
+        # since functions expect first observation vector to be not None to identify number
+        # of time-points.
+        for m in range(midx):
+            X_split = None
+            if Xs[idx] is not None:
+                X_split = Xs[idx][sidx0:sidx1, :]
+                if drop_coef:
+                    keep_idx = abs(X_split).sum(axis=0) > 0
+                    X_split = X_split[:, keep_idx]
+                    keep.append(keep_idx)
+            elif drop_coef:
+                keep.append(None)
+
+            y_split = None
+            if pari == 0 and m == 0:
+                y_split = ys[0][sidx0:sidx1]
+
+            split_Xs.append(X_split)
+            split_Ys.append(y_split)
+            idx += 1
+
+    # Now state specific models
+    for j in range(n_S):
+
+        iterM = M
+
+        # If emission model is multivariate Gaussian, then it has M n_par!
+        if isinstance(obs_fams[j][0], MultiGauss):
+            iterM = 1
+
+        for m in range(iterM):
+
+            jmbFam = obs_fams[j][m]  # Get family associated with state j and signal m
+
+            if jmbFam is not None:
+
+                for _ in range(jmbFam.n_par):
+
+                    X_split = None
+                    if Xs[idx] is not None:
+                        X_split = Xs[idx][sidx0:sidx1, :]
+                        if drop_coef:
+                            keep_idx = abs(X_split).sum(axis=0) > 0
+                            X_split = X_split[:, keep_idx]
+                            keep.append(keep_idx)
+                    elif drop_coef:
+                        keep.append(None)
+
+                    y_split = None
+                    if ys[idx] is not None:
+                        y_split = ys[idx][sidx0:sidx1]
+
+                    split_Xs.append(X_split)
+                    split_Ys.append(y_split)
+                    idx += 1
+
+            else:
+                # Only have observation models for events = n_S-1
+                if j % 2 == 1:
+                    X_split = None
+                    if Xs[idx] is not None:
+                        X_split = Xs[idx][sidx0:sidx1, :]
+                        if drop_coef:
+                            keep_idx = abs(X_split).sum(axis=0) > 0
+                            X_split = X_split[:, keep_idx]
+                            keep.append(keep_idx)
+                    elif drop_coef:
+                        keep.append(None)
+
+                    y_split = None
+                    if ys[idx] is not None:
+                        y_split = ys[idx][sidx0:sidx1]
+
+                    split_Xs.append(X_split)
+                    split_Ys.append(y_split)
+                    idx += 1
+
+    # Now state duration probabilities #
+    tidx0 = tid[sidx]
+    tidx1 = tid[sidx + 1] if sidx < (n_series - 1) else Xs[idx].shape[0]
+    for j in range(n_S * (1 if starts_with_first else 2)):
+        jdFam = d_fams[j]
+
+        if jdFam is not None:
+            for _ in range(jdFam.n_par):
+                X_split = None
+                if Xs[idx] is not None:
+                    X_split = Xs[idx][tidx0:tidx1, :]
+                    if drop_coef:
+                        keep_idx = abs(X_split).sum(axis=0) > 0
+                        X_split = X_split[:, keep_idx]
+                        keep.append(keep_idx)
+                elif drop_coef:
+                    keep.append(None)
+
+                y_split = ys[idx][tidx0:tidx1] if ys[idx] is not None else None
+                split_Xs.append(X_split)
+                split_Ys.append(y_split)
+                idx += 1
+
+    # Now state transition probabilities #
+    if model_T and n_S > 2:
+        for j in range(n_S):
+
+            for _ in range(n_S - 2):
+                X_split = None
+                if Xs[idx] is not None:
+                    X_split = Xs[idx][tidx0:tidx1, :]
+                    if drop_coef:
+                        keep_idx = abs(X_split).sum(axis=0) > 0
+                        X_split = X_split[:, keep_idx]
+                        keep.append(keep_idx)
+                elif drop_coef:
+                    keep.append(None)
+
+                y_split = ys[idx][tidx0:tidx1] if ys[idx] is not None else None
+                split_Xs.append(X_split)
+                split_Ys.append(y_split)
+                idx += 1
+
+    # Now initial state probabilities #
+    # For pi we need to remember that we really only need trial-level model matrices
+    # even if tid = sid
+    if model_pi:
+        for _ in range(n_S - 1):
+            X_split = None
+            if Xs[idx] is not None:
+                X_split = Xs[idx][tidx0 : (tidx0 + 1), :]  # noqa: E203
+                if drop_coef:
+                    keep_idx = abs(X_split).sum(axis=0) > 0
+                    X_split = X_split[:, keep_idx]
+                    keep.append(keep_idx)
+            elif drop_coef:
+                keep.append(None)
+
+            y_split = None
+            if ys[idx] is not None:
+                y_split = (
+                    ys[idx][tidx0 : (tidx0 + 1)]  # noqa: E203
+                    if ys[idx] is not None
+                    else None
+                )
+
+            split_Xs.append(X_split)
+            split_Ys.append(y_split)
+            idx += 1
+
+    return split_Ys, split_Xs, keep
+
+
 def _split_matrices(
     ys: list[np.ndarray | None],
     Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
@@ -31,7 +311,12 @@ def _split_matrices(
     model_pi: bool,
     starts_with_first: bool,
     Lrhoi: scp.sparse.csc_array | None = None,
-) -> tuple[list[np.ndarray | None], list[scp.sparse.csc_array | None]]:
+    drop_coef: bool = False,
+) -> tuple[
+    list[list[np.ndarray | None]],
+    list[list[scp.sparse.csc_array | None]],
+    list[list[list[bool] | None]],
+]:
     """Splits the model matrices and vectors of observations into series-specific versions.
 
     Internal function.
@@ -84,151 +369,66 @@ def _split_matrices(
     :param Lrhoi: Inverse of transpose of Cholesky of banded covariance matrix of an ar model of the
         residuals for a HMP-like HSMM. Defaults to None - indicating no ar model.
     :type Lrhoi: scp.sparse.csc_array | None, optional
-    :return: A tuple holding lists of series-specific splits of ``ys`` and ``Xs``. Lists might
-        contain Nones, in case a specific model matrix has been requested not to be accumulated
-        explicitly.
-    :rtype: tuple[list[np.ndarray|None],list[scp.sparse.csc_array|None]]
+    :param drop_coef: Whether or not coefficients not associated with series ``sidx`` should be
+        dropped from the model matrices. Defaults to False.
+    :type drop_coef: bool, optional
+    :return: A tuple holding lists of series-specific splits of ``ys`` and ``Xs`` as well
+        as ``keep_idx_s``. The latter is a boolean index vector indicating which coefficients to
+        retain per series when computing the gradient. Lists on the second level might contain
+        Nones, in case a specific model matrix has been requested not to be accumulated explicitly.
+    :rtype: tuple[list[list[np.ndarray | None]], list[list[scp.sparse.csc_array | None]],
+        list[list[list[bool] | None]]]
     """
 
     # Split up ys, Xs
     split_Xs = []
     split_Ys = []
+    keep_idxs = []
+    n_series = len(sid)
 
-    idx = 0  # Keep track of indices for ys and Xs
+    # Rho idx for hmp
+    rho_idx = (len(shared_pars) * (1 if shared_m else M)) + (((n_S - 1) // 2) * M)
 
-    # First check for part of models shared between states (and m)
-    for par in shared_pars:
+    yfix = [
+        (
+            ys[idx]
+            if Lrhoi is None or idx >= rho_idx or ys[idx] is None
+            else Lrhoi.T @ ys[idx]
+        )
+        for idx in range(len(ys))
+    ]
 
-        midx = 1
-        if shared_m is False:
-            midx = M
+    for sidx in range(n_series):
+        y_split_s, X_split_s, keep_idx_s = _vstack_s_matrices(
+            sidx,
+            yfix,
+            Xs,
+            shared_pars,
+            shared_m,
+            obs_fams,
+            d_fams,
+            sid,
+            tid,
+            n_S,
+            M,
+            model_T,
+            model_pi,
+            starts_with_first,
+            drop_coef,
+        )
+        split_Ys.append(y_split_s)
+        split_Xs.append(X_split_s)
+        keep_idxs.append(keep_idx_s)
 
-        # Only need to collect Xs for all par and m. For ys we only need first par and m
-        # since functions expect first observation vector to be not None to identify number
-        # of time-points.
-        for m in range(midx):
-            X_split = None
-            if Xs[idx] is not None:
-                Xidx = np.arange(Xs[idx].shape[0])
-                Xmj = Xs[idx]
-                X_split = [Xmj[split, :] for split in np.split(Xidx, sid[1:])]
-
-            y_split = None
-            if par == 0 and m == 0:
-                ymj = ys[0] if Lrhoi is None else Lrhoi.T @ ys[0]
-                y_split = np.split(ymj, sid[1:])
-
-            split_Xs.append(X_split)
-            split_Ys.append(y_split)
-            idx += 1
-
-    # Now state specific models
-    for j in range(n_S):
-
-        iterM = M
-
-        # If emission model is multivariate Gaussian, then it has M n_par!
-        if isinstance(obs_fams[j][0], MultiGauss):
-            iterM = 1
-
-        for m in range(iterM):
-
-            jmbFam = obs_fams[j][m]  # Get family associated with state j and signal m
-
-            if jmbFam is not None:
-
-                for _ in range(jmbFam.n_par):
-
-                    X_split = None
-                    if Xs[idx] is not None:
-                        Xidx = np.arange(Xs[idx].shape[0])
-                        Xmj = Xs[idx]
-                        X_split = [Xmj[split, :] for split in np.split(Xidx, sid[1:])]
-
-                    y_split = None
-                    if ys[idx] is not None:
-                        ymj = ys[idx] if Lrhoi is None else Lrhoi.T @ ys[idx]
-                        y_split = np.split(ymj, sid[1:])
-
-                    split_Xs.append(X_split)
-                    split_Ys.append(y_split)
-                    idx += 1
-
-            else:
-                # Only have observation models for events = n_S-1
-                if j % 2 == 1:
-                    X_split = None
-                    if Xs[idx] is not None:
-                        Xidx = np.arange(Xs[idx].shape[0])
-                        Xmj = Xs[idx]
-                        X_split = [Xmj[split, :] for split in np.split(Xidx, sid[1:])]
-
-                    y_split = None
-                    if ys[idx] is not None:
-                        ymj = ys[idx] if Lrhoi is None else Lrhoi.T @ ys[idx]
-                        y_split = np.split(ymj, sid[1:])
-
-                    split_Xs.append(X_split)
-                    split_Ys.append(y_split)
-                    idx += 1
-
-    # Now state duration probabilities #
-    for j in range(n_S * (1 if starts_with_first else 2)):
-        jdFam = d_fams[j]
-
-        if jdFam is not None:
-            for _ in range(jdFam.n_par):
-                X_split = None
-                if Xs[idx] is not None:
-                    Xidx = np.arange(Xs[idx].shape[0])
-                    X_split = [Xs[idx][split, :] for split in np.split(Xidx, tid[1:])]
-
-                y_split = np.split(ys[idx], tid[1:]) if ys[idx] is not None else None
-                split_Xs.append(X_split)
-                split_Ys.append(y_split)
-                idx += 1
-
-    # Now state transition probabilities #
-    if model_T and n_S > 2:
-        for j in range(n_S):
-
-            for _ in range(n_S - 2):
-                X_split = None
-                if Xs[idx] is not None:
-                    Xidx = np.arange(Xs[idx].shape[0])
-                    X_split = [Xs[idx][split, :] for split in np.split(Xidx, tid[1:])]
-
-                y_split = np.split(ys[idx], tid[1:]) if ys[idx] is not None else None
-                split_Xs.append(X_split)
-                split_Ys.append(y_split)
-                idx += 1
-
-    # Now initial state probabilities #
-    # For pi we need to remember that we really only need trial-level model matrices
-    # even if tid = sid
-    if model_pi:
-        for _ in range(n_S - 1):
-            X_split = None
-            if Xs[idx] is not None:
-                Xidx = np.arange(Xs[idx].shape[0])
-                X_split = [Xs[idx][[split[0]], :] for split in np.split(Xidx, tid[1:])]
-
-            y_split = None
-            if ys[idx] is not None:
-                yidx = np.arange(ys[idx].shape[0])
-                y_split = [ys[idx][[split[0]], :] for split in np.split(yidx, tid[1:])]
-
-            split_Xs.append(X_split)
-            split_Ys.append(y_split)
-            idx += 1
-
-    return split_Ys, split_Xs
+    # print(split_Xs, split_Ys)
+    return split_Ys, split_Xs, keep_idxs
 
 
 def _compute_series_probs(
     coef: np.ndarray,
     coef_split_idx: list[int],
     shared_pars: list[int],
+    shared_j: list[list[int]] | None,
     shared_m: bool,
     ys: list[np.ndarray | None],
     Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
@@ -249,6 +449,9 @@ def _compute_series_probs(
     hmp_fam: str = "Exponential",
     rho: float | None = None,
     tvdtpi: bool = False,
+    hmp_fast: bool = False,
+    hmp_d_offset: bool = False,
+    flats: list[int] | None = None,
 ) -> tuple[
     np.ndarray,
     np.ndarray,
@@ -275,6 +478,9 @@ def _compute_series_probs(
         at least one (in case ``shared_m is False`` one for each of the ``M`` signals) formula
         has been provided containing terms to be shared between the ``n_S`` states.
     :type shared_pars: list[int]
+    :param shared_j: A List of same length as shared_pars or None. Elements are lists with state
+        indices for states that should share the corresponding predictor for par in shared_pars.
+    :type shared_j: list[list[int]] | None
     :param shared_m: Bool indicating whether the shared terms are not just shared between states but
         also between the ``M`` signals.
     :type shared_m: bool
@@ -332,6 +538,13 @@ def _compute_series_probs(
     :param tvdtpi: Whether the hsmm has time-varying models for the state duration,
         state transition, and initial state distributions. Defaults to False
     :type tvdtpi: bool, optional
+    :param hmp_fast: Whether the hmp propoabilities should be computed for use with conventional
+        hsmm algorithms (False) or for use with the fast hmp code for estimation (True). Only
+        has an effect when ``is_hmp is True``. Defaults to False
+    :type hmp_fast: bool, optional
+    :param flats: For a hmp model a list with the indices of flats present for this trial.
+        Defaults to None
+    :type flats: list[int], optional
     :raises ValueError: _description_
     :return: Returns ``y_mat`` (a (n_T,M) array holding the observations from all signals),
         ``mus`` (a (n_T,M,n_S) array holding the state-specific expected value of each observation
@@ -364,7 +577,9 @@ def _compute_series_probs(
         ds = np.zeros((D - 1, n_S * (1 if starts_with_first else 2), n_T), order="F")
     else:
         ds = np.zeros((D - 1, n_S * (1 if starts_with_first else 2)), order="F")
-    d_val = np.arange(1, D).reshape(-1, 1)
+    d_val = (
+        np.arange(D - 1).reshape(-1, 1) if hmp_fast else np.arange(1, D).reshape(-1, 1)
+    )
 
     # We can also pre-compute the observation probabilities
     y_mat = None
@@ -381,6 +596,11 @@ def _compute_series_probs(
         jbs = np.zeros((n_T, n_S, M), order="F") - np.inf
         cbs = np.zeros((n_T, n_S, M), order="F") - np.inf
         bs = np.zeros((n_T, n_S), order="F")
+    elif hmp_fast:
+        n_events = (n_S - 1) // 2
+        n_flats = n_events + 1
+        mus = np.zeros((n_T, M, n_events), order="F")
+        ds = np.zeros((D - 1, n_flats), order="F")
     else:
         jbs = np.zeros((n_T, M, event_width, n_S), order="F") - np.inf
         cbs = np.zeros((n_T, M, event_width, n_S), order="F") - np.inf
@@ -396,7 +616,7 @@ def _compute_series_probs(
 
     # First observation probabilities #
 
-    if is_hmp:
+    if is_hmp and hmp_fast is False:
         # Initialize some density/probability functions for hmp-like models
         hmp_code = 2 if hmp_fam == "Gaussian" else 1
 
@@ -424,25 +644,41 @@ def _compute_series_probs(
     idx = 0  # Keep track of indices for ys and Xs
 
     # First check for part of emission models shared between states (and m)
-    shared_eta = []  # Holds list per par, each list contains at least one eta vector.
-    for par in shared_pars:
+    # Holds list per par, each list contains at least one eta vector.
+    shared_eta = [
+        [] for _ in range(1 if obs_fams[0][0] is None else obs_fams[0][0].n_par)
+    ]
+
+    # Dict with states that have at least one shared eta. value is another dict with pars for
+    # keys and lists for values. Each list contains indices in shared_eta[par] associated with
+    # the key state.
+    shared_j_dict = None if shared_j is None else {}
+    for pari, par in enumerate(shared_pars):
 
         midx = 1
         if shared_m is False:
             midx = M
 
-        shared_eta.append([])
+        if shared_j is not None:
+            for j in shared_j[pari]:
+                if j not in shared_j_dict:
+                    shared_j_dict[j] = {}
+                if par not in shared_j_dict[j]:
+                    shared_j_dict[j][par] = []
 
         # Compute shared part of eta per parameter and m
         for m in range(midx):
+            if shared_j is not None:
+                for j in shared_j[pari]:
+                    shared_j_dict[j][par].append(len(shared_eta[par]))
             shared_eta[par].append(Xs[idx] @ split_coef[idx])
             idx += 1
 
     # Extract (potential) thetas for multivariate observation models
     thetas = split_coef[-1].flatten()
     theta_idx = 0
-
-    for j in range(n_S):
+    evidx = 1
+    for j in range(n_S if hmp_fast is False else n_events):
 
         # Multivariate gaussian emission
         if isinstance(obs_fams[j][0], MultiGauss):
@@ -461,11 +697,20 @@ def _compute_series_probs(
                 etasbjm.append(Xs[idx] @ split_coef[idx])
 
                 # Add shared eta to etasbjm
-                if 0 in shared_pars:
-                    if shared_m:
-                        etasbjm[-1] += shared_eta[0][0]
-                    else:
-                        etasbjm[-1] += shared_eta[0][par]
+                if _check_shared(j, 0, shared_pars, shared_j_dict):
+                    if shared_j is None:
+                        if shared_m:
+                            etasbjm[-1] += shared_eta[0][0]
+                        else:
+                            etasbjm[-1] += shared_eta[0][par]
+                    elif j in shared_j_dict:
+                        shared_j_it = len(shared_j_dict[j][0])
+                        if shared_m is False:
+                            shared_j_it //= jmbFam.n_par
+                        eidx = 0 if shared_m else par
+                        for _ in range(shared_j_it):
+                            etasbjm[-1] += shared_eta[0][shared_j_dict[j][0][eidx]]
+                            eidx += 1 if shared_m else jmbFam.n_par
 
                 musbjm.append(jmbFam.links[par].fi(etasbjm[-1]))
                 idx += 1
@@ -525,11 +770,22 @@ def _compute_series_probs(
                         etasbjm.append(Xs[idx] @ split_coef[idx])
 
                         # Add shared eta to etasbjm
-                        if par in shared_pars:
-                            if shared_m is False:
-                                etasbjm[-1] += shared_eta[par][m]
-                            else:
-                                etasbjm[-1] += shared_eta[par][0]
+                        if _check_shared(j, par, shared_pars, shared_j_dict):
+                            if shared_j is None:
+                                if shared_m is False:
+                                    etasbjm[-1] += shared_eta[par][m]
+                                else:
+                                    etasbjm[-1] += shared_eta[par][0]
+                            elif j in shared_j_dict:
+                                shared_j_it = len(shared_j_dict[j][par])
+                                if shared_m is False:
+                                    shared_j_it //= M
+                                eidx = 0 if shared_m else m
+                                for _ in range(shared_j_it):
+                                    etasbjm[-1] += shared_eta[par][
+                                        shared_j_dict[j][par][eidx]
+                                    ]
+                                    eidx += 1 if shared_m else M
 
                         musbjm.append(jmbFam.links[par].fi(etasbjm[-1]))
                         idx += 1
@@ -556,59 +812,79 @@ def _compute_series_probs(
                 else:
 
                     # Bumps
-                    if j % 2 == 1:  #
+                    if hmp_fast or j % 2 == 1:  #
 
                         yJM = ys[idx]
 
                         etasbjm = [Xs[idx] @ split_coef[idx]]
 
                         # Add shared eta to etasbjm
-                        if 0 in shared_pars:
-                            if shared_m is False:
-                                etasbjm[-1] += shared_eta[0][m]
-                            else:
-                                etasbjm[-1] += shared_eta[0][0]
+                        j_sidx = evidx if hmp_fast else j
+                        if _check_shared(j_sidx, 0, shared_pars, shared_j_dict):
+                            if shared_j is None:
+                                if shared_m is False:
+                                    etasbjm[-1] += shared_eta[0][m]
+                                else:
+                                    etasbjm[-1] += shared_eta[0][0]
+                            elif j_sidx in shared_j_dict:
+                                shared_j_it = len(shared_j_dict[j_sidx][0])
+                                if shared_m is False:
+                                    shared_j_it //= M
+                                eidx = 0 if shared_m else m
+                                for _ in range(shared_j_it):
+                                    etasbjm[-1] += shared_eta[0][
+                                        shared_j_dict[j_sidx][0][eidx]
+                                    ]
+                                    eidx += 1 if shared_m else M
 
                         musbjm = etasbjm  # Assume identity link
                         mus[:, m, j] = musbjm[0][:, 0]
 
-                        for d in range(event_width):
+                        if hmp_fast:
+                            if j == 0:
+                                y_mat[:, m] = yJM[:, 0]
 
-                            # Expected bump for every time-point given dur d in bump
-                            Ebump = event_template[d] * mus[:, m, j]
+                        else:
 
-                            if rho is not None:
+                            for d in range(event_width):
 
-                                if d > 0:
-                                    # Previous mean was mu at previous time weighted by sine at
-                                    # previous dur
-                                    Ebump = d0 * Ebump + d1 * (
-                                        event_template[d - 1]
-                                        * np.concatenate(([0], mus[:-1, m, j]))
-                                    )
-                                else:
-                                    # Previous mean was 0 (last time-point of preceding flat)
-                                    Ebump = d0 * Ebump
+                                # Expected bump for every time-point given dur d in bump
+                                Ebump = event_template[d] * mus[:, m, j]
 
-                            jbs[:, m, d, j] = ld_wrapper(
-                                y_mat[:, m],
-                                Ebump,
-                                scale,
-                            )
-                            cbs[:, m, d, j] = lcp_wrapper(
-                                y_mat[:, m],
-                                Ebump,
-                                scale,
-                            )
+                                if rho is not None:
 
-                            bs[:, d, j] += jbs[:, m, d, j]
+                                    if d > 0:
+                                        # Previous mean was mu at previous time weighted by sine at
+                                        # previous dur
+                                        Ebump = d0 * Ebump + d1 * (
+                                            event_template[d - 1]
+                                            * np.concatenate(([0], mus[:-1, m, j]))
+                                        )
+                                    else:
+                                        # Previous mean was 0 (last time-point of preceding flat)
+                                        Ebump = d0 * Ebump
 
-                            if log is False:
-                                # Transform log probs to probs
-                                jbs[:, m, d, j] = np.exp(jbs[:, m, d, j])
-                                cbs[:, m, d, j] = np.exp(cbs[:, m, d, j])
+                                jbs[:, m, d, j] = ld_wrapper(
+                                    y_mat[:, m],
+                                    Ebump,
+                                    scale,
+                                )
+                                cbs[:, m, d, j] = lcp_wrapper(
+                                    y_mat[:, m],
+                                    Ebump,
+                                    scale,
+                                )
+
+                                bs[:, d, j] += jbs[:, m, d, j]
+
+                                if log is False:
+                                    # Transform log probs to probs
+                                    jbs[:, m, d, j] = np.exp(jbs[:, m, d, j])
+                                    cbs[:, m, d, j] = np.exp(cbs[:, m, d, j])
 
                         idx += 1
+                        if m == (M - 1):
+                            evidx += 2
 
                     # Flats
                     else:
@@ -648,17 +924,19 @@ def _compute_series_probs(
                             jbs[:, m, :, j] = np.exp(jbs[:, m, :, j])
                             cbs[:, m, :, j] = np.exp(cbs[:, m, :, j])
 
-        if log is False:
+        if log is False and bs is not None:
             if is_hmp is False:
                 bs[:, j] = np.exp(bs[:, j])
             else:
                 bs[:, :, j] = np.exp(bs[:, :, j])
 
     # Now state duration probabilities #
+    f_idx = 0
+    for j in range(
+        (n_S if hmp_fast is False else n_flats) * (1 if starts_with_first else 2)
+    ):
 
-    for j in range(n_S * (1 if starts_with_first else 2)):
-
-        jdFam = d_fams[j]
+        jdFam = d_fams[j if hmp_fast is False else f_idx]
         if jdFam is not None:
 
             etasdj = []
@@ -676,9 +954,21 @@ def _compute_series_probs(
                     lpdd = jdFam.lp(d.reshape(-1, 1), *musdj)
                     lpd.append(lpdd)
             else:
-                lpd = jdFam.lp(d_val, *musdj)
+                if hmp_d_offset and is_hmp:
+                    shift = (
+                        event_width // 2
+                        if (f_idx in [flats[0], flats[-1]])
+                        else event_width
+                    )
+                    d_shift = d_val + shift
+                    lpd = jdFam.lp(d_shift, *musdj)
+                else:
+                    d_shift = d_val
+                lpd = jdFam.lp(d_shift, *musdj)
 
             mus_d.append(musdj)
+
+            f_idx += 2
 
         else:
             if j % 2 == 1:
@@ -702,6 +992,12 @@ def _compute_series_probs(
                 ds[:, j, :] = np.log(ds[:, j, :])
         else:
             ds[:, j] = np.exp(lpd.flatten())
+
+            # Fix nans/infs before normalizing
+            if hmp_fast and np.any(np.isnan(ds[:, j]) | np.isinf(ds[:, j])):
+                # print("problem with ds",j)
+                ds[(np.isnan(ds[:, j]) | np.isinf(ds[:, j])), j] = 0
+
             ds[:, j] /= np.sum(ds[:, j])
 
             if log:
@@ -790,6 +1086,7 @@ def _sample_series_emissions(
     coef: np.ndarray,
     coef_split_idx: list[int],
     shared_pars: list[int],
+    shared_j: list[list[int]] | None,
     shared_m: bool,
     Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     n_S: int,
@@ -816,6 +1113,9 @@ def _sample_series_emissions(
         at least one (in case ``shared_m is False`` one for each of the ``M`` signals) formula
         has been provided containing terms to be shared between the ``n_S`` states.
     :type shared_pars: list[int]
+    :param shared_j: A List of same length as shared_pars or None. Elements are lists with state
+        indices for states that should share the corresponding predictor for par in shared_pars.
+    :type shared_j: list[list[int]] | None
     :param shared_m: Bool indicating whether the shared terms are not just shared between states but
         also between the ``M`` signals.
     :type shared_m: bool
@@ -895,17 +1195,32 @@ def _sample_series_emissions(
     # First check for part of emission models shared between states (and m)
 
     # Holds list per par, each list contains at least one eta vector.
-    shared_eta = []
-    for par in shared_pars:
+    shared_eta = [
+        [] for _ in range(1 if obs_fams[0][0] is None else obs_fams[0][0].n_par)
+    ]
+
+    # Dict with states that have at least one shared eta. value is another dict with pars for
+    # keys and lists for values. Each list contains indices in shared_eta[par] associated with
+    # the key state.
+    shared_j_dict = None if shared_j is None else {}
+    for pari, par in enumerate(shared_pars):
 
         midx = 1
         if shared_m is False:
             midx = M
 
-        shared_eta.append([])
+        if shared_j is not None:
+            for j in shared_j[pari]:
+                if j not in shared_j_dict:
+                    shared_j_dict[j] = {}
+                if par not in shared_j_dict[j]:
+                    shared_j_dict[j][par] = []
 
         # Compute shared part of eta per parameter and m
         for m in range(midx):
+            if shared_j is not None:
+                for j in shared_j[pari]:
+                    shared_j_dict[j][par].append(len(shared_eta[par]))
             shared_eta[par].append(Xs[idx] @ split_coef[idx])
             idx += 1
 
@@ -929,11 +1244,20 @@ def _sample_series_emissions(
                 etasbjm.append(Xs[idx] @ split_coef[idx])
 
                 # Add shared eta to etasbjm
-                if 0 in shared_pars:
-                    if shared_m:
-                        etasbjm[-1] += shared_eta[0][0]
-                    else:
-                        etasbjm[-1] += shared_eta[0][par]
+                if _check_shared(j, 0, shared_pars, shared_j_dict):
+                    if shared_j is None:
+                        if shared_m:
+                            etasbjm[-1] += shared_eta[0][0]
+                        else:
+                            etasbjm[-1] += shared_eta[0][par]
+                    elif j in shared_j_dict:
+                        shared_j_it = len(shared_j_dict[j][0])
+                        if shared_m is False:
+                            shared_j_it //= jmbFam.n_par
+                        eidx = 0 if shared_m else par
+                        for _ in range(shared_j_it):
+                            etasbjm[-1] += shared_eta[0][shared_j_dict[j][0][eidx]]
+                            eidx += 1 if shared_m else jmbFam.n_par
 
                 musbjm.append(jmbFam.links[par].fi(etasbjm[-1]))
                 idx += 1
@@ -973,11 +1297,22 @@ def _sample_series_emissions(
                         etasbjm.append(Xs[idx] @ split_coef[idx])
 
                         # Add shared eta to etasbjm
-                        if par in shared_pars:
-                            if shared_m is False:
-                                etasbjm[-1] += shared_eta[par][m]
-                            else:
-                                etasbjm[-1] += shared_eta[par][0]
+                        if _check_shared(j, par, shared_pars, shared_j_dict):
+                            if shared_j is None:
+                                if shared_m is False:
+                                    etasbjm[-1] += shared_eta[par][m]
+                                else:
+                                    etasbjm[-1] += shared_eta[par][0]
+                            elif j in shared_j_dict:
+                                shared_j_it = len(shared_j_dict[j][par])
+                                if shared_m is False:
+                                    shared_j_it //= M
+                                eidx = 0 if shared_m else m
+                                for _ in range(shared_j_it):
+                                    etasbjm[-1] += shared_eta[par][
+                                        shared_j_dict[j][par][eidx]
+                                    ]
+                                    eidx += 1 if shared_m else M
 
                         musbjm.append(jmbFam.links[par].fi(etasbjm[-1]))
                         idx += 1
@@ -1136,6 +1471,9 @@ class HSMMFamily(GSMMFamily):
     :type ends_in_last: bool
     :param n_cores: Number of cores to use to parallelize functions, defaults to 1
     :type n_cores: int, optional
+    :param n_cores_llk: Number of cores to use to parallelize the likelihood function, defaults to
+        None which means it is said to ``n_cores``
+    :type n_cores_llk: int | None, optional
     :param build_mat_idx: If not all matrices are built explicitly, this has to be a list of indices
         per parameter modeled, pointing at the index of ``Xs`` holding the matrix that should be
         used by that parameter.
@@ -1144,17 +1482,28 @@ class HSMMFamily(GSMMFamily):
         at least one (in case ``shared_m is False`` one for each of the ``M`` signals) formula
         has been provided containing terms to be shared between the ``n_S`` states.
     :type shared_pars: list[int]
+    :param shared_j: A List of same length as shared_pars or None. Elements are lists with state
+        indices for states that should share the corresponding predictor for par in shared_pars.
+    :type shared_j: list[list[int]] | None
     :param shared_m: Bool indicating whether the shared terms are not just shared between states but
         also between the ``M`` signals.
     :type shared_m: bool
-    :param T: Optionally a fixed state transition matrix as a np.array or a list of series-specific
-        fixed state transition matrices, defaults to None indicating that the state transition
-        matrix should be estimated.
+    :param T: Optionally a fixed state transition matrix as a np.array or a list of fixed state
+        transition matrices (see the ``T_index`` argument), defaults to None indicating that the
+        state transition matrix should be estimated.
     :type T: list[np.ndarray] | np.ndarray | None, optional
     :param pi: Optionally a fixed initial state distribution matrix as a np.array or a list of
-        series-specific fixed initial state distribution matrices, defaults to None indicating that
-        the initial state distribution matrix should be estimated.
+        initial state distribution matrices (see the ``pi_index`` argument), defaults to None
+        indicating that the initial state distribution matrix should be estimated.
     :type pi: list[np.ndarray] | np.ndarray | None, optional
+    :param T_index: If ``T`` is a list, then this argument needs to be a list or numpy array holding
+        for every individual series the index corresponding to the state transition matrix in ``T``
+        that should be used for that series. Defaults to None
+    :type T_index: list[int] | np.ndarray | None, optional
+    :param pi_index: If ``pi`` is a list, then this argument needs to be a list or numpy array
+        holding for every individual series the index corresponding to the initial state
+        distribution matrix in ``pi`` that should be used for that series. Defaults to None
+    :type pi_index: list[int] | np.ndarray | None, optional
     :param Lrhoi: Optional Inverse of the transpose of the cholesky of the co-variance (before
         scaling) matrix of an ar1 model of the residuals of a HMP-like HSMM, defaults to None
     :type Lrhoi: scp.sparse.csc_array | None, optional
@@ -1172,6 +1521,20 @@ class HSMMFamily(GSMMFamily):
         , and state durations must be specified for data having the same number of rows as the data
         used by the formulas of the observation models. Defaults to False
     :type tvdtpi: bool, optional
+    :param hmp_location: Sample location array for a HMP-like model. Typically extracted from
+        the HMP toolbox by Weindel et al. Defaults to None
+    :type hmp_location: np.ndarray, optional
+    :param fast_hmp: Whether to use fast hmp code. This requires the model to be strictly serial
+        (left-to-right). However, skipped states for some series are still possible (i.e., group
+        models). Defaults to False
+    :type fast_hmp: bool, optional
+    :param hmp_d_offset: Whether to compute stage durations based on event peak to peak time
+        (as in HMP) or as the time between the offset of the previous event and the onset of the
+        next event (``hmp_d_offset=False``). Setting this to None means it is set to True if
+        ``fast_hmp is True`` (because then the non fitting related functions produce the correct
+        output despite the difference in fitting algorithms used) and otherwise to False. Defaults
+        to None.
+    :type hmp_d_offset: bool | None, optional
     :raises ValueError: if either ``T`` or ``pi`` have a value other than None but not both.
     :raises ValueError: if ``starts_with_first is False`` and the model is HMP-like (i.e.,
         ``event_template is not None``).
@@ -1191,17 +1554,24 @@ class HSMMFamily(GSMMFamily):
         starts_with_first: bool,
         ends_with_last: bool,
         ends_in_last: bool,
-        n_cores=1,
+        n_cores: int = 1,
+        n_cores_llk: int | None = None,
         build_mat_idx: list[int] | None = None,
         shared_pars: list[int] = [],
+        shared_j: list[list[int]] | None = None,
         shared_m: bool = False,
         T: list[np.ndarray] | np.ndarray | None = None,
         pi: list[np.ndarray] | np.ndarray | None = None,
+        T_index: np.ndarray | list[int] | None = None,
+        pi_index: np.ndarray | list[int] | None = None,
         Lrhoi: scp.sparse.csc_array | None = None,
         scale: float | None = None,
         event_template: np.ndarray | None = None,
         hmp_fam: str = "Exponential",
         tvdtpi: bool = False,
+        hmp_location: np.ndarray | None = None,
+        fast_hmp: bool = False,
+        hmp_d_offset: bool | None = None,
     ) -> None:
 
         super().__init__(
@@ -1235,11 +1605,34 @@ class HSMMFamily(GSMMFamily):
 
         self.extra_coef = 0
         self.is_hmp = event_template is not None
+        self.hmp_location = hmp_location
+        self.fast_hmp = fast_hmp
+        self.cross_cor = None
+        self.shared_j = shared_j
+        self.hmp_d_offset = hmp_d_offset
+        self.n_cores_llk = n_cores_llk
+        if n_cores_llk is None:
+            self.n_cores_llk = n_cores
+        self._ar_template = None
+        self.T_index = T_index
+        self.pi_index = pi_index
+
+        if self.fast_hmp and (self.is_hmp is False):
+            warnings.warn(
+                "``fast_hmp`` is True but model is not a hmp model. Ignoring ``fast_hmp``."
+            )
+            self.fast_hmp = False
 
         if (T is None and pi is not None) or (T is not None and pi is None):
             raise ValueError(
                 "Either both ``T`` and ``pi`` must be specified or both set to None."
             )
+
+        if isinstance(T, list) and T_index is None:
+            raise ValueError("If ``T`` is a list, ``T_index`` must be specified!")
+
+        if isinstance(pi, list) and pi_index is None:
+            raise ValueError("If ``pi`` is a list, ``pi_index`` must be specified!")
 
         self.fix_T_pi = (T is not None) and (pi is not None)
 
@@ -1252,11 +1645,194 @@ class HSMMFamily(GSMMFamily):
             if isinstance(state_obs[0], MultiGauss):
                 self.extra_coef += state_obs[0].extra_coef
 
+        if self.hmp_d_offset is None:
+            if self.fast_hmp:
+                self.hmp_d_offset = True
+            else:
+                self.hmp_d_offset = False
+
         # Check for time-varying duration, state transition, initial state models
         self.tvdtpi = tvdtpi
 
+        self.__fit_split_id = None
+        self.__fit_y_split = None
+        self.__fit_X_split = None
+
+    def prefit_setup(
+        self,
+        ys: list[np.ndarray | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
+    ):
+        """Pre-fit setup for a HSMM.
+
+        Sets up the cross correlation data for HMP-like models if ``self.fast_hmp is True``.
+        Cross-correlation is computed as outlined by Weindel, van Maanen, and Borst (2024).
+
+        References:
+         - Weindel, G., van Maanen, L., & Borst, J. P. (2024). Trial-by-trial detection of\
+            cognitive events in neural time-series. Imaging Neuroscience, 2, 1–28.\
+            https://doi.org/10.1162/imag_a_00400
+
+        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
+            ``lhs.variable`` to the formulas for single series. **Note**: by convention ``mssm``
+            expectes that the actual observed data is passed along via the first formula (so it is
+            stored in ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first
+            formula, then ``ys`` contains ``None`` at their indices to save memory.
+        :type ys: [np.ndarray or None]
+        :param Xs: A list of sparse model matrices per likelihood parameter for single series.
+            Can contain None for indices for which model matrix should not be formed explicitly.
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
+        """
+        if self.fast_hmp:
+            self.cross_cor = []
+            normed_template = self.llkargs[-2].copy()
+            # print(normed_template)
+
+            n_S = self.llkargs[0]
+            sid = self.llkargs[3]
+            tid = self.llkargs[4]
+            M = self.llkargs[6]
+            shared_pars = self.llkargs[12]
+            shared_m = self.llkargs[13]
+            Lrhoi = self.llkargs[16]
+
+            if tid is None:
+                tid = sid
+
+            if Lrhoi is not None:
+                rho = np.sqrt(-1 * (np.power(1 / Lrhoi[1, 1], 2) - 1))
+
+                d0 = 1 / np.sqrt(1 - np.power(rho, 2))  # weight current mean
+                d1 = -rho / np.sqrt(1 - np.power(rho, 2))  # weight previous mean
+
+                # Adjust pattern for ar1 model
+                ar_template = np.zeros(normed_template.shape[0] + 1)
+
+                for pidx in range(normed_template.shape[0]):
+                    if pidx > 0:
+                        ar_template[pidx] = (
+                            d0 * normed_template[pidx] + d1 * normed_template[pidx - 1]
+                        )
+                    else:
+                        ar_template[pidx] = d0 * normed_template[pidx]
+
+                ar_template[-1] = d1 * normed_template[-1]
+                normed_template = ar_template
+
+            # Normalize template
+            normed_template /= np.sum(normed_template**2)
+
+            idx = 0  # Keep track of indices for ys and Xs
+
+            # First check for part of models shared between states (and m)
+            for pari in range(len(shared_pars)):
+
+                midx = 1
+                if shared_m is False:
+                    midx = M
+
+                for m in range(midx):
+                    if ys[idx] is None or pari != 0 or m != 0:
+                        self.cross_cor.append(None)
+                    else:
+                        tpc = []
+                        split_Ys = np.split(
+                            Lrhoi.T @ ys[idx] if Lrhoi is not None else ys[idx], sid[1:]
+                        )
+                        for yss in split_Ys:
+                            # Compute cross-correlation as in HMP
+                            tpc.extend(
+                                scp.signal.correlate(
+                                    yss.flatten(),
+                                    normed_template,
+                                    mode="same",
+                                    method="direct",
+                                )
+                            )
+                        self.cross_cor.append(np.array(tpc).reshape(-1, 1))
+                    idx += 1
+
+            # Now individual parts
+            n_events = (n_S - 1) // 2
+            for yi in range(len(ys) - idx):
+                if ys[idx] is None:
+                    self.cross_cor.append(None)
+                elif yi < (n_events * M):
+                    tpc = []
+                    split_Ys = np.split(
+                        Lrhoi.T @ ys[idx] if Lrhoi is not None else ys[idx], sid[1:]
+                    )
+                    for yss in split_Ys:
+                        # Compute cross-correlation as in HMP
+                        tpc.extend(
+                            scp.signal.correlate(
+                                yss.flatten(),
+                                normed_template,
+                                mode="same",
+                                method="direct",
+                            )
+                        )
+                    self.cross_cor.append(np.array(tpc).reshape(-1, 1))
+                    # print(yi, ys[idx].flatten()[:5])
+                    # print(yi, tpc[:5])
+                else:
+                    # Duration variables
+                    self.cross_cor.append(ys[idx])
+                idx += 1
+
+    def _group_hmp_events(
+        self,
+        series: int,
+    ) -> tuple[int, list[int], list[int], list[int], list[int]]:
+        """Finds the events and stages present for a given series of a HMP model.
+
+        :param series: The series for which to determine the grouping.
+        :type series: int
+        :return: Number of events present for this series, the event and stage
+            indices as two lists (used by fast_hmp code), and the bump and flat indices
+            (having the same information for the default code computing the hmp model like
+            a regular HSMM).
+        :rtype: tuple[int, list[int], list[int], list[int], list[int]]
+        """
+        T = self.llkargs[14]
+        pi = self.llkargs[15]
+
+        if isinstance(T, list) and isinstance(pi, list):
+            Ts = T[self.T_index[series]]
+            pis = pi[self.pi_index[series]]
+
+        else:
+            Ts = T
+            pis = pi
+
+        # Find initial flat stage for this trial
+        flat = np.argmax(pis)
+        stage = flat // 2
+        sidx = 0 if flat == 0 else Ts[:flat, :].sum().astype(int) // 2
+        eidx = Ts.sum().astype(int) // 2
+        stages = [stage]
+        flats = [flat]
+        events = []
+        bumps = []
+        n_events = 0
+
+        # Loop over transitions
+        for _ in range(sidx, eidx):
+            bump = np.argmax(Ts[flat, :])
+            event = bump // 2
+            flat = flat = np.argmax(Ts[bump, :])
+            stage = flat // 2
+            stages.append(stage)
+            events.append(event)
+            bumps.append(bump)
+            flats.append(flat)
+            n_events += 1
+
+        return n_events, events, stages, bumps, flats
+
     def series_log_prob(
         self,
+        series: int,
         coef: np.ndarray,
         coef_split_idx: list[int],
         ys: list[np.ndarray],
@@ -1266,6 +1842,8 @@ class HSMMFamily(GSMMFamily):
         """Computes the (log)-probabilities of observations and stage durations under given model
         for a single series.
 
+        :param series: The series for which to compute the (log) probabilities.
+        :type series: int
         :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
             be flattened!).
         :type coef: np.ndarray
@@ -1302,8 +1880,6 @@ class HSMMFamily(GSMMFamily):
         build_mat_idx = self.llkargs[11]
         shared_pars = self.llkargs[12]
         shared_m = self.llkargs[13]
-        # T = self.llkargs[14]
-        # pi = self.llkargs[15]
         Lrhoi = self.llkargs[16]
         scale = self.llkargs[17]
         event_template = self.llkargs[18]
@@ -1311,6 +1887,10 @@ class HSMMFamily(GSMMFamily):
         is_hmp = self.is_hmp
         tvdtpi = self.tvdtpi
         # fix_T_pi = self.fix_T_pi
+
+        flats = None
+        if self.hmp_d_offset:
+            _, _, _, _, flats = self._group_hmp_events(series)
 
         rho = None
         if Lrhoi is not None:
@@ -1322,6 +1902,7 @@ class HSMMFamily(GSMMFamily):
             coef,
             coef_split_idx,
             shared_pars,
+            self.shared_j,
             shared_m,
             ys,
             Xs,
@@ -1342,6 +1923,9 @@ class HSMMFamily(GSMMFamily):
             hmp_fam,
             rho,
             tvdtpi,
+            False,
+            self.hmp_d_offset,
+            flats,
         )
         bs[(np.isnan(bs) | np.isinf(bs))] = -np.inf if log else 0
         ds[(np.isnan(ds) | np.isinf(ds))] = -np.inf if log else 0
@@ -1422,7 +2006,7 @@ class HSMMFamily(GSMMFamily):
             tid = sid
 
         # Split up ys, Xs
-        split_Ys, split_Xs = _split_matrices(
+        split_Ys, split_Xs, _ = _split_matrices(
             ys,
             Xs,
             shared_pars,
@@ -1445,16 +2029,11 @@ class HSMMFamily(GSMMFamily):
 
             for series in range(n_series):
                 bss, dss = self.series_log_prob(
+                    series,
                     coef,
                     coef_split_idx,
-                    [
-                        y_split[series] if y_split is not None else None
-                        for y_split in split_Ys
-                    ],
-                    [
-                        X_split[series] if X_split is not None else None
-                        for X_split in split_Xs
-                    ],
+                    split_Ys[series],
+                    split_Xs[series],
                     log,
                 )
 
@@ -1463,27 +2042,25 @@ class HSMMFamily(GSMMFamily):
         else:  # Compute in parallel
 
             args = zip(
+                [s for s in range(n_series)],
                 repeat(coef),
                 repeat(coef_split_idx),
-                [
-                    [
-                        y_split[series] if y_split is not None else None
-                        for y_split in split_Ys
-                    ]
-                    for series in range(n_series)
-                ],
-                [
-                    [
-                        X_split[series] if X_split is not None else None
-                        for X_split in split_Xs
-                    ]
-                    for series in range(n_series)
-                ],
+                split_Ys,
+                split_Xs,
                 repeat(log),
             )
 
+            # No need to copy cross_cor
+            orig_cross_cor = None
+            if self.cross_cor is not None:
+                orig_cross_cor = self.cross_cor
+                self.cross_cor = None
+
             with mp.Pool(processes=n_cores) as pool:
                 bs, ds = zip(*pool.starmap(self.series_log_prob, args))
+
+            if orig_cross_cor is not None:
+                self.cross_cor = orig_cross_cor
 
             ps = [[bss, dss] for bss, dss in zip(bs, ds)]
 
@@ -1550,6 +2127,7 @@ class HSMMFamily(GSMMFamily):
                 coef,
                 coef_split_idx,
                 shared_pars,
+                self.shared_j,
                 shared_m,
                 ys,
                 Xs,
@@ -1567,11 +2145,14 @@ class HSMMFamily(GSMMFamily):
                 starts_with_first,
                 build_mat_idx,
                 tvdtpi=tvdtpi,
+                hmp_fast=False,
+                hmp_d_offset=self.hmp_d_offset,
+                flats=None,
             )
 
         elif isinstance(T, list) and isinstance(pi, list):
-            Ts = T[series]
-            pis = pi[series]
+            Ts = T[self.T_index[series]]
+            pis = pi[self.pi_index[series]]
 
         else:
             Ts = T
@@ -1655,7 +2236,7 @@ class HSMMFamily(GSMMFamily):
             tid = sid
 
         # Split up ys, Xs
-        split_Ys, split_Xs = _split_matrices(
+        split_Ys, split_Xs, _ = _split_matrices(
             ys,
             Xs,
             shared_pars,
@@ -1680,14 +2261,8 @@ class HSMMFamily(GSMMFamily):
                     series,
                     coef,
                     coef_split_idx,
-                    [
-                        y_split[series] if y_split is not None else None
-                        for y_split in split_Ys
-                    ],
-                    [
-                        X_split[series] if X_split is not None else None
-                        for X_split in split_Xs
-                    ],
+                    split_Ys[series],
+                    split_Xs[series],
                 )
 
                 ps.append([T, pi])
@@ -1698,24 +2273,21 @@ class HSMMFamily(GSMMFamily):
                 [s for s in range(n_series)],
                 repeat(coef),
                 repeat(coef_split_idx),
-                [
-                    [
-                        y_split[series] if y_split is not None else None
-                        for y_split in split_Ys
-                    ]
-                    for series in range(n_series)
-                ],
-                [
-                    [
-                        X_split[series] if X_split is not None else None
-                        for X_split in split_Xs
-                    ]
-                    for series in range(n_series)
-                ],
+                split_Ys,
+                split_Xs,
             )
+
+            # No need to copy cross_cor
+            orig_cross_cor = None
+            if self.cross_cor is not None:
+                orig_cross_cor = self.cross_cor
+                self.cross_cor = None
 
             with mp.Pool(processes=n_cores) as pool:
                 Ts, pis = zip(*pool.starmap(self.series_Tpi, args))
+
+            if orig_cross_cor is not None:
+                self.cross_cor = orig_cross_cor
 
             ps = [[T, pi] for T, pi in zip(Ts, pis)]
 
@@ -1785,6 +2357,10 @@ class HSMMFamily(GSMMFamily):
         fix_T_pi = self.fix_T_pi
         tvdtpi = self.tvdtpi
 
+        flats = None
+        if self.hmp_d_offset:
+            _, _, _, _, flats = self._group_hmp_events(series)
+
         # Extract rho
         rho = None
         if Lrhoi is not None:
@@ -1800,6 +2376,7 @@ class HSMMFamily(GSMMFamily):
             coef,
             coef_split_idx,
             shared_pars,
+            self.shared_j,
             shared_m,
             Xs,
             n_S,
@@ -1823,6 +2400,7 @@ class HSMMFamily(GSMMFamily):
             coef,
             coef_split_idx,
             shared_pars,
+            self.shared_j,
             shared_m,
             ys,
             Xs,
@@ -1843,12 +2421,15 @@ class HSMMFamily(GSMMFamily):
             hmp_fam,
             rho,
             tvdtpi,
+            False,
+            self.hmp_d_offset,
+            flats,
         )
 
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
-                Ts = T[series]
-                pis = pi[series]
+                Ts = T[self.T_index[series]]
+                pis = pi[self.pi_index[series]]
 
             else:
                 Ts = T
@@ -1929,7 +2510,7 @@ class HSMMFamily(GSMMFamily):
                                 # Previous mean was 0 (last time-point of preceding flat)
                                 Ebump = d0 * Ebump
 
-                        emission_samples[t, m, sample] += Ebump
+                        emission_samples[t, m, sample] += Ebump[0]
 
                 # Update time and dur
                 t += 1
@@ -2052,7 +2633,7 @@ class HSMMFamily(GSMMFamily):
             tid = sid
 
         # Split up ys, Xs
-        split_Ys, split_Xs = _split_matrices(
+        split_Ys, split_Xs, _ = _split_matrices(
             ys,
             Xs,
             shared_pars,
@@ -2080,14 +2661,8 @@ class HSMMFamily(GSMMFamily):
                         series,
                         coef,
                         coef_split_idx,
-                        [
-                            y_split[series] if y_split is not None else None
-                            for y_split in split_Ys
-                        ],
-                        [
-                            X_split[series] if X_split is not None else None
-                            for X_split in split_Xs
-                        ],
+                        split_Ys[series],
+                        split_Xs[series],
                         seed,
                         n_samples,
                         scale,
@@ -2101,24 +2676,18 @@ class HSMMFamily(GSMMFamily):
                 [s for s in range(n_series)],
                 repeat(coef),
                 repeat(coef_split_idx),
-                [
-                    [
-                        y_split[series] if y_split is not None else None
-                        for y_split in split_Ys
-                    ]
-                    for series in range(n_series)
-                ],
-                [
-                    [
-                        X_split[series] if X_split is not None else None
-                        for X_split in split_Xs
-                    ]
-                    for series in range(n_series)
-                ],
+                split_Ys,
+                split_Xs,
                 repeat(seed),
                 repeat(n_samples),
                 repeat(scale),
             )
+
+            # No need to copy cross_cor
+            orig_cross_cor = None
+            if self.cross_cor is not None:
+                orig_cross_cor = self.cross_cor
+                self.cross_cor = None
 
             with warnings.catch_warnings():  # Supress warnings
                 warnings.simplefilter("ignore")
@@ -2128,6 +2697,9 @@ class HSMMFamily(GSMMFamily):
                 predictions = [
                     [e_predss, s_predss] for e_predss, s_predss in zip(e_preds, s_preds)
                 ]
+
+            if orig_cross_cor is not None:
+                self.cross_cor = orig_cross_cor
 
         return predictions
 
@@ -2186,6 +2758,10 @@ class HSMMFamily(GSMMFamily):
         fix_T_pi = self.fix_T_pi
         tvdtpi = self.tvdtpi
 
+        flats = None
+        if self.hmp_d_offset:
+            _, _, _, _, flats = self._group_hmp_events(series)
+
         # Must extract rho, even if ``Lrhoi`` is set to None above (happens when this method is
         # called by get_resid) - of course only if ``Lrhoi`` was provided to constructor
         rho = None
@@ -2204,6 +2780,7 @@ class HSMMFamily(GSMMFamily):
             coef,
             coef_split_idx,
             shared_pars,
+            self.shared_j,
             shared_m,
             ys,
             Xs,
@@ -2224,12 +2801,15 @@ class HSMMFamily(GSMMFamily):
             hmp_fam,
             rho,
             tvdtpi,
+            False,
+            self.hmp_d_offset,
+            flats,
         )
 
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
-                lTs = np.log(T[series])
-                lpis = np.log(pi[series])
+                lTs = np.log(T[self.T_index[series]])
+                lpis = np.log(pi[self.pi_index[series]])
 
             else:
                 lTs = np.log(T)
@@ -2342,7 +2922,7 @@ class HSMMFamily(GSMMFamily):
             tid = sid
 
         # Split up ys, Xs
-        split_Ys, split_Xs = _split_matrices(
+        split_Ys, split_Xs, _ = _split_matrices(
             ys,
             Xs,
             shared_pars,
@@ -2370,14 +2950,8 @@ class HSMMFamily(GSMMFamily):
                         series,
                         coef,
                         coef_split_idx,
-                        [
-                            y_split[series] if y_split is not None else None
-                            for y_split in split_Ys
-                        ],
-                        [
-                            X_split[series] if X_split is not None else None
-                            for X_split in split_Xs
-                        ],
+                        split_Ys[series],
+                        split_Xs[series],
                     )
 
                     states.append([edss, statess])
@@ -2388,21 +2962,15 @@ class HSMMFamily(GSMMFamily):
                 [s for s in range(n_series)],
                 repeat(coef),
                 repeat(coef_split_idx),
-                [
-                    [
-                        y_split[series] if y_split is not None else None
-                        for y_split in split_Ys
-                    ]
-                    for series in range(n_series)
-                ],
-                [
-                    [
-                        X_split[series] if X_split is not None else None
-                        for X_split in split_Xs
-                    ]
-                    for series in range(n_series)
-                ],
+                split_Ys,
+                split_Xs,
             )
+
+            # No need to copy cross_cor
+            orig_cross_cor = None
+            if self.cross_cor is not None:
+                orig_cross_cor = self.cross_cor
+                self.cross_cor = None
 
             with warnings.catch_warnings():  # Supress warnings
                 warnings.simplefilter("ignore")
@@ -2410,6 +2978,9 @@ class HSMMFamily(GSMMFamily):
                     eds, states = zip(*pool.starmap(self.series_viterbi, args))
 
                 states = [[edss, statess] for edss, statess in zip(eds, states)]
+
+            if orig_cross_cor is not None:
+                self.cross_cor = orig_cross_cor
 
         return states
 
@@ -2474,6 +3045,10 @@ class HSMMFamily(GSMMFamily):
         fix_T_pi = self.fix_T_pi
         tvdtpi = self.tvdtpi
 
+        flats = None
+        if self.hmp_d_offset and self.fast_hmp is False:
+            _, _, _, _, flats = self._group_hmp_events(series)
+
         # Must extract rho, even if ``Lrhoi`` is set to None above (happens when this method is
         # called by get_resid) - of course only if ``Lrhoi`` was provided to constructor
         rho = None
@@ -2488,10 +3063,11 @@ class HSMMFamily(GSMMFamily):
 
         # We can pre-compute the bs and ds - i.e., observation probabilities and
         # duration probabilities
-        _, _, _, _, _, bs, ds, Ts, pis = _compute_series_probs(
+        cross_corr, mus, _, _, _, bs, ds, Ts, pis = _compute_series_probs(
             coef,
             coef_split_idx,
             shared_pars,
+            self.shared_j,
             shared_m,
             ys,
             Xs,
@@ -2512,21 +3088,151 @@ class HSMMFamily(GSMMFamily):
             hmp_fam,
             rho,
             tvdtpi,
+            self.fast_hmp,
+            False if self.fast_hmp else self.hmp_d_offset,
+            flats,
         )
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
-                Ts = T[series]
-                pis = pi[series]
+                Ts = T[self.T_index[series]]
+                pis = pi[self.pi_index[series]]
 
             else:
                 Ts = T
                 pis = pi
 
-        bs[np.isnan(bs) | np.isinf(bs)] = 0
+        if self.fast_hmp is False:
+            bs[np.isnan(bs) | np.isinf(bs)] = 0
         ds[np.isnan(ds) | np.isinf(ds)] = 0
 
         # Now sample state sequences
-        if is_hmp:
+        if self.fast_hmp:
+            eds = np.zeros(n_samples)
+            states = np.zeros((n_T, n_samples), dtype=np.int64)
+            np_gen = np.random.default_rng(seed)
+            # The following computes the forward variables of a HMP model as described by
+            # Weindel, van Maanen and Borst (2024) and then uses these to back sample from the
+            # posterior of state sequences. Code taken & modified from:
+            # https://github.com/GWeindel/hmp/blob/devel/hmp/models/event.py
+            # print(cross_corr.shape, n_T)
+
+            n_events = (n_S - 1) // 2
+            n_flats = n_events + 1
+            gains = np.zeros((n_T, n_events), dtype=np.float64)
+
+            for i in range(cross_corr.shape[1]):
+                # computes the gains, i.e. the log of the likelihood ratio between
+                # event present and absent.
+                gains = (
+                    gains
+                    + cross_corr[:, [i]] * mus[:, i, :]
+                    - mus[:, i, :] ** 2 / scale
+                )
+            gains = np.exp(gains)
+
+            # pmf for each flat with appropriate zeroing to prevent overlap between events
+            pmf = np.zeros([n_T, n_flats], dtype=np.float64)
+            end = min(n_T, D - 1)
+
+            # Figure out which transitions are actually happening on this trial.
+            # Needs translation from bump/flat world to event/stage world.
+            n_events, events, stages, bumps, flats = self._group_hmp_events(series)
+
+            # Handle first stage here, rest in loop over transitions below
+            pmf[:end, stages[0]] = ds[:end, stages[0]]
+            # Min duration must account for bleed over pattern and 1 sample of flat
+            pmf[: (event_width // 2 + 1), stages[0]] = 0
+
+            # Loop over transitions
+            for sti, stage in enumerate(stages[1:]):
+                pmf[:end, stage] = ds[:end, stage]
+
+                if sti < (n_events - 1):
+                    pmf[: (event_width + 1), stage] = 0
+                else:
+                    pmf[: (event_width // 2 + 1), stage] = 0
+
+            # Now modified forward pass
+            forward = np.zeros((n_T, n_events), dtype=np.float64)
+            forward[:, 0] = pmf[:, stages[0]] * gains[:, events[0]]
+
+            for evidx in np.arange(1, n_events):
+                # convolution between pmf and previous forward multiplied by gain
+                forward[:, evidx] = (
+                    np.convolve(forward[:, evidx - 1], pmf[:, stages[evidx]])[:n_T]
+                    * gains[:, events[evidx]]
+                )
+
+            # Getting the event props only requires accounting for final distribution
+            # backward holds joint probs of all emissions and final event happening at
+            # time t.
+            backward = forward[:, -1].copy()
+            backward *= np.flip(pmf[:, stages[-1]])
+            backward = np.clip(backward, 0, None)
+
+            # Compute trial exp(llk).
+            ellk = backward.sum()
+
+            # ellk is probs of all emissions so backward/ellk gives
+            # probs of final event happening at time t.
+            last_event_props = backward / ellk
+            last_event_props /= np.sum(last_event_props)
+
+            # Now generate samples
+            for sample in range(n_samples):
+
+                event_peaks = np.zeros(n_events, dtype=np.int64)
+                t = np.arange(n_T, dtype=np.int64)
+
+                # Can sample last event from last_event_props
+                event_peaks[-1] = np_gen.choice(t, size=None, p=last_event_props)
+
+                # Now sample remaining events backwards
+                for evidx in range(n_events - 2, -1, -1):
+                    # Model is strictly sequential so given location of event evidx + 1
+                    # prop of previous event happening at t=0:location is
+                    # forward[0:location,evidx]*np.flip(pmf[0:location,evidx+1])
+                    peak_censor = event_peaks[evidx + 1] + 1
+
+                    # Need to re-compute the censored pmf given new end
+                    c_pmf = pmf[:peak_censor, stages[evidx + 1]]
+
+                    event_props = forward[:peak_censor, evidx] * np.flip(c_pmf)
+                    event_props = np.clip(event_props, 0, None)
+                    event_props /= np.sum(event_props)
+
+                    event_peaks[evidx] = np_gen.choice(
+                        t[:peak_censor], size=None, p=event_props
+                    )
+
+                # Now fill state vector
+                sidx = 0
+                for evidx in range(n_events):
+                    states[sidx : event_peaks[evidx], sample] = flats[  # noqa: E203
+                        evidx
+                    ]
+                    states[
+                        (
+                            event_peaks[evidx] - event_width // 2
+                        ) : event_peaks[  # noqa: E203
+                            evidx
+                        ],
+                        sample,
+                    ] = bumps[evidx]
+                    states[
+                        event_peaks[evidx] : (  # noqa: E203
+                            event_peaks[evidx] + event_width // 2 + 1
+                        ),
+                        sample,
+                    ] = bumps[evidx]
+                    sidx = event_peaks[evidx] + event_width // 2 + 1
+
+                # Handle last flat
+                states[sidx:, sample] = flats[-1]
+
+            return eds, states
+
+        elif is_hmp:
             hmp_code = 1
         else:
             hmp_code = 0
@@ -2638,8 +3344,8 @@ class HSMMFamily(GSMMFamily):
             tid = sid
 
         # Split up ys, Xs
-        split_Ys, split_Xs = _split_matrices(
-            ys,
+        split_Ys, split_Xs, _ = _split_matrices(
+            ys if self.fast_hmp is False else self.cross_cor,
             Xs,
             shared_pars,
             shared_m,
@@ -2652,7 +3358,7 @@ class HSMMFamily(GSMMFamily):
             False if fix_T_pi else True,
             False if fix_T_pi else True,
             starts_with_first,
-            Lrhoi,
+            None if self.fast_hmp else Lrhoi,
         )
 
         # Now sample state sequences for every series
@@ -2666,14 +3372,8 @@ class HSMMFamily(GSMMFamily):
                     series,
                     coef,
                     coef_split_idx,
-                    [
-                        y_split[series] if y_split is not None else None
-                        for y_split in split_Ys
-                    ],
-                    [
-                        X_split[series] if X_split is not None else None
-                        for X_split in split_Xs
-                    ],
+                    split_Ys[series],
+                    split_Xs[series],
                     seed,
                     n_samples,
                 )
@@ -2686,23 +3386,17 @@ class HSMMFamily(GSMMFamily):
                 [s for s in range(n_series)],
                 repeat(coef),
                 repeat(coef_split_idx),
-                [
-                    [
-                        y_split[series] if y_split is not None else None
-                        for y_split in split_Ys
-                    ]
-                    for series in range(n_series)
-                ],
-                [
-                    [
-                        X_split[series] if X_split is not None else None
-                        for X_split in split_Xs
-                    ]
-                    for series in range(n_series)
-                ],
+                split_Ys,
+                split_Xs,
                 repeat(seed),
                 repeat(n_samples),
             )
+
+            # No need to copy cross_cor
+            orig_cross_cor = None
+            if self.cross_cor is not None:
+                orig_cross_cor = self.cross_cor
+                self.cross_cor = None
 
             with warnings.catch_warnings():  # Supress warnings
                 warnings.simplefilter("ignore")
@@ -2710,6 +3404,9 @@ class HSMMFamily(GSMMFamily):
                     eds, states = zip(*pool.starmap(self.sample_posterior_series, args))
 
                 states = [[edss, statess] for edss, statess in zip(eds, states)]
+
+            if orig_cross_cor is not None:
+                self.cross_cor = orig_cross_cor
 
         return states
 
@@ -2779,6 +3476,10 @@ class HSMMFamily(GSMMFamily):
         fix_T_pi = self.fix_T_pi
         tvdtpi = self.tvdtpi
 
+        flats = None
+        if self.hmp_d_offset:
+            _, _, _, _, flats = self._group_hmp_events(series)
+
         # Extract rho
         rho = None
         if Lrhoi is not None:
@@ -2792,6 +3493,7 @@ class HSMMFamily(GSMMFamily):
             coef,
             coef_split_idx,
             shared_pars,
+            self.shared_j,
             shared_m,
             ys,
             Xs,
@@ -2812,11 +3514,14 @@ class HSMMFamily(GSMMFamily):
             hmp_fam,
             rho,
             tvdtpi,
+            False,
+            self.hmp_d_offset,
+            flats,
         )
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
-                Ts = T[series]
-                pis = pi[series]
+                Ts = T[self.T_index[series]]
+                pis = pi[self.pi_index[series]]
 
             else:
                 Ts = T
@@ -2881,18 +3586,16 @@ class HSMMFamily(GSMMFamily):
         elif resid_type == "viterbi_dur":
 
             # Decode viterbi path
-            viterbi = self.decode_viterbi(
+            viterbi = self.series_viterbi(
+                series,
                 coef,
                 coef_split_idx,
                 ys,
                 Xs,
-                sid=np.array([0]),
-                tid=np.array([0]),
-                n_cores=1,
             )
 
             res_sep = _compute_dur_res_series(
-                viterbi[0][1], n_S, mus_d, d_fams, starts_with_first, tvdtpi
+                viterbi[1], n_S, mus_d, d_fams, starts_with_first, tvdtpi
             )
 
             # Compute residual of duration MAP under model for stage durations
@@ -2908,16 +3611,14 @@ class HSMMFamily(GSMMFamily):
             res = res.reshape(1, -1)
 
         elif resid_type == "posterior_dur":
-            state_samples = self.sample_posterior_states(
+            state_samples = self.sample_posterior_series(
+                series,
                 coef,
                 coef_split_idx,
                 ys,
                 Xs,
-                n_samples=n_samples,
                 seed=seed,
-                sid=np.array([0]),
-                tid=np.array([0]),
-                n_cores=1,
+                n_samples=n_samples,
             )
 
             res = np.zeros((1, n_S, n_samples))
@@ -2926,7 +3627,7 @@ class HSMMFamily(GSMMFamily):
 
                 # Extract durations given sampled series
                 res_sep = _compute_dur_res_series(
-                    state_samples[0][1][:, s],
+                    state_samples[1][:, s],
                     n_S,
                     mus_d,
                     d_fams,
@@ -3052,8 +3753,12 @@ class HSMMFamily(GSMMFamily):
             tid = sid
 
         # Split up ys, Xs
-        split_Ys, split_Xs = _split_matrices(
-            ys,
+        split_Ys, split_Xs, _ = _split_matrices(
+            (
+                ys
+                if self.fast_hmp is False or resid_type != "posterior_dur"
+                else self.cross_cor
+            ),
             Xs,
             shared_pars,
             shared_m,
@@ -3066,7 +3771,11 @@ class HSMMFamily(GSMMFamily):
             False if fix_T_pi else True,
             False if fix_T_pi else True,
             starts_with_first,
-            Lrhoi,
+            (
+                Lrhoi
+                if self.fast_hmp is False or resid_type != "posterior_dur"
+                else None
+            ),
         )
 
         # Now compute llk for every individual series and then sum up
@@ -3080,14 +3789,8 @@ class HSMMFamily(GSMMFamily):
                         series,
                         coef,
                         coef_split_idx,
-                        [
-                            y_split[series] if y_split is not None else None
-                            for y_split in split_Ys
-                        ],
-                        [
-                            X_split[series] if X_split is not None else None
-                            for X_split in split_Xs
-                        ],
+                        split_Ys[series],
+                        split_Xs[series],
                         resid_type,
                         seed,
                         n_samples,
@@ -3103,24 +3806,18 @@ class HSMMFamily(GSMMFamily):
                 [s for s in range(n_series)],
                 repeat(coef),
                 repeat(coef_split_idx),
-                [
-                    [
-                        y_split[series] if y_split is not None else None
-                        for y_split in split_Ys
-                    ]
-                    for series in range(n_series)
-                ],
-                [
-                    [
-                        X_split[series] if X_split is not None else None
-                        for X_split in split_Xs
-                    ]
-                    for series in range(n_series)
-                ],
+                split_Ys,
+                split_Xs,
                 repeat(resid_type),
                 repeat(seed),
                 repeat(n_samples),
             )
+
+            # No need to copy cross_cor
+            orig_cross_cor = None
+            if self.cross_cor is not None:
+                orig_cross_cor = self.cross_cor
+                self.cross_cor = None
 
             with warnings.catch_warnings():  # Supress warnings
                 warnings.simplefilter("ignore")
@@ -3129,6 +3826,9 @@ class HSMMFamily(GSMMFamily):
                     residss = pool.starmap(self.series_resid, args)
 
                 res = np.concatenate(residss, axis=0)
+
+            if orig_cross_cor is not None:
+                self.cross_cor = orig_cross_cor
 
         # Transform to normality?
         if transform_to_normal and resid_type == "forward":
@@ -3191,6 +3891,10 @@ class HSMMFamily(GSMMFamily):
         fix_T_pi = self.fix_T_pi
         tvdtpi = self.tvdtpi
 
+        flats = None
+        if self.hmp_d_offset and self.fast_hmp is False:
+            _, _, _, _, flats = self._group_hmp_events(series)
+
         # Extract rho
         rho = None
         if Lrhoi is not None:
@@ -3202,10 +3906,11 @@ class HSMMFamily(GSMMFamily):
 
         # We can pre-compute the bs and ds - i.e., observation probabilities and
         # duration probabilities
-        _, _, _, _, _, bs, ds, Ts, pis = _compute_series_probs(
+        cross_corr, mus, _, _, _, bs, ds, Ts, pis = _compute_series_probs(
             coef,
             coef_split_idx,
             shared_pars,
+            self.shared_j,
             shared_m,
             ys,
             Xs,
@@ -3226,11 +3931,14 @@ class HSMMFamily(GSMMFamily):
             hmp_fam,
             rho,
             tvdtpi,
+            self.fast_hmp,
+            False if self.fast_hmp else self.hmp_d_offset,
+            flats,
         )
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
-                Ts = T[series]
-                pis = pi[series]
+                Ts = T[self.T_index[series]]
+                pis = pi[self.pi_index[series]]
 
             else:
                 Ts = T
@@ -3239,7 +3947,7 @@ class HSMMFamily(GSMMFamily):
         if np.any(np.isnan(ds) | np.isinf(ds)):
             return -np.inf
 
-        if np.any(np.isnan(bs) | np.isinf(bs)):
+        if self.fast_hmp is False and np.any(np.isnan(bs) | np.isinf(bs)):
             return -np.inf
 
         if np.any(np.isnan(pis) | np.isinf(pis)):
@@ -3248,29 +3956,85 @@ class HSMMFamily(GSMMFamily):
         if np.any(np.isnan(Ts) | np.isinf(Ts)):
             return -np.inf
 
-        # Now compute llk #
-        if is_hmp:
-            hmp_code = 1
-        else:
-            hmp_code = 0
+        # Now compute llk
+        if self.fast_hmp:
 
-        llk = hsmm.llk(
-            bs,
-            ds,
-            Ts,
-            pis,
-            event_template if hmp_code != 0 else np.zeros(1),
-            scale if hmp_code != 0 else 1,
-            n_T,
-            D,
-            n_S,
-            event_width if hmp_code != 0 else 0,
-            starts_with_first,
-            ends_with_last,
-            ends_in_last,
-            hmp_code,
-            tvdtpi,
-        )
+            # The following computes the log-likelihood of a HMP model as described by
+            # Weindel, van Maanen and Borst (2024). Code taken & modified from:
+            # https://github.com/GWeindel/hmp/blob/devel/hmp/models/event.py
+            # print(cross_corr.shape, n_T)
+            n_events = (n_S - 1) // 2
+            n_flats = n_events + 1
+            gains = np.zeros((n_T, n_events), dtype=np.float64)
+
+            for i in range(cross_corr.shape[1]):
+                # computes the gains, i.e. the log of the likelihood ratio between
+                # event present and absent.
+                gains = (
+                    gains
+                    + cross_corr[:, [i]] * mus[:, i, :]
+                    - mus[:, i, :] ** 2 / scale
+                )
+            gains = np.exp(gains)
+
+            # pmf for each flat with appropriate zeroing to prevent overlap between events
+            pmf = np.zeros([n_T, n_flats], dtype=np.float64)
+            end = min(n_T, D - 1)
+
+            # Figure out which transitions are actually happening on this trial.
+            # Needs translation from bump/flat world to event/stage world.
+            n_events, events, stages, _, _ = self._group_hmp_events(series)
+
+            # Handle first stage here, rest in loop over transitions below
+            pmf[:end, stages[0]] = ds[:end, stages[0]]
+            pmf[: self.hmp_location[stages[0]], stages[0]] = 0
+
+            # Loop over transitions
+            for stage in stages[1:]:
+                pmf[:end, stage] = ds[:end, stage]
+                pmf[: self.hmp_location[stage], stage] = 0
+
+            # Now modified forward pass
+            forward = np.zeros((n_T, n_events), dtype=np.float64)
+            forward[:, 0] = pmf[:, stages[0]] * gains[:, events[0]]
+
+            for evidx in np.arange(1, n_events):
+                # convolution between pmf and previous forward multiplied by gain
+                forward[:, evidx] = (
+                    np.convolve(forward[:, evidx - 1], pmf[:, stages[evidx]])[:n_T]
+                    * gains[:, events[evidx]]
+                )
+
+            # Account for final distribution
+            forward[:, -1] *= np.flip(pmf[:, stages[-1]])
+
+            # Compute trial llk.
+            forward = np.clip(forward, 0, None)
+            llk = np.log(forward[:, -1].sum())
+
+        else:
+            if is_hmp:
+                hmp_code = 1
+            else:
+                hmp_code = 0
+
+            llk = hsmm.llk(
+                bs,
+                ds,
+                Ts,
+                pis,
+                event_template if hmp_code != 0 else np.zeros(1),
+                scale if hmp_code != 0 else 1,
+                n_T,
+                D,
+                n_S,
+                event_width if hmp_code != 0 else 0,
+                starts_with_first,
+                ends_with_last,
+                ends_in_last,
+                hmp_code,
+                tvdtpi,
+            )
         return llk
 
     def llk(
@@ -3327,7 +4091,7 @@ class HSMMFamily(GSMMFamily):
             tid = self.llkargs[4]
         M = self.llkargs[6]
         starts_with_first = self.llkargs[7]
-        n_cores = self.llkargs[10]
+        n_cores = self.n_cores_llk
         shared_pars = self.llkargs[12]
         shared_m = self.llkargs[13]
         Lrhoi = self.llkargs[16]
@@ -3345,8 +4109,8 @@ class HSMMFamily(GSMMFamily):
             llc = np.log(d0[d0 != 1]).sum()
 
         # Split up ys, Xs
-        split_Ys, split_Xs = _split_matrices(
-            ys,
+        split_Ys, split_Xs, _ = _split_matrices(
+            ys if self.fast_hmp is False else self.cross_cor,
             Xs,
             shared_pars,
             shared_m,
@@ -3359,7 +4123,7 @@ class HSMMFamily(GSMMFamily):
             False if fix_T_pi else True,
             False if fix_T_pi else True,
             starts_with_first,
-            Lrhoi,
+            None if self.fast_hmp else Lrhoi,
         )
 
         # Now compute llk for every individual series and then sum up
@@ -3373,14 +4137,8 @@ class HSMMFamily(GSMMFamily):
                         series,
                         coef,
                         coef_split_idx,
-                        [
-                            y_split[series] if y_split is not None else None
-                            for y_split in split_Ys
-                        ],
-                        [
-                            X_split[series] if X_split is not None else None
-                            for X_split in split_Xs
-                        ],
+                        split_Ys[series],
+                        split_Xs[series],
                     )
 
                     llk += llks
@@ -3391,21 +4149,15 @@ class HSMMFamily(GSMMFamily):
                 [s for s in range(n_series)],
                 repeat(coef),
                 repeat(coef_split_idx),
-                [
-                    [
-                        y_split[series] if y_split is not None else None
-                        for y_split in split_Ys
-                    ]
-                    for series in range(n_series)
-                ],
-                [
-                    [
-                        X_split[series] if X_split is not None else None
-                        for X_split in split_Xs
-                    ]
-                    for series in range(n_series)
-                ],
+                split_Ys,
+                split_Xs,
             )
+
+            # No need to copy cross_cor
+            orig_cross_cor = None
+            if self.cross_cor is not None:
+                orig_cross_cor = self.cross_cor
+                self.cross_cor = None
 
             with warnings.catch_warnings():  # Supress warnings
                 warnings.simplefilter("ignore")
@@ -3414,6 +4166,9 @@ class HSMMFamily(GSMMFamily):
                     llks = pool.starmap(self.series_llk, args)
 
                 llk = np.sum(llks)
+
+            if orig_cross_cor is not None:
+                self.cross_cor = orig_cross_cor
 
         if np.isnan(llk):
             llk = -np.inf
@@ -3430,6 +4185,7 @@ class HSMMFamily(GSMMFamily):
         coef_split_idx: list[int],
         ys: list[np.ndarray],
         Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
+        keep_idx: list[bool],
     ) -> np.ndarray:
         """Computes gradient of log-likelihood of model for a single series.
 
@@ -3450,6 +4206,9 @@ class HSMMFamily(GSMMFamily):
         :param Xs: A list of sparse model matrices per likelihood parameter. Can contain None for
             indices for which model matrix should not be formed explicitly.
         :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
+        :param keep_idx: A boolean index list indicating which coefficients in ``coef`` are
+            dependent on this series.
+        :type keep_idx: list[bool]
         :return:  Gradient as array of shape (-1,1)
         :rtype: np.ndarray
         """
@@ -3466,6 +4225,7 @@ class HSMMFamily(GSMMFamily):
         ends_in_last = self.llkargs[9]
         build_mat_idx = self.llkargs[11]
         shared_pars = self.llkargs[12]
+        shared_j = self.shared_j
         shared_m = self.llkargs[13]
         T = self.llkargs[14]
         pi = self.llkargs[15]
@@ -3491,37 +4251,66 @@ class HSMMFamily(GSMMFamily):
         ]
         Xs = Xfix
 
+        # Drop from coef
+        full_coef = coef.shape[0] - self.extra_coef
+
+        # First get theta
+        split_coef = np.split(coef, coef_split_idx)
+        thetas = split_coef[-1].flatten()
+
+        # Now re-compute split_coef
+        split_coef_kept = []
+        keep_coef = []
+        for xi, keep_idxX in enumerate(keep_idx):
+            cidx = keep_idxX if keep_idxX is not None else keep_idx[build_mat_idx[xi]]
+            keep_coef.extend(cidx)
+            split_coef_kept.append(split_coef[xi][cidx])
+        split_coef = split_coef_kept
+
         # Extract some extra info and define storage
         n_T = len(ys[0])  # Number of time-points in this series
         event_width = None if event_template is None else len(event_template)
 
         # We can pre-compute the bs and ds - i.e., observation probabilities and duration
         # probabilities - and their gradients
-        if is_hmp:
-            y_mat = np.zeros((n_T, M), order="F")
-            mus = np.zeros((n_T, M, n_S), order="F")
-            bs = np.zeros((n_T, event_width, n_S), order="F")
-
-            # Compute weights from rho
-            if rho is not None:
-
-                d0 = 1 / np.sqrt(1 - np.power(rho, 2))  # weight current mean
-                d1 = -rho / np.sqrt(1 - np.power(rho, 2))  # weight previous mean
-
-        else:
-            y_mat = None
-            mus = None
-            bs = np.zeros((n_T, n_S), order="F")
-
         if tvdtpi:
             ds = np.zeros(
                 (D - 1, n_S * (1 if starts_with_first else 2), n_T), order="F"
             )
         else:
             ds = np.zeros((D - 1, n_S * (1 if starts_with_first else 2)), order="F")
-        d_val = np.arange(1, D).reshape(-1, 1)
+        d_val = (
+            np.arange(D - 1).reshape(-1, 1)
+            if self.fast_hmp
+            else np.arange(1, D).reshape(-1, 1)
+        )
+
         state_vals = np.arange(0, n_S - 1).reshape(-1, 1)
         pi_vals = np.arange(0, n_S).reshape(-1, 1)
+
+        if is_hmp is False:
+            mus = None
+            cross_corr = None
+            bs = np.zeros((n_T, n_S), order="F")
+        else:
+            cross_corr = np.zeros((n_T, M), order="F")
+            if self.fast_hmp:
+                n_events = (n_S - 1) // 2
+                n_flats = n_events + 1
+                mus = np.zeros((n_T, M, n_events), order="F")
+                ds = np.zeros((D - 1, n_flats), order="F")
+            else:
+                mus = np.zeros((n_T, M, n_S), order="F")
+                bs = np.zeros((n_T, event_width, n_S), order="F")
+
+                if self.hmp_d_offset:
+                    _, _, _, _, flats = self._group_hmp_events(series)
+
+                # Compute weights from rho
+                if rho is not None:
+
+                    d0 = 1 / np.sqrt(1 - np.power(rho, 2))  # weight current mean
+                    d1 = -rho / np.sqrt(1 - np.power(rho, 2))  # weight previous mean
 
         b_grad = None
         d_grad = None
@@ -3531,8 +4320,7 @@ class HSMMFamily(GSMMFamily):
         j_idx_grad = None
         m_idx_grad = None
 
-        split_coef = np.split(coef, coef_split_idx)
-        total_coef = 0
+        total_coef = 0  # total number of coef (after dropping)
 
         # First observation probabilities #
 
@@ -3542,37 +4330,53 @@ class HSMMFamily(GSMMFamily):
 
         # Lists below hold list per par. Each list contains at least one eta/X index/list to
         # be filled with duplicate coefficient indices
-        shared_eta = []
-        shared_X = []
-        shared_coef_idx = []
+        shared_eta = [
+            [] for _ in range(1 if obs_fams[0][0] is None else obs_fams[0][0].n_par)
+        ]
+        shared_X = [
+            [] for _ in range(1 if obs_fams[0][0] is None else obs_fams[0][0].n_par)
+        ]
+        shared_coef_idx = {}
+        # Dict with states that have at least one shared eta. value is another dict with pars for
+        # keys and lists for values. Each list contains indices in shared_eta[par] associated with
+        # the key state.
+        shared_j_dict = None if shared_j is None else {}
 
         # List below holds indices of all duplicated coef so that we can later exclude them
         shared_coef_idx_flat = []
-        for par in shared_pars:
+        for pari, par in enumerate(shared_pars):
 
             midx = 1
             if shared_m is False:
                 midx = M
 
-            shared_eta.append([])
-            shared_X.append([])
-            shared_coef_idx.append([])
+            if par not in shared_coef_idx:
+                shared_coef_idx[par] = []
+            if shared_j is not None:
+                for j in shared_j[pari]:
+                    if j not in shared_j_dict:
+                        shared_j_dict[j] = {}
+                    if par not in shared_j_dict[j]:
+                        shared_j_dict[j][par] = []
 
             # Compute shared part of eta per parameter and m and collect
             # X index + add list to be populated with duplicated/shared coef
             for m in range(midx):
+                if shared_j is not None:
+                    for j in shared_j[pari]:
+                        shared_j_dict[j][par].append(len(shared_eta[par]))
                 shared_eta[par].append(Xs[idx] @ split_coef[idx])
                 shared_X[par].append(idx)
                 shared_coef_idx[par].append([])
                 idx += 1
 
         # print("OBS:")
-        thetas = split_coef[-1].flatten()
         theta_idx = 0
         # Will need to keep track of position of theta gradients
         # since they will need to be moved to the end
         theta_grad_idx = []
-        for j in range(n_S):
+        evidx = 1
+        for j in range(n_S if self.fast_hmp is False else n_events):
 
             iterM = M
             # If emission model is multivariate Gaussian, then it has M n_par!
@@ -3611,6 +4415,10 @@ class HSMMFamily(GSMMFamily):
                         # print(j,split_coef[idx])
                         etasbjm.append(Xs[idx] @ split_coef[idx])
 
+                        # Can alrady update total coef, but needs to be modified
+                        # below in case of shared coef
+                        total_coef += Xs[idx].shape[1]
+
                         # Now handle any shared model component:
                         # 1) add shared eta to etasbjm
                         # 2) expand Xsj[-1] column-wise by shared model matrix
@@ -3620,43 +4428,66 @@ class HSMMFamily(GSMMFamily):
                         if isinstance(jmbFam, MultiGauss):
                             shared_par_idx = 0
 
-                        if shared_par_idx in shared_pars:
-                            midx = 0
+                        if _check_shared(j, shared_par_idx, shared_pars, shared_j_dict):
+                            eidx = 0
+                            shared_j_it = (
+                                1
+                                if shared_j is None
+                                else len(shared_j_dict[j][shared_par_idx])
+                            )
                             if shared_m is False:
-                                midx = m
+                                eidx = m
                                 if isinstance(jmbFam, MultiGauss):
-                                    midx = par
+                                    eidx = par
 
-                            # 1)
-                            etasbjm[-1] += shared_eta[shared_par_idx][midx]
+                                if shared_j is not None:
+                                    shared_j_it //= M
 
-                            # 2)
-                            Xsj[-1] = scp.sparse.hstack(
-                                (Xsj[-1], Xs[shared_X[shared_par_idx][midx]])
-                            )
+                            for _ in range(shared_j_it):
+                                seidx = (
+                                    eidx
+                                    if shared_j is None
+                                    else shared_j_dict[j][shared_par_idx][eidx]
+                                )
 
-                            # 3)
-                            start_idx = total_coef + Xs[idx].shape[1]
-                            stop_idx = (
-                                total_coef
-                                + Xs[idx].shape[1]
-                                + Xs[shared_X[shared_par_idx][midx]].shape[1]
-                            )
+                                # 1)
+                                etasbjm[-1] += shared_eta[shared_par_idx][seidx]
 
-                            # Make sure total coef reflects duplicated coef
-                            total_coef += Xs[shared_X[shared_par_idx][midx]].shape[1]
+                                # 2)
+                                if isinstance(Xsj[-1], np.ndarray):
+                                    Xsj[-1] = np.hstack(
+                                        (Xsj[-1], Xs[shared_X[shared_par_idx][seidx]])
+                                    )
+                                else:
+                                    Xsj[-1] = scp.sparse.hstack(
+                                        (Xsj[-1], Xs[shared_X[shared_par_idx][seidx]])
+                                    )
 
-                            shared_idx = np.arange(
-                                start_idx,
-                                stop_idx,
-                            )
+                                # 3)
+                                start_idx = total_coef
+                                stop_idx = (
+                                    total_coef
+                                    + Xs[shared_X[shared_par_idx][seidx]].shape[1]
+                                )
 
-                            shared_coef_idx[shared_par_idx][midx].append(shared_idx)
+                                # Make sure total coef reflects duplicated coef
+                                total_coef += Xs[shared_X[shared_par_idx][seidx]].shape[
+                                    1
+                                ]
 
-                            shared_coef_idx_flat.extend(shared_idx)
+                                shared_idx = np.arange(
+                                    start_idx,
+                                    stop_idx,
+                                )
+
+                                shared_coef_idx[shared_par_idx][seidx].append(
+                                    shared_idx
+                                )
+
+                                shared_coef_idx_flat.extend(shared_idx)
+                                eidx += 1 if shared_m else M
 
                         musbjm.append(jmbFam.links[par].fi(etasbjm[-1]))
-                        total_coef += Xs[idx].shape[1]
                         idx += 1
 
                     if isinstance(jmbFam, MultiGauss):
@@ -3722,11 +4553,14 @@ class HSMMFamily(GSMMFamily):
                         # state j and signal m
                         if b_grad is None:
                             b_grad = grad_par
-                            j_idx_grad = np.zeros(grad_par.shape[1]) + j
+                            j_idx_grad = np.zeros(grad_par.shape[1], dtype=np.int32) + j
                         else:
                             b_grad = np.concatenate([b_grad, grad_par], axis=1)
                             j_idx_grad = np.concatenate(
-                                [j_idx_grad, np.zeros(grad_par.shape[1]) + j]
+                                [
+                                    j_idx_grad,
+                                    np.zeros(grad_par.shape[1], dtype=np.int32) + j,
+                                ]
                             )
 
                     # Have gradients with respect to coef but need gradients with respect
@@ -3755,7 +4589,7 @@ class HSMMFamily(GSMMFamily):
                                     [b_grad, dldtheta.reshape(-1, 1)], axis=1
                                 )
                                 j_idx_grad = np.concatenate(
-                                    [j_idx_grad, np.zeros(1) + j]
+                                    [j_idx_grad, np.zeros(1, dtype=np.int32) + j]
                                 )
 
                                 # Reset partial of R
@@ -3775,63 +4609,75 @@ class HSMMFamily(GSMMFamily):
                 # Assume HMP/HSMMMVPA pattern for observation model - response variable has to
                 # be cross-correlation between pca components and pattern
                 else:
-
-                    if j % 2 == 1:
+                    if self.fast_hmp or j % 2 == 1:
                         # Only first y associated with state j and signal m is not None
                         yJM = ys[idx]
+                        grad_par = Xs[idx]
 
                         etasbjm = [Xs[idx] @ split_coef[idx]]
+
+                        total_coef += Xs[idx].shape[1]
 
                         # Now handle any shared model component:
                         # 1) add shared eta to etasbjm
                         # 2) expand Xsj[-1] column-wise by shared model matrix - this happens
                         #    later!
                         # 3) collect indices of duplicated coefficients
-                        if len(shared_pars) > 0:
-                            midx = 0
+                        j_sidx = evidx if self.fast_hmp else j
+
+                        if _check_shared(j_sidx, 0, shared_pars, shared_j_dict):
+                            eidx = 0
+                            shared_j_it = (
+                                1 if shared_j is None else len(shared_j_dict[j_sidx][0])
+                            )
                             if shared_m is False:
-                                midx = m
+                                eidx = m
+                                if shared_j is not None:
+                                    shared_j_it //= M
 
-                            # 1)
-                            etasbjm[-1] += shared_eta[0][midx]
+                            for _ in range(shared_j_it):
+                                seidx = (
+                                    eidx
+                                    if shared_j is None
+                                    else shared_j_dict[j_sidx][0][eidx]
+                                )
 
-                            # 3)
-                            start_idx = total_coef + Xs[idx].shape[1]
-                            stop_idx = (
-                                total_coef
-                                + Xs[idx].shape[1]
-                                + Xs[shared_X[0][midx]].shape[1]
-                            )
+                                # 1)
+                                etasbjm[-1] += shared_eta[0][seidx]
 
-                            # Again make sure that total coef reflects duplicates
-                            total_coef += Xs[shared_X[0][midx]].shape[1]
+                                # 2)
+                                if isinstance(grad_par, np.ndarray):
+                                    grad_par = np.hstack(
+                                        (grad_par, Xs[shared_X[0][seidx]])
+                                    )
+                                else:
+                                    grad_par = scp.sparse.hstack(
+                                        (grad_par, Xs[shared_X[0][seidx]])
+                                    )
 
-                            shared_idx = np.arange(
-                                start_idx,
-                                stop_idx,
-                            )
+                                # 3)
+                                start_idx = total_coef
+                                stop_idx = total_coef + Xs[shared_X[0][seidx]].shape[1]
 
-                            shared_coef_idx[0][midx].append(shared_idx)
+                                # Again make sure that total coef reflects duplicates
+                                total_coef += Xs[shared_X[0][seidx]].shape[1]
 
-                            shared_coef_idx_flat.extend(shared_idx)
+                                shared_idx = np.arange(
+                                    start_idx,
+                                    stop_idx,
+                                )
+                                # print(evidx, j, m, eidx, seidx, shared_idx)
+
+                                shared_coef_idx[0][seidx].append(shared_idx)
+                                shared_coef_idx_flat.extend(shared_idx)
+                                eidx += 1 if shared_m else M
 
                         musbjm = etasbjm  # Assume identity link
-                        total_coef += Xs[idx].shape[1]
+
                         mus[:, m, j] = musbjm[0][:, 0]
 
-                        # Get partial derivative of lpb with respect to coef
-                        if 0 in shared_pars:
-                            # Can now complete step 2) for shared model component!
-                            if shared_m is False:
-                                grad_par = scp.sparse.hstack(
-                                    (Xs[idx], Xs[shared_X[0][m]])
-                                )
-                            else:
-                                grad_par = scp.sparse.hstack(
-                                    (Xs[idx], Xs[shared_X[0][0]])
-                                )
-                        else:
-                            grad_par = Xs[idx]
+                        if self.fast_hmp and j == 0:
+                            cross_corr[:, m] = yJM[:, 0]
 
                         # Cast to array
                         grad_par = (
@@ -3845,25 +4691,33 @@ class HSMMFamily(GSMMFamily):
 
                         if b_grad is None:
                             b_grad = grad_par
-                            m_idx_grad = np.zeros(grad_par.shape[1]) + m
-                            j_idx_grad = np.zeros(grad_par.shape[1]) + j
+                            m_idx_grad = np.zeros(grad_par.shape[1], dtype=np.int32) + m
+                            j_idx_grad = np.zeros(grad_par.shape[1], dtype=np.int32) + j
                         else:
                             b_grad = np.concatenate([b_grad, grad_par], axis=1)
                             m_idx_grad = np.concatenate(
-                                [m_idx_grad, np.zeros(grad_par.shape[1]) + m]
+                                [
+                                    m_idx_grad,
+                                    np.zeros(grad_par.shape[1], dtype=np.int32) + m,
+                                ]
                             )
                             j_idx_grad = np.concatenate(
-                                [j_idx_grad, np.zeros(grad_par.shape[1]) + j]
+                                [
+                                    j_idx_grad,
+                                    np.zeros(grad_par.shape[1], dtype=np.int32) + j,
+                                ]
                             )
 
                         idx += 1
+                        if m == (M - 1):
+                            evidx += 2
 
                     # Flat state has no bump and simply gets p(y == zero|\beta) for all obs
                     else:
                         yJM = ys[m]
                         mus[:, m, j] = 0
                         if j == 0:
-                            y_mat[:, m] = yJM[:, 0]
+                            cross_corr[:, m] = yJM[:, 0]
 
             if is_hmp is False:
                 # Turn log-probs into probs again
@@ -3873,9 +4727,13 @@ class HSMMFamily(GSMMFamily):
 
         # Now state duration probabilities ##
         # print("DUR:")
-        for j in range(n_S * (1 if starts_with_first else 2)):
+        f_idx = 0
+        for j in range(
+            (n_S if self.fast_hmp is False else n_flats)
+            * (1 if starts_with_first else 2)
+        ):
 
-            jdFam = d_fams[j]
+            jdFam = d_fams[j if self.fast_hmp is False else f_idx]
             if jdFam is not None:
 
                 etasdj = []
@@ -3899,7 +4757,16 @@ class HSMMFamily(GSMMFamily):
                         lpdd = jdFam.lp(d.reshape(-1, 1), *musdj)
                         lpd.append(lpdd)
                 else:
-                    lpd = jdFam.lp(d_val, *musdj)
+                    if is_hmp and (self.fast_hmp is False) and self.hmp_d_offset:
+                        shift = (
+                            event_width // 2
+                            if (f_idx in [flats[0], flats[-1]])
+                            else event_width
+                        )
+                        d_shift = d_val + shift
+                    else:
+                        d_shift = d_val
+                    lpd = jdFam.lp(d_shift, *musdj)
                 # lpd[np.isnan(lpd) | np.isinf(lpd)] = -np.inf
                 # print(lpd[1])
                 # print(jdFam.lp(d_val[1],musdj[0][0],musdj[1][0]))
@@ -3917,7 +4784,16 @@ class HSMMFamily(GSMMFamily):
                             )
                             d1eta.append(d1etad)
                     else:
-                        d1eta, _, _ = deriv_transform_mu_eta(d_val, musdj, jdFam)
+                        if is_hmp and (self.fast_hmp is False) and self.hmp_d_offset:
+                            shift = (
+                                event_width // 2
+                                if (f_idx in [flats[0], flats[-1]])
+                                else event_width
+                            )
+                            d_shift = d_val + shift
+                        else:
+                            d_shift = d_val
+                        d1eta, _, _ = deriv_transform_mu_eta(d_shift, musdj, jdFam)
                 else:
                     if tvdtpi:
                         d1eta = []
@@ -3933,9 +4809,18 @@ class HSMMFamily(GSMMFamily):
                             ]
                             d1eta.append(d1etad)
                     else:
+                        if is_hmp and (self.fast_hmp is False) and self.hmp_d_offset:
+                            shift = (
+                                event_width // 2
+                                if (f_idx in [flats[0], flats[-1]])
+                                else event_width
+                            )
+                            d_shift = d_val + shift
+                        else:
+                            d_shift = d_val
                         d1eta = [
                             jdFam.dpars(
-                                d_val,
+                                d_shift,
                                 *musdj,
                                 index=d1i,
                                 order=DerivOrder.d1,
@@ -4001,6 +4886,9 @@ class HSMMFamily(GSMMFamily):
 
                     else:
                         rds = np.exp(lpd)  # p(rds[:,j])
+                        # Fix nans/infs before normalizing
+                        if np.any(np.isnan(rds) | np.isinf(rds)):
+                            rds[np.isnan(rds) | np.isinf(rds)] = 0
                         grad_par_d = rds * grad_par
 
                         # To get partial derivatives of normalized probabilities
@@ -4029,8 +4917,10 @@ class HSMMFamily(GSMMFamily):
                         d_grad = np.concatenate([d_grad, grad_par], axis=1)
 
                     j_idx_grad = np.concatenate(
-                        [j_idx_grad, np.zeros(grad_par.shape[1]) + j]
+                        [j_idx_grad, np.zeros(grad_par.shape[1], dtype=np.int32) + j]
                     )
+
+                f_idx += 2
 
             else:
                 if j % 2 == 1:
@@ -4057,11 +4947,13 @@ class HSMMFamily(GSMMFamily):
 
             else:
                 ds[:, j] = np.exp(lpd.flatten())
-                ds[:, j] /= np.sum(ds[:, j])
 
+                # Fix nans/infs before normalizing
                 if np.any(np.isnan(ds[:, j]) | np.isinf(ds[:, j])):
                     # print("problem with ds",j)
                     ds[(np.isnan(ds[:, j]) | np.isinf(ds[:, j])), j] = 0
+
+                ds[:, j] /= np.sum(ds[:, j])
 
         # Done at this point for models with fixed T and pi
         if fix_T_pi is False:
@@ -4172,7 +5064,10 @@ class HSMMFamily(GSMMFamily):
 
                         # Again update j_idx_grad but only at first iter!
                         j_idx_grad = np.concatenate(
-                            [j_idx_grad, np.zeros(grad_par.shape[1]) + j]
+                            [
+                                j_idx_grad,
+                                np.zeros(grad_par.shape[1], dtype=np.int32) + j,
+                            ]
                         )
 
                     # Collect final state transition probabilities
@@ -4270,8 +5165,8 @@ class HSMMFamily(GSMMFamily):
             # print(pi)
         else:
             if isinstance(T, list) and isinstance(pi, list):
-                Ts = T[series]
-                pis = pi[series]
+                Ts = T[self.T_index[series]]
+                pis = pi[self.pi_index[series]]
 
             else:
                 Ts = T
@@ -4315,6 +5210,164 @@ class HSMMFamily(GSMMFamily):
                 n_S > 2,
                 tvdtpi,
             )
+        elif self.fast_hmp:
+            # Now for hmp..
+
+            # The following computes gradient of the log-likelihood of a HMP model as
+            # described by Weindel, van Maanen and Borst (2024). Code taken & modified from:
+            # https://github.com/GWeindel/hmp/blob/devel/hmp/models/event.py
+            n_events = (n_S - 1) // 2
+            n_flats = n_events + 1
+            gains = np.zeros((n_T, n_events), dtype=np.float64)
+
+            # Derivatives of gains with respect to coef
+            for m in range(cross_corr.shape[1]):
+                # computes the gains, i.e. the log of the likelihood ratio between
+                # event present and absent.
+                m_gain = cross_corr[:, [m]] * mus[:, m, :] - mus[:, m, :] ** 2 / scale
+                gains += m_gain
+
+                # deriv of m_gain with respect to mus shape: (n_T, n_events)
+                dgdmu = cross_corr[:, [m]] - 2 * mus[:, m, :] / scale
+
+                # Index coefficients associated with channel m
+                gidx = m_idx_grad == m
+
+                # Get corresponding event index for all coef associated with
+                # channel m
+                gjidx = j_idx_grad[: b_grad.shape[1]][gidx]
+
+                # Compute derivatives of m_gain with respect to coef
+                b_grad[:, gidx] *= dgdmu[:, gjidx]
+
+            gains = np.exp(gains)  # = exp(m_gain[0]) * exp(m_gain[1]), ...
+
+            # Now finalize deriv of gains with respect to coef
+            b_grad *= gains[:, j_idx_grad[: b_grad.shape[1]]]
+
+            # Done with emissions part
+
+            # pmf for each flat with appropriate zeroing to prevent overlap between events
+            end = min(n_T, D - 1)
+            if n_T > d_grad.shape[0]:
+                d_grad = np.concatenate(
+                    (d_grad, np.zeros((n_T - d_grad.shape[0], d_grad.shape[1]))), axis=0
+                )
+                ds = np.concatenate(
+                    (ds, np.zeros((n_T - ds.shape[0], ds.shape[1]))), axis=0
+                )
+            elif d_grad.shape[0] > end:
+                d_grad = d_grad[:end, :]
+                ds = ds[:end, :]
+
+            # Figure out which transitions are actually happening on this trial.
+            # Needs translation from bump/flat world to event/stage world.
+            n_events, events, stages, _, _ = self._group_hmp_events(series)
+
+            # Handle first stage here, rest in loop over transitions below
+            # Get coefficients associated with pmf of stage
+            gidx = (j_idx_grad == stages[0])[b_grad.shape[1] :]  # noqa: E203
+            ds[: self.hmp_location[stages[0]], stages[0]] = 0
+            # Zero grads accordingly as well
+            d_grad[: self.hmp_location[stages[0]], gidx] = 0
+
+            # Loop over transitions
+            for stage in stages[1:]:
+
+                # Get coefficients associated with pmf of stage
+                gidx = (j_idx_grad == stage)[b_grad.shape[1] :]  # noqa: E203
+
+                ds[: self.hmp_location[stage], stage] = 0
+                d_grad[: self.hmp_location[stage], gidx] = 0
+
+            # Done with durations part
+
+            # Now modified forward pass
+            forward = ds[:, stages[0]] * gains[:, events[0]]
+
+            # Deriv of forward with respect to coefficients (no cross dependencies
+            # between emission and latent process in a hmp model)
+            tgrad = np.zeros((n_T, total_coef), dtype=np.float64)
+
+            # Start with coefs associated with gain[0]
+            ggidx = j_idx_grad == events[0]
+            ggidx[b_grad.shape[1] :] = False  # noqa: E203
+            tgrad[:, ggidx] = b_grad[:, ggidx[: b_grad.shape[1]]] * ds[:, [stages[0]]]
+
+            # Now coef associated with pmf[0]
+            gdidx = j_idx_grad == stages[0]
+            gdidx[: b_grad.shape[1]] = False
+            tgrad[:, gdidx] = (
+                d_grad[:, gdidx[b_grad.shape[1] :]]  # noqa: E203
+                * gains[:, [events[0]]]
+            )
+
+            for evidx in np.arange(1, n_events):
+                # convolution between pmf and previous forward multiplied by gain
+                conv = np.convolve(forward, ds[:, stages[evidx]])[:n_T]
+                nextforward = conv * gains[:, events[evidx]]
+
+                # derivative of nextforward is
+                # dconvdcoef * gains[:, event] + conv * dgains[event]dcoef
+
+                # dconvdcoef
+                dconvdcoef = np.zeros_like(tgrad)
+                gdidx = j_idx_grad == stages[evidx]
+                ggidx = j_idx_grad == events[evidx]
+                gdidx[: b_grad.shape[1]] = False
+                ggidx[b_grad.shape[1] :] = False  # noqa: E203
+                for t in range(n_T):
+
+                    tt = np.arange(0, t + 1)
+
+                    dconvdcoef[t, :] += np.sum(
+                        tgrad[tt, :] * ds[t - tt, stages[evidx]].reshape(-1, 1), axis=0
+                    )
+                    dconvdcoef[t, gdidx] += np.sum(
+                        forward[tt].reshape(-1, 1)
+                        * d_grad[:, gdidx[b_grad.shape[1] :]][  # noqa: E203
+                            t - tt, :
+                        ].reshape(t + 1, -1),
+                        axis=0,
+                    )
+
+                tgrad = dconvdcoef * gains[:, [events[evidx]]]
+                tgrad[:, ggidx] += (
+                    conv.reshape(-1, 1) * b_grad[:, ggidx[: b_grad.shape[1]]]
+                )
+
+                forward = nextforward
+
+            # Account for final distribution. Need derivative of:
+            # forward[:] = forward[:] * np.flip(pmf[:, -1])
+
+            # Start with gain
+            ggidx = np.isin(j_idx_grad, events)
+            ggidx[b_grad.shape[1] :] = False  # noqa: E203
+            tgrad[:, ggidx] *= np.flip(ds[:, stages[-1]]).reshape(-1, 1)
+
+            # Also 2 cases for pmf: coef associated with pmf[:, -1] and those not.
+            # First case is special. forward[:] does not depend on coef and for
+            # the pmf deriv we need to account for the flip. Deriv is:
+            gdidx = j_idx_grad == stages[-1]
+            gdidx[: b_grad.shape[1]] = False
+
+            tgrad[:, gdidx] = d_grad[
+                :, gdidx[b_grad.shape[1] :]  # noqa: E203
+            ] * np.flip(forward[:]).reshape(-1, 1)
+
+            # Second case is just like gain case
+            gdidx = (j_idx_grad != stages[-1]) & np.isin(j_idx_grad, stages)
+            gdidx[: b_grad.shape[1]] = False
+            tgrad[:, gdidx] *= np.flip(ds[:, stages[-1]]).reshape(-1, 1)
+
+            # Now update forward one last time
+            forward[:] *= np.flip(ds[:, stages[-1]])
+
+            # Get grad
+            tgrad = np.sum(tgrad, axis=0)
+            grad = tgrad / np.sum(forward)
+
         else:
             # Still not done for hmp
             if is_hmp:
@@ -4363,12 +5416,14 @@ class HSMMFamily(GSMMFamily):
                                         # flat)
                                         Ebump = d0 * Ebump
 
-                                lbs[:, m, d, j] = ld_wrapper(y_mat[:, m], Ebump, scale)
+                                lbs[:, m, d, j] = ld_wrapper(
+                                    cross_corr[:, m], Ebump, scale
+                                )
 
                                 bs[:, d, j] += lbs[:, m, d, j]
                         else:
                             # flat
-                            lbs[:, m, 0, j] = ld_wrapper(y_mat[:, m], 0, scale)
+                            lbs[:, m, 0, j] = ld_wrapper(cross_corr[:, m], 0, scale)
 
                             if rho is not None and j > 0:
                                 # Handle time-lag of last sample of previous bump into current
@@ -4378,7 +5433,7 @@ class HSMMFamily(GSMMFamily):
                                 )
 
                                 lbs[:, m, 1, j] = ld_wrapper(
-                                    y_mat[:, m], d1 * Ebump, scale
+                                    cross_corr[:, m], d1 * Ebump, scale
                                 )
                             else:
                                 lbs[:, m, 1, j] = lbs[:, m, 0, j]
@@ -4399,7 +5454,7 @@ class HSMMFamily(GSMMFamily):
 
             grad = hsmm.llkFTPgrad(
                 bs,
-                y_mat,
+                cross_corr,
                 mus,
                 ds,
                 Ts,
@@ -4431,19 +5486,13 @@ class HSMMFamily(GSMMFamily):
             shared_coef_idx_flat.extend(theta_grad_idx)
             idx = 0  # Reset index
             grad2 = []  # Unique grad
-            for par in shared_pars:
-
-                midx = 1
-                if shared_m is False:
-                    midx = M
+            for par in shared_coef_idx.keys():
 
                 # Compute shared part of grad by summing over shared coef indices
-                for m in range(midx):
+                for m in range(len(shared_coef_idx[par])):
                     grad_shared = np.zeros(Xs[idx].shape[1])
-
                     for shared_idx in shared_coef_idx[par][m]:
                         grad_shared += grad[shared_idx]
-
                     grad2.extend(grad_shared)
 
                     idx += 1
@@ -4456,12 +5505,15 @@ class HSMMFamily(GSMMFamily):
             # These can simply be appended to gradient
             grad2.extend(grad[ind_coef_idx_flat])
 
+            # Now embed in full_grad
+            full_grad = np.zeros(full_coef)
+            full_grad[keep_coef] = grad2
+
             if len(theta_grad_idx) > 0:
                 # Add theta gradients to end of grad
-                grad2.extend(grad[theta_grad_idx])
+                full_grad = np.concatenate((full_grad, grad[theta_grad_idx]))
 
-            # Cast to np array
-            grad = np.array(grad2)
+            grad = full_grad
 
         elif len(theta_grad_idx) > 0:
 
@@ -4475,13 +5527,19 @@ class HSMMFamily(GSMMFamily):
             # These need to be put first in gradient
             grad2.extend(grad[coef_idx_flat])
 
+            # Now embed in full_grad
+            full_grad = np.zeros(full_coef)
+            full_grad[keep_coef] = grad2
+
             # Add theta gradients to end of grad
-            grad2.extend(grad[theta_grad_idx])
+            grad = np.concatenate((full_grad, grad[theta_grad_idx]))
 
-            # Cast to np array
-            grad = np.array(grad2)
+        else:
+            # Simply embed grad in full grad
+            full_grad = np.zeros(full_coef)
+            full_grad[keep_coef] = grad
+            grad = full_grad
 
-        # print(llk)
         return grad.reshape(-1, 1)
 
     def gradient(
@@ -4528,6 +5586,11 @@ class HSMMFamily(GSMMFamily):
         :rtype: np.ndarray
         """
 
+        # def llk_wrap(x: np.ndarray) -> float:
+        #    return self.llk(x.reshape(-1, 1), coef_split_idx, ys, Xs)
+
+        # gradfd = scp.optimize.approx_fprime(coef.flatten(), llk_wrap).reshape(-1, 1)
+
         # Extract families, transition matrices, etc.
         n_S = self.llkargs[0]
         obs_fams = self.llkargs[1]
@@ -4550,8 +5613,12 @@ class HSMMFamily(GSMMFamily):
             tid = sid
 
         # Split up ys, Xs
-        split_Ys, split_Xs = _split_matrices(
-            ys,
+        (
+            split_Ys,
+            split_Xs,
+            keep_idxs,
+        ) = _split_matrices(
+            ys if self.fast_hmp is False else self.cross_cor,
             Xs,
             shared_pars,
             shared_m,
@@ -4564,7 +5631,8 @@ class HSMMFamily(GSMMFamily):
             False if fix_T_pi else True,
             False if fix_T_pi else True,
             starts_with_first,
-            Lrhoi,
+            None if self.fast_hmp else Lrhoi,
+            True,
         )
 
         # Now compute grad for every individual series and then sum up
@@ -4577,14 +5645,9 @@ class HSMMFamily(GSMMFamily):
                         series,
                         coef,
                         coef_split_idx,
-                        [
-                            y_split[series] if y_split is not None else None
-                            for y_split in split_Ys
-                        ],
-                        [
-                            X_split[series] if X_split is not None else None
-                            for X_split in split_Xs
-                        ],
+                        split_Ys[series],
+                        split_Xs[series],
+                        keep_idxs[series],
                     )
                 # print(grads)
                 if grad is None:
@@ -4598,21 +5661,16 @@ class HSMMFamily(GSMMFamily):
                 [s for s in range(n_series)],
                 repeat(coef),
                 repeat(coef_split_idx),
-                [
-                    [
-                        y_split[series] if y_split is not None else None
-                        for y_split in split_Ys
-                    ]
-                    for series in range(n_series)
-                ],
-                [
-                    [
-                        X_split[series] if X_split is not None else None
-                        for X_split in split_Xs
-                    ]
-                    for series in range(n_series)
-                ],
+                split_Ys,
+                split_Xs,
+                keep_idxs,
             )
+
+            # No need to copy cross_cor!
+            orig_cross_cor = None
+            if self.cross_cor is not None:
+                orig_cross_cor = self.cross_cor
+                self.cross_cor = None
 
             with warnings.catch_warnings():  # Supress warnings
                 warnings.simplefilter("ignore")
@@ -4622,4 +5680,8 @@ class HSMMFamily(GSMMFamily):
 
                 grad = np.sum(grads, axis=0)
 
+            if orig_cross_cor is not None:
+                self.cross_cor = orig_cross_cor
+
+        # print(np.abs(gradfd - grad).max())
         return grad

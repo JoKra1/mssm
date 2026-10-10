@@ -1196,6 +1196,9 @@ class GSMM:
             if "n_samples" not in sample_hessian_options:
                 sample_hessian_options["n_samples"] = N_u
 
+        # Can call pre-fit setup of family now
+        self.family.prefit_setup(ys, Xs)
+
         # Now fit model
         coef, H, LV, LV_linop, total_edf, term_edfs, penalty, smooth_pen, fit_info = (
             solve_generalSmooth_sparse(
