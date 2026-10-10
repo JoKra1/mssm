@@ -958,9 +958,22 @@ def print_smooth_terms(
         pen_out = 0
         for sti in form.get_smooth_term_idx():
             sterm = terms[sti]
+
+            # Base-case for un-penalized smooth terms
+            t_edf = form.coef_per_term[sti]
             if sterm.by is not None and sterm.id is None:
-                for li in range(len(form.get_factor_levels()[sterm.by])):
-                    t_edf = round(term_edf[edf_idx], ndigits=3)
+                n_levels = len(form.get_factor_levels()[sterm.by])
+
+                # Ajust base-case edf for by levles
+                t_edf = int(t_edf / n_levels)
+
+                # Now loop over by levels
+                for li in range(n_levels):
+
+                    # Optionally extract correct edf for penalized terms.
+                    if sterm.is_penalized:
+                        t_edf = round(term_edf[edf_idx], ndigits=3)
+
                     e_str = (
                         smooth_names[name_idx]
                         + f": {coding_factors[sterm.by][li]}; edf: {t_edf}"
@@ -992,9 +1005,13 @@ def print_smooth_terms(
                         p_idx += 1
 
                     print(e_str)
-                    edf_idx += 1
+
+                    # advance edf vector index only if term was penalized
+                    if sterm.is_penalized:
+                        edf_idx += 1
             else:
-                t_edf = round(term_edf[edf_idx], ndigits=3)
+                if sterm.is_penalized:
+                    t_edf = round(term_edf[edf_idx], ndigits=3)
                 e_str = smooth_names[name_idx] + f"; edf: {t_edf}"
                 if t_edf < pen_cutoff:
                     # Term has effectively been removed from the model
@@ -1023,7 +1040,9 @@ def print_smooth_terms(
                     p_idx += 1
 
                 print(e_str)
-                edf_idx += 1
+
+                if sterm.is_penalized:
+                    edf_idx += 1
 
             name_idx += 1
 
@@ -1303,18 +1322,24 @@ def approx_smooth_p_values(
     Trs = []
 
     # Loop over smooth terms
-    start_coef = form.unpenalized_coef  # Start indexing V_b after un-penalized coef
     edf_idx = 0
     for sti in st_idx:
-        if isinstance(terms[sti], fs) is False:
+        sterm = terms[sti]
+        if isinstance(sterm, fs) is False:
 
             n_s_coef = form.coef_per_term[sti]
             enumerator = range(1)
-            if not terms[sti].by is None and terms[sti].id is None:
-                n_levels = len(form.get_factor_levels()[terms[sti].by])
+            if not sterm.by is None and sterm.id is None:
+                n_levels = len(form.get_factor_levels()[sterm.by])
                 enumerator = range(n_levels)
                 n_s_coef = int(n_s_coef / n_levels)
 
+            # Define base-case for edf of un-penalized smooth terms
+            r = n_s_coef
+
+            # Get start coef idx from formula since lvi is formula-specific block.
+            # This also catches un-penalized terms
+            start_coef = form.coef_idx_per_term[sti][0]
             for _ in enumerator:
                 # Extract coefficients corresponding to smooth
                 end_coef = start_coef + n_s_coef
@@ -1349,8 +1374,9 @@ def approx_smooth_p_values(
                 s = np.flip(s)  # Eigenvalues are in decreasing order now
                 U = np.flip(U, axis=1)
 
-                # get edf for this term and compute r,k,v, and p from Wood (2017)
-                r = term_edf[edf_idx]
+                # Optionally get edf for this term and (re) compute r,k,v, and p from Wood (2017)
+                if sterm.is_penalized:
+                    r = term_edf[edf_idx]
                 k = int(r)
                 if k > 0:
                     v = r - k
@@ -1589,11 +1615,12 @@ def approx_smooth_p_values(
                 Trs.append(Tr)
 
                 # Prepare for next term
-                edf_idx += 1
+                if sterm.is_penalized:
+                    edf_idx += 1
+                # By-level smooths need start_coef updated
                 start_coef += n_s_coef
 
         else:  # Random smooth terms are fully penalized
-            start_coef += form.coef_per_term[sti]
             edf_idx += 1
 
     return ps, Trs
