@@ -214,6 +214,10 @@ class DiscreteModelMatrix:
             W = np.array([])
 
         if not W_is_sparse:
+            if W is not None and not W.flags.f_contiguous:
+                # C++ side expects Fortran style dense matrix
+                W = np.asfortranarray(W)
+
             W = [W]
 
         return W, hasW, W_is_sparse

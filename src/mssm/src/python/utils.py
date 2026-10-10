@@ -1329,7 +1329,7 @@ def approx_smooth_p_values(
 
             n_s_coef = form.coef_per_term[sti]
             enumerator = range(1)
-            if not sterm.by is None and sterm.id is None:
+            if sterm.by is not None and sterm.id is None:
                 n_levels = len(form.get_factor_levels()[sterm.by])
                 enumerator = range(n_levels)
                 n_s_coef = int(n_s_coef / n_levels)

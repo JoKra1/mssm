@@ -1317,7 +1317,8 @@ class f(GammTerm):
         if self.is_identifiable and self.te:
             if self.Z[0].type == ConstType.QR:
                 if discrete:
-                    dt.Q = self.Z[0].Z
+                    # Force same flags as dt.unique_matrices gets.
+                    dt.Q = np.asfortranarray(self.Z[0].Z)
                 else:
                     matrix_term = matrix_term @ self.Z[0].Z
 
