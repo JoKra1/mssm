@@ -967,7 +967,8 @@ def sample_mssm(
             ep = np.log(np.exp(ep) / orig_scale)
 
             for pidx in range(len(r_pen)):
-                r_pen[pidx].lam = np.exp(ep[pidx])
+                # Fix deprecated NumPy 1.25 warning
+                r_pen[pidx].lam = np.exp(ep[pidx, 0])
 
         eig, U = scp.linalg.eigh(Vpreg)
 
