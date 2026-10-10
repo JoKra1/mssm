@@ -845,7 +845,7 @@ class Formula:
             irsterm = terms[irsti]
 
             t_total_coef, t_unpenalized_coef, t_coef_names = irsterm.get_coef_info(
-                self.has_intercept, factor_levels
+                irsti, factor_levels
             )
 
             self.coef_names.extend(t_coef_names)
@@ -2162,35 +2162,19 @@ def build_penalties(formula) -> list[LambdaTerm]:
     start_idx = formula.unpenalized_coef
 
     if start_idx is None:
-        ValueError("Penalty start index is ill-defined.")
+        raise ValueError("Penalty start index is ill-defined.")
 
     cur_pen_idx = start_idx
     prev_pen_idx = start_idx
 
     for irsti in formula.get_ir_smooth_term_idx():
 
+        # Extract current term
         irsterm = terms[irsti]
-        vars = irsterm.variables
 
-        # Calculate nCoef
-        n_coef = irsterm.nk
-
-        if len(vars) > 1:
-            n_coef = np.prod(irsterm.nk)
-
-        by_levels = None
-        if irsterm.by is not None:
-            by_levels = factor_levels[irsterm.by]
-
+        # Check for penalties
         if not irsterm.is_penalized:
             if len(penalties) == 0:
-
-                added_not_penalized = n_coef
-                if irsterm.by is not None:
-                    added_not_penalized *= len(by_levels)
-                start_idx += added_not_penalized
-                cur_pen_idx = start_idx
-
                 if formula.print_warn:
                     warnings.warn(
                         (
@@ -2228,27 +2212,16 @@ def build_penalties(formula) -> list[LambdaTerm]:
     for sti in formula.get_smooth_term_idx():
 
         sterm = terms[sti]
+
+        # Need some additional variables compared to irf terms for penalty construction.
         vars = sterm.variables
-
-        # Calculate nCoef
-        if len(vars) > 1:
-            n_coef = np.prod(sterm.nk)
-        else:
-            n_coef = sterm.nk
-
         by_levels = None
         if sterm.by is not None:
             by_levels = factor_levels[sterm.by]
 
+        # Again check penalties
         if not sterm.is_penalized:
             if len(penalties) == 0:
-
-                added_not_penalized = n_coef
-                if sterm.by is not None:
-                    added_not_penalized *= len(by_levels)
-
-                start_idx += added_not_penalized
-
                 if formula.print_warn:
                     warnings.warn(
                         (

@@ -2345,11 +2345,17 @@ class irf(GammTerm):
         """
         # Calculate Coef names for impulse response terms
         vars = self.variables
-        n_coef = self.nk
         coef_names = []
 
+        # Compute term_n_coef as for regular smooths, except for the identifiability handling
+        # which is not necessary here.
         if len(vars) > 1:
-            n_coef = np.prod(self.nk)
+            term_n_coef = np.prod(self.nk)
+        else:
+            term_n_coef = self.nk
+
+        # Total coef accounting for potential by keywords.
+        n_coef = term_n_coef
 
         # var label
         var_label = vars[0]
@@ -2362,11 +2368,16 @@ class irf(GammTerm):
 
             for by_level in by_levels:
                 coef_names.extend(
-                    [f"irf_{ti}_{var_label}_{ink}_{by_level}" for ink in range(n_coef)]
+                    [
+                        f"irf_{ti}_{var_label}_{ink}_{by_level}"
+                        for ink in range(term_n_coef)
+                    ]
                 )
 
         else:
-            coef_names.extend([f"irf_{ti}_{var_label}_{ink}" for ink in range(n_coef)])
+            coef_names.extend(
+                [f"irf_{ti}_{var_label}_{ink}" for ink in range(term_n_coef)]
+            )
 
         # Check if term is penalized - if not we need to return the correct number of
         # unpenalized coefficients

@@ -1125,7 +1125,7 @@ class DiscreteModelMatrix:
         return self.__mul__(other)
 
     def is_transposed(self) -> bool:
-        return self.__T
+        return self._T
 
     @property
     def T(self) -> TDiscreteMatrix:
