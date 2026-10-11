@@ -4868,7 +4868,9 @@ class MultiGauss(GSMMFamily):
         for mui in range(self.n_par):
 
             yRmui = RRy[mui, :]
-            grad[total_idx : total_idx + Xfix[mui].shape[1]] = Xfix[mui].T @ yRmui
+            grad[total_idx : total_idx + Xfix[mui].shape[1]] = (  # noqa: E203
+                Xfix[mui].T @ yRmui
+            )
             total_idx += Xfix[mui].shape[1]
 
         # Now partials for variance parameters
