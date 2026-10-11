@@ -2384,7 +2384,7 @@ def REML(
 def sample_lam_t(
     ep: np.ndarray, Vpr: np.ndarray, df: int, n_est: int, b: float, seed: int | None
 ) -> np.ndarray:
-    """Samples :math:`log(\\boldsymbol{\\lambda}) \sim t(\\boldsymbol{\\mu},\\boldsymbol{\\Sigma})`.
+    """Samples :math:`log(\\boldsymbol{\\lambda}) \\sim t(\\boldsymbol{\\mu},\\boldsymbol{\\Sigma})`.
 
     Here t is a multivariate t distribution with mean ``ep`` and covariance matrix ``Vpr`` and
     ``df`` degrees of freedom. ``n_est`` samples are obtained.

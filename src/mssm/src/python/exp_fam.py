@@ -686,7 +686,7 @@ class Family(ABC):
             warnings.simplefilter("ignore")
             G = (y - mu) / (dy1 * V)
         G[np.isnan(G) | np.isinf(G)] = 0
-        grad = np.sum(G * X, axis=0).reshape(-1, 1) / scale
+        grad = X.T @ G / scale
 
         return grad
 
@@ -4868,10 +4868,7 @@ class MultiGauss(GSMMFamily):
         for mui in range(self.n_par):
 
             yRmui = RRy[mui, :]
-
-            grad[total_idx : total_idx + Xfix[mui].shape[1]] = (  # noqa: E203
-                Xfix[mui] * yRmui[:, None]
-            ).sum(axis=0)
+            grad[total_idx : total_idx + Xfix[mui].shape[1]] = Xfix[mui].T @ yRmui
             total_idx += Xfix[mui].shape[1]
 
         # Now partials for variance parameters
@@ -5002,10 +4999,10 @@ class MultiGauss(GSMMFamily):
         for mui in range(self.n_par):
             if is_coef:
                 RRxbarjmui = RRxbarj[mui, :]
-                d2 = -np.sum(Xfix[mui] * RRxbarjmui[:, None], axis=0)
+                d2 = -(Xfix[mui].T @ RRxbarjmui)
             else:
                 RJRpRRJymui = RJRpRRJy[mui, :]
-                d2 = (Xfix[mui] * RJRpRRJymui[:, None]).sum(axis=0)
+                d2 = Xfix[mui].T @ RJRpRRJymui
             Hj.extend(d2)
 
         # And theta:
