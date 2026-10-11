@@ -1,7 +1,7 @@
 # mssm: Mixed Sparse Smooth Models
 
 ![GitHub CI Stable](https://github.com/jokra1/mssm/actions/workflows/python-package.yml/badge.svg?branch=stable)
-![Docs](https://github.com/jokra1/mssm/actions/workflows/documentation.yml/badge.svg?branch=main)
+![Docs](https://github.com/jokra1/mssm/actions/workflows/documentation.yml/badge.svg?branch=stable)
 [![codecov](https://codecov.io/gh/JoKra1/mssm/graph/badge.svg?token=B2NZBO4XJ3)](https://codecov.io/gh/JoKra1/mssm)
 ![preprint](https://img.shields.io/badge/preprint-arXiv%3A2506.13132-orange?link=https%3A%2F%2Farxiv.org%2Fabs%2F2506.13132)
 

@@ -2381,6 +2381,60 @@ def REML(
     return reml + lgdetS / 2 - lgdetXXS / 2 + (Mp * np.log(2 * np.pi)) / 2
 
 
+def sample_lam_t(
+    ep: np.ndarray, Vpr: np.ndarray, df: int, n_est: int, b: float, seed: int | None
+) -> np.ndarray:
+    """Samples :math:`log(\\boldsymbol{\\lambda}) \sim t(\\boldsymbol{\\mu},\\boldsymbol{\\Sigma})`.
+
+    Here t is a multivariate t distribution with mean ``ep`` and covariance matrix ``Vpr`` and
+    ``df`` degrees of freedom. ``n_est`` samples are obtained.
+
+    Returned vector is of dimension (``n_est``,``n_lam``) where ``n_lam`` is the number of
+    log smoothing parameters included in ``ep``.
+
+    :param ep: Mean vector of log smoothing parameters of dimension (``n_lam``,1).
+    :type ep: np.ndarray
+    :param Vpr: Covariance matrix to use for sampling
+    :type Vpr: np.ndarray
+    :param df: Degrees of freedom of the t distribution
+    :type df: int
+    :param n_est: Number of samples to obtain
+    :type n_est: int
+    :param b: Upper limit on the smoothing parameters enforced for all samples.
+    :type b: float
+    :param seed: Random see to use
+    :type seed: int | None
+    :return: Sampled vector of smoothing parameters
+    :rtype: np.ndarray
+    """
+    # Sample log smoothing parameters
+    p_sample = scp.stats.multivariate_t.rvs(
+        loc=np.ndarray.flatten(ep),
+        shape=Vpr,
+        df=df,
+        size=n_est,
+        random_state=seed,
+    )
+
+    # Convert to smoothing parameters
+    p_sample = np.exp(p_sample)
+
+    if len(np.ndarray.flatten(ep)) == 1:  # Single lambda parameter in model
+
+        if (
+            n_est == 1
+        ):  # and single sample (n_est==1) - so p_sample needs to be shape (1,1)
+            p_sample = np.array([p_sample])
+
+        p_sample = p_sample.reshape(n_est, 1)  # p_sample needs to be shape (n_est,1)
+
+    elif n_est == 1:  # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
+        p_sample = np.array([p_sample]).reshape(1, -1)
+
+    p_sample[np.isinf(p_sample)] = b
+    return p_sample
+
+
 def estimateVp(
     model,
     nR: int = 250,
@@ -2706,27 +2760,7 @@ def estimateVp(
 
     if n_c > 1:  # Parallelize grid search
         # Generate next \\lambda values for which to compute REML, and Vb
-        p_sample = scp.stats.multivariate_t.rvs(
-            loc=np.ndarray.flatten(ep), shape=Vpr, df=df, size=n_est, random_state=seed
-        )
-        p_sample = np.exp(p_sample)
-        p_sample[np.isinf(p_sample)] = b
-
-        if len(np.ndarray.flatten(ep)) == 1:  # Single lambda parameter in model
-
-            if (
-                n_est == 1
-            ):  # and single sample (n_est==1) - so p_sample needs to be shape (1,1)
-                p_sample = np.array([p_sample])
-
-            p_sample = p_sample.reshape(
-                n_est, 1
-            )  # p_sample needs to be shape (n_est,1)
-
-        elif (
-            n_est == 1
-        ):  # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
-            p_sample = np.array([p_sample]).reshape(1, -1)
+        p_sample = sample_lam_t(ep, Vpr, df, n_est, b, seed)
 
         minDiag = 0.1 * min(np.sqrt(Vpr.diagonal()))
         # Make sure actual estimate is included once.
@@ -2900,27 +2934,7 @@ def estimateVp(
 
     else:
         # Generate \\lambda values for which to compute REML, and Vb
-        p_sample = scp.stats.multivariate_t.rvs(
-            loc=np.ndarray.flatten(ep), shape=Vpr, df=df, size=n_est, random_state=seed
-        )
-        p_sample = np.exp(p_sample)
-        p_sample[np.isinf(p_sample)] = b
-
-        if len(np.ndarray.flatten(ep)) == 1:  # Single lambda parameter in model
-
-            if (
-                n_est == 1
-            ):  # and single sample (n_est==1) - so p_sample needs to be shape (1,1)
-                p_sample = np.array([p_sample])
-
-            p_sample = p_sample.reshape(
-                n_est, 1
-            )  # p_sample needs to be shape (n_est,1)
-
-        elif (
-            n_est == 1
-        ):  # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
-            p_sample = np.array([p_sample]).reshape(1, -1)
+        p_sample = sample_lam_t(ep, Vpr, df, n_est, b, seed)
 
         # Make sure actual estimate is included once.
         minDiag = 0.1 * min(np.sqrt(Vpr.diagonal()))
@@ -4108,31 +4122,7 @@ def correct_VB(
 
         if n_c > 1:  # Parallelize grid search
             # Generate next \\lambda values for which to compute REML, and Vb
-            p_sample = scp.stats.multivariate_t.rvs(
-                loc=np.ndarray.flatten(ep),
-                shape=Vpr,
-                df=df,
-                size=n_est,
-                random_state=seed,
-            )
-            p_sample = np.exp(p_sample)
-            p_sample[np.isinf(p_sample)] = b
-
-            if len(np.ndarray.flatten(ep)) == 1:  # Single lambda parameter in model
-
-                if (
-                    n_est == 1
-                ):  # and single sample (n_est==1) - so p_sample needs to be shape (1,1)
-                    p_sample = np.array([p_sample])
-
-                p_sample = p_sample.reshape(
-                    n_est, 1
-                )  # p_sample needs to be shape (n_est,1)
-
-            elif (
-                n_est == 1
-            ):  # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
-                p_sample = np.array([p_sample]).reshape(1, -1)
+            p_sample = sample_lam_t(ep, Vpr, df, n_est, b, seed)
 
             minDiag = 0.1 * min(np.sqrt(Vpr.diagonal()))
             # Make sure actual estimate is included once.
@@ -4334,31 +4324,7 @@ def correct_VB(
 
         else:
             # Generate \\lambda values for which to compute REML, and Vb
-            p_sample = scp.stats.multivariate_t.rvs(
-                loc=np.ndarray.flatten(ep),
-                shape=Vpr,
-                df=df,
-                size=n_est,
-                random_state=seed,
-            )
-            p_sample = np.exp(p_sample)
-            p_sample[np.isinf(p_sample)] = b
-
-            if len(np.ndarray.flatten(ep)) == 1:  # Single lambda parameter in model
-
-                if (
-                    n_est == 1
-                ):  # and single sample (n_est==1) - so p_sample needs to be shape (1,1)
-                    p_sample = np.array([p_sample])
-
-                p_sample = p_sample.reshape(
-                    n_est, 1
-                )  # p_sample needs to be shape (n_est,1)
-
-            elif (
-                n_est == 1
-            ):  # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
-                p_sample = np.array([p_sample]).reshape(1, -1)
+            p_sample = sample_lam_t(ep, Vpr, df, n_est, b, seed)
 
             # Make sure actual estimate is included once.
             minDiag = 0.1 * min(np.sqrt(Vpr.diagonal()))
