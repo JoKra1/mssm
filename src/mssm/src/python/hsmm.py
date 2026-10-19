@@ -562,6 +562,10 @@ def _compute_series_probs(
     """
     # Compute (log) probs for an individual series
 
+    # Need number of formulas spent for shared terms for hmp to index
+    # correct response variable
+    n_shared = len(shared_pars) * (1 if shared_m else M)
+
     # First fix ys and Xs for Nones
     yfix = [y if y is not None else ys[0] for y in ys]
     ys = yfix
@@ -888,7 +892,7 @@ def _compute_series_probs(
 
                     # Flats
                     else:
-                        yJM = ys[m]
+                        yJM = ys[n_shared + m]
                         mus[:, m, j] = 0
 
                         if j == 0:
@@ -4238,6 +4242,7 @@ class HSMMFamily(GSMMFamily):
         is_hmp = self.is_hmp
         fix_T_pi = self.fix_T_pi
         tvdtpi = self.tvdtpi
+        n_shared = len(shared_pars) * (1 if shared_m else M)
 
         # Extract rho
         rho = None
@@ -4716,7 +4721,7 @@ class HSMMFamily(GSMMFamily):
 
                     # Flat state has no bump and simply gets p(y == zero|\beta) for all obs
                     else:
-                        yJM = ys[m]
+                        yJM = ys[n_shared + m]
                         mus[:, m, j] = 0
                         if j == 0:
                             cross_corr[:, m] = yJM[:, 0]
