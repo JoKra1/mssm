@@ -2,9 +2,16 @@
 import numpy as np
 from mssm.models import *
 import copy
+import os
 
-max_atol = 100  # 0
-max_rtol = 100  # 1e-6
+# Make test tolerances environ (local dev vs. remote) conditional.
+# See: https://docs.python.org/3/library/os.html#os.getenv
+if os.environ.get("MSSM_DEV_TOL", "0") == "1":
+    max_atol = 0
+    max_rtol = 1e-6
+else:
+    max_atol = 100
+    max_rtol = 100
 
 default_compare_test_kwargs = {
     "correct_V": True,
