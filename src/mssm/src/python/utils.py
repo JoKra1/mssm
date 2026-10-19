@@ -1214,9 +1214,9 @@ def approx_smooth_p_values(
     **Warning:** The resulting p-values are **approximate**. They should only be treated as
     indicative.
 
-    **Note:** Just like in ``mgcv``, the returned p-value is an average: two p-values are computed
-    because of an ambiguity in forming :math:`T_r` and averaged to get the final one. For
-    :math:`T_r` we return the max of the two alternatives.
+    **Note:** As described in section 6.12.1 of Wood (2017), the returned p-value is an average:
+    two p-values are computed because of an ambiguity in forming :math:`T_r` and averaged to get
+    the final one. For :math:`T_r` we return the max of the two alternatives.
 
     References:
      - Davies, R. B. (1980). Algorithm AS 155: The Distribution of a Linear Combination of χ2 \
@@ -1225,7 +1225,6 @@ def approx_smooth_p_values(
         (2nd ed.).
      - Wood, S. N. (2013). On p-values for smooth components of an extended generalized additive \
         model.
-     - ``testStat`` function in mgcv, see: https://github.com/cran/mgcv/blob/master/R/mgcv.r#L3780
 
     :param model: Model for which to compute p values.
     :type model: mssm.models.GSMM | mssm.models.GAMMLSS | mssm.models.GAMM
@@ -1388,14 +1387,9 @@ def approx_smooth_p_values(
                             [1 / lam if lami < k else 0 for lami, lam in enumerate(s)]
                         )
 
-                        sign = np.sign(U[0, :])
-                        U *= sign
-                        RVRI1 = U @ S @ U.T
-
-                        # Also compute inverse for alternative version of Eigen-vectors
-                        # (see Wood, 2017):
-                        U *= sign
-                        RVRI2 = U @ S @ U.T
+                        # No need to compute inverse for alternative version of Eigen-vectors
+                        # somce signs cancel in integer case (see Wood, 2017):
+                        RVRI1 = RVRI2 = U @ S @ U.T
 
                         # And the test statistic defined in Wood (2012)
                         Tr1 = (s_coef.T @ R.T @ RVRI1 @ R @ s_coef)[0, 0]
@@ -1419,11 +1413,6 @@ def approx_smooth_p_values(
                         # Take only eigen-vectors need for the actual product for the test-statistic
                         U = U[:, : k + 1]
 
-                        # Fix sign of Eigen-vectors to sign of first row
-                        # (based on testStat function in mgcv)
-                        sign = np.sign(U[0, :])
-                        U *= sign
-
                         # Now we can reform the diagonal matrix needed for inverting RVR
                         # (computation follows Wood, 2012)
                         S = np.zeros((U.shape[1], U.shape[1]))
@@ -1443,9 +1432,10 @@ def approx_smooth_p_values(
                         # And finally compute the inverse
                         RVRI1 = U @ S @ U.T
 
-                        # Also compute inverse for alternative version of Eigen-vectors
-                        # (see Wood, 2017):
-                        U *= sign
+                        # Fix sign of Eigen-vectors to sign of first row.
+                        # Based on section 6.12.1 in Wood (2017) we can compute p-values for
+                        # both signs and then average
+                        U[:, -1] *= -1
                         RVRI2 = U @ S @ U.T
 
                         # And the test statistic defined in Wood (2012)
@@ -1488,9 +1478,9 @@ def approx_smooth_p_values(
                                 n,
                                 0,
                                 0,
-                                2e-5,
+                                1e-5,
                                 len(n),
-                                20000,
+                                30000,
                             )
                             p2, code2, _ = davies.daviesQF(
                                 np.array([*lb, -Tr2 / rs_df]),
@@ -1498,9 +1488,9 @@ def approx_smooth_p_values(
                                 n,
                                 0,
                                 0,
-                                2e-5,
+                                1e-5,
                                 len(n),
-                                20000,
+                                30000,
                             )
                             p1 = 1 - p1
                             p2 = 1 - p2
