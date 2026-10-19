@@ -4106,6 +4106,7 @@ class HSMMFamily(GSMMFamily):
         llc = 0
         if Lrhoi is not None:
             d0 = Lrhoi.diagonal()
+            # Log det
             llc = np.log(d0[d0 != 1]).sum()
 
         # Split up ys, Xs
@@ -4173,8 +4174,9 @@ class HSMMFamily(GSMMFamily):
         if np.isnan(llk):
             llk = -np.inf
 
-        # Correct for potential ar1 model
-        llk -= llc
+        # Correct for potential ar1 model (remember ar1 model is applied
+        # to each of M signals)
+        llk += M * llc
 
         return llk
 

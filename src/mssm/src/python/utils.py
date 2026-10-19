@@ -98,7 +98,7 @@ def computeFcolsSparsity(
     return fcols, len(fcols) / start_idx, start_idx
 
 
-def computeAr1Chol(formula: Formula, rho: float) -> tuple[scp.sparse.csc_array, float]:
+def computeAr1Chol(formula: Formula, rho: float) -> tuple[scp.sparse.csr_array, float]:
     """Computes the inverse of the transpose of the cholesky of the co-variance (before scaling)
     matrix of an ar1 model.
 
@@ -106,39 +106,52 @@ def computeAr1Chol(formula: Formula, rho: float) -> tuple[scp.sparse.csc_array, 
     :type formula: Formula
     :param rho: ar1 weight.
     :type rho: float
-    :return: Tuple, containing banded inverse Cholesky transpose as a scipy array and the correction
-        needed to get the log-likelihood of the ar1 model (i.e., the root of the log-determiant of
-        the inverse of the co-variance matrix (before scaling)).
-    :rtype: tuple[scp.sparse.csc_array,float]
+    :return: Tuple, containing banded inverse Cholesky transpose as a scipy array and the log
+        determinant part needed to get the log-likelihood of the ar1 model (i.e.,
+        -0.5* log-determiant of the inverse of the co-variance matrix (before scaling)).
+    :rtype: tuple[scp.sparse.csr_array,float]
     """
+
+    if rho >= 1 or rho <= -1:
+        raise ValueError("`rho` must be < 1 and > -1!")
 
     y_flat = formula.y_flat[formula.NOT_NA_flat]
     n_y = len(y_flat)
     d0 = np.tile(1 / np.sqrt(1 - np.power(rho, 2)), n_y)
     d1 = np.tile(-rho / np.sqrt(1 - np.power(rho, 2)), n_y - 1)
 
-    # Correct ar1 process for individual (time) series
+    # Correct ar1 process for individual (time) series.
+    start = np.zeros(n_y, dtype=bool)
+    start[0] = True  # Manually insert first series start
     if formula.series_id is not None:
-        start = np.tile(False, len(formula.y_flat))
-        start[formula.sid] = True
-        start = start[formula.NOT_NA_flat]
+        # Multiple series case, need to find starting points. Start
+        # by expanding formulas.sid
+        exp_id = np.zeros(len(formula.y_flat), dtype=np.int64)
+        exp_id[formula.sid] = 1
+
+        # Now running sum over exp_id assigns series identifier to every
+        # element associated with series. Afterwards we can drop NANs
+        exp_id = np.cumsum(exp_id)[formula.NOT_NA_flat]
+
+        # Now correct start vector
+        start[1:] = exp_id[1:] != exp_id[:-1]
+
+        # Get index vectors
         sid0 = np.where(start)[0]
         sid1 = sid0[1:] - 1
 
+        # And correct diagonals
         d0[sid0] = 1
         d1[sid1] = 0
     else:
-        # Only correct first obs
+        # Base case = only a single series starting at first obs.
         d0[0] = 1
 
     Lrhoi = scp.sparse.diags_array([d0, d1], format="csr", offsets=[0, 1])
 
-    # Log-likelihood correction computed as done by mgcv. Simply the root of the log-determinant of
-    # the inverse of the co-variance matrix (before scaling). see:
-    # https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/bam.r#L2761
-    llc = (n_y - (np.sum(start) if formula.series_id is not None else 1)) * np.log(
-        1 / np.sqrt(1 - np.power(rho, 2))
-    )
+    # -0.5 * Log-determinant of ar1 model as described by Wood (2017)
+    # needs to be added to llk of transformed model.
+    llc = (n_y - np.sum(start)) * np.log(1 / np.sqrt(1 - np.power(rho, 2)))
 
     return Lrhoi, llc
 

@@ -2822,12 +2822,9 @@ class GAMM(GAMMLSS):
             y = self.get_ys()
 
             if self.rho is not None:
-                # Need to correct for the "weights" of the covariance matrix of the ar1 model,
-                # as done in the bam function in
-                # mgcv. see:
-                # https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/bam.r#L2761
+                # Need to add log det part for ar 1 model
                 _, ar_cor = computeAr1Chol(self.formulas[0], self.rho)
-                pen -= ar_cor
+                pen -= ar_cor  # or rather subtract from pen
 
             if self.family.twopar:
                 scale = self.scale
