@@ -108,7 +108,7 @@ def computeAr1Chol(formula: Formula, rho: float) -> tuple[scp.sparse.csr_array, 
     :type rho: float
     :return: Tuple, containing banded inverse Cholesky transpose as a scipy array and the log
         determinant part needed to get the log-likelihood of the ar1 model (i.e.,
-        -0.5* log-determiant of the inverse of the co-variance matrix (before scaling)).
+        -0.5* log-determinant of the co-variance matrix (before scaling)).
     :rtype: tuple[scp.sparse.csr_array,float]
     """
 
@@ -1401,7 +1401,7 @@ def approx_smooth_p_values(
                         )
 
                         # No need to compute inverse for alternative version of Eigen-vectors
-                        # somce signs cancel in integer case (see Wood, 2017):
+                        # since signs cancel in integer case (see Wood, 2017):
                         RVRI1 = RVRI2 = U @ S @ U.T
 
                         # And the test statistic defined in Wood (2012)
@@ -1445,7 +1445,7 @@ def approx_smooth_p_values(
                         # And finally compute the inverse
                         RVRI1 = U @ S @ U.T
 
-                        # Fix sign of Eigen-vectors to sign of first row.
+                        # Fix sign of last Eigen-vector to address ambiguity.
                         # Based on section 6.12.1 in Wood (2017) we can compute p-values for
                         # both signs and then average
                         U[:, -1] *= -1
@@ -1475,8 +1475,10 @@ def approx_smooth_p_values(
                                 n.append(k - 2 + 1)
                                 lb.append(1)
 
-                            # Now the weighted variables
-                            n.extend([1, 1, rs_df])
+                            # Now the weighted variables. Davies code casts n to int, so
+                            # we should use that int for the weight computation as well..
+                            rs_df_int = max(1, int(rs_df))
+                            n.extend([1, 1, rs_df_int])
                             lb.extend([v1, v2])
 
                             # cast to np.array - not lb since we still need to add weight for
@@ -1486,7 +1488,7 @@ def approx_smooth_p_values(
 
                             # Compute as discussed by Wood (2017)
                             p1, code1, _ = davies.daviesQF(
-                                np.array([*lb, -Tr1 / rs_df]),
+                                np.array([*lb, -Tr1 / rs_df_int]),
                                 nc,
                                 n,
                                 0,
@@ -1496,7 +1498,7 @@ def approx_smooth_p_values(
                                 30000,
                             )
                             p2, code2, _ = davies.daviesQF(
-                                np.array([*lb, -Tr2 / rs_df]),
+                                np.array([*lb, -Tr2 / rs_df_int]),
                                 nc,
                                 n,
                                 0,
@@ -1569,10 +1571,10 @@ def approx_smooth_p_values(
                             lb = np.array(lb)
 
                             p1, code1, _ = davies.daviesQF(
-                                lb, nc, n, Tr1, 0, 2e-5, len(n), 20000
+                                lb, nc, n, Tr1, 0, 1e-5, len(n), 30000
                             )
                             p2, code2, _ = davies.daviesQF(
-                                lb, nc, n, Tr2, 0, 2e-5, len(n), 20000
+                                lb, nc, n, Tr2, 0, 1e-5, len(n), 30000
                             )
                             p1 = 1 - min(p1, 1)
                             p2 = 1 - min(p2, 1)
