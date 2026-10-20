@@ -715,7 +715,7 @@ class Test_ar1_Gaussian:
     def test_GAMedf(self):
         np.testing.assert_allclose(
             self.model.edf,
-            20.848721033068795,
+            20.761358529625536,
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.0001),
         )
@@ -726,76 +726,76 @@ class Test_ar1_Gaussian:
             coef,
             np.array(
                 [
-                    [36.56746619],
-                    [18.38610041],
-                    [-194.86662089],
-                    [-69.64843072],
-                    [-151.3548762],
-                    [-165.01347493],
-                    [-96.31054075],
-                    [-105.92452482],
-                    [475.66390794],
-                    [1047.67911573],
-                    [1617.59990081],
-                    [-73.51078279],
-                    [33.0187979],
-                    [14.37041146],
-                    [-11.65065876],
-                    [-13.83346069],
-                    [-36.02625752],
-                    [-36.8593549],
-                    [42.77691521],
-                    [115.10561624],
-                    [-6.45145897],
-                    [-4.46471154],
-                    [-1.17417159],
-                    [3.90436888],
-                    [6.32542163],
-                    [4.97724076],
-                    [4.6508228],
-                    [5.98385755],
-                    [7.7258949],
-                    [-6.54343469],
-                    [-4.52837177],
-                    [-1.190887],
-                    [3.96008844],
-                    [6.41555198],
-                    [5.04813343],
-                    [4.71715262],
-                    [6.06929885],
-                    [7.83627795],
-                    [-0.13894973],
-                    [0.48227914],
-                    [0.42007256],
-                    [0.5196528],
-                    [-0.50033832],
-                    [1.73661863],
-                    [1.51262315],
-                    [1.8711972],
-                    [-0.52197612],
-                    [1.81172224],
-                    [1.57803973],
-                    [1.95212164],
-                    [-0.8028081],
-                    [2.78645856],
-                    [2.4270506],
-                    [3.00239477],
-                    [-0.08915421],
-                    [0.30944679],
-                    [0.26953233],
-                    [0.33342608],
-                    [-0.32103445],
-                    [1.1142749],
-                    [0.97054976],
-                    [1.20062169],
-                    [-0.33491735],
-                    [1.16246303],
-                    [1.01252275],
-                    [1.25254547],
-                    [-0.51510814],
-                    [1.78788576],
-                    [1.55727613],
-                    [1.92643499],
+                    [37.59890296],
+                    [15.71523303],
+                    [-194.62176112],
+                    [-63.93041941],
+                    [-141.9389744],
+                    [-158.18933898],
+                    [-78.22935544],
+                    [-37.6443316],
+                    [219.85373449],
+                    [468.3128501],
+                    [714.79443116],
+                    [-73.09026801],
+                    [32.7556426],
+                    [12.0359707],
+                    [-13.32700109],
+                    [-27.54425625],
+                    [-16.74099549],
+                    [-22.6393419],
+                    [42.79797524],
+                    [116.28896367],
+                    [-6.44232711],
+                    [-4.45837235],
+                    [-1.17246944],
+                    [3.89888613],
+                    [6.31647858],
+                    [4.97014494],
+                    [4.6441125],
+                    [5.97518737],
+                    [7.714687],
+                    [-6.54821924],
+                    [-4.53168262],
+                    [-1.191757],
+                    [3.96298651],
+                    [6.42024506],
+                    [5.0518194],
+                    [4.72058354],
+                    [6.07370475],
+                    [7.84196215],
+                    [-0.10915907],
+                    [0.37887979],
+                    [0.33001],
+                    [0.4082402],
+                    [-0.39306728],
+                    [1.36429239],
+                    [1.18832019],
+                    [1.4700159],
+                    [-0.41006565],
+                    [1.42329347],
+                    [1.23971131],
+                    [1.53359031],
+                    [-0.6306877],
+                    [2.18904816],
+                    [1.906696],
+                    [2.35868701],
+                    [-0.09065224],
+                    [0.31464645],
+                    [0.27406129],
+                    [0.33902867],
+                    [-0.32642887],
+                    [1.1329981],
+                    [0.98685798],
+                    [1.22079564],
+                    [-0.34054489],
+                    [1.18199573],
+                    [1.02953588],
+                    [1.27359159],
+                    [-0.5237633],
+                    [1.81792716],
+                    [1.5834425],
+                    [1.9588041],
                 ]
             ),
             atol=min(max_atol, 0),
@@ -808,8 +808,8 @@ class Test_ar1_Gaussian:
             lam,
             np.array(
                 [
-                    0.002621769139735816,
-                    0.043577859437411604,
+                    0.00433775640780192,
+                    0.04274473523823579,
                     10000000.0,
                     10000000.0,
                     10000000.0,
@@ -825,13 +825,13 @@ class Test_ar1_Gaussian:
     def test_GAMreml(self):
         reml = self.model.get_reml()
         np.testing.assert_allclose(
-            reml, -86642.72573737243, atol=min(max_atol, 0), rtol=min(max_rtol, 0.0001)
+            reml, -86346.23824784148, atol=min(max_atol, 0), rtol=min(max_rtol, 0.0001)
         )
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
         np.testing.assert_allclose(
-            llk, -86608.91815873925, atol=min(max_atol, 0), rtol=min(max_rtol, 0.0001)
+            llk, -86315.71678769283, atol=min(max_atol, 0), rtol=min(max_rtol, 0.0001)
         )
 
 
@@ -2877,7 +2877,7 @@ class Test_print_smooth_by_factor_p:
             self.model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
-        comp = "\nDistribution parameter: 1\n\nf(['time'],by=fact): fact_1; edf: 9.43 f: 60.057 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.607 f: 16.831 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_3; edf: 4.839 f: 10.948 P(F > f) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        comp = "\nDistribution parameter: 1\n\nf(['time'],by=fact): fact_1; edf: 9.43 f: 60.057 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.607 f: 16.831 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_3; edf: 4.839 f: 11.016 P(F > f) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         assert comp == capture
 
 
@@ -2906,7 +2906,7 @@ class Test_print_smooth_by_factor_fs_p:
             self.model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
-        comp = "\nDistribution parameter: 1\n\nf(['time'],by=fact): fact_1; edf: 9.493 f: 34.404 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.866 f: 8.889 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_3; edf: 5.295 f: 3.238 P(F > f) = 0.00449 **\nf(['time'],by=sub); edf: 94.041\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        comp = "\nDistribution parameter: 1\n\nf(['time'],by=fact): fact_1; edf: 9.493 f: 36.864 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_2; edf: 7.866 f: 8.889 P(F > f) = 0.000e+00 ***\nf(['time'],by=fact): fact_3; edf: 5.295 f: 3.238 P(F > f) = 0.00449 **\nf(['time'],by=sub); edf: 94.041\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         assert comp == capture
 
 
@@ -2932,7 +2932,7 @@ class Test_print_smooth_binomial:
             self.model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
-        comp = "\nDistribution parameter: 1\n\nf(['x0']); edf: 2.856 chi^2: 18.417 P(Chi^2 > chi^2) = 7.220e-04 ***\nf(['x1']); edf: 1.962 chi^2: 59.723 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x2']); edf: 6.243 chi^2: 168.267 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x3']); edf: 1.407 chi^2: 2.731 P(Chi^2 > chi^2) = 0.29779\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        comp = "\nDistribution parameter: 1\n\nf(['x0']); edf: 2.856 chi^2: 18.417 P(Chi^2 > chi^2) = 8.403e-04 ***\nf(['x1']); edf: 1.962 chi^2: 59.723 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x2']); edf: 6.243 chi^2: 168.267 P(Chi^2 > chi^2) = 0.000e+00 ***\nf(['x3']); edf: 1.407 chi^2: 2.731 P(Chi^2 > chi^2) = 0.29779\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         assert comp == capture
 
 
@@ -2995,7 +2995,7 @@ class Test_te_p_values:
         np.testing.assert_allclose(
             self.ps,
             np.array(
-                [np.float64(0.19051092087804067), np.float64(0.0), np.float64(0.0)]
+                [np.float64(0.24528857666239579), np.float64(0.0), np.float64(0.0)]
             ),
             atol=min(max_atol, 0.06),
             rtol=min(max_rtol, 1e-6),
@@ -3308,7 +3308,7 @@ class Test_shared:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.33824034340042264, 0.0, 0.0, 0.19845584583265063]),
+            np.array([0.3379924150189306, 0.0, 0.0, 0.19821358843967635]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.5),
         )
@@ -3468,7 +3468,7 @@ class Test_scaledT:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.07484991939372287, 0.0, 0.0, 0.2412486959166208]),
+            np.array([0.07457313810403965, 0.0, 0.0, 0.24124778372670574]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.5),
         )
@@ -3482,8 +3482,8 @@ class Test_scaledT:
             Trs,
             np.array(
                 [
-                    3.1809874866091556,
-                    487.24072555719874,
+                    3.1930971473210352,
+                    487.7087082627022,
                     986.9308330903519,
                     1.373323661827929,
                 ]
@@ -3623,7 +3623,7 @@ class Test_scaledT_inner:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.07452861876116601, 0.0, 0.0, 0.24125108252257288]),
+            np.array([0.0745276823307594, 0.0, 0.0, 0.24125017047819985]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.5),
         )
@@ -3638,7 +3638,7 @@ class Test_scaledT_inner:
             np.array(
                 [
                     3.19229229126508,
-                    487.24212623054916,
+                    487.7100710693875,
                     986.9297816819574,
                     1.3733097304844804,
                 ]

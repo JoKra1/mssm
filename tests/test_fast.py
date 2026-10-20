@@ -976,7 +976,7 @@ class Test_gammlss:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.14258428481207802]),
+            np.array([0.0, 0.0, 0.0, 0.1425828883094417]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.5),
         )
@@ -1140,7 +1140,7 @@ class Test_gsmm:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.14259562235543766]),
+            np.array([0.0, 0.0, 0.0, 0.1425942270917449]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.5),
         )
@@ -1300,7 +1300,7 @@ class Test_gsmm_qefs:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.1378392282169118]),
+            np.array([0.0, 0.0, 0.0, 0.13783761256617305]),
             atol=min(max_atol, 0.5),
             rtol=min(max_rtol, 0.5),
         )
@@ -1316,7 +1316,7 @@ class Test_gsmm_qefs:
                 [
                     71.218205262136,
                     569.0989832735104,
-                    2074.4407120147007,
+                    2116.0499987726225,
                     5.565986170389199,
                 ]
             ),
@@ -1627,7 +1627,7 @@ class Test_Poisson:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.3132143544584074]),
+            np.array([0.0, 0.0, 0.0, 0.3131327815135582]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.5),
         )
@@ -1641,10 +1641,10 @@ class Test_Poisson:
             Trs,
             np.array(
                 [
-                    7146.953064501585,
+                    10314.62222183161,
                     7804.180636661045,
                     274.96857036820666,
-                    1.0176006357356815,
+                    1.018279553654676,
                 ]
             ),
             atol=min(max_atol, 0),

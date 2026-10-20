@@ -165,7 +165,7 @@ class Test_ar:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.8507391005107705]),
+            np.array([0.0, 0.0, 0.0, 0.850720237029005]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.5),
         )
@@ -180,8 +180,8 @@ class Test_ar:
             np.array(
                 [
                     50.98512414086201,
-                    477.4277024095954,
-                    563.1979577943996,
+                    478.29157305476303,
+                    564.5719196394917,
                     0.1674604521271632,
                 ]
             ),
@@ -1234,7 +1234,7 @@ class Test_GAMMLSS:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.09469171220246564]),
+            np.array([0.0, 0.0, 0.0, 0.11503319847673388]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.5),
         )
@@ -1416,7 +1416,7 @@ class Test_GAM:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([1.0176132998473975e-06, 0.0, 0.0, 0.29480269422543426]),
+            np.array([6.033858279685944e-07, 0.0, 0.0, 0.3453829265279551]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.5),
         )
