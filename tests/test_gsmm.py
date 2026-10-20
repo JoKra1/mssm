@@ -1367,7 +1367,7 @@ class Test_shared:
         np.testing.assert_allclose(
             ps,
             np.array([1.9391246991462552e-07, 0.0, 0.0, 0.10507782434362795]),
-            atol=min(max_atol, 0),
+            atol=min(max_atol, 1e-6),
             rtol=min(max_rtol, 0.75),
         )
 

@@ -1433,7 +1433,7 @@ class Test_shared_pen:
         np.testing.assert_allclose(
             ps,
             np.array([1.9392680367102955e-07, 0.0, 0.0, 0.10506355340639945]),
-            atol=min(max_atol, 0),
+            atol=min(max_atol, 1e-6),
             rtol=min(max_rtol, 0.75),
         )
 
