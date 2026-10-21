@@ -283,7 +283,7 @@ class Formula:
     :type discretize: bool, optional
     :ivar lhs lhs: The left-hand side object of the regression formula passed to the constructor.
         Initialized at construction.
-    :ivar [GammTerm] terms: The list of terms passed to the constructor. Initialized at
+    :ivar [GammTerm] terms: A copy of the list of terms passed to the constructor. Initialized at
         construction.
     :ivar pd.DataFrame data: The dataframe passed to the constructor. Initialized at
         construction.
@@ -331,7 +331,7 @@ class Formula:
     ) -> None:
 
         self.lhs = lhs
-        self.terms = terms
+        self.terms = copy.deepcopy(terms)  # Copy is safer due to in-place manipulation
         self.data = data
         self.series_id = series_id
         self.print_warn = print_warn
