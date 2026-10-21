@@ -37,7 +37,7 @@ def compare_CDL(
     prior: Callable | None = None,
     recompute_H: bool | None = None,
     compute_Vcc: bool | None = None,
-    bfgs_options: dict = {},
+    bfgs_options: dict | None = None,
 ) -> dict:
     """Computes the AIC difference and (optionally) performs an approximate GLRT on twice the
     difference in unpenalized likelihood between models ``model1`` and ``model2``
@@ -417,7 +417,7 @@ def compare_CDL(
                 recompute_H=recompute_H,
                 compute_Vcc=compute_Vcc,
                 seed=seed,
-                **bfgs_options,
+                bfgs_options=bfgs_options,
             )
 
         if len(model2.overall_penalties) == 0:
@@ -444,7 +444,7 @@ def compare_CDL(
                 recompute_H=recompute_H,
                 compute_Vcc=compute_Vcc,
                 seed=seed,
-                **bfgs_options,
+                bfgs_options=bfgs_options,
             )
 
         if only_expected_edf:

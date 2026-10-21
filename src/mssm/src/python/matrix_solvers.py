@@ -461,7 +461,7 @@ def cpp_solve_LXX(
         success
     :rtype: tuple[scp.sparse.csc_array,list[int],int]
     """
-    return eigen_solvers.cpp_solve_LXX(*map_csc_to_eigen(A))
+    return eigen_solvers.solve_LXX(*map_csc_to_eigen(A))
 
 
 def cpp_solve_tr(

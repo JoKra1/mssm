@@ -2824,8 +2824,10 @@ def solve_gamm_sparse(
         # Can simply apply ar1 model at start, then we estimate Lrhoi.T@y ~ N(Lrhoi.T@X@coef,scale)
         # Need to fix eta and resid after convergence.
         y = Lrhoi.T @ y
-        X = (Lrhoi.T @ X).tocsc()
-        X.sort_indices()
+        X = Lrhoi.T @ X
+        if scp.sparse.issparse(X):
+            X = X.tocsc()
+            X.sort_indices()
 
     # Additive mixed model can simply be fit on y and X
     # Generalized mixed model needs to be fit on weighted X and pseudo-dat

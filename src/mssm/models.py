@@ -2822,12 +2822,9 @@ class GAMM(GAMMLSS):
             y = self.get_ys()
 
             if self.rho is not None:
-                # Need to correct for the "weights" of the covariance matrix of the ar1 model,
-                # as done in the bam function in
-                # mgcv. see:
-                # https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/bam.r#L2761
+                # Need to add log det part for ar 1 model
                 _, ar_cor = computeAr1Chol(self.formulas[0], self.rho)
-                pen -= ar_cor
+                pen -= ar_cor  # or rather subtract from pen
 
             if self.family.twopar:
                 scale = self.scale
@@ -3301,7 +3298,11 @@ class GAMM(GAMMLSS):
                 return_sparse = False
                 self._uses_sparse_matrices = False
 
-            if self.formulas[0].file_loading_nc == 1 or self.formulas[0].discretize_cov:
+            if (
+                self.formulas[0].file_loading_nc == 1
+                or self.formulas[0].discretize_cov
+                or self.formulas[0].has_irf
+            ):
                 model_mat = build_sparse_matrix_from_formula(
                     terms,
                     has_intercept,
@@ -3349,14 +3350,20 @@ class GAMM(GAMMLSS):
                             repeat(var_maxs),
                             repeat(factor_levels),
                             cov_split,
-                            repeat(cov),
+                            repeat(None),  # cov
+                            repeat(None),  # pool
+                            repeat(None),  # use_only
+                            repeat(0),  # tol
+                            repeat(False),  # discrete
+                            repeat(None),  # cov_bins
+                            repeat(None),  # cov_bin_idxs
                             repeat(not self._uses_sparse_matrices),
                         ),
                     )
                     if self._uses_sparse_matrices:
                         model_mat = scp.sparse.vstack(Xs, format="csc")
                     else:
-                        model_mat = np.concatenate(Xs, axis=1)
+                        model_mat = np.concatenate(Xs, axis=0)
 
             if len(irstx) > 0:
                 model_mat = model_mat[self.formulas[0].NOT_NA_flat, :]

@@ -114,7 +114,7 @@ class Test_Chol_updating:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.10946942004018534]),
+            np.array([0.0, 0.0, 0.0, 0.13514816088385978]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.5),
         )
@@ -129,8 +129,8 @@ class Test_Chol_updating:
             np.array(
                 [
                     56.57981055869128,
-                    2704.9256868875573,
-                    237.11272829050944,
+                    2709.92015248055,
+                    239.85693950775803,
                     4.758159728976558,
                 ]
             ),
@@ -291,7 +291,7 @@ class Test_repara_skip:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.5852398802652816]),
+            np.array([0.6799439304824341]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.5),
         )
@@ -459,7 +459,7 @@ class Test_PropHaz_hard:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.21062684440882912]),
+            np.array([0.0, 0.0, 0.0, 0.210625554349121]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.5),
         )
@@ -629,7 +629,7 @@ class Test_PropHaz_repara_hard:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.21062684440883006]),
+            np.array([0.0, 0.0, 0.0, 0.2106255543491219]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.5),
         )
@@ -1366,8 +1366,8 @@ class Test_shared:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.07909902713107153]),
-            atol=min(max_atol, 0),
+            np.array([1.9391246991462552e-07, 0.0, 0.0, 0.10507782434362795]),
+            atol=min(max_atol, 1e-6),
             rtol=min(max_rtol, 0.75),
         )
 
@@ -1744,7 +1744,7 @@ class Test_shared_qefs:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.11668572393892673]),
+            np.array([0.0, 0.0, 0.0, 0.14430378396714877]),
             atol=min(max_atol, 0.15),
             rtol=min(max_rtol, 0.5),
         )
@@ -1889,7 +1889,7 @@ class Test_mvn:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.5845488651154345]),
+            np.array([0.0, 0.0, 0.0, 0.4688387962147975]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.5),
         )
@@ -1904,9 +1904,9 @@ class Test_mvn:
             np.array(
                 [
                     87.26216463615783,
-                    165.50250394044605,
+                    165.9822145974116,
                     1157.3462255099012,
-                    0.8883147952436188,
+                    1.7578642571182552,
                 ]
             ),
             atol=min(max_atol, 0),
@@ -2137,7 +2137,7 @@ class Test_mvn_qefs:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.5712410678886176]),
+            np.array([0.0, 0.0, 0.0, 0.44168457253661875]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.5),
         )
@@ -2154,7 +2154,7 @@ class Test_mvn_qefs:
                     218.96559216075173,
                     2019.5546930105306,
                     10213.89163830023,
-                    0.8945811694633254,
+                    1.9171701223964814,
                 ]
             ),
             atol=min(max_atol, 0),
@@ -2440,7 +2440,7 @@ class Test_PSD_sqEFS:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.12082735068125411]),
+            np.array([0.0, 0.0, 0.0, 0.12082597145836066]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.5),
         )

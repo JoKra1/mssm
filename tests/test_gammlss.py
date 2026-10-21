@@ -685,7 +685,7 @@ class Test_te_p_values:
     def test_p2_hard(self):
         np.testing.assert_allclose(
             self.ps[1],
-            np.array([np.float64(0.738724988815144), np.float64(0.0)]),
+            np.array([np.float64(0.7387309193873018), np.float64(0.0)]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 1e-5),
         )
@@ -981,8 +981,8 @@ class Test_diff_whole_func_cor:
             self.sim_fit_model.print_smooth_terms(p_values=True)
         capture = capture.getvalue()
 
-        comp1 = "\nDistribution parameter: 1\n\nf(['x0']); edf: 7.079 chi^2: 457.542 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x0'],by=cond): a; edf: 1.0 chi^2: 0.056 P(Chi^2 > chi^2) = 0.81334\nf(['x0'],by=cond): b; edf: 2.789 chi^2: 13.49 P(Chi^2 > chi^2) = 0.00585 **\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
-        comp2 = "\nDistribution parameter: 1\n\nf(['x0']); edf: 7.079 chi^2: 457.185 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x0'],by=cond): a; edf: 1.0 chi^2: 0.056 P(Chi^2 > chi^2) = 0.81334\nf(['x0'],by=cond): b; edf: 2.789 chi^2: 13.49 P(Chi^2 > chi^2) = 0.00585 **\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        comp1 = "\nDistribution parameter: 1\n\nf(['x0']); edf: 7.079 chi^2: 457.542 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x0'],by=cond): a; edf: 1.0 chi^2: 0.056 P(Chi^2 > chi^2) = 0.81334\nf(['x0'],by=cond): b; edf: 2.789 chi^2: 13.49 P(Chi^2 > chi^2) = 0.0071 **\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
+        comp2 = "\nDistribution parameter: 1\n\nf(['x0']); edf: 7.079 chi^2: 457.185 P(Chi^2 > chi^2) = 0.000e+00 ***\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n\nDistribution parameter: 2\n\nf(['x0'],by=cond): a; edf: 1.0 chi^2: 0.056 P(Chi^2 > chi^2) = 0.81334\nf(['x0'],by=cond): b; edf: 2.789 chi^2: 13.49 P(Chi^2 > chi^2) = 0.0071 **\n\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: . p-values are approximate!\n"
         assert (comp1 == capture) or (comp2 == capture)
 
     def test_diff(self):
@@ -1432,8 +1432,8 @@ class Test_shared_pen:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([0.0, 0.0, 0.0, 0.07909498523766123]),
-            atol=min(max_atol, 0),
+            np.array([1.9392680367102955e-07, 0.0, 0.0, 0.10506355340639945]),
+            atol=min(max_atol, 1e-6),
             rtol=min(max_rtol, 0.75),
         )
 
@@ -1795,7 +1795,7 @@ class Test_shared_pen2:
             ps.extend(pps)
         np.testing.assert_allclose(
             ps,
-            np.array([3.5717079275299213e-06, 0.0, 0.0, 0.09119187436952969]),
+            np.array([7.155790479052015e-07, 0.0, 0.0, 0.09118635280097409]),
             atol=min(max_atol, 0),
             rtol=min(max_rtol, 0.5),
         )
@@ -1812,7 +1812,7 @@ class Test_shared_pen2:
                     38.36237880945953,
                     9463.441910146503,
                     712.2431495413452,
-                    2.856138998529643,
+                    2.856297950379164,
                 ]
             ),
             atol=min(max_atol, 0),

@@ -98,7 +98,7 @@ def computeFcolsSparsity(
     return fcols, len(fcols) / start_idx, start_idx
 
 
-def computeAr1Chol(formula: Formula, rho: float) -> tuple[scp.sparse.csc_array, float]:
+def computeAr1Chol(formula: Formula, rho: float) -> tuple[scp.sparse.csr_array, float]:
     """Computes the inverse of the transpose of the cholesky of the co-variance (before scaling)
     matrix of an ar1 model.
 
@@ -106,39 +106,52 @@ def computeAr1Chol(formula: Formula, rho: float) -> tuple[scp.sparse.csc_array, 
     :type formula: Formula
     :param rho: ar1 weight.
     :type rho: float
-    :return: Tuple, containing banded inverse Cholesky transpose as a scipy array and the correction
-        needed to get the log-likelihood of the ar1 model (i.e., the root of the log-determiant of
-        the inverse of the co-variance matrix (before scaling)).
-    :rtype: tuple[scp.sparse.csc_array,float]
+    :return: Tuple, containing banded inverse Cholesky transpose as a scipy array and the log
+        determinant part needed to get the log-likelihood of the ar1 model (i.e.,
+        -0.5* log-determinant of the co-variance matrix (before scaling)).
+    :rtype: tuple[scp.sparse.csr_array,float]
     """
+
+    if rho >= 1 or rho <= -1:
+        raise ValueError("`rho` must be < 1 and > -1!")
 
     y_flat = formula.y_flat[formula.NOT_NA_flat]
     n_y = len(y_flat)
     d0 = np.tile(1 / np.sqrt(1 - np.power(rho, 2)), n_y)
     d1 = np.tile(-rho / np.sqrt(1 - np.power(rho, 2)), n_y - 1)
 
-    # Correct ar1 process for individual (time) series
+    # Correct ar1 process for individual (time) series.
+    start = np.zeros(n_y, dtype=bool)
+    start[0] = True  # Manually insert first series start
     if formula.series_id is not None:
-        start = np.tile(False, len(formula.y_flat))
-        start[formula.sid] = True
-        start = start[formula.NOT_NA_flat]
+        # Multiple series case, need to find starting points. Start
+        # by expanding formulas.sid
+        exp_id = np.zeros(len(formula.y_flat), dtype=np.int64)
+        exp_id[formula.sid] = 1
+
+        # Now running sum over exp_id assigns series identifier to every
+        # element associated with series. Afterwards we can drop NANs
+        exp_id = np.cumsum(exp_id)[formula.NOT_NA_flat]
+
+        # Now correct start vector
+        start[1:] = exp_id[1:] != exp_id[:-1]
+
+        # Get index vectors
         sid0 = np.where(start)[0]
         sid1 = sid0[1:] - 1
 
+        # And correct diagonals
         d0[sid0] = 1
         d1[sid1] = 0
     else:
-        # Only correct first obs
+        # Base case = only a single series starting at first obs.
         d0[0] = 1
 
     Lrhoi = scp.sparse.diags_array([d0, d1], format="csr", offsets=[0, 1])
 
-    # Log-likelihood correction computed as done by mgcv. Simply the root of the log-determinant of
-    # the inverse of the co-variance matrix (before scaling). see:
-    # https://github.com/cran/mgcv/blob/fb7e8e718377513e78ba6c6bf7e60757fc6a32a9/R/bam.r#L2761
-    llc = (n_y - (np.sum(start) if formula.series_id is not None else 1)) * np.log(
-        1 / np.sqrt(1 - np.power(rho, 2))
-    )
+    # -0.5 * Log-determinant of ar1 model as described by Wood (2017)
+    # needs to be added to llk of transformed model.
+    llc = (n_y - np.sum(start)) * np.log(1 / np.sqrt(1 - np.power(rho, 2)))
 
     return Lrhoi, llc
 
@@ -958,9 +971,22 @@ def print_smooth_terms(
         pen_out = 0
         for sti in form.get_smooth_term_idx():
             sterm = terms[sti]
+
+            # Base-case for un-penalized smooth terms
+            t_edf = form.coef_per_term[sti]
             if sterm.by is not None and sterm.id is None:
-                for li in range(len(form.get_factor_levels()[sterm.by])):
-                    t_edf = round(term_edf[edf_idx], ndigits=3)
+                n_levels = len(form.get_factor_levels()[sterm.by])
+
+                # Ajust base-case edf for by levles
+                t_edf = int(t_edf / n_levels)
+
+                # Now loop over by levels
+                for li in range(n_levels):
+
+                    # Optionally extract correct edf for penalized terms.
+                    if sterm.is_penalized:
+                        t_edf = round(term_edf[edf_idx], ndigits=3)
+
                     e_str = (
                         smooth_names[name_idx]
                         + f": {coding_factors[sterm.by][li]}; edf: {t_edf}"
@@ -992,9 +1018,13 @@ def print_smooth_terms(
                         p_idx += 1
 
                     print(e_str)
-                    edf_idx += 1
+
+                    # advance edf vector index only if term was penalized
+                    if sterm.is_penalized:
+                        edf_idx += 1
             else:
-                t_edf = round(term_edf[edf_idx], ndigits=3)
+                if sterm.is_penalized:
+                    t_edf = round(term_edf[edf_idx], ndigits=3)
                 e_str = smooth_names[name_idx] + f"; edf: {t_edf}"
                 if t_edf < pen_cutoff:
                     # Term has effectively been removed from the model
@@ -1023,7 +1053,9 @@ def print_smooth_terms(
                     p_idx += 1
 
                 print(e_str)
-                edf_idx += 1
+
+                if sterm.is_penalized:
+                    edf_idx += 1
 
             name_idx += 1
 
@@ -1195,9 +1227,9 @@ def approx_smooth_p_values(
     **Warning:** The resulting p-values are **approximate**. They should only be treated as
     indicative.
 
-    **Note:** Just like in ``mgcv``, the returned p-value is an average: two p-values are computed
-    because of an ambiguity in forming :math:`T_r` and averaged to get the final one. For
-    :math:`T_r` we return the max of the two alternatives.
+    **Note:** As described in section 6.12.1 of Wood (2017), the returned p-value is an average:
+    two p-values are computed because of an ambiguity in forming :math:`T_r` and averaged to get
+    the final one. For :math:`T_r` we return the max of the two alternatives.
 
     References:
      - Davies, R. B. (1980). Algorithm AS 155: The Distribution of a Linear Combination of χ2 \
@@ -1206,7 +1238,6 @@ def approx_smooth_p_values(
         (2nd ed.).
      - Wood, S. N. (2013). On p-values for smooth components of an extended generalized additive \
         model.
-     - ``testStat`` function in mgcv, see: https://github.com/cran/mgcv/blob/master/R/mgcv.r#L3780
 
     :param model: Model for which to compute p values.
     :type model: mssm.models.GSMM | mssm.models.GAMMLSS | mssm.models.GAMM
@@ -1303,18 +1334,24 @@ def approx_smooth_p_values(
     Trs = []
 
     # Loop over smooth terms
-    start_coef = form.unpenalized_coef  # Start indexing V_b after un-penalized coef
     edf_idx = 0
     for sti in st_idx:
-        if isinstance(terms[sti], fs) is False:
+        sterm = terms[sti]
+        if isinstance(sterm, fs) is False:
 
             n_s_coef = form.coef_per_term[sti]
             enumerator = range(1)
-            if not terms[sti].by is None and terms[sti].id is None:
-                n_levels = len(form.get_factor_levels()[terms[sti].by])
+            if sterm.by is not None and sterm.id is None:
+                n_levels = len(form.get_factor_levels()[sterm.by])
                 enumerator = range(n_levels)
                 n_s_coef = int(n_s_coef / n_levels)
 
+            # Define base-case for edf of un-penalized smooth terms
+            r = n_s_coef
+
+            # Get start coef idx from formula since lvi is formula-specific block.
+            # This also catches un-penalized terms
+            start_coef = form.coef_idx_per_term[sti][0]
             for _ in enumerator:
                 # Extract coefficients corresponding to smooth
                 end_coef = start_coef + n_s_coef
@@ -1349,8 +1386,9 @@ def approx_smooth_p_values(
                 s = np.flip(s)  # Eigenvalues are in decreasing order now
                 U = np.flip(U, axis=1)
 
-                # get edf for this term and compute r,k,v, and p from Wood (2017)
-                r = term_edf[edf_idx]
+                # Optionally get edf for this term and (re) compute r,k,v, and p from Wood (2017)
+                if sterm.is_penalized:
+                    r = term_edf[edf_idx]
                 k = int(r)
                 if k > 0:
                     v = r - k
@@ -1362,14 +1400,9 @@ def approx_smooth_p_values(
                             [1 / lam if lami < k else 0 for lami, lam in enumerate(s)]
                         )
 
-                        sign = np.sign(U[0, :])
-                        U *= sign
-                        RVRI1 = U @ S @ U.T
-
-                        # Also compute inverse for alternative version of Eigen-vectors
-                        # (see Wood, 2017):
-                        U *= sign
-                        RVRI2 = U @ S @ U.T
+                        # No need to compute inverse for alternative version of Eigen-vectors
+                        # since signs cancel in integer case (see Wood, 2017):
+                        RVRI1 = RVRI2 = U @ S @ U.T
 
                         # And the test statistic defined in Wood (2012)
                         Tr1 = (s_coef.T @ R.T @ RVRI1 @ R @ s_coef)[0, 0]
@@ -1393,11 +1426,6 @@ def approx_smooth_p_values(
                         # Take only eigen-vectors need for the actual product for the test-statistic
                         U = U[:, : k + 1]
 
-                        # Fix sign of Eigen-vectors to sign of first row
-                        # (based on testStat function in mgcv)
-                        sign = np.sign(U[0, :])
-                        U *= sign
-
                         # Now we can reform the diagonal matrix needed for inverting RVR
                         # (computation follows Wood, 2012)
                         S = np.zeros((U.shape[1], U.shape[1]))
@@ -1417,9 +1445,10 @@ def approx_smooth_p_values(
                         # And finally compute the inverse
                         RVRI1 = U @ S @ U.T
 
-                        # Also compute inverse for alternative version of Eigen-vectors
-                        # (see Wood, 2017):
-                        U *= sign
+                        # Fix sign of last Eigen-vector to address ambiguity.
+                        # Based on section 6.12.1 in Wood (2017) we can compute p-values for
+                        # both signs and then average
+                        U[:, -1] *= -1
                         RVRI2 = U @ S @ U.T
 
                         # And the test statistic defined in Wood (2012)
@@ -1446,8 +1475,10 @@ def approx_smooth_p_values(
                                 n.append(k - 2 + 1)
                                 lb.append(1)
 
-                            # Now the weighted variables
-                            n.extend([1, 1, rs_df])
+                            # Now the weighted variables. Davies code casts n to int, so
+                            # we should use that int for the weight computation as well..
+                            rs_df_int = max(1, int(rs_df))
+                            n.extend([1, 1, rs_df_int])
                             lb.extend([v1, v2])
 
                             # cast to np.array - not lb since we still need to add weight for
@@ -1457,24 +1488,24 @@ def approx_smooth_p_values(
 
                             # Compute as discussed by Wood (2017)
                             p1, code1, _ = davies.daviesQF(
-                                np.array([*lb, -Tr1 / rs_df]),
+                                np.array([*lb, -Tr1 / rs_df_int]),
                                 nc,
                                 n,
                                 0,
                                 0,
-                                2e-5,
+                                1e-5,
                                 len(n),
-                                20000,
+                                30000,
                             )
                             p2, code2, _ = davies.daviesQF(
-                                np.array([*lb, -Tr2 / rs_df]),
+                                np.array([*lb, -Tr2 / rs_df_int]),
                                 nc,
                                 n,
                                 0,
                                 0,
-                                2e-5,
+                                1e-5,
                                 len(n),
-                                20000,
+                                30000,
                             )
                             p1 = 1 - p1
                             p2 = 1 - p2
@@ -1540,10 +1571,10 @@ def approx_smooth_p_values(
                             lb = np.array(lb)
 
                             p1, code1, _ = davies.daviesQF(
-                                lb, nc, n, Tr1, 0, 2e-5, len(n), 20000
+                                lb, nc, n, Tr1, 0, 1e-5, len(n), 30000
                             )
                             p2, code2, _ = davies.daviesQF(
-                                lb, nc, n, Tr2, 0, 2e-5, len(n), 20000
+                                lb, nc, n, Tr2, 0, 1e-5, len(n), 30000
                             )
                             p1 = 1 - min(p1, 1)
                             p2 = 1 - min(p2, 1)
@@ -1589,11 +1620,12 @@ def approx_smooth_p_values(
                 Trs.append(Tr)
 
                 # Prepare for next term
-                edf_idx += 1
+                if sterm.is_penalized:
+                    edf_idx += 1
+                # By-level smooths need start_coef updated
                 start_coef += n_s_coef
 
         else:  # Random smooth terms are fully penalized
-            start_coef += form.coef_per_term[sti]
             edf_idx += 1
 
     return ps, Trs
@@ -2354,6 +2386,60 @@ def REML(
     return reml + lgdetS / 2 - lgdetXXS / 2 + (Mp * np.log(2 * np.pi)) / 2
 
 
+def sample_lam_t(
+    ep: np.ndarray, Vpr: np.ndarray, df: int, n_est: int, b: float, seed: int | None
+) -> np.ndarray:
+    """Sample :math:`log(\\boldsymbol{\\lambda}) \\sim t(\\boldsymbol{\\mu},\\boldsymbol{\\Sigma})`.
+
+    Here t is a multivariate t distribution with mean ``ep`` and covariance matrix ``Vpr`` and
+    ``df`` degrees of freedom. ``n_est`` samples are obtained.
+
+    Returned vector is of dimension (``n_est``,``n_lam``) where ``n_lam`` is the number of
+    log smoothing parameters included in ``ep``.
+
+    :param ep: Mean vector of log smoothing parameters of dimension (``n_lam``,1).
+    :type ep: np.ndarray
+    :param Vpr: Covariance matrix to use for sampling
+    :type Vpr: np.ndarray
+    :param df: Degrees of freedom of the t distribution
+    :type df: int
+    :param n_est: Number of samples to obtain
+    :type n_est: int
+    :param b: Upper limit on the smoothing parameters enforced for all samples.
+    :type b: float
+    :param seed: Random see to use
+    :type seed: int | None
+    :return: Sampled vector of smoothing parameters
+    :rtype: np.ndarray
+    """
+    # Sample log smoothing parameters
+    p_sample = scp.stats.multivariate_t.rvs(
+        loc=np.ndarray.flatten(ep),
+        shape=Vpr,
+        df=df,
+        size=n_est,
+        random_state=seed,
+    )
+
+    # Convert to smoothing parameters
+    p_sample = np.exp(p_sample)
+
+    if len(np.ndarray.flatten(ep)) == 1:  # Single lambda parameter in model
+
+        if (
+            n_est == 1
+        ):  # and single sample (n_est==1) - so p_sample needs to be shape (1,1)
+            p_sample = np.array([p_sample])
+
+        p_sample = p_sample.reshape(n_est, 1)  # p_sample needs to be shape (n_est,1)
+
+    elif n_est == 1:  # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
+        p_sample = np.array([p_sample]).reshape(1, -1)
+
+    p_sample[np.isinf(p_sample)] = b
+    return p_sample
+
+
 def estimateVp(
     model,
     nR: int = 250,
@@ -2679,27 +2765,7 @@ def estimateVp(
 
     if n_c > 1:  # Parallelize grid search
         # Generate next \\lambda values for which to compute REML, and Vb
-        p_sample = scp.stats.multivariate_t.rvs(
-            loc=np.ndarray.flatten(ep), shape=Vpr, df=df, size=n_est, random_state=seed
-        )
-        p_sample = np.exp(p_sample)
-        p_sample[np.isinf(p_sample)] = b
-
-        if len(np.ndarray.flatten(ep)) == 1:  # Single lambda parameter in model
-
-            if (
-                n_est == 1
-            ):  # and single sample (n_est==1) - so p_sample needs to be shape (1,1)
-                p_sample = np.array([p_sample])
-
-            p_sample = p_sample.reshape(
-                n_est, 1
-            )  # p_sample needs to be shape (n_est,1)
-
-        elif (
-            n_est == 1
-        ):  # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
-            p_sample = np.array([p_sample]).reshape(1, -1)
+        p_sample = sample_lam_t(ep, Vpr, df, n_est, b, seed)
 
         minDiag = 0.1 * min(np.sqrt(Vpr.diagonal()))
         # Make sure actual estimate is included once.
@@ -2873,27 +2939,7 @@ def estimateVp(
 
     else:
         # Generate \\lambda values for which to compute REML, and Vb
-        p_sample = scp.stats.multivariate_t.rvs(
-            loc=np.ndarray.flatten(ep), shape=Vpr, df=df, size=n_est, random_state=seed
-        )
-        p_sample = np.exp(p_sample)
-        p_sample[np.isinf(p_sample)] = b
-
-        if len(np.ndarray.flatten(ep)) == 1:  # Single lambda parameter in model
-
-            if (
-                n_est == 1
-            ):  # and single sample (n_est==1) - so p_sample needs to be shape (1,1)
-                p_sample = np.array([p_sample])
-
-            p_sample = p_sample.reshape(
-                n_est, 1
-            )  # p_sample needs to be shape (n_est,1)
-
-        elif (
-            n_est == 1
-        ):  # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
-            p_sample = np.array([p_sample]).reshape(1, -1)
+        p_sample = sample_lam_t(ep, Vpr, df, n_est, b, seed)
 
         # Make sure actual estimate is included once.
         minDiag = 0.1 * min(np.sqrt(Vpr.diagonal()))
@@ -4081,31 +4127,7 @@ def correct_VB(
 
         if n_c > 1:  # Parallelize grid search
             # Generate next \\lambda values for which to compute REML, and Vb
-            p_sample = scp.stats.multivariate_t.rvs(
-                loc=np.ndarray.flatten(ep),
-                shape=Vpr,
-                df=df,
-                size=n_est,
-                random_state=seed,
-            )
-            p_sample = np.exp(p_sample)
-            p_sample[np.isinf(p_sample)] = b
-
-            if len(np.ndarray.flatten(ep)) == 1:  # Single lambda parameter in model
-
-                if (
-                    n_est == 1
-                ):  # and single sample (n_est==1) - so p_sample needs to be shape (1,1)
-                    p_sample = np.array([p_sample])
-
-                p_sample = p_sample.reshape(
-                    n_est, 1
-                )  # p_sample needs to be shape (n_est,1)
-
-            elif (
-                n_est == 1
-            ):  # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
-                p_sample = np.array([p_sample]).reshape(1, -1)
+            p_sample = sample_lam_t(ep, Vpr, df, n_est, b, seed)
 
             minDiag = 0.1 * min(np.sqrt(Vpr.diagonal()))
             # Make sure actual estimate is included once.
@@ -4307,31 +4329,7 @@ def correct_VB(
 
         else:
             # Generate \\lambda values for which to compute REML, and Vb
-            p_sample = scp.stats.multivariate_t.rvs(
-                loc=np.ndarray.flatten(ep),
-                shape=Vpr,
-                df=df,
-                size=n_est,
-                random_state=seed,
-            )
-            p_sample = np.exp(p_sample)
-            p_sample[np.isinf(p_sample)] = b
-
-            if len(np.ndarray.flatten(ep)) == 1:  # Single lambda parameter in model
-
-                if (
-                    n_est == 1
-                ):  # and single sample (n_est==1) - so p_sample needs to be shape (1,1)
-                    p_sample = np.array([p_sample])
-
-                p_sample = p_sample.reshape(
-                    n_est, 1
-                )  # p_sample needs to be shape (n_est,1)
-
-            elif (
-                n_est == 1
-            ):  # multiple lambdas - so p_sample needs to be shape (1,n_lambda)
-                p_sample = np.array([p_sample]).reshape(1, -1)
+            p_sample = sample_lam_t(ep, Vpr, df, n_est, b, seed)
 
             # Make sure actual estimate is included once.
             minDiag = 0.1 * min(np.sqrt(Vpr.diagonal()))
