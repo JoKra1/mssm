@@ -49,6 +49,30 @@ class DiscreteTerm:
     n_marginals: int = 1
 
 
+def _is_symmetric(W: scp.sparse.sparray | scp.sparse.spmatrix | np.ndarray) -> bool:
+    """Function to check whether square matrix ``W`` is symmetric or not.
+
+    :param W: Square matrix, can be sparse or dense
+    :type W: scp.sparse.sparray | scp.sparse.spmatrix | np.ndarray
+    :return: Bool, indicating whether ``W`` is symmetric or not.
+    :rtype: bool
+    """
+    # Root of machine tolerance for both dense and sparse checks
+    rtol = np.sqrt(np.finfo(float).eps)
+
+    if isinstance(W, np.ndarray):
+        # Take scipy's check
+        return scp.linalg.issymmetric(W, rtol=rtol)
+
+    # For sparse we need to do it manually
+    diff = W - W.T
+
+    if diff.nnz == 0 or np.abs(diff.data).max() <= rtol * np.abs(W.data).max():
+        return True
+
+    return False
+
+
 def _XjTWXk(
     dtj: DiscreteTerm,
     dtk: DiscreteTerm,
@@ -117,6 +141,78 @@ def _XjTWXk(
         hasW,
         *W,
     )
+
+
+class DiscreteCrossProduct:
+    """A wrapper class to accumulate the (sparse) cross-product of two :class:`DiscreteModelMatrix`.
+
+    :param shape: Dimensions of final cross-product.
+    :type shape: tuple[int, int]
+    :param sparse: Whether the cross-product should be accumulated in sparse matrix storage or in
+        a dense array.
+    :type sparse: bool
+    """
+
+    def __init__(self, shape: tuple[int, int], sparse: bool):
+        self.shape = shape
+        self.sparse = sparse
+
+        # Can now prepare data storage
+        if self.sparse:
+            self.rows: list[int] = []
+            self.cols: list[int] = []
+            self.data: list[int] = []
+        else:
+            self.data = np.zeros(shape)
+
+    def insert_block(self, srow: int, scol: int, block: np.ndarray) -> None:
+        """Inserts the cross-product block ``block`` with upper left index ``srow`` and ``scol``.
+
+        :param srow: Index of upper row
+        :type srow: int
+        :param scol: Index of left-most column
+        :type scol: int
+        :param block: Array holding dense cross-product between two :class:`DiscreteTerm`.
+        :type block: np.ndarray
+        """
+        if self.sparse:
+            # There is a chance that the cross-product itself is somewhat sparse, so it makes
+            # sense to get only the rows and cols actually filled by this block.
+            # see: https://numpy.org/doc/stable/reference/generated/numpy.nonzero.html#numpy-nonzero
+            nonzero = np.nonzero(block)  # (rows, cols) that are non-zero
+            if len(nonzero[0]) == 0:
+                # Block is completely empty
+                return
+
+            self.rows.extend(nonzero[0] + srow)
+            self.cols.extend(nonzero[1] + scol)
+            self.data.extend(block[nonzero])
+
+        else:
+            # Simply write to data for dense case
+            erow = srow + block.shape[0]
+            ecol = scol + block.shape[1]
+            self.data[srow:erow, scol:ecol] = block
+
+    def eval(self) -> np.ndarray | scp.sparse.csc_array:
+        """Returns the accumulated cross-product as sparse csc_array or numpy array.
+
+        :return: The accumulated cross-product
+        :rtype: np.ndarray | scp.sparse.csc_array
+        """
+
+        if self.sparse:
+            # Build sparse matrix from data, rows, and cols
+            return scp.sparse.csc_array(
+                (
+                    self.data,
+                    (self.rows, self.cols),
+                ),
+                shape=self.shape,
+            )
+
+        # Dense case can return directly
+        return self.data
 
 
 class DiscreteModelMatrix:
