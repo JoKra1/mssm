@@ -50,6 +50,22 @@ class lhs:
         self.f = f
 
 
+def _is_numeric(dtype: np.dtype | pd.api.extensions.ExtensionDtype | str) -> bool:
+    """Internal function that checks whether ``dtype`` is numeric.
+
+    Numeric datatypes include float and integer dtypes from numpy and pandas and
+    thus also pandas nullable integer and float types
+    (see https://pandas.pydata.org/docs/user_guide/integer_na.html). Object and string dtypes are
+    treated as categorical/factor types.
+
+    :param dtype: The type of a variable to check
+    :type dtype: np.dtype | pd.api.extensions.ExtensionDtype | str
+    :return: bool indicating whether ``dtype`` is numeric or not
+    :rtype: bool
+    """
+    return pd.api.types.is_integer_dtype(dtype) or pd.api.types.is_float_dtype(dtype)
+
+
 def _compute_constraint_single_MP(
     sterm: f,
     vars: list[str],
@@ -459,7 +475,7 @@ class Formula:
 
                 # Smooth-term variables must all be continuous
                 if isinstance(term, f) or isinstance(term, irf):
-                    if vartype not in ["float64", "int64"]:
+                    if not _is_numeric(vartype):
                         raise TypeError(
                             (
                                 f"Variable '{var}' attributed to smooth/impulse response smooth "
@@ -469,7 +485,7 @@ class Formula:
 
                 # Random intercept variable must be categorical
                 if isinstance(term, ri):
-                    if vartype in ["float64", "int64"]:
+                    if _is_numeric(vartype):
                         raise TypeError(
                             (
                                 f"Variable '{var}' attributed to random intercept term {ti} must "
@@ -495,10 +511,7 @@ class Formula:
                             )
                         )
 
-                    if len(self.file_paths) == 0 and data[t_by].dtype in [
-                        "float64",
-                        "int64",
-                    ]:
+                    if len(self.file_paths) == 0 and _is_numeric(data[t_by].dtype):
                         raise KeyError(
                             (
                                 f"Data-type of By-variable '{t_by}' attributed to term {ti} must "
@@ -507,9 +520,9 @@ class Formula:
                             )
                         )
 
-                    if len(self.file_paths) > 0 and read_dtype(
-                        t_by, self.file_paths[0], self.file_loading_kwargs
-                    ) in ["float64", "int64"]:
+                    if len(self.file_paths) > 0 and _is_numeric(
+                        read_dtype(t_by, self.file_paths[0], self.file_loading_kwargs)
+                    ):
                         raise KeyError(
                             (
                                 f"Data-type of By-variable '{t_by}' attributed to term {ti} must "
@@ -535,9 +548,9 @@ class Formula:
                                 )
                             )
 
-                        if len(self.file_paths) == 0 and data[
-                            t_by_subgroup[0]
-                        ].dtype in ["float64", "int64"]:
+                        if len(self.file_paths) == 0 and _is_numeric(
+                            data[t_by_subgroup[0]].dtype
+                        ):
                             raise KeyError(
                                 (
                                     f"Data-type of sub-group by-variable '{t_by_subgroup[0]}' "
@@ -546,11 +559,13 @@ class Formula:
                                 )
                             )
 
-                        if len(self.file_paths) > 0 and read_dtype(
-                            t_by_subgroup[0],
-                            self.file_paths[0],
-                            self.file_loading_kwargs,
-                        ) in ["float64", "int64"]:
+                        if len(self.file_paths) > 0 and _is_numeric(
+                            read_dtype(
+                                t_by_subgroup[0],
+                                self.file_paths[0],
+                                self.file_loading_kwargs,
+                            )
+                        ):
                             raise KeyError(
                                 (
                                     f"Data-type of sub-group by-variable '{t_by_subgroup[0]}' "
@@ -594,7 +609,7 @@ class Formula:
                             t_by_cont, self.file_paths[0], self.file_loading_kwargs
                         )
 
-                    if vartype not in ["float64", "int64"]:
+                    if not _is_numeric(vartype):
                         raise TypeError(
                             (
                                 f"Variable '{t_by_cont}' attributed to term {ti} must be numeric "
@@ -719,19 +734,23 @@ class Formula:
             self.var_to_cov[var] = cvi
 
             # Assign vartype enum and calculate mins/maxs for continuous variables
-            if vartype in ["float64", "int64"]:
+            if _is_numeric(vartype):
                 # ToDo: these can be properties of the formula.
                 self.var_types[var] = VarType.NUMERIC
                 if len(self.file_paths) == 0:
-                    self.var_mins[var] = np.nanmin(self.data[var])
-                    self.var_maxs[var] = np.nanmax(self.data[var])
+                    # Cast datatype to float64 ion a way that also handles nullable types
+                    # (which might have different nan values) to get correct limits
+                    dat_var = self.data[var].to_numpy(dtype=np.float64, na_value=np.nan)
+                    self.var_mins[var] = np.nanmin(dat_var)
+                    self.var_maxs[var] = np.nanmax(dat_var)
                 else:
+                    # Reading from file builds array earlier, still need to cast here
                     unique_var = read_unique(
                         var,
                         self.file_paths,
                         self.file_loading_nc,
                         self.file_loading_kwargs,
-                    )
+                    ).astype(np.float64)
                     self.var_mins[var] = np.min(unique_var)
                     self.var_maxs[var] = np.max(unique_var)
             else:
@@ -1024,13 +1043,23 @@ class Formula:
         else:
             # Collect entire y column
             if data is not None:
-                y_flat = np.array(data[self.lhs.variable]).reshape(-1, 1)
+                y_col = data[self.lhs.variable]
 
-                # Cast correctly to 64 bit
-                if np.issubdtype(y_flat.dtype, np.integer):
-                    y_flat = y_flat.astype(np.int64)
-                elif np.issubdtype(y_flat.dtype, np.floating):
-                    y_flat = y_flat.astype(np.float64)
+                # Cast correctly to 64 bit while trying to maintain int/float distinction as best
+                # as possible. **Note** Nullable ints can contain NANs, these must be
+                # cast to float here! If no NANs are present we can cast to np.int.
+                # casts must copy to prevent changes to data passed by user.
+                if pd.api.types.is_integer_dtype(y_col.dtype) and not y_col.hasnans:
+                    y_flat = y_col.to_numpy(dtype=np.int64, copy=True)
+                elif _is_numeric(y_col.dtype):
+                    y_flat = y_col.to_numpy(
+                        dtype=np.float64, na_value=np.nan, copy=True
+                    )
+                else:
+                    # No change to data in y_col, can simply wrap in array
+                    y_flat = np.array(y_col)
+
+                y_flat = y_flat.reshape(-1, 1)
 
                 if self.discretize_cov:
                     n_bins = min(int(np.sqrt(data[NAs_flat].shape[0])), 1000)
@@ -1064,9 +1093,19 @@ class Formula:
                         self.file_loading_nc,
                         self.file_loading_kwargs,
                     )
+
+                    # Cast as in __encode_var
+                    if var_types[c] == VarType.NUMERIC:
+                        c_raw = c_raw.astype(np.float64)
             else:
                 if c in self.subgroup_variables:
                     c_raw = np.array(data[c.split(":")[0]])
+                elif var_types[c] == VarType.NUMERIC:
+                    # Cast as in __encode_var but here need to create copy to prevent
+                    # change to user passed data in case of discretization happening below.
+                    c_raw = data[c].to_numpy(
+                        dtype=np.float64, na_value=np.nan, copy=True
+                    )
                 else:
                     c_raw = np.array(data[c])
 
