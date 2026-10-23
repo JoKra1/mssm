@@ -36,6 +36,8 @@ class DiscreteTerm:
     :ivar int total_columns: Total columns of this term **after absorbing any constraints**.
         Initialized with 1.
     :ivar int n_marginals: Number of marginals this term has. Initialized with 1.
+    :ivar np.ndarray | None nonzero_rows: Indices of nonzero rows of this term. Initialized with
+        ``None``.
     """
 
     unique_matrices: list[np.ndarray] | None = None
@@ -47,6 +49,7 @@ class DiscreteTerm:
     Q: np.ndarray | None = None
     total_columns: int = 1
     n_marginals: int = 1
+    nonzero_rows: np.ndarray | None = None
 
 
 def _is_symmetric(W: scp.sparse.sparray | scp.sparse.spmatrix | np.ndarray) -> bool:
@@ -71,6 +74,89 @@ def _is_symmetric(W: scp.sparse.sparray | scp.sparse.spmatrix | np.ndarray) -> b
         return True
 
     return False
+
+
+def _nonzeroXjTWXk(
+    dtjs: list[DiscreteTerm],
+    dtks: list[DiscreteTerm],
+    W: scp.sparse.sparray | scp.sparse.spmatrix | np.ndarray | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Function that determines for which combinations of ``dtj`` and ``dtk`` the cross product
+    needs to be computed (i.e., is non-zero).
+
+    :param dtjs: List of term matrices included in ``X_j``
+    :type dtks: DiscreteTerm
+    :param dtk: List of term matrices included in ``X_k``
+    :type dtk: DiscreteTerm
+    :param W: Inner matrix ``W``, either as sparse array/matrix or numpy array
+    :type W: scp.sparse.sparray | scp.sparse.spmatrix | np.ndarray | None
+    :return: Pairs of indices for which cross-product needs to be computed in separate arrays for
+        ``X_j`` (first array) and ``X_k`` (second array)
+    :rtype: tuple[np.ndarray, np.ndarray]
+    """
+
+    # Ok, assuming that no term is zero everywhere we have two cases:
+    # 1) "full" terms with no nonzero rows (term.nonzero is None)
+    # 2) "partial" terms with some nonzero rows (term.nonzero has indices)
+    #
+    # Only cross-products between partial terms j and k can potentially be zero and also only if W
+    # is not fully dense.
+
+    # Get full and partial j term sorting
+    full_j = []
+    partial_j = []
+    n_partial_j = 0
+
+    for j, dtj in enumerate(dtjs):
+        if dtj.nonzero_rows is None:
+            full_j.append(j)
+        else:
+            partial_j.append(j)
+            n_partial_j += 1
+
+    # Same for k
+    full_k = []
+    partial_k = []
+    n_partial_k = 0
+
+    for k, dtk in enumerate(dtks):
+        if dtk.nonzero_rows is None:
+            full_k.append(k)
+        else:
+            partial_k.append(k)
+            n_partial_k += 1
+
+    # We definitely need the cross-products between full j terms and all k terms
+    # as well as the cross-products between partial j terms and full k terms.
+
+    # Stores index pairs for nonzero cross-product blocks between term j and k
+    nonzero_j = []
+    nonzero_k = []
+
+    # First set of cross-products
+    fulljk = np.meshgrid(full_j, np.arange(len(dtks)), indexing="ij")
+    nonzero_j.extend(fulljk[0])
+    nonzero_k.extend(fulljk[1])
+
+    # Second set
+    fullkj = np.meshgrid(partial_j, full_k, indexing="ij")
+    nonzero_j.extend(fullkj[0])
+    nonzero_k.extend(fullkj[1])
+
+    # Now if W is dense, then we also need all remaining cross-products between
+    # partial terms in j and k
+    if isinstance(W, np.ndarray):
+        # Assume W is fully dense and not just incorrectly stored in dense storage..
+        partialjk = np.meshgrid(partial_j, partial_k, indexing="ij")
+        nonzero_j.extend(partialjk[0])
+        nonzero_k.extend(partialjk[1])
+
+    elif n_partial_j > 0 and n_partial_k > 0:
+        # If we still have partial blocks left, then we now need to check which
+        # of the corresponding cross-products we need. To compute this efficiently
+        # we can exploit the dt.non_zero arrays and use them to set up binary indicator
+        # matrices to determine which of the remaining cross-products are zero everywhere.
+        pass
 
 
 def _XjTWXk(
@@ -273,6 +359,35 @@ class DiscreteModelMatrix:
         )
 
         self._T: bool = False
+
+        # Initial computation of nonzero rows
+        self.__update_term_nonzeros()
+
+    def __update_term_nonzeros(self) -> None:
+        """Computes for each term which rows of the term matrix can be nonzero.
+
+        **Note**: For terms with multiple marginals (e.g., tensor terms) what counts as a zero rows
+        are rows that are zero in all marginals (e.g., anything with a by-keyword).
+        """
+
+        for term in self.terms:
+
+            # Get zero rows of unique matrices
+            zeros = [np.all(umat == 0, axis=1) for umat in term.unique_matrices]
+
+            # Early cheap check if term has no zero rows
+            # To avoid storing an array of all rows, just use None
+            if np.all([~np.any(uz) for uz in zeros]):
+                term.nonzero_rows = None
+                continue
+
+            # Have zero rows in unique matrices, now expand to full matrices
+            exp_zeros = np.ones_like(term.indices[0], dtype=bool)
+            for umati in range(term.n_marginals):
+                exp_zeros &= zeros[umati][term.indices[umati]]
+
+            # Only thing left is to get indices of nonzero rows
+            term.nonzero_rows = np.nonzero(~exp_zeros)
 
     def __prepareW(
         self, otherpreM: scp.sparse.csc_array | np.ndarray | None
