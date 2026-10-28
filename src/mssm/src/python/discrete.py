@@ -52,6 +52,55 @@ class DiscreteTerm:
     nonzero_rows: np.ndarray | None = None
 
 
+def _convert_index(
+    idx: int | list | np.ndarray | slice | np.integer, size: int
+) -> int | np.ndarray | None:
+    """Takes index ``idx`` targeting an axis of dimension ``size`` and converts it into an
+    positive int, a flattened array positive ints, or ``None`` (to select everything from the axis).
+
+    **Note**: negative indices, slices, and boolean masks handled as numpy would handle them.
+
+    :param idx: Index to be converted
+    :type idx: int | list | np.ndarray | slice | np.integer
+    :param size: DImension of axis indexed by ``idx``
+    :type size: int
+    :raises IndexError: If ``idx`` is out of bounds or has multiple dimensions.
+    :return: The converted index
+    :rtype: int | np.ndarray | None
+    """
+    if isinstance(idx, int) or isinstance(idx, np.integer):
+        # Catch out of bounds first, note:
+        # -size maps back to zero so can keep
+        # +size maps back to largest index + 1 so already needs to go
+        if idx < -size or idx >= size:
+            raise IndexError(f"Index {idx} is not within size {size}.")
+        # Now safe to wrap negatives
+        if idx < 0:
+            return size + idx
+        return idx
+
+    if isinstance(idx, slice):
+        # Handle : slices here, any other slice
+        # can be handled with final return
+        if idx == slice(None, None, None):
+            return None
+    else:
+        # list or array can both be handled as array. Need to check
+        # for > 1 dimension here!
+        idx = np.asarray(idx)
+        if idx.size == 0:
+            # Cast empty lists to int
+            idx = idx.astype(np.int64)
+
+        if idx.ndim != 1:
+            raise IndexError(
+                "Class:`DiscreteModelMatrix` only supports single dimension indices."
+            )
+
+    # Evaluate list, array, or non-full slice
+    return np.arange(size)[idx]
+
+
 def _is_symmetric(W: scp.sparse.sparray | scp.sparse.spmatrix | np.ndarray) -> bool:
     """Function to check whether square matrix ``W`` is symmetric or not.
 
