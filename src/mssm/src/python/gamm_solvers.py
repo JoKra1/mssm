@@ -6858,7 +6858,8 @@ def test_SR1(
             # against machine precision directly
             rcond, _ = scp.linalg.lapack.dgecon(lu, np.linalg.norm(t2, 1))
             # Check against tolerance scipy uses to determine LinAlgWarnings
-            Fail = info != 0 or (rcond < np.finfo(float).eps)
+            # Cast to bool, since checks are of form ``skip is False`` which fails with np.bool_!
+            Fail = bool(info != 0 or np.isnan(rcond) or (rcond < np.finfo(float).eps))
         except:  # noqa: E722
             Fail = True
 
