@@ -84,6 +84,9 @@ def _nonzeroXjTWXk(
     """Function that determines for which combinations of ``dtj`` and ``dtk`` the cross product
     needs to be computed (i.e., is non-zero).
 
+    References:
+     - Davis, T. A. (2006). Direct Methods for Sparse Linear Systems.
+
     :param dtjs: List of term matrices included in ``X_j``
     :type dtks: DiscreteTerm
     :param dtk: List of term matrices included in ``X_k``
@@ -101,6 +104,9 @@ def _nonzeroXjTWXk(
     #
     # Only cross-products between partial terms j and k can potentially be zero and also only if W
     # is not fully dense.
+
+    # Number of rows for both sets of terms has to be the same
+    N = dtjs[0].indices[0].shape[0]
 
     # Get full and partial j term sorting
     full_j = []
@@ -155,8 +161,44 @@ def _nonzeroXjTWXk(
         # If we still have partial blocks left, then we now need to check which
         # of the corresponding cross-products we need. To compute this efficiently
         # we can exploit the dt.non_zero arrays and use them to set up binary indicator
-        # matrices to determine which of the remaining cross-products are zero everywhere.
-        pass
+        # structure matrices to determine which of the remaining cross-products are zero everywhere.
+        # The following relies on Theorem 2.1 originally by Gilbert, stated in Davis "Direct
+        # Methods for Sparse Linear Systems".
+
+        # Prepare sparse structure matrices. Each have N rows and number of columns matches
+        # dimension of the partial terms. Columns are non_zero rows for terms.
+        Sj_idx = [dtjs[j].nonzero_rows for j in partial_j]
+        Sk_idx = [dtks[k].nonzero_rows for k in partial_k]
+
+        Sjks = []
+        for idx in [Sj_idx, Sk_idx]:
+
+            # From scipy docs for sparse csc_array: "row indices for column i are stored in
+            # indices[indptr[i]:indptr[i+1]]...". So indptr is cumsum over len of arrays in
+            # idx arrays starting from zero
+            ptr = np.concatenate(([0], np.cumsum([len(r) for r in idx])))
+
+            # Now can create structure indicator as sparse matrix. Again from scipy docs:
+            # "...and their corresponding values are stored in data[indptr[i]:indptr[i+1]]", so
+            # np.ones(ptr[-1]) gives sufficient ones to fill all nonzeros
+            S = scp.sparse.csc_array(
+                (np.ones(ptr[-1]), np.concatenate(idx), ptr), shape=(N, len(idx))
+            )
+            Sjks.append(S)
+
+        # Given structure indicators we can compute the overlap based on straightforward extension
+        # of Gilbert's theorem as:
+        overlap = Sjks[0].T @ Sjks[1] if W is None else Sjks[0].T @ (abs(W) @ Sjks[1])
+
+        # Extract term indices hat have overlap
+        overlap_j, overlap_k = overlap.nonzero()
+        nonzero_j.extend(partial_j[overlap_j])
+        nonzero_k.extend(partial_k[overlap_k])
+
+    # Now need to get things in order for each j for each k...
+    # Can use lexsort but need to remember LAST index is primary sort dim!
+    order = np.lexsort((nonzero_k, nonzero_j))
+    return nonzero_j[order], nonzero_k[order]
 
 
 def _XjTWXk(
