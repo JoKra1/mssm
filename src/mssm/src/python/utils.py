@@ -2294,14 +2294,20 @@ def REML(
     :return: (Approximate) REML score
     :rtype: float|np.ndarray
     """
+    n_coef = coef.shape[0]
 
     # Compute S_\\lambda before any re-parameterization
-    S_emb, _, _, _ = compute_S_emb_pinv_det(len(coef), penalties, "svd")
+    if len(penalties) > 0:
+        S_emb, _, _, _ = compute_S_emb_pinv_det(n_coef, penalties, "svd")
 
-    # Re-parameterize as shown in Wood (2011) to enable stable computation of log(|S_\\lambda|+)
-    Sj_reps, _, _, _, S_reps, SJ_term_idx, S_idx, S_coefs, Q_reps, Mp = reparam(
-        None, penalties, None, option=4
-    )
+        # Re-parameterize as shown in Wood (2011) to enable stable computation of log(|S_\\lambda|+)
+        Sj_reps, _, _, _, S_reps, SJ_term_idx, S_idx, S_coefs, Q_reps, Mp = reparam(
+            None, penalties, None, option=4
+        )
+    else:
+        S_emb = scp.sparse.csc_array(([], ([], [])), shape=(n_coef, n_coef))
+        S_reps = []
+        Mp = n_coef
 
     # if not X is None:
     # S_emb = None
