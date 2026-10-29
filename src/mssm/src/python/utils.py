@@ -2233,7 +2233,15 @@ def compute_REML_candidate_GSMM(
             lgdetDs.append(lgdetD)
 
         total_edf, _, _ = calculate_edf(
-            None, None, LV, penalties, lgdetDs, n_coef, n_c, None, S_emb
+            None,
+            None,
+            LV,
+            penalties,
+            lgdetDs,
+            n_coef - (len(drop) if drop is not None else 0),
+            n_c,
+            None,
+            S_emb,
         )
 
         if origNH is not None:
@@ -2368,10 +2376,11 @@ def REML(
     # fitting (based on S_\\lambda before re-parameterization).
     H_pen = nH + S_emb / scale
 
-    # Drop unidentifiable parameters
+    # Drop unidentifiable parameters. **Note**: these also lower dimension of penalty Kernel (Mp)
     if keep is not None:
         H_pen = H_pen[:, keep]
         H_pen = H_pen[keep, :]
+        Mp -= n_coef - len(keep)
 
     Sdiag = np.power(np.abs(H_pen.diagonal()), 0.5)
     PI = scp.sparse.diags(1 / Sdiag, format="csc")

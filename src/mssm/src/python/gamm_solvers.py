@@ -1231,7 +1231,7 @@ def update_scale_edf(
             None,
         )
     else:
-        total_edf = colsX
+        total_edf = colsX - (len(drop) if drop is not None else 0)
         term_edfs = None
         Bs = None
 
@@ -6550,7 +6550,7 @@ def solve_gammlss_sparse(
         term_edfs = calculate_term_edf(gamlss_pen, term_edfs)
     else:
         term_edfs = None
-        total_edf = n_coef
+        total_edf = n_coef - (len(drop) if drop is not None else 0)
 
     return (
         coef,
@@ -8960,7 +8960,7 @@ def correct_lambda_step_gen_smooth(
             LV,
             smooth_pen_rp,
             lgdetDs,
-            n_coef - (len(drop) if drop is not None else 0),
+            n_coef,
             n_c,
             None,
             S_emb,
@@ -9861,6 +9861,11 @@ def solve_generalSmooth_sparse(
                     "note that even then estimates are likely to be inaccurate."
                 )
             )
+
+    # Computing edf in GSMM always starts from total coef, so need to account for drop here only
+    # once!
+    if drop is not None:
+        total_edf -= len(drop)
 
     return (
         coef,
