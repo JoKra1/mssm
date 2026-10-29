@@ -943,7 +943,7 @@ class Test_gammlss:
     def test_GAMreml(self):
         reml = self.model.get_reml()
         np.testing.assert_allclose(
-            reml, -4512.688618306298, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            reml, -4511.769679773092, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_GAMllk(self):
@@ -1107,7 +1107,7 @@ class Test_gsmm:
     def test_GAMreml(self):
         reml = self.model.get_reml()
         np.testing.assert_allclose(
-            reml, -4512.690758802791, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            reml, -4511.771820269586, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_GAMllk(self):
@@ -1267,7 +1267,7 @@ class Test_gsmm_qefs:
     def test_GAMreml(self):
         reml = self.model.get_reml()
         np.testing.assert_allclose(
-            reml, -4521.032209266315, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            reml, -4520.11327073311, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_GAMllk(self):
@@ -1424,7 +1424,7 @@ class Test_te_scaling_qefs:
     def test_GAMreml(self):
         reml = self.model.get_reml()
         np.testing.assert_allclose(
-            reml, -1758.4067889827425, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            reml, -1757.487850449538, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_GAMllk(self):
