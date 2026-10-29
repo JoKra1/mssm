@@ -6773,10 +6773,14 @@ def test_SR1(
     sks: np.ndarray,
     yks: np.ndarray,
     rhos: np.ndarray,
+    acols: list[int] | None = None,
+    omega_scale: float = 1,
 ) -> bool:
     """Test whether SR1 update is well-defined for H.
 
-    Relies on steps discussed by Byrd, Nocdeal & Schnabel (1992).
+    Relies on steps discussed by Byrd, Nocdeal & Schnabel (1992). Specifically, the update is
+    rejected if inverting the inner matrix fails outright or if a triangular decomposition suggests
+    the latter to be poorly conditioned.
 
     References:
      - Byrd, R. H., Nocedal, J., & Schnabel, R. B. (1994). Representations of quasi-Newton \
@@ -6795,6 +6799,15 @@ def test_SR1(
     :type yks: np.ndarray
     :param rhos: Previous rhos
     :type rhos: np.ndarray
+    :param acols: For the structured qEFS update this array holds indices of columns of negative
+        Hessian to be approximated via quasi Newton. Note, that ``yk`` and ``yks`` are expected to
+        already be transformed by the information about the Hessian that is available (see
+        :func:`update_ys_qefs`). Defaults to None, meaning the test is performed on the full update
+        vectors.
+    :type acols: list[int] | None, optional
+    :param omega_scale: Additional multiplier (e.g., ``"dampen_HBB"`` for the structured update)
+        applied to ``omega``. Defaults to 1
+    :type omega_scale: float, optional
     :return: Check whether SR1 update is well-defined for H.
     :rtype: bool
     """
@@ -6808,23 +6821,47 @@ def test_SR1(
         yks = np.append(yks, yk.T, axis=0)
         rhos = np.append(rhos, rho[0, 0])
 
+    if acols is not None:
+        # Structured update: only need subset of update vectors approximated via quasi-newton
+        # Re-cast to contiguous array, since indexing otherwise slows computeHSR1 noticeably
+        sks = np.ascontiguousarray(sks[:, acols])
+        yks = np.ascontiguousarray(yks[:, acols])
+
+        with np.errstate(divide="ignore"):
+            rhos = 1 / np.einsum("ij,ij->i", sks, yks)
+
     # Compute new omega to better scale hessian (again see Nocedal & Wright, 2004)
     if sks.shape[0] > 0:
-        omega = compute_omega(yks, sks)
+        omega = omega_scale * compute_omega(yks, sks)
     else:
         omega = 1
 
     # Update H0 (rather H0(k))
-    H0 = scp.sparse.identity(sk.shape[0], format="csc") * omega
+    H0 = scp.sparse.identity(sks.shape[1], format="csc") * omega
 
     # Now try SR1 update
     Fail = False
-    try:
-        _, _, _ = computeHSR1(
-            sks, yks, rhos, H0, omega=omega, make_psd=False, explicit=False
-        )
-    except:  # noqa: E722
-        Fail = True
+    with warnings.catch_warnings():
+        # Conditioning is checked explicitly below, so can ignore any warning related to such
+        # issues (if they are thrown by scipy)
+        warnings.simplefilter("ignore", scp.linalg.LinAlgWarning)
+        try:
+            _, t2, _ = computeHSR1(
+                sks, yks, rhos, H0, omega=omega, make_psd=False, explicit=False
+            )
+
+            # t2 is inverse of inner term which has same condition number, so can just work with
+            # that
+            # Triangular (LU) decomp:
+            lu, _, info = scp.linalg.lapack.dgetrf(t2)
+            # dgecon "estimates the reciprocal of the condition number" so can check
+            # against machine precision directly
+            rcond, _ = scp.linalg.lapack.dgecon(lu, np.linalg.norm(t2, 1))
+            # Check against tolerance scipy uses to determine LinAlgWarnings
+            # Cast to bool, since checks are of form ``skip is False`` which fails with np.bool_!
+            Fail = bool(info != 0 or np.isnan(rcond) or (rcond < np.finfo(float).eps))
+        except:  # noqa: E722
+            Fail = True
 
     # Undo conditional assignment
     sks = np.delete(sks, 0, axis=0)
@@ -6901,6 +6938,12 @@ def update_ys_qefs(
     alpha: float | None,
     skip: bool,
     maxcor: int,
+    nHfd: np.ndarray | scp.sparse.csc_array | None = None,
+    P2: scp.sparse.csc_array | None = None,
+    onHBb: np.ndarray | scp.sparse.csc_array | None = None,
+    IonHBB: np.ndarray | None = None,
+    acols: list[int] | None = None,
+    omega_scale: float = 1,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, bool]:
     """Determines new update vectors ``yk`` and ``sk`` as well as new values for ``rho`` and
     ``omega`` and, for the "SR1" update decides whether they should be collected and used for the
@@ -6938,6 +6981,26 @@ def update_ys_qefs(
     :param maxcor: Maximum number of update vectors to retain as part of the limited memory
         approximations to the hessian/inverse.
     :type maxcor: int
+    :param nHfd: For the structured qEFS update this holds a (Finite difference approximation)
+        symmetric (sparse) matrix with ``fcols`` rows and columns set to (finite difference
+        approximation of) columns of negative Hessian of llk. Defaults to None
+    :type nHfd: np.ndarray | scp.sparse.csc_array | None, optional
+    :param P2: For the structured qEFS update, this holds a ``len(tcols) * len(yk)`` permutation
+        matrix that transforms the quasi Newton approximated block back into the negative Hessian
+        via P2 @ nHqa @ P2.T (see :func:`init_qEFS_storage`). Defaults to None
+    :type P2: scp.sparse.csc_array | None, optional
+    :param onHBb: For the structured qEFS update, the (dampened) top right block of ``nHfd`` but
+        ordered so that all columns approximated via quasi-newton come last (i.e., what is returned
+        by :func:`makepdd_fd2llk`). Defaults to None
+    :type onHBb: np.ndarray | scp.sparse.csc_array | None, optional
+    :param IonHBB: For the structured qEFS update, the inverse of ``onHBb``. Defaults to None
+    :type IonHBB: np.ndarray | None, optional
+    :param acols:  For the structured qEFS update this array holds indices of columns of negative
+        Hessian to be approximated via quasi Newton. Passed to :func:`test_SR1`. Defaults to None
+    :type acols: list[int] | None, optional
+    :param omega_scale: Additional multiplier (e.g., ``"dampen_HBB"`` for the structured update)
+        applied to ``omega``. Passed to :func:`test_SR1`. Defaults to 1
+    :type omega_scale: float, optional
     :return: Updated values for ``yks``, ``sks``, ``rhos``, as well as ``omega`` (latest
         estimate of eigenvalue of hessian) and ``skip`` reflecting the updated decision on whether
         to collect the update vectors for the "SR1" update.
@@ -6949,6 +7012,11 @@ def update_ys_qefs(
         yk = (-1 * next_grad_up) - (-1 * grad_up)
         sk = alpha * step
 
+        if nHfd is not None:
+            # Structured update: correct for the part of the Hessian that is available
+            yk -= nHfd @ sk
+            yk -= P2 @ (onHBb.T @ (IonHBB @ (onHBb @ (P2.T @ sk))))
+
         with warnings.catch_warnings():  # Divide by zero
             warnings.simplefilter("ignore")
 
@@ -6959,7 +7027,7 @@ def update_ys_qefs(
 
     if skip is False:
         # Check if SR1 update is defined (see Nocedal & Wright, 2004)
-        skip = test_SR1(sk, yk, rhok, sks, yks, rhos)
+        skip = test_SR1(sk, yk, rhok, sks, yks, rhos, acols, omega_scale)
 
     if skip is False:
         # Update defined, can collect update vectors
@@ -7002,6 +7070,12 @@ def sample_ys_qefs(
     H0: scp.sparse.csc_array,
     sample_kwargs: dict,
     n_c: int = 10,
+    nHfd: np.ndarray | scp.sparse.csc_array | None = None,
+    P2: scp.sparse.csc_array | None = None,
+    onHBb: np.ndarray | scp.sparse.csc_array | None = None,
+    IonHBB: np.ndarray | None = None,
+    acols: list[int] | None = None,
+    omega_scale: float = 1,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, int]:
     """Function to sample the limited-memory quasi-Newton approximation at estimate ``coef``,
     based on Berahas et al. (2021).
@@ -7057,6 +7131,26 @@ def sample_ys_qefs(
     :type sample_kwargs: dict
     :param n_c: Number of cores to use, defaults to 10
     :type n_c: int, optional
+    :param nHfd: For the structured qEFS update this holds a (Finite difference approximation)
+        symmetric (sparse) matrix with ``fcols`` rows and columns set to (finite difference
+        approximation of) columns of negative Hessian of llk. Defaults to None
+    :type nHfd: np.ndarray | scp.sparse.csc_array | None, optional
+    :param P2: For the structured qEFS update, this holds a ``len(tcols) * len(yk)`` permutation
+        matrix that transforms the quasi Newton approximated block back into the negative Hessian
+        via P2 @ nHqa @ P2.T (see :func:`init_qEFS_storage`). Defaults to None
+    :type P2: scp.sparse.csc_array | None, optional
+    :param onHBb: For the structured qEFS update, the (dampened) top right block of ``nHfd`` but
+        ordered so that all columns approximated via quasi-newton come last (i.e., what is returned
+        by :func:`makepdd_fd2llk`). Defaults to None
+    :type onHBb: np.ndarray | scp.sparse.csc_array | None, optional
+    :param IonHBB: For the structured qEFS update, the inverse of ``onHBb``. Defaults to None
+    :type IonHBB: np.ndarray | None, optional
+    :param acols:  For the structured qEFS update this array holds indices of columns of negative
+        Hessian to be approximated via quasi Newton. Passed to :func:`test_SR1`. Defaults to None
+    :type acols: list[int] | None, optional
+    :param omega_scale: Additional multiplier (e.g., ``"dampen_HBB"`` for the structured update)
+        applied to ``omega``. Passed to :func:`test_SR1`. Defaults to 1
+    :type omega_scale: float, optional
     :return: Updated values for the update vectors and rho variables ``yks``, ``sks``, ``rhos``,
         as well as ``omega`` (latest estimate of eigenvalue of hessian) and ``updates`` (number of
         accepted samples).
@@ -7181,6 +7275,12 @@ def sample_ys_qefs(
             r,
             False,
             maxcor,
+            nHfd,
+            P2,
+            onHBb,
+            IonHBB,
+            acols,
+            omega_scale,
         )
 
         # Check if update was accepted
@@ -7260,17 +7360,23 @@ def makepdd_fd2llk(
         onHBB if isinstance(onHBB, np.ndarray) else onHBB.toarray()
     )
 
+    # Catch EVs that are numerically zero in the PSD path as well
+    eps = np.power(np.finfo(float).eps, 0.5)
+    thresh = eps * np.max(np.abs(eigonHBB))
+
     if make_PD and make_PSD:
         # Enforce PD
-        eps = np.power(np.finfo(float).eps, 0.5)
-        thresh = eps * np.max(np.abs(eigonHBB))
         eigonHBB[eigonHBB <= thresh] = thresh
         ire = 1 / eigonHBB
     else:
-        # Enforce maximum of PSD only - can also keep indefinite
+        # Enforce maximum of PSD only - can also keep indefinite. Numerically zero EVs are
+        # set to exactly zero in both cases, to prevent the inverse conditioning from blowing up
         ire = np.zeros_like(eigonHBB)
         if make_PSD:
-            eigonHBB[eigonHBB <= 0] = 0
+            eigonHBB[eigonHBB <= thresh] = 0
+        else:
+            # Check for absolute here to leave large negative EVs untouched
+            eigonHBB[np.abs(eigonHBB) <= thresh] = 0
         ire[eigonHBB != 0] = 1 / eigonHBB[eigonHBB != 0]
 
     # Re-compute onHBB as PD and invert
@@ -7278,8 +7384,11 @@ def makepdd_fd2llk(
     IonHBB = U @ np.diag(ire) @ U.T
 
     if make_PD is False and make_PSD:
-        # Project HBb onto range of onHBB
-        onHBb = onHBB @ IonHBB @ onHBb
+        # Project HBb onto range of onHBB. Need: onHBb = onHBB @ IonHBB @ onHBb. Since U.T@U = I,
+        # onHBB @ IonHBB = U @ diag(eigonHBB * ire) @ U.T, with inner diagonal resulting in a
+        # diagonal with 1s where eigonHBB != 0 and 0s elsewhere. So:
+        Ur = U[:, eigonHBB != 0]
+        onHBb = Ur @ (Ur.T @ onHBb)
 
     # Replace blocks in noHfd with PD and dampened versions
     with warnings.catch_warnings():  # Sparsity efficiency warning
@@ -7480,7 +7589,10 @@ def getCholnH(
     :param S_root: Root of the total (weighted) penalty matrix
     :type S_root: scp.sparse.csc_array
     :param make_pd: Whether to enforce the Hessian approximation to be PD (otherwise only PSD is
-        enforced), defaults to True
+        enforced). Note, that for the structured update (i.e., if ``linopH.fcols is not None``) this
+        will force the top left block of the Hessian approximation (holding the exact/fd
+        approximation part) to be PD, independent of what is set for ``"PD_HBB"`` in
+        ``linopH.sqEFS_options``. Defaults to True
     :type make_pd: bool, optional
     :return: Cholesky ``Lp`` of the pivoted quasi-Newton approximation to the negative Hessian of
         the penalized log-likelihood and the pivot matrix so that ``P@Lp`` gives the unpivoted
@@ -7535,7 +7647,8 @@ def getCholnH(
             else 1
         )
 
-        PD_HBB = (
+        # Force top left block to be PD if entire approximation should be PD
+        PD_HBB = make_pd or (
             linopH.sqEFS_options["PD_HBB"] if "PD_HBB" in linopH.sqEFS_options else True
         )
 
@@ -7596,11 +7709,17 @@ def getCholnH(
         eig, U = scp.linalg.eigh(
             onHBB if isinstance(onHBB, np.ndarray) else onHBB.toarray()
         )
-        eig[eig < 0] = 0  # Must be PSD for Chol to make sense
+        # Must be PSD for Chol to make sense. EVs of onHBB returned by makepdd_fd2llk are
+        # either >= ``thresh`` or zero - but no longer exactly so here due to the additional
+        # decomposition. This can cause problems if ``onHBB`` was obtained from ``makepdd_fd2llk``
+        # with PD=True: EVs forced to ``thresh`` might come back slightly below or above
+        # that numerically speaking. So we only check against 0.5 * thresh for the zeroing to
+        # prevent flipping lower ones to zero.
+        eps = np.power(np.finfo(float).eps, 0.5)
+        thresh = eps * np.max(np.abs(eig))
+        eig[eig < 0.5 * thresh] = 0
 
         if PD_HBB:
-            eps = np.power(np.finfo(float).eps, 0.5)
-            thresh = eps * np.max(np.abs(eig))
             eig[eig < thresh] = thresh
 
         ieig = np.zeros_like(eig)
@@ -7776,6 +7895,9 @@ def sampleHcoef(
             # Un-penalized case
             S_emb = scp.sparse.csc_array(([], ([], [])), shape=(n_coef, n_coef))
 
+    nHfd = None
+    IonHBB = None
+    onHBb = None
     if fcols is not None:
         nHfd = -1 * family.jhessian(fcols, coef, coef_split_idx, ys, Xs, n_c=n_c)
 
@@ -7825,6 +7947,16 @@ def sampleHcoef(
             linopH.yk, linopH.sk, method="mean" if sample_hessian else "NoWr"
         ) * scp.sparse.identity(S_emb.shape[1], format="csc")
 
+    # Sampling test is now performed on subset of hessian columns that are approximated via
+    # quasi-newton, so need to pass along some extra info.
+    dampen_HBB = 1
+    if fcols is not None:
+        dampen_HBB = (
+            linopH.sqEFS_options["dampen_HBB"]
+            if "dampen_HBB" in linopH.sqEFS_options
+            else 1
+        )
+
     updates = -1
     attempts = 0
     while (updates < force_min_updates) and (attempts < 30):
@@ -7840,20 +7972,18 @@ def sampleHcoef(
             H0,
             sample_hessian_options,
             n_c=n_c,
+            nHfd=nHfd,
+            P2=linopH.P2,
+            onHBb=onHBb,
+            IonHBB=IonHBB,
+            acols=linopH.acols,
+            omega_scale=dampen_HBB,
         )
         seed += 1
         attempts += 1
 
     if updates > 0:
         if fcols is not None:
-            # Again correct for structured information available
-            # beyond S_emb
-            yks -= (nHfd @ sks.T).T
-            yks -= (linopH.P2 @ onHBb.T @ (IonHBB @ (onHBb @ (linopH.P2.T @ sks.T)))).T
-
-            # and re-compute rhos
-            rhos = 1 / np.einsum("ij,ij->i", sks, yks)
-
             linopH.nHfd = nHfd
             linopH.IonHBB = IonHBB
 
@@ -8026,6 +8156,11 @@ def update_coef_gen_smooth(
             if "dampen_HBb" in opt_raw.sqEFS_options
             else 1
         )
+        dampen_HBB = (
+            opt_raw.sqEFS_options["dampen_HBB"]
+            if "dampen_HBB" in opt_raw.sqEFS_options
+            else 1
+        )
         PD_HBB = (
             opt_raw.sqEFS_options["PD_HBB"]
             if "PD_HBB" in opt_raw.sqEFS_options
@@ -8120,6 +8255,7 @@ def update_coef_gen_smooth(
 
         nHfd = None
         IonHBB = None
+        onHBb = None
         if fcols is not None and sample_hessian is False:
             # IFF structured update also includes fd hessian approximation info, we must
             # correct all k update vectors for hessian after step taken. Thus need to figure
@@ -8232,7 +8368,9 @@ def update_coef_gen_smooth(
 
                 H0 = omega0 * scp.sparse.identity(S_emb.shape[1], format="csc")
 
-            # Now sample update vectors
+            # Now sample update vectors.
+            # Sampling test is now performed on subset of hessian columns that are approximated via
+            # quasi-newton, so need to pass along some extra info.
             updates = 0
             attempts = 0
             while (updates <= 0) and (attempts < 30):
@@ -8248,17 +8386,17 @@ def update_coef_gen_smooth(
                     H0,
                     sample_hessian_options,
                     n_c=n_c,
+                    nHfd=nHfd,
+                    P2=P2,
+                    onHBb=onHBb,
+                    IonHBB=IonHBB,
+                    acols=acols,
+                    omega_scale=dampen_HBB if fcols is not None else 1,
                 )
                 attempts += 1
 
             if updates == 0:
                 warnings.warn("Failed to sample any update vectors for the Hessian!")
-
-            elif fcols is not None:
-                # Again correct for any kind of structured information available
-                # beyond S_emb
-                yks -= (nHfd @ sks.T).T
-                yks -= (P2 @ onHBb.T @ (IonHBB @ (onHBb @ (P2.T @ sks.T)))).T
 
     # Update coefficients:
     full_coef = None
