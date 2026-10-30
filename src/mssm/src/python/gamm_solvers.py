@@ -274,7 +274,6 @@ def compute_S_emb_pinv_det(
     S_pinv_elements = []
     S_pinv_rows = []
     S_pinv_cols = []
-    cIndexPinv = SJ_idx[0]
 
     # Optionally compute root of S_\\lambda
     S_root_singles = None
@@ -287,6 +286,10 @@ def compute_S_emb_pinv_det(
         # Now handle all pinv calculations because all penalties
         # associated with a term have been collected in SJ
 
+        # cIndexPinv must be set at each penalty's start index to skip un-penalized coef
+        # between linear predictors
+        cIndexPinv = SJ_idx[SJi]
+
         if SJ_terms[SJi] == 1:
 
             if root:
@@ -297,7 +300,6 @@ def compute_S_emb_pinv_det(
 
             # No overlap between penalties so we can just leave this block in the
             # pseudo-inverse empty.
-            cIndexPinv += SJs[SJi].shape[1] * SJ_reps[SJi]
             FS_use_rank.append(True)
 
         else:

@@ -10,7 +10,8 @@ import sys
 
 
 def sort_penalties(penalties: list[LambdaTerm]) -> list[LambdaTerm]:
-    """Sorts penalties by ``start_index`` in ascending order.
+    """Stable sort of penalties by ``start_index`` in ascending order so that relative order of
+    penalties with same ``start_index`` is maintained.
 
     :param penalties: A list of term-specific penalties.
     :type penalties: list[LambdaTerm]
@@ -19,7 +20,10 @@ def sort_penalties(penalties: list[LambdaTerm]) -> list[LambdaTerm]:
     """
 
     idx = [pen.start_index for pen in penalties]
-    sort_idx = np.argsort(idx)
+    # Sort needs to be stable to maintain relative order. Stable keyword was only added later,
+    # so pass via kind.
+    # see: https://numpy.org/doc/stable/reference/generated/numpy.argsort.html
+    sort_idx = np.argsort(idx, kind="stable")
     return [penalties[sidx] for sidx in sort_idx]
 
 
