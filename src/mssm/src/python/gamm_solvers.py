@@ -10,7 +10,7 @@ from .exp_fam import (
     Identity,
     warnings,
 )
-from .penalties import split_shared_penalties, create_id_dict
+from .penalties import split_shared_penalties, create_id_dict, get_pinv_single_blocks
 from .formula import (
     build_sparse_matrix_from_formula,
     pd,
@@ -271,6 +271,10 @@ def compute_S_emb_pinv_det(
 
     # print(SJ_idx_len)
     # print(SJ_reps,SJ_lams,SJ_idx)
+
+    # Get single penalties that need pinv
+    pinv_single_idx = get_pinv_single_blocks(penalties)
+
     S_pinv_elements = []
     S_pinv_rows = []
     S_pinv_cols = []
@@ -290,7 +294,7 @@ def compute_S_emb_pinv_det(
         # between linear predictors
         cIndexPinv = SJ_idx[SJi]
 
-        if SJ_terms[SJi] == 1:
+        if SJ_terms[SJi] == 1 and SJ_idx[SJi] not in pinv_single_idx:
 
             if root:
                 if S_root_singles is None:
@@ -985,16 +989,32 @@ def calculate_edf(
             Bps = compute_B(LP, compute_eigen_perm(Pr), lTerm, n_c, drop)  # noqa: F405
 
             if lTerm.clust_series is not None:
-                if Bps[1] < lgdetDs[lti]:
+                # **Note**: lgdetDs matches merged_penalties so need to find lTerm in
+                # merged_penalties. Since there is no id for clustered fs, lTerm is
+                # referenced in merged_penalties.
+                merged_lti = None
+                for mi, mpen in enumerate(merged_penalties):
+                    if mpen is lTerm:
+                        merged_lti = mi
+                        break
+
+                if merged_lti is None:
+                    raise ValueError(
+                        "Could not find penalty with clust_series in merged penalties."
+                    )
+
+                lgdetD = lgdetDs[merged_lti]
+
+                if Bps[1] < lgdetD:
                     Bps = Bps[1]
-                elif (Bps[1] * 0.7 + Bps[0] * 0.3) < lgdetDs[lti]:
+                elif (Bps[1] * 0.7 + Bps[0] * 0.3) < lgdetD:
                     Bps = Bps[1] * 0.7 + Bps[0] * 0.3
-                elif (Bps[1] + Bps[0]) / 2 < lgdetDs[lti]:
+                elif (Bps[1] + Bps[0]) / 2 < lgdetD:
                     Bps = (Bps[1] + Bps[0]) / 2
-                elif Bps[0] < lgdetDs[lti]:
+                elif Bps[0] < lgdetD:
                     Bps = Bps[0]
                 else:
-                    Bps = lgdetDs[lti] - 1e-7
+                    Bps = lgdetD - 1e-7
 
         pen_params = lTerm.lam * Bps
         total_edf -= pen_params

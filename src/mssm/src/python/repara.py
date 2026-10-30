@@ -12,6 +12,7 @@ from .penalties import (
     embed_in_S_sparse,
     split_shared_penalties,
     combine_shared_penalties,
+    get_pinv_single_blocks,
 )
 from .custom_types import LambdaTerm
 from .discrete import DiscreteModelMatrix
@@ -623,9 +624,13 @@ def reparam(
         S_inv_rp = None  # Inverse of overall penalty
         S_root_rp = None  # root of overall penalty
 
+        # Get single penalties that need an inverse
+        pinv_single_idx = get_pinv_single_blocks(S)
+
         for Si, (Q_rep, S_rep, grp_idx, S_coef) in enumerate(
             zip(Q_reps, S_reps, SJ_term_idx, SJ_coef)
         ):
+            invert_grp = len(grp_idx) > 1 or SJ_idx[Si] in pinv_single_idx
 
             for j in range(len(grp_idx)):
                 S_J = Sj_reps[grp_idx[j]].S_J
@@ -662,11 +667,7 @@ def reparam(
             # Update total penalty and optionally root and inverse
 
             # Compute inverse of S_rep
-            if (
-                ((form_inverse == 1) and (len(grp_idx) > 1))
-                or form_root
-                or form_inverse == 2
-            ):
+            if ((form_inverse == 1) and invert_grp) or form_root or form_inverse == 2:
                 L, code = cpp_chol(S_rep)
                 if code != 0:
                     raise ValueError(
@@ -677,8 +678,8 @@ def reparam(
                     *translate_sparse(L), S_root_rp, n_coef, S_coef, SJ_idx[Si]
                 )
 
-            # Form inverse - only if this is not a single penalty term
-            if ((form_inverse == 1) and (len(grp_idx) > 1)) or form_inverse == 2:
+            # Form inverse
+            if ((form_inverse == 1) and invert_grp) or form_inverse == 2:
                 Linv = compute_Linv(L, n_c)
                 S_inv = (Linv.T @ Linv).tocsc()
 
@@ -693,7 +694,7 @@ def reparam(
 
             for _ in range(1, rep_SJs[Si]):
                 if (
-                    ((form_inverse == 1) and (len(grp_idx) > 1))
+                    ((form_inverse == 1) and invert_grp)
                     or form_root
                     or form_inverse == 2
                 ):
@@ -701,7 +702,7 @@ def reparam(
                         *translate_sparse(L), S_root_rp, n_coef, S_coef, c_idx
                     )
 
-                if ((form_inverse == 1) and (len(grp_idx) > 1)) or form_inverse == 2:
+                if ((form_inverse == 1) and invert_grp) or form_inverse == 2:
                     S_inv_rp, _ = embed_in_S_sparse(
                         *translate_sparse(S_inv), S_inv_rp, n_coef, S_coef, c_idx
                     )

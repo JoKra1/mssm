@@ -58,6 +58,44 @@ def create_id_dict(penalties: list[LambdaTerm]) -> dict | None:
     return None
 
 
+def get_pinv_single_blocks(penalties: list[LambdaTerm]) -> list[int]:
+    """Identifies single-penalty blocks for which the (pseudo-) inverse is needed to compute the
+    derivative of :math:`log(|\\mathbf{S}_\\lambda|_+)`.
+
+    Needed when a single-penalty block shares an id with a penalty in a multi-penalty block, then
+    we need the (pseudo-) inverse for both.
+
+    :param penalties: A list of penalty matrices in which merged penalties have been split into
+        individual penalties, some of which might have a ``id`` flag.
+    :type penalties: list[LambdaTerm]
+    :return: List with start indices of single-penalty blocks which require a (pseudo-) inverse.
+    :rtype: list[int]
+    """
+    # 1) Get number of penalties sharing a starting index
+    n_pen_block = {}
+    for pen in penalties:
+        if pen.start_index not in n_pen_block:
+            n_pen_block[pen.start_index] = 1
+        else:
+            n_pen_block[pen.start_index] += 1
+
+    # 2) extract ids of penalties that are part of a multi-block
+    multi_ids = [
+        pen.id
+        for pen in penalties
+        if pen.id is not None and n_pen_block[pen.start_index] > 1
+    ]
+
+    # 3) now extract start_indices of single penalties that share a multi_id
+    pinv_idx = [
+        pen.start_index
+        for pen in penalties
+        if n_pen_block[pen.start_index] == 1 and pen.id in multi_ids
+    ]
+
+    return pinv_idx
+
+
 def combine_shared_penalties(penalties: list[LambdaTerm]) -> list[LambdaTerm]:
     """Identifies penalties that should share a lambda parameter and merges them into a single
     :class:`LambdaTerm`.
