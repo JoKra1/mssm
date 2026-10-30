@@ -1024,7 +1024,9 @@ def calculate_edf(
 
 
 def calculate_term_edf(
-    merged_penalties: list[LambdaTerm], param_penalized: list[float]
+    merged_penalties: list[LambdaTerm],
+    param_penalized: list[float],
+    drop: None | np.typing.NDArray[np.int_] = None,
 ) -> list[float]:
     """Internal function. Computes the smooth-term (and random term) specific estimated degrees of
     freedom.
@@ -1043,6 +1045,9 @@ def calculate_term_edf(
     :param param_penalized: List holding the amount of parameters penalized away by individual
         penalties - obtained from :func:`calculate_edf`.
     :type param_penalized: list[float]
+    :param drop: An optional array holding any coefficients that were dropped from the model. The
+        term-wise edf are corrected for that. Defaults to None
+    :type drop: None | np.typing.NDArray[np.int_]
     :return: A list holding the estimated degrees of freedom per smooth/random term in the model
     :rtype: list[float]
     """
@@ -1051,6 +1056,7 @@ def calculate_term_edf(
     # to get the term-wise edf.
     term_pen_params = []
     term_n_coef = []
+    term_n_drop = []
     term_idx = []
     SJ_idx_max = 0
     SJ_idx_len = 0
@@ -1065,6 +1071,16 @@ def calculate_term_edf(
             term_pen_params.append(param_penalized[lti])
             term_idx.append(lTerm.start_index)
             SJ_idx_max = lTerm.start_index
+            if drop is not None:
+                # Need to collect whether term had coefficients dropped so that
+                # we can subtract them from term_n_coef[lti]
+                pen_range = np.arange(
+                    lTerm.start_index,
+                    lTerm.start_index + lTerm.S_J.shape[1] * lTerm.rep_sj,
+                )
+                term_n_drop.append(np.sum(np.isin(drop, pen_range)))
+            else:
+                term_n_drop.append(0)
             SJ_idx_len += 1
 
         else:  # A term with the same starting index exists already - so sum the pen_params
@@ -1083,7 +1099,7 @@ def calculate_term_edf(
     # Now we can compute the final term-wise edf.
     term_edf = []
     for lti in range(SJ_idx_len):
-        term_edf.append(term_n_coef[lti] - term_pen_params[lti])
+        term_edf.append(term_n_coef[lti] - (term_n_drop[lti] + term_pen_params[lti]))
 
     return term_edf
 
