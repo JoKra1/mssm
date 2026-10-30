@@ -801,7 +801,7 @@ class Test_drop:
     def test_GAMreml(self):
         reml = self.model.get_reml()
         np.testing.assert_allclose(
-            reml, -10648.058207937705, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
+            reml, -10648.97714647091, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
         )
 
     def test_GAMllk(self):

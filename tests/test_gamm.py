@@ -1260,7 +1260,7 @@ class Test_drop:
     def test_GAMreml(self):
         reml = self.model.get_reml()
         np.testing.assert_allclose(
-            reml, -10643.879807223055, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
+            reml, -10644.798745756285, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
         )
 
     def test_GAMllk(self):
@@ -1658,25 +1658,25 @@ class Test_drop_no_pen_order:
     def test_GAMllk1(self):
         llk = self.model1.get_llk(False)
         np.testing.assert_allclose(
-            llk, -2209.29436493949, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
+            llk, -2209.420766917531, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
         )
 
     def test_GAMllk2(self):
         llk = self.model2.get_llk(False)
         np.testing.assert_allclose(
-            llk, -2209.29436493949, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
+            llk, -2209.420766917531, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
         )
 
     def test_scale1(self):
         scale = self.model1.scale
         np.testing.assert_allclose(
-            scale, 1.9825008568078437, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
+            scale, 1.9768203385934946, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
         )
 
     def test_scale2(self):
         scale = self.model2.scale
         np.testing.assert_allclose(
-            scale, 1.9825008568078437, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
+            scale, 1.9768203385934946, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
         )
 
 
