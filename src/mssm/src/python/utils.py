@@ -3326,6 +3326,14 @@ def compute_Vp_WPS(
 
     Vp = np.zeros((len(penalties), len(penalties)))
 
+    # Collect start indices. **Note**: shared penalties can cover several!
+    # Collect in sets to allow for easy union comparison to determine if two penalties
+    # overlap
+    pen_blocks = [
+        set(pen.start_indices) if isinstance(pen.S_Js, list) else {pen.start_index}
+        for pen in penalties
+    ]
+
     # Now can accumulate hessian of reml with respect to log(lambda)
     for peni in range(len(penalties)):
 
@@ -3360,15 +3368,18 @@ def compute_Vp_WPS(
                     @ coef
                 )
 
-            # Now derivative of the log-determinant of S_emb. Only defined if peni==penj or
-            # both are in the same group
+            # Now derivative of the log-determinant of S_emb. Only applicable if peni==penj or
+            # both penalties are in same block. **Note** for shared penalties start indices alone
+            # cannot be compared since there might be gaps between shared penalties and peni might
+            # only overlap with a later block.
             t3 = 0
-            if gamma or (penalties[peni].start_index == penalties[penj].start_index):
+            # Union check to see if peni and penj share at least one start idx
+            if gamma or len(pen_blocks[peni] & pen_blocks[penj]) > 0:
+                # S_inv_rp and S_J_emb already contain all rep_sj repetitions of a penalty
                 t3 = (
                     -1
                     * penalties[peni].lam
                     * penalties[penj].lam
-                    * penalties[peni].rep_sj
                     * (
                         S_inv_rp
                         @ Sj_reps[penj].S_J_emb
@@ -3379,9 +3390,7 @@ def compute_Vp_WPS(
 
                 if gamma:
                     t3 += (
-                        penalties[peni].lam
-                        * penalties[peni].rep_sj
-                        * (S_inv_rp @ Sj_reps[peni].S_J_emb).trace()
+                        penalties[peni].lam * (S_inv_rp @ Sj_reps[peni].S_J_emb).trace()
                     )
 
                 t3 = 0.5 * t3

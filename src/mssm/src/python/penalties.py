@@ -47,7 +47,12 @@ def create_id_dict(penalties: list[LambdaTerm]) -> dict | None:
             else:
                 id_dict[pen.id] = [peni]
 
-    if len(id_dict) > 0 and max([len(v) for v in id_dict.values()]) > 1:
+    # Make sure to only collect ids which occur at least 2 times
+    id_dict = {
+        pen_id: pen_idx for pen_id, pen_idx in id_dict.items() if len(pen_idx) > 1
+    }
+
+    if len(id_dict) > 0:
         return id_dict
 
     return None

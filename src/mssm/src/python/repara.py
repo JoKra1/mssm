@@ -598,8 +598,16 @@ def reparam(
                 Sj_reps[grp_idx[j]].S_J = scp.sparse.csc_array(S_Jrep[j])
 
             if S_rep is None:  # Fix r==Q in first iteration
+                # Sk alone is full rank, need to add all penalties in group to S_rep
                 S_rep = SJbar[0] * LJgroup[0]
-                Q_rep = scp.sparse.eye(r, format="csc")
+                for j in range(1, len(SJbar)):
+                    S_rep += SJbar[j] * LJgroup[j]
+
+                # Q_rep needs different dimensions if Q_rep0 exists, in which case it
+                # holds the entire transformation already.
+                Q_rep = scp.sparse.eye(
+                    r if Q_rep0 is None else Q_rep0.shape[1], format="csc"
+                )
 
             S_reps.append(scp.sparse.csc_array(S_rep))
 

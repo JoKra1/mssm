@@ -12,6 +12,7 @@ from ..python.gamm_solvers import (
 )
 
 from .custom_types import SamplerResult, LambdaTerm
+from .penalties import split_shared_penalties, combine_shared_penalties
 from .utils import sample_MVN, estimateVp, GAMLSSGSMMFamily, RhoPrior, MVUniformRhoPrior
 
 from ...models import (
@@ -1102,9 +1103,11 @@ def sample_mssm(
         # Note that scales and thetas are added to coef vector when working with ``deriv_fam``,
         # so from now on treat ``coef`` as having dimension n_coef + n_scale + n_theta
 
+        # Need to split penalties before embedding then merge afterwards
+        r_pen = split_shared_penalties(r_pen)
         r_pen = embed_shared_penalties([r_pen], formulas, deriv_fam.extra_coef)
         r_pen = [sp for sp in r_pen if len(sp) > 0]
-        r_pen = [pen for pens in r_pen for pen in pens]
+        r_pen = combine_shared_penalties([pen for pens in r_pen for pen in pens])
 
     # Get initial penalty matrix
     if n_lam > 0:
@@ -1190,12 +1193,10 @@ def sample_mssm(
 
         NP_pen = [pen for pens in NP_pen for pen in pens]
 
+        # Must check for joint NP_fidx and NP_tidx to catch right terms
+        NP_ftidx = list(zip(NP_fidx, NP_tidx))
         for pen in NP_pen:
-            if (
-                pen.dist_param in NP_fidx
-                and pen.term in NP_tidx
-                and pen.type == PenType.NULL
-            ):
+            if (pen.dist_param, pen.term) in NP_ftidx and pen.type == PenType.NULL:
 
                 S_f_emb += pen.S_J_emb * lambda_0
 
