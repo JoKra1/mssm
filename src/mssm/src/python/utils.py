@@ -1129,6 +1129,8 @@ def compute_bias_corrected_edf(model, overwrite: bool = False) -> None:
     if model.edf1 is None or overwrite:
         term_edf1 = []
         edf1 = 0
+        drop = model.info.dropped
+        n_drop = len(drop) if drop is not None else 0
 
         if isinstance(model.family, Family):  # GAMM case
             scale = model.scale
@@ -1137,17 +1139,16 @@ def compute_bias_corrected_edf(model, overwrite: bool = False) -> None:
             nH = -1 * model.hessian
             F = model.lvi.T @ model.lvi @ (nH * scale)
 
-            edf1 += model.formulas[0].unpenalized_coef
-
         else:
 
             # Start with forming F matrix
             nH = -1 * model.hessian
             F = model.lvi.T @ model.lvi @ nH
 
-            edf1 += np.sum([form.unpenalized_coef for form in model.formulas])
-
         F_diag = F.diagonal()
+
+        # Keep track of all coef not covered by any penalty.
+        n_unpen = F.shape[1]
 
         prev_start_idx = -1
 
@@ -1173,9 +1174,18 @@ def compute_bias_corrected_edf(model, overwrite: bool = False) -> None:
                 t_edf1 = 2 * np.sum(Fjd) - Fjtrace
                 term_edf1.append(t_edf1)
                 edf1 += t_edf1
+                n_unpen -= S_len
+
+                if drop is not None:
+                    # Keep track of dropped coefficients associated with this penalized term
+                    # Need to subtract them from n_drop since they are accounted for already
+                    n_drop -= np.sum((drop >= S_start) & (drop < S_end))
 
                 # Update current start index
                 prev_start_idx = pen.start_index
+
+        # n_unpen still needs to be corrected for remaining drops in n_drop
+        edf1 += n_unpen - n_drop
 
         model.edf1 = edf1
         model.term_edf1 = term_edf1
