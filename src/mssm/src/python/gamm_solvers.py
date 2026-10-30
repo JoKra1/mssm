@@ -3185,7 +3185,7 @@ def solve_gamm_sparse(
 
     # Final term edf
     if term_edfs is not None:
-        term_edfs = calculate_term_edf(penalties, term_edfs)
+        term_edfs = calculate_term_edf(penalties, term_edfs, fit_info.dropped)
 
     # At this point, Wr/z might not match the dimensions of y and X, because observations might be
     # excluded at convergence. eta and mu are of correct dimension, so we need to re-compute Wr -
@@ -6563,7 +6563,7 @@ def solve_gammlss_sparse(
 
     # Calculate actual term-specific edf
     if len(gamlss_pen) > 0:
-        term_edfs = calculate_term_edf(gamlss_pen, term_edfs)
+        term_edfs = calculate_term_edf(gamlss_pen, term_edfs, drop)
     else:
         term_edfs = None
         total_edf = n_coef - (len(drop) if drop is not None else 0)
@@ -7841,6 +7841,7 @@ def sampleHcoef(
     force_min_updates: int = 0,
     n_c: int = 10,
     seed: int | None = 0,
+    drop: np.typing.NDArray[np.int_] | None = None,
 ) -> tuple[scp.sparse.linalg.LinearOperator, int, float | None, list[float] | None]:
     """Wrapper around the :func:`sample_ys_qefs` function to update the limited-memory quasi-Newton
     approximation to the negative hessian at estimate ``coef``, based on Berahas et al. (2021).
@@ -7887,6 +7888,9 @@ def sampleHcoef(
     :type n_c: int, optional
     :param seed: Number of seed to use for the random sampling, defaults to 0
     :type seed: int | None, optional
+    :param drop: An optional array holding any coefficients that were dropped from the model. The
+        term-wise edf are corrected for that. Defaults to None
+    :type drop: np.typing.NDArray[np.int_] | None, optional
     :return: (Updated) ``linopH``, number of update vectors successfully sampled, new overall
         edf, and term-wise edf. Note that the last two can be ``None`` when ``updates==0`` or when
         ``make_psd is False``.
@@ -8023,7 +8027,7 @@ def sampleHcoef(
                 S_emb,
             )
 
-            term_edfs = calculate_term_edf(smooth_pen, term_edfs)
+            term_edfs = calculate_term_edf(smooth_pen, term_edfs, drop)
 
     return linopH, updates, total_edf, term_edfs
 
@@ -9770,7 +9774,7 @@ def solve_generalSmooth_sparse(
 
     # Calculate actual term-specific edf
     if len(smooth_pen) > 0:
-        term_edfs = calculate_term_edf(smooth_pen, term_edfs)
+        term_edfs = calculate_term_edf(smooth_pen, term_edfs, drop)
     else:
         term_edfs = None
         total_edf = n_coef
@@ -9808,6 +9812,7 @@ def solve_generalSmooth_sparse(
                 S_emb=S_emb,
                 n_c=n_c,
                 seed=outer,
+                drop=drop,
             )
 
             # Collect new edf
