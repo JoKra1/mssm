@@ -1813,6 +1813,11 @@ def compute_reml_candidate_GAMM(
     if isinstance(family, ExtendedFamily) and family.est_theta:
         prev_theta = copy.deepcopy(family.theta)
 
+    # Values returned if the candidate cannot be evaluated before these are computed (see except)
+    coef = np.zeros((X.shape[1], 1))
+    scale = 1
+    edf = X.shape[1]
+
     try:
         if isinstance(family, Gaussian) and isinstance(family.link, Identity):
             # AMM - directly solve for coef

@@ -988,7 +988,12 @@ def calculate_edf(
         else:
             Bps = compute_B(LP, compute_eigen_perm(Pr), lTerm, n_c, drop)  # noqa: F405
 
-            if lTerm.clust_series is not None:
+            if lTerm.clust_series is not None and lgdetDs is None:
+                # No lgdetDs to cap B with (e.g., REML candidates for correct_VB), so fall back
+                # to first option checked below.
+                Bps = Bps[1]
+
+            elif lTerm.clust_series is not None:
                 # **Note**: lgdetDs matches merged_penalties so need to find lTerm in
                 # merged_penalties. Since there is no id for clustered fs, lTerm is
                 # referenced in merged_penalties.
