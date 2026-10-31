@@ -173,7 +173,7 @@ class Test_BIG_GAMM_Discretize:
 
     def test_GAMreml(self):
         reml = self.model.get_reml()
-        assert round(reml, ndigits=2) == -84063.0
+        assert round(reml, ndigits=2) == -84029.66
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
@@ -270,7 +270,7 @@ class Test_BIG_GAMM_Discretize2:
         assert round(self.model.scale, ndigits=3) == 10.962
 
     def test_GAMreml(self):
-        assert round(self.model.get_reml(), ndigits=2) == -84062.96
+        assert round(self.model.get_reml(), ndigits=2) == -84029.62
 
     def test_GAMllk(self):
         assert round(self.model.get_llk(False), ndigits=0) == -75225.0

@@ -121,11 +121,18 @@ def combine_shared_penalties(penalties: list[LambdaTerm]) -> list[LambdaTerm]:
         for id in id_dict.keys():
             m_pens = [pen for pen in penalties if pen.id == id]
             S_J_emb = m_pens[0].S_J_emb
-            D_J_emb = m_pens[0].D_J_emb
 
             for peni in range(1, len(m_pens)):
                 S_J_emb += m_pens[peni].S_J_emb
-                D_J_emb += m_pens[peni].D_J_emb
+
+            # Summing the roots does not work if two penalties are in same block. Currently this
+            # can only happen with extra penalties but we can just stack roots to have this
+            # handle the general overlapping case by default.
+            D_J_emb = scp.sparse.hstack([pen.D_J_emb for pen in m_pens]).tocsc()
+            # From scipy: "row indices for column i are stored in indices[indptr[i]:indptr[i+1]]"
+            # so indptr[i]==indptr[i+1] means an implicit zero column, can use that to drop the
+            # latter from the root to save memory.
+            D_J_emb = D_J_emb[:, np.diff(D_J_emb.indptr) > 0]
 
             m_pen = LambdaTerm(
                 S_J=S_J_emb[

@@ -255,7 +255,8 @@ def compare_CDL(
         obtained from the QR. This takes substantially longer. If this is set to ``'qEFS'``, then
         the coefficients are estimated via quasi netwon and the smoothing penalties are estimated
         from the quasi newton approximation to the hessian. This only requieres first derviative
-        information. Defaults to "Chol".
+        information. Defaults to "Chol" but might be replaced with "QR" for GAMMs if any
+        coefficients were dropped during model fitting.
     :type method: str,optional
     :param seed: Seed to use for random parts of the correction. Defaults to None
     :type seed: int,optional

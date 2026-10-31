@@ -5072,6 +5072,7 @@ def drop_terms_X(
     """
     # Drop from model matrices
     start_idx = 0
+    n_kept = 0
     split_idx = []
     new_Xs = []
     for Xi, X in enumerate(Xs):
@@ -5084,10 +5085,11 @@ def drop_terms_X(
         # print(X.shape)
         new_Xs.append(X)
 
-        if Xi == 0:
-            split_idx.append(X.shape[1])
-        elif Xi < len(Xs) - 1:
-            split_idx.append(X.shape[1] + split_idx[-1])
+        # Split after every model matrix except for the last so split_idx remains an empty list for
+        # models with a single linear predictor.
+        n_kept += X.shape[1]
+        if Xi < len(Xs) - 1:
+            split_idx.append(n_kept)
 
     return new_Xs, split_idx
 
@@ -5673,7 +5675,7 @@ def update_coef_gammlss(
             _, L, LV, _ = newton_coef_smooth(
                 coef,
                 grad,
-                H - eps * scp.sparse.identity(H.shape[1], format="csc"),
+                H - eps * scp.sparse.eye_array(H.shape[1], format="csc"),
                 S_emb,
                 n_c=n_c,
             )
@@ -6722,9 +6724,10 @@ def check_drop_valid_gensmooth(
     # ... from Xs...
     rXs, rcoef_split_idx = drop_terms_X(Xs, keep)
 
-    # Deal with any extra coefficients when checking for the drop
+    # Adjust split_idx for extra coefficients which still are the final subset of dropcoef
+    # (see GSMM.fit)
     if family.extra_coef is not None:
-        rcoef_split_idx.append(rXs[-1].shape[1] + rcoef_split_idx[-1])
+        rcoef_split_idx.append(sum(rX.shape[1] for rX in rXs))
 
     # ... and from S_emb
     rS_emb = S_emb[keep, :]
@@ -6956,6 +6959,11 @@ def handle_drop_gsmm(
     # ... from Xs...
     rXs, rcoef_split_idx = drop_terms_X(Xs, keep)
     # print(rXs)
+
+    # Adjust split_idx for extra coefficients which still are the final subset of dropcoef
+    # (see GSMM.fit)
+    if family.extra_coef is not None:
+        rcoef_split_idx.append(sum(rX.shape[1] for rX in rXs))
 
     # ... and from S_emb
     rS_emb = S_emb[keep, :]
@@ -8669,7 +8677,7 @@ def update_coef_gen_smooth(
                 _, L, LV, _ = newton_coef_smooth(
                     coef,
                     grad,
-                    H - eps * scp.sparse.identity(H.shape[1], format="csc"),
+                    H - eps * scp.sparse.eye_array(H.shape[1], format="csc"),
                     S_emb,
                     n_c=n_c,
                 )

@@ -72,7 +72,8 @@ class LambdaTerm:
         with this lambda term. Note, this matrix contains ``rep_sj`` diagonal sub-blocks each
         filled with ``S_J``. Initialized with ``None``.
     :ivar scp.sparse.csc_array D_J_emb: Root of ``S_J_emb``, so that ``D_J_emb@D_J_emb.T=S_J_emb``.
-        Initialized with ``None``.
+        Note, that the root will not necessarily be square for merged penalties (that share a
+        smoothing parameter via id). Initialized with ``None``.
     :ivar int rep_sj: How many sequential sub-blocks of ``S_J_emb`` need to be filled with ``S_J``.
         Useful if all levels of a categorical variable for which a separate smooth is to be
         estimated are assumed to share the same lambda value. Initialized with 1.

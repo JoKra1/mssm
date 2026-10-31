@@ -216,9 +216,9 @@ class GSMM:
     :ivar float edf1: The model estimated degrees of freedom as a float corrected for smoothness
         bias. Set by the :func:`approx_smooth_p_values` function, the first time it is called.
         Initialized with ``None``.
-    :ivar [float] term_edf: The estimated degrees of freedom per smooth term. Initialized with
+    :ivar [float] term_edf: The estimated degrees of freedom per penalty block. Initialized with
         ``None``.
-    :ivar [float] term_edf1: The estimated degrees of freedom per smooth term corrected for
+    :ivar [float] term_edf1: The estimated degrees of freedom per penalty block corrected for
         smoothness bias. Set by the :func:`approx_smooth_p_values` function, the first time it is
         called. Initialized with ``None``.
     :ivar float penalty: The total penalty applied to the model deviance after fitting as a float.
@@ -1258,7 +1258,9 @@ class GSMM:
                     "log-likelihood is invertible."
                 )
             )
-            self.hessian -= fit_info.eps * scp.sparse.identity(H.shape[1], format="csc")
+            self.hessian -= fit_info.eps * scp.sparse.eye_array(
+                H.shape[1], format="csc"
+            )
         self.info = fit_info
 
         # Assign predictions and parameter estimates
@@ -1730,9 +1732,9 @@ class GAMMLSS(GSMM):
     :ivar float edf1: The model estimated degrees of freedom as a float corrected for smoothness
         bias. Set by the :func:`approx_smooth_p_values` function, the first time it is called.
         Initialized with ``None``.
-    :ivar [float] term_edf: The estimated degrees of freedom per smooth term. Initialized with
+    :ivar [float] term_edf: The estimated degrees of freedom per penalty block. Initialized with
         ``None``.
-    :ivar [float] term_edf1: The estimated degrees of freedom per smooth term corrected for
+    :ivar [float] term_edf1: The estimated degrees of freedom per penalty block corrected for
         smoothness bias. Set by the :func:`approx_smooth_p_values` function, the first time it
         is called. Initialized with ``None``.
     :ivar float penalty: The total penalty applied to the model deviance after fitting as a float.
@@ -2216,7 +2218,9 @@ class GAMMLSS(GSMM):
                     "log-likelihood is invertible."
                 )
             )
-            self.hessian -= fit_info.eps * scp.sparse.identity(H.shape[1], format="csc")
+            self.hessian -= fit_info.eps * scp.sparse.eye_array(
+                H.shape[1], format="csc"
+            )
         self.info = fit_info
 
     ################################### Prediction ###################################  # noqa: E266
@@ -2668,9 +2672,9 @@ class GAMM(GAMMLSS):
     :ivar float edf1: The model estimated degrees of freedom as a float corrected for smoothness
         bias. Set by the :func:`approx_smooth_p_values` function, the first time it is called.
         Initialized with ``None``.
-    :ivar [float] term_edf: The estimated degrees of freedom per smooth term.
+    :ivar [float] term_edf: The estimated degrees of freedom per penalty block.
         Initialized with ``None``.
-    :ivar [float] term_edf1: The estimated degrees of freedom per smooth term corrected for
+    :ivar [float] term_edf1: The estimated degrees of freedom per penalty block corrected for
         smoothness bias. Set by the :func:`approx_smooth_p_values` function, the first time it
         is called. Initialized with ``None``.
     :ivar float penalty: The total penalty applied to the model deviance after fitting as a float.

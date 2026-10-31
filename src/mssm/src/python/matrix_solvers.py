@@ -767,7 +767,7 @@ def compute_B(
 
             D_idx = np.arange(
                 lTerm.start_index + NULL_idx,
-                lTerm.S_J.shape[1] * (lTerm.rep_sj + 1),
+                lTerm.start_index + lTerm.S_J.shape[1] * lTerm.rep_sj,
                 lTerm.S_J.shape[1],
             )
 
@@ -779,9 +779,7 @@ def compute_B(
             D_end = lTerm.start_index + D_len
             D_idx = idx[D_start:D_end]
 
-            # Now check if dropped column is included, if so remove and update length.
-            D_idx = D_idx[np.isin(D_idx, drop) == False]  # noqa: E712
-            D_len = len(D_idx)
+            # Now remove rows of dropped coefficients
             PD = P @ lTerm.D_J_emb[:, D_idx][keep, :]
 
         D_r = int(D_len / 2000)
