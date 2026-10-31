@@ -881,10 +881,11 @@ class GSMM:
             iteration. Defaults to True
         :type repara: bool,optional
         :param extra_penalties: **Experimental**. An optional list of extra penalties to be placed
-            on the coefficients. **Important:** mssm does not (currently) support partially
-            overlapping penalties. Thus, if you do provide your own penalties they should either
-            only affect coefficients not penalized already or match (in terms of ``start_index``
-            and dimensions of ``S_J``) an existing penalty matrix. Currently, is not supported
+            on the coefficients. **Important:** mssm does not (currently) support (partially)
+            overlapping penalties. Thus, if you do provide your own penalties they need to cover
+            only the coefficients associated with an individual term in any of the formulas passed
+            to the constructor. If you need a shared penalty for multiple terms set the ``id``
+            keyword of the extra penalties. Currently, ``extra_penalties`` are not supported
             together with ``repara``, so if this argument is not None we set ``repara=False``.
             Defaults to None.
         :type extra_penalties: list[LambdaTerm] | None, optional
@@ -991,6 +992,15 @@ class GSMM:
                 (
                     "Ignoring argument ``repara``, which is currently not supported in the "
                     "presence of ``extra_penalties``."
+                )
+            )
+            repara = False
+
+        if repara and build_mat is not None:
+            warnings.warn(
+                (
+                    "Ignoring argument ``repara``, which is currently not supported when "
+                    "``build_mat`` is used to indicate which matrices to build."
                 )
             )
             repara = False

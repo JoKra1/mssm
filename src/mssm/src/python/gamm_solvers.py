@@ -4616,43 +4616,27 @@ def newton_coef_smooth(
     pgrad = np.array([grad[i] - (S_emb[[i], :] @ coef)[0] for i in range(len(grad))])
     nH = -1 * H + S_emb
 
-    # Below tries diagonal pre-conditioning as implemented in mgcv's gam.fit5 function,
-    # see: https://github.com/cran/mgcv/blob/master/R/gam.fit4.r#L1028. However, this does not work
-    # well for me, so I must be doing something wrong.. The diagonal pre-conditioning as suggested
-    # by WPS (2016) does work. So for now this is what happens below the comment.
-    """
-    nHdgr = nH.diagonal()
-    mD = np.min(nHdgr)
-    ill_def = False
-    if mD <= 0:
-       mAcc = np.max(nHdgr)*np.power(np.finfo(float).eps,0.5)
-       if (-mD) < mAcc:
-          nHdgr[nHdgr < mAcc] = mAcc
-       else:
-          ill_def = True
-
-    if ill_def:
-       nH += (
-              np.abs(mD)*scp.sparse.identity(nH.shape[1],format='csc') +
-              np.abs(mAcc)*scp.sparse.identity(nH.shape[1],format='csc')
-              )
-       D = scp.sparse.diags(np.ones_like(nHdgr))
-       DI = D
-    else:
-    D = scp.sparse.diags(np.power(nHdgr,-0.5))
-    DI = scp.sparse.diags(1/np.power(nHdgr,-0.5)) # For cholesky
-    """
-
     # Diagonal pre-conditioning as suggested by WPS (2016)
     nHdgr = nH.diagonal()
     nHdgr = np.power(np.abs(nHdgr), -0.5)
+    nHdgr[np.isinf(nHdgr) | np.isnan(nHdgr)] = 1
     D = scp.sparse.diags(nHdgr)
     DI = scp.sparse.diags(1 / nHdgr)
 
     nH2 = D @ nH @ D
 
+    err = False
     if isinstance(nH2, np.ndarray) is False:
         nH2 = nH2.tocsc()
+        if np.any((np.isinf(nH2.data) | np.isnan(nH2.data))):
+            err = True
+
+    elif np.any((np.isinf(nH2) | np.isnan(nH2))):
+        err = True
+
+    # Abort invalid newton step with clean error message
+    if err:
+        raise ValueError("Hessian contains invalid values (NaN or Inf).")
     # print(max(np.abs(nH.diagonal())),max(np.abs(nH2.diagonal())))
 
     # Compute V, inverse of nH
