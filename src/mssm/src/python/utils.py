@@ -898,7 +898,7 @@ def get_term_edfs(model, par: int = 0, edf1: bool = False) -> dict:
     :param par: Parameter of the likelihood/family for which to compute edf. Ignored when ``model``
         is a GAMM. Defaults to 0
     :type par: int, optional
-    :param edf1: Whether or not the estimated degrees of freedom should be corrected for smoothnes
+    :param edf1: Whether or not the estimated degrees of freedom should be corrected for smoothness
         bias. Doing so results in more accurate p-values but can be expensive for large models for
         which the difference is anyway likely to be marginal. Defaults to False
     :type edf1: bool, optional
