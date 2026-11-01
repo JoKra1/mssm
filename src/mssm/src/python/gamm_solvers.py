@@ -6234,7 +6234,8 @@ def solve_gammlss_sparse(
         defaults to True
     :type is_sparse: bool, optional
     :param should_keep_drop: If set to True, any coefficients that are dropped during fitting - are
-        permanently excluded from all subsequent iterations, defaults to True
+        permanently excluded from all subsequent iterations, defaults to True. Set to False if
+        ``repara=True``.
     :type should_keep_drop: bool, optional
     :param prefit_grad: Whether to rely on Gradient Descent to improve the initial starting estimate
         for coefficients., defaults to False
@@ -6275,6 +6276,11 @@ def solve_gammlss_sparse(
             "The initial coefficients result in invalid value for at least one predictor. Provide \
             a different set via the family's ``init_coef`` function."
         )
+
+    # With repara, dropped indices are for reparameterized model and need to be re-computed
+    # every iter.
+    if repara:
+        should_keep_drop = False
 
     # Build current penalties
     keep_drop = None
@@ -6540,6 +6546,61 @@ def solve_gammlss_sparse(
         # 4) Checked for convergence
         # 5) Applied the new update lambdas so that we can go to the next iteration
         # print("lambda after step:",[lterm.lam for lterm in gamlss_pen])
+
+    # Dropped indices need to be recovered in non-repara space, so need one more update to
+    # coef
+    if repara and drop is not None and len(gamlss_pen) > 0:
+        lambda_updates = fit_info.lambda_updates
+        (
+            coef,
+            split_coef,
+            mus,
+            etas,
+            H,
+            L,
+            LV,
+            c_llk,
+            c_pen_llk,
+            eps,
+            keep,
+            drop,
+            S_emb,
+            gamlss_pen,
+            total_edf,
+            term_edfs,
+            _,
+        ) = correct_lambda_step_gamlss(
+            family,
+            mus,
+            y,
+            Xs,
+            S_norm,
+            n_coef,
+            form_n_coef,
+            form_up_coef,
+            coef,
+            coef_split_idx,
+            gamlss_pen,
+            lam_delta,
+            extend_by,
+            was_extended,
+            c_llk,
+            fit_info,
+            0,  # Must be 0 to skip lambda control
+            max_inner,
+            min_inner,
+            conv_tol,
+            method,
+            piv_tol,
+            None,  # Drops need to be reidentified
+            extend_lambda,
+            extension_method_lam,
+            control_lambda,
+            False,  # No repara
+            is_sparse,
+            n_c,
+        )
+        fit_info.lambda_updates = lambda_updates
 
     # H, L, and LV do not have sorted indices after undoing repara transform - need to take care of
     # that here.
@@ -9371,7 +9432,8 @@ def solve_generalSmooth_sparse(
     :param repara: Whether to apply a stabilizing re-parameterization to the model, defaults to True
     :type repara: bool, optional
     :param should_keep_drop: If set to True, any coefficients that are dropped during fitting - are
-        permanently excluded from all subsequent iterations, defaults to True
+        permanently excluded from all subsequent iterations, defaults to True. Set to False if
+        ``repara=True``.
     :type should_keep_drop: bool, optional
     :param form_VH: Whether to explicitly form matrix ``V`` - the estimated inverse of the negative
         Hessian of the penalized likelihood - and ``H`` - the estimate of the Hessian of the
@@ -9462,6 +9524,11 @@ def solve_generalSmooth_sparse(
 
     extend_by = initialize_extension(extension_method_lam, smooth_pen)
     was_extended = [False for _ in enumerate(smooth_pen)]
+
+    # With repara, dropped indices are for reparameterized model and need to be re-computed
+    # every iter.
+    if repara:
+        should_keep_drop = False
 
     # Build current penalties
     keep_drop = None
@@ -9787,6 +9854,60 @@ def solve_generalSmooth_sparse(
         # 5) Applied the new update lambdas so that we can go to the next iteration
 
         # print("lambda after step:",[lterm.lam for lterm in smooth_pen])
+
+    # Dropped indices need to be recovered in non-repara space, so need one more update to
+    # coef
+    if repara and drop is not None and len(smooth_pen) > 0:
+        lambda_updates = fit_info.lambda_updates
+        (
+            coef,
+            H,
+            L,
+            LV,
+            c_llk,
+            c_pen_llk,
+            __old_opt,
+            keep,
+            drop,
+            S_emb,
+            smooth_pen,
+            total_edf,
+            term_edfs,
+            _,
+        ) = correct_lambda_step_gen_smooth(
+            family,
+            ys,
+            Xs,
+            S_norm,
+            n_coef,
+            form_n_coef,
+            form_up_coef,
+            coef,
+            coef_split_idx,
+            smooth_pen,
+            lam_delta,
+            extend_by,
+            was_extended,
+            c_llk,
+            fit_info,
+            0,  # Must be 0 to skip lambda control
+            max_inner,
+            min_inner,
+            conv_tol,
+            gamma,
+            method,
+            optimizer,
+            __old_opt,
+            None,  # Drops must be reidentified
+            extend_lambda,
+            extension_method_lam,
+            control_lambda,
+            False,  # No repara
+            n_c,
+            global_opt_qefs,
+            fcols,
+        )
+        fit_info.lambda_updates = lambda_updates
 
     # Total penalty
     penalty = coef.T @ S_emb @ coef

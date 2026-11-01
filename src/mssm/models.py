@@ -860,7 +860,11 @@ class GSMM:
         :param should_keep_drop: Only used when ``method in ["QR/Chol","LU/Chol","Direct/Chol"]``.
             If set to True, any coefficients that are dropped during fitting - are permanently
             excluded from all subsequent iterations. If set to False, this is determined anew at
-            every iteration - **costly**! Defaults to True.
+            every iteration - **costly**! **Note**, set to False if
+            ``repara=True`` because drops are then determined for the re-parameterized problem,
+            which differs for every smoothing parameter step. Any coefficients dropped at
+            the final estimate are then identified again without the re-parameterization requiring
+            a final update to the coefficients. Defaults to True
         :type should_keep_drop: bool,optional
         :param gamma: Setting this to a value larger than 1 promotes more complex (less smooth)
             models. Setting this to a value smaller than 1 (but must be > 0) promotes smoother
@@ -2048,7 +2052,11 @@ class GAMMLSS(GSMM):
         :param should_keep_drop: Only used when ``method in ["QR/Chol","LU/Chol","Direct/Chol"]``.
             If set to True, any coefficients that are dropped during fitting - are permanently
             excluded from all subsequent iterations. If set to False, this is determined anew
-            at every iteration - **costly**! Defaults to True.
+            at every iteration - **costly**! **Note**, set to False if
+            ``repara=True`` because drops are then determined for the re-parameterized problem,
+            which differs for every smoothing parameter step. Any coefficients dropped at
+            the final estimate are then identified again without the re-parameterization requiring
+            a final update to the coefficients. Defaults to True
         :type should_keep_drop: bool,optional
         :param prefit_grad: Whether to rely on Gradient Descent to improve the initial starting
             estimate for coefficients. Defaults to True.

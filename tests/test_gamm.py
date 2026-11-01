@@ -165,7 +165,7 @@ class Test_BIG_GAMM_Discretize:
     model.fit(**default_gamm_test_kwargs)
 
     def test_GAMedf(self):
-        assert round(self.model.edf, ndigits=0) == 2433.0
+        assert round(self.model.edf, ndigits=0) == 2432.0
 
     def test_GAMsigma(self):
         _, sigma = self.model.get_pars()
@@ -1477,18 +1477,18 @@ class Test_drop:
                         0.37034317,
                         0.32443744,
                         0.53423691,
-                        0.50741044,
+                        0.50740986,
                         0.85755008,
                         1.72581553,
-                        -0.16159212,
+                        -0.1615918,
                         0.94273488,
-                        -0.13667816,
+                        -0.1366788,
                         -0.4537871,
                     ],
                     [
                         -0.90706986,
                         -0.41853814,
-                        0.08967159,
+                        0.08967137,
                         -0.6928048,
                         -1.10320734,
                         1.27638547,
