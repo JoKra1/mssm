@@ -6039,8 +6039,15 @@ def correct_lambda_step_gamlss(
     # At this point we have accepted the step - so we can propose a new one
     if drop is not None:
         fit_info.dropped = drop
+
+        # With repara we need to keep transformation matrices as well
+        if repara:
+            fit_info.Q_emb = Q_emb
+            fit_info.Qs = Qs
     else:
         fit_info.dropped = None
+        fit_info.Q_emb = None
+        fit_info.Qs = None
 
     step_norm = np.linalg.norm(lam_delta)
     lam_delta = []
@@ -6535,9 +6542,11 @@ def solve_gammlss_sparse(
         prev_lam = copy.deepcopy([lterm.lam for lterm in gamlss_pen])  # noqa: F841
         # prev_coef = copy.deepcopy(coef)
         # print("lambda before step:",[lterm.lam for lterm in gamlss_pen])
-        # And ultimately apply new proposed lambda step
-        for lti, lTerm in enumerate(gamlss_pen):
-            lTerm.lam += lam_delta[lti]
+        # And ultimately apply new proposed lambda step - skip in the last iter
+        # to ensure returned lambda matches coef etc.
+        if outer < max_outer - 1:
+            for lti, lTerm in enumerate(gamlss_pen):
+                lTerm.lam += lam_delta[lti]
 
         # At this point we have:
         # 1) Estimated coef given lambda
@@ -6546,61 +6555,6 @@ def solve_gammlss_sparse(
         # 4) Checked for convergence
         # 5) Applied the new update lambdas so that we can go to the next iteration
         # print("lambda after step:",[lterm.lam for lterm in gamlss_pen])
-
-    # Dropped indices need to be recovered in non-repara space, so need one more update to
-    # coef
-    if repara and drop is not None and len(gamlss_pen) > 0:
-        lambda_updates = fit_info.lambda_updates
-        (
-            coef,
-            split_coef,
-            mus,
-            etas,
-            H,
-            L,
-            LV,
-            c_llk,
-            c_pen_llk,
-            eps,
-            keep,
-            drop,
-            S_emb,
-            gamlss_pen,
-            total_edf,
-            term_edfs,
-            _,
-        ) = correct_lambda_step_gamlss(
-            family,
-            mus,
-            y,
-            Xs,
-            S_norm,
-            n_coef,
-            form_n_coef,
-            form_up_coef,
-            coef,
-            coef_split_idx,
-            gamlss_pen,
-            lam_delta,
-            extend_by,
-            was_extended,
-            c_llk,
-            fit_info,
-            0,  # Must be 0 to skip lambda control
-            max_inner,
-            min_inner,
-            conv_tol,
-            method,
-            piv_tol,
-            None,  # Drops need to be reidentified
-            extend_lambda,
-            extension_method_lam,
-            control_lambda,
-            False,  # No repara
-            is_sparse,
-            n_c,
-        )
-        fit_info.lambda_updates = lambda_updates
 
     # H, L, and LV do not have sorted indices after undoing repara transform - need to take care of
     # that here.
@@ -9127,8 +9081,15 @@ def correct_lambda_step_gen_smooth(
     # At this point we have accepted the lambda step and can propose a new one!
     if drop is not None:
         fit_info.dropped = drop
+
+        # With repara we need to keep transformation matrices as well
+        if repara:
+            fit_info.Q_emb = Q_emb
+            fit_info.Qs = Qs
     else:
         fit_info.dropped = None
+        fit_info.Q_emb = None
+        fit_info.Qs = None
 
     # For qEFS we check whether new approximation results in worse balance of efs update - then we
     # fall back to previous approximation
@@ -9842,9 +9803,11 @@ def solve_generalSmooth_sparse(
 
         # print("lambda before step:",[lterm.lam for lterm in smooth_pen])
 
-        # And ultimately apply new proposed lambda step
-        for lti, lTerm in enumerate(smooth_pen):
-            lTerm.lam += lam_delta[lti]
+        # And ultimately apply new proposed lambda step - skip in the last iter
+        # to ensure returned lambda matches coef etc.
+        if outer < max_outer - 1:
+            for lti, lTerm in enumerate(smooth_pen):
+                lTerm.lam += lam_delta[lti]
 
         # At this point we have:
         # 1) Estimated coef given lambda
@@ -9854,60 +9817,6 @@ def solve_generalSmooth_sparse(
         # 5) Applied the new update lambdas so that we can go to the next iteration
 
         # print("lambda after step:",[lterm.lam for lterm in smooth_pen])
-
-    # Dropped indices need to be recovered in non-repara space, so need one more update to
-    # coef
-    if repara and drop is not None and len(smooth_pen) > 0:
-        lambda_updates = fit_info.lambda_updates
-        (
-            coef,
-            H,
-            L,
-            LV,
-            c_llk,
-            c_pen_llk,
-            __old_opt,
-            keep,
-            drop,
-            S_emb,
-            smooth_pen,
-            total_edf,
-            term_edfs,
-            _,
-        ) = correct_lambda_step_gen_smooth(
-            family,
-            ys,
-            Xs,
-            S_norm,
-            n_coef,
-            form_n_coef,
-            form_up_coef,
-            coef,
-            coef_split_idx,
-            smooth_pen,
-            lam_delta,
-            extend_by,
-            was_extended,
-            c_llk,
-            fit_info,
-            0,  # Must be 0 to skip lambda control
-            max_inner,
-            min_inner,
-            conv_tol,
-            gamma,
-            method,
-            optimizer,
-            __old_opt,
-            None,  # Drops must be reidentified
-            extend_lambda,
-            extension_method_lam,
-            control_lambda,
-            False,  # No repara
-            n_c,
-            global_opt_qefs,
-            fcols,
-        )
-        fit_info.lambda_updates = lambda_updates
 
     # Total penalty
     penalty = coef.T @ S_emb @ coef

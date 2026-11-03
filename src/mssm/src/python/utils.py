@@ -2078,6 +2078,8 @@ def compute_REML_candidate_GSMM(
         tuple[np.typing.NDArray[np.int_], np.typing.NDArray[np.int_]] | None
     ) = None,
     sparse: bool = True,
+    Q_emb: scp.sparse.csc_array | None = None,
+    Qs: list[scp.sparse.csc_array] | None = None,
 ) -> tuple[float, scp.sparse.csc_array, scp.sparse.csc_array, np.ndarray, float, float]:
     """Allows to evaluate REML criterion (e.g., Wood, 2011; Wood, 2016) efficiently for a set of
     \\lambda values for a GSMM or GAMMLSS.
@@ -2118,6 +2120,14 @@ def compute_REML_candidate_GSMM(
     :type keep_drop: tuple[np.typing.NDArray[np.int_],np.typing.NDArray[np.int_]] | None
     :param sparse: Whether the Hessian is sparse for GAMMLSS models, defaults to True
     :type sparse: bool, optional
+    :param Q_emb: Optional matric that re-parameterized the final model (see ``Fit_info.Q_emb``).
+        Indices in ``keep_drop`` were determined for that reparameterization. REML and model fit
+        happen in this reparameterization but the latter is reverted before returning so that all
+        objects match no reparameterization applied. Defaults to None
+    :type Q_emb: scp.sparse.csc_array | None, optional
+    :param Qs: List of reparameterization matrices for all linear predictors (see ``Fit_info.Qs``).
+        Needed if ``Q_emb`` is not None, defaults to None
+    :type Qs: list[scp.sparse.csc_array] | None, optional
     :return: reml criterion,conditional covariance matrix of coefficients for this lambda,
         un-pivoted inverse of the pivoted Cholesky of the negative hessian of the penalized llk,
         coefficients, total edf, llk
@@ -2140,6 +2150,20 @@ def compute_REML_candidate_GSMM(
             )
 
         S_norm /= scp.sparse.linalg.norm(S_norm, ord=None)
+
+    # Coefficients dropped from a re-parameterized model need to be dropped again so have
+    # to transform using the final repara from fit
+    coef_rp = coef
+    Xs_rp = Xs
+    S_emb_rp = S_emb
+    if Q_emb is not None:
+        coef_rp = Q_emb.T @ coef
+        S_emb_rp = (Q_emb.T @ S_emb @ Q_emb).tocsc()
+        S_emb_rp.sort_indices()
+
+        Xs_rp = copy.copy(Xs)
+        for qi, Q in enumerate(Qs):
+            Xs_rp[qi] = Xs[qi] @ Q
 
     try:
         if isinstance(family, GSMMFamily):  # GSMM
@@ -2168,10 +2192,10 @@ def compute_REML_candidate_GSMM(
             coef, H, L, LV, c_llk, _, _, keep, drop = update_coef_gen_smooth(
                 family,
                 y,
-                Xs,
-                coef,
+                Xs_rp,
+                coef_rp,
                 coef_split_idx,
-                S_emb,
+                S_emb_rp,
                 S_norm,
                 None,
                 None,
@@ -2209,9 +2233,6 @@ def compute_REML_candidate_GSMM(
                 LVp0 = compute_Linv(Lp, n_c)
                 LV = apply_eigen_perm(Pr, LVp0)
 
-            V = LV.T @ LV  # inverse of hessian of penalized likelihood
-            nH = -1 * H  # negative hessian of likelihood
-
         else:  # GAMMLSS
             split_coef = np.split(coef, coef_split_idx)
 
@@ -2227,11 +2248,11 @@ def compute_REML_candidate_GSMM(
                     family,
                     mus,
                     y,
-                    Xs,
-                    coef,
+                    Xs_rp,
+                    coef_rp,
                     coef_split_idx,
-                    S_emb,
-                    None,
+                    S_emb_rp,
+                    S_norm,
                     None,
                     None,
                     None,
@@ -2248,13 +2269,19 @@ def compute_REML_candidate_GSMM(
                 )
             )
 
-            V = LV.T @ LV
-            nH = -1 * H
-
         # Remaining computations are shared for GAMMLSS and GSMM
 
+        # Undo repara
+        if Q_emb is not None:
+            coef = Q_emb @ coef
+            H = Q_emb @ H @ Q_emb.T
+            LV = LV @ Q_emb.T
+
+        V = LV.T @ LV  # inverse of hessian of penalized likelihood
+        nH = -1 * H  # negative hessian of likelihood
+
         # Compute reml
-        reml = REML(c_llk, nH, coef, 1, penalties, keep)[0, 0]
+        reml = REML(c_llk, nH, coef, 1, penalties, keep, Q_emb)[0, 0]
 
         # Compute edf
         lgdetDs = []
@@ -2305,6 +2332,7 @@ def REML(
     scale: float,
     penalties: list[LambdaTerm],
     keep: np.typing.NDArray[np.int_] | None = None,
+    Q_emb: scp.sparse.csc_array | None = None,
 ) -> float | np.ndarray:
     """
     Based on Wood (2011). Exact REML for Gaussian GAM, Laplace approximate (Wood, 2016) for
@@ -2336,6 +2364,9 @@ def REML(
         log-likelihood. Can also be set to ``None`` (default) in which case all coefficients are
         treated as identifiable.
     :type keep: np.typing.NDArray[np.int_]|None, optional
+    :param Q_emb: Optional matric that re-parameterized the final model (see ``Fit_info.Q_emb``).
+        Indices in ``keep`` were determined for that reparameterization. Defaults to None
+    :type Q_emb: scp.sparse.csc_array | None, optional
     :return: (Approximate) REML score
     :rtype: float|np.ndarray
     """
@@ -2412,6 +2443,14 @@ def REML(
     # efficiently. Hence, we simply rely on the pivoted cholesky (again pre-conditioned) used for
     # fitting (based on S_\\lambda before re-parameterization).
     H_pen = nH + S_emb / scale
+
+    # Indices in keep might refer to model under repara
+    if Q_emb is not None:
+        H_pen = Q_emb.T @ H_pen @ Q_emb
+
+        if isinstance(H_pen, np.ndarray) is False:
+            H_pen = H_pen.tocsc()
+            H_pen.sort_indices()
 
     # Drop unidentifiable parameters. **Note**: these also lower dimension of penalty Kernel (Mp)
     if keep is not None:
@@ -2727,6 +2766,8 @@ def estimateVp(
                         bfgs_options=bfgs_options,
                         keep_drop=keep_drop,
                         sparse=model._uses_sparse_matrices,
+                        Q_emb=model.info.Q_emb,
+                        Qs=model.info.Qs,
                     )
 
                 return -reml
@@ -2979,6 +3020,8 @@ def estimateVp(
                     repeat(origNH),
                     repeat(keep_drop),
                     repeat(model._uses_sparse_matrices),
+                    repeat(model.info.Q_emb),
+                    repeat(model.info.Qs),
                 )
                 with mp.Pool(processes=n_c) as pool:
                     (
@@ -3040,6 +3083,8 @@ def estimateVp(
                         bfgs_options=bfgs_options,
                         keep_drop=keep_drop,
                         sparse=model._uses_sparse_matrices,
+                        Q_emb=model.info.Q_emb,
+                        Qs=model.info.Qs,
                     )
                 except:  # noqa: E722
                     warnings.warn(
@@ -3498,6 +3543,7 @@ def compute_Vb_corr_WPS(
     coef: np.ndarray,
     scale: float = 1,
     drop: np.typing.NDArray[np.int_] | None = None,
+    Q_emb: scp.sparse.csc_array | None = None,
 ) -> tuple[np.ndarray, np.ndarray | float]:
     """Computes both correction terms for ``Vb`` or :math:`\\mathbf{V}_{\\boldsymbol{\\beta}}`,
     which is the co-variance matrix for the conditional posterior of :math:`\\boldsymbol{\\beta}`
@@ -3538,6 +3584,11 @@ def compute_Vb_corr_WPS(
         Coefficients in this list (i.e., not identifiable) are dropped from the negative hessian of
         the penalized log-likelihood. Can also be set to ``None`` (default) in which case all
         coefficients are treated as identifiable.
+    :type drop: np.typing.NDArray[np.int_] | None, optional
+    :param Q_emb: Optional matric that re-parameterized the final model (see ``Fit_info.Q_emb``).
+        Indices in ``keep_drop`` were determined for that reparameterization. ``Vcc`` is computed
+        in this reparameterization but the latter is reverted before returning. Defaults to None
+    :type Q_emb: scp.sparse.csc_array | None, optional
     :raises ArithmeticError: Will throw an error when the negative Hessian of the penalized
         likelihood is ill-scaled so that a Cholesky decomposition fails.
     :return: A tuple containing: ``Vc`` and ``Vcc``. ``Vbr.T@Vbr*scale`` + ``Vc`` + ``Vcc`` is
@@ -3550,6 +3601,14 @@ def compute_Vb_corr_WPS(
     # Get (unscaled) negative Hessian of the penalized likelihood.
     # For a GAMM, this will thus be X.T@W@X + S_emb - since H = (X.T@W@X)\\phi
     nH = (-1 * H) * scale + S_emb
+
+    # Indices in drop might refer to model under repara
+    if Q_emb is not None:
+        nH = Q_emb.T @ nH @ Q_emb
+
+        if isinstance(nH, np.ndarray) is False:
+            nH = nH.tocsc()
+            nH.sort_indices()
 
     # Dropped coefficients are fixed at zero so we have to compute Vcc on reduced model space
     keep = list(range(nH.shape[1]))
@@ -3570,7 +3629,7 @@ def compute_Vb_corr_WPS(
 
     # Vbr.T@Vbr = nH^{-1} - Vbr is in principle available in model.lvi or model.lvi after fitting,
     # but we need Rinv anyway so we can form it from Rinv. The exception is if we have
-    # parameters dropped. Then we need to use Vbr which is padded with zeroes!
+    # parameters dropped. Then we need to use Vbr which had columns/rows zeroed (under repara)
     if drop is not None:
         V = Vbr.T @ Vbr
 
@@ -3606,7 +3665,11 @@ def compute_Vb_corr_WPS(
 
     for pen in penalties:
         # Must check keep here as well
-        A = pen.lam * pen.S_J_emb[keep, :][:, keep].toarray()
+        S_J_emb = pen.S_J_emb
+        if Q_emb is not None:
+            S_J_emb = (Q_emb.T @ S_J_emb @ Q_emb).tocsc()
+
+        A = pen.lam * S_J_emb[keep, :][:, keep].toarray()
         dRdRho = dChol.dChol(R, A)
 
         # Now inverse computations (see sup. materials D in WPS, 2016)
@@ -3632,6 +3695,10 @@ def compute_Vb_corr_WPS(
         VccE = np.zeros((len(coef), len(coef)))
         VccE[np.ix_(keep, keep)] = Vcc
         Vcc = VccE
+
+    # And undo repara
+    if Q_emb is not None:
+        Vcc = Q_emb @ Vcc @ Q_emb.T
 
     # Done, don't forget to scale Vcc since nH was unscaled!
     return Vc, scale * Vcc
@@ -4174,6 +4241,7 @@ def correct_VB(
                         model.overall_penalties,
                         model.coef,
                         drop=model.info.dropped,
+                        Q_emb=model.info.Q_emb,
                     )
             else:
                 # Only compute first correction term
@@ -4390,6 +4458,8 @@ def correct_VB(
                         repeat(origNH),
                         repeat(keep_drop),
                         repeat(model._uses_sparse_matrices),
+                        repeat(model.info.Q_emb),
+                        repeat(model.info.Qs),
                     )
                     with mp.Pool(processes=n_c) as pool:
                         (
@@ -4468,6 +4538,8 @@ def correct_VB(
                             bfgs_options=bfgs_options,
                             keep_drop=keep_drop,
                             sparse=model._uses_sparse_matrices,
+                            Q_emb=model.info.Q_emb,
+                            Qs=model.info.Qs,
                         )
                     except:  # noqa: E722
                         warnings.warn(
@@ -4835,7 +4907,12 @@ def correct_VB(
                 ]
             )
 
-            Vdrop = V[keep, :]
+            # Indices in keep might refer model in repara
+            Vdrop = V
+            if model.info.Q_emb is not None:
+                Vdrop = model.info.Q_emb.T @ V @ model.info.Q_emb
+
+            Vdrop = Vdrop[keep, :]
             Vdrop = Vdrop[:, keep]
 
             LVdrop, code2 = cpp_chol(Vdrop)
@@ -4862,6 +4939,10 @@ def correct_VB(
                     LV = scp.sparse.csc_array(
                         (LVdat, (LVrow, LVcol)), shape=model.hessian.shape
                     )
+
+                # And undo repara
+                if model.info.Q_emb is not None:
+                    LV = model.info.Q_emb @ LV
 
         # V is definitely not PD..
         if code2 != 0:

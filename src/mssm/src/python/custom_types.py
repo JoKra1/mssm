@@ -161,7 +161,16 @@ class Fit_info:
         (i.e., GAMM, GAMMLSS, GSMM). Initialized with ``None``.
     :ivar np.typing.NDArray[np.int_] dropped: The final set of coefficients dropped during
         GAMMLSS/GSMM estimation when using ``method in ["QR/Chol","LU/Chol","Direct/Chol"]`` or
-        ``None`` in which case no coefficients were dropped. Initialized with None.
+        ``None`` in which case no coefficients were dropped. **Note**, if ``Q_emb`` is not ``None``
+        these indices refer to the re-parameterized model. Initialized with None.
+    :ivar scp.sparse.csc_array Q_emb: Optionally the transformation matrix of the
+        re-parameterization used in the final GAMMLSS/GSMM iteration (i.e., ``Q_emb.T@S_emb@Q_emb``
+        is the total penalty matrix after re-parameterization). Only set when coefficients were
+        dropped in the final fitting iteration. Initialized with None.
+    :ivar list[scp.sparse.csc_array] Qs: Optional list of transformation matrices ``Qd``
+        corresponding to ``Q_emb`` (i.e., ``Xd@Qd`` is the model matrix for d-th linear predictor
+        under repara). **Note**, only contains transformation matrices up to (and including) the
+        last linear predictor that includes at least a single penalty. Initialized with None.
     """
 
     lambda_updates: int = 0
@@ -170,6 +179,8 @@ class Fit_info:
     eps: float = 0
     K2: float | None = None
     dropped: np.typing.NDArray[np.int_] | None = None
+    Q_emb: scp.sparse.csc_array | None = None
+    Qs: list[scp.sparse.csc_array] | None = None
 
 
 @dataclass

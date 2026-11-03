@@ -596,9 +596,15 @@ class GSMM:
                 ]
             )
 
-        # fmt: off
-        reml = REML(llk, -1 * self.hessian, self.coef, 1, self.overall_penalties, keep)[0, 0]
-        # fmt: on
+        reml = REML(
+            llk,
+            -1 * self.hessian,
+            self.coef,
+            1,
+            self.overall_penalties,
+            keep,
+            self.info.Q_emb,
+        )[0, 0]
         return reml
 
     def get_resid(self, drop_NA: bool = True, **kwargs) -> np.ndarray:
@@ -862,9 +868,9 @@ class GSMM:
             excluded from all subsequent iterations. If set to False, this is determined anew at
             every iteration - **costly**! **Note**, set to False if
             ``repara=True`` because drops are then determined for the re-parameterized problem,
-            which differs for every smoothing parameter step. Any coefficients dropped at
-            the final estimate are then identified again without the re-parameterization requiring
-            a final update to the coefficients. Defaults to True
+            which differs for every smoothing parameter step. Indices in ``self.info.dropped``
+            then refer to the model under the re-parameterization stored in ``self.info.Q_emb``.
+            Defaults to True
         :type should_keep_drop: bool,optional
         :param gamma: Setting this to a value larger than 1 promotes more complex (less smooth)
             models. Setting this to a value smaller than 1 (but must be > 0) promotes smoother
@@ -1895,9 +1901,16 @@ class GAMMLSS(GSMM):
                     if cidx not in self.info.dropped
                 ]
             )
-        # fmt: off
-        reml = REML(llk, -1 * self.hessian, self.coef, 1, self.overall_penalties, keep)[0, 0]
-        # fmt: on
+
+        reml = REML(
+            llk,
+            -1 * self.hessian,
+            self.coef,
+            1,
+            self.overall_penalties,
+            keep,
+            self.info.Q_emb,
+        )[0, 0]
         return reml
 
     def get_resid(self, **kwargs) -> np.ndarray:
@@ -2054,9 +2067,9 @@ class GAMMLSS(GSMM):
             excluded from all subsequent iterations. If set to False, this is determined anew
             at every iteration - **costly**! **Note**, set to False if
             ``repara=True`` because drops are then determined for the re-parameterized problem,
-            which differs for every smoothing parameter step. Any coefficients dropped at
-            the final estimate are then identified again without the re-parameterization requiring
-            a final update to the coefficients. Defaults to True
+            which differs for every smoothing parameter step. Indices in ``self.info.dropped``
+            then refer to the model under the re-parameterization stored in ``self.info.Q_emb``.
+            Defaults to True
         :type should_keep_drop: bool,optional
         :param prefit_grad: Whether to rely on Gradient Descent to improve the initial starting
             estimate for coefficients. Defaults to True.
