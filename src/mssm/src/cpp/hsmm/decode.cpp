@@ -505,6 +505,9 @@ std::tuple<
             2) State S_{t-1} != tmp_j and D_{t-1} = 1. I.e., another state ended at previous time
 
             lam(t,d,j) has P(S_t=j,D_T=d|o_{1:t})!
+
+            P(o_t) cancels  unless state is a flat of a hmp model with an ar1 model. First obs prob
+            then depends on lag of previous bump.
             */
 
             for (size_t i = 0; i < n_S; i++)
@@ -514,6 +517,11 @@ std::tuple<
                     if ((tmp_ed + 1) <= (D - 2))
                     {
                         state_probs[i] = lam(t-1,tmp_ed+1,i);
+
+                        if (hmp_code != 0 && tmp_j % 2 == 0)
+                        {
+                            state_probs[i] *= bs(t,0,tmp_j);
+                        }
                     }
                     else
                     {
@@ -525,13 +533,18 @@ std::tuple<
                     state_probs[i] = lam(t-1,0,i) *
                                         ((tvdtpi) ? T(i,tmp_j,t-1): T(i,tmp_j)) *
                                         ((tvdtpi) ?
-                                            ds(tmp_ed,(starts_with_first) ? tmp_j : tmp_j + n_S,t-1)
+                                            ds(tmp_ed,(starts_with_first) ? tmp_j : tmp_j + n_S,t)
                                             :
                                             ds(tmp_ed,(starts_with_first) ? tmp_j : tmp_j + n_S)
                                         );
+
+                    if (hmp_code != 0 && tmp_j % 2 == 0)
+                    {
+                        state_probs[i] *= bs(t,1,tmp_j);
+                    }
                 }
             }
-            
+
             // Can now sample S_{t-1}
             std::discrete_distribution<int>st(state_probs.begin(),state_probs.end());
 
