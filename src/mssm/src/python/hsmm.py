@@ -551,8 +551,8 @@ def _compute_series_probs(
     :param flats: For a hmp model a list with the indices of flats present for this trial.
         Defaults to None
     :type flats: list[int], optional
-    :param hmp_location: Array holding locations (one per stage) of a hmp model, used to
-        compute the stage durations if ``hmp_d_offset is True``. Defaults to None
+    :param hmp_location: Array holding locations (one per stage, in samples) of a hmp model, used
+        to compute the stage durations if ``hmp_d_offset is True``. Defaults to None
     :type hmp_location: np.ndarray, optional
     :raises ValueError: _description_
     :return: Returns ``y_mat`` (a (n_T,M) array holding the observations from all signals),
@@ -1406,7 +1406,7 @@ def _shift_hmp_pmf(
     n_T: int,
     d_grad: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray | None]:
-    """Internal function to shift the stage the duration pmf of a stage for fast_hmp models and
+    """Internal function to shift the duration pmf of a stage for fast_hmp models and
     a time-series with ``n_T`` observations.
 
     Optionally returns gradient of the shifted pmf with respect to the coefficients involved in
@@ -1420,14 +1420,13 @@ def _shift_hmp_pmf(
     :param n_T: Time-points/number of observations in the series
     :type n_T: int
     :param d_grad: Optional array of shape ``(D - 1, n_coef)``, holding the gradient of ``ds``
-    with respect to the coefficients involved in the model of the former. Defaults to None
+        with respect to the coefficients involved in the model of the former. Defaults to None
     :type d_grad: np.ndarray | None, optional
     :return: Array (of shape ``(n_T,)``) holding shifted pmf and optionally its gradient
         (another array of shape  ``(n_T, n_coef)`` or None).
     :rtype: tuple[np.ndarray, np.ndarray | None]
     """
 
-    # Prefer shifted pmf
     location = int(location)
     pmf = np.zeros(n_T, dtype=np.float64)
     pmf_grad = (
@@ -1437,7 +1436,7 @@ def _shift_hmp_pmf(
     # Support of stage duration variable after correcting for location (stage has duration
     # loc + x where x has pmf ds)
     n_x = ds.shape[0] - location
-    # Number of durations that end up in shifted pmf. Must not match n_T-location because
+    # Number of durations that end up in shifted pmf. Does not have to match n_T-location because
     # the maximum state duration can be lower than that.
     n_ret = min(n_T - location, n_x)
 
@@ -1515,13 +1514,14 @@ def _compute_dur_res_series(
             # Identify correct duration distribution
             dj_idx = j if (transitions == 0 or starts_with_first is True) else j + n_S
 
-            # Now compute residual of duration under model
+            # Now compute residual of duration under model. With time-varying models, as in llk,
+            # need. to index t-d to match state onset
             if mus_d[dj_idx] is None:
                 res[j] = None
             else:
                 d_res = d_fams[(dj_idx)].get_resid(
                     np.array([d + d_shift[j]]).reshape(-1, 1), *mus_d[dj_idx]
-                )[t if tvdtpi else 0, 0]
+                )[t - d if tvdtpi else 0, 0]
 
                 # And collect
                 res[j].append(d_res)
@@ -1538,7 +1538,7 @@ def _compute_dur_res_series(
     else:
         d_res = d_fams[(dj_idx)].get_resid(
             np.array([d + d_shift[j]]).reshape(-1, 1), *mus_d[dj_idx]
-        )[t - 1 if tvdtpi else 0, 0]
+        )[t - d if tvdtpi else 0, 0]
 
         res[j].append(d_res)
 
@@ -1595,7 +1595,8 @@ class HSMMFamily(GSMMFamily):
         specific versions. If this is set to ``None``, it will be set to ``sid`` automatically.
         ``sid``.
     :type tid: np.ndarray | None
-    :param D: Max duration a state can take on (**in samples**)
+    :param D: Max duration a state can take on (**in samples**). To match HMP (with
+        ``fast_hmp=True``) set this to the number of samples in the longest series plus one.
     :type D: int
     :param M: Number of signals recorded if the HSMM is multivariate.
     :type M: int
@@ -1657,16 +1658,19 @@ class HSMMFamily(GSMMFamily):
     :param tvdtpi: Whether the latent process model should be time-varying or not. If set to True,
         then formulas for the state transition probabilities, initial state transition probabilities
         , and state durations must be specified for data having the same number of rows as the data
-        used by the formulas of the observation models. Defaults to False
+        used by the formulas of the observation models. Not supported for HMP-like models. Defaults
+        to False
     :type tvdtpi: bool, optional
-    :param hmp_location: Array holding locations (one per stage) for a HMP-like model.
-        The location of a stage puts a hard minimum on the time between two events: a stage with
-        location ``l`` lasts ``l + x`` samples, where ``x`` follows the duration distribution of the
-        stage. The locations are used by the fast hmp code and, if ``hmp_d_offset is True``, to
-        compute the stage durations for HMP models with ``fast_hmp = False``. Can be extracted from
-        the HMP toolbox by Weindel et al. Defaults to None, in which case the location of all stages
-        between two events is set to the width ``w`` of the event pattern. The first and last stage
-        get ``w // 2``, so that patterns remain within a series.
+    :param hmp_location: Array holding locations (one per stage, **in samples**) for a HMP-like
+        model. The location of a stage puts a hard minimum on the time between two events: a stage
+        with location ``l`` lasts ``l + x`` samples, where ``x`` follows the duration distribution
+        of the stage. The locations are used by the fast hmp code and, if ``hmp_d_offset is True``,
+        to compute the stage durations for HMP models with ``fast_hmp = False``. **Note**, models
+        of the HMP toolbox by Weindel et al. work with locations in ms, so these have to
+        be converted first. Defaults to None, in which case the location of all stages between two
+        events is set to the width ``w`` of the event pattern. The first stage gets ``w // 2`` and
+        the last stage ``(w - 1) // 2`` (the number of samples of the before and after the pattern
+        peaks), so that patterns remain within a series.
     :type hmp_location: np.ndarray, optional
     :param fast_hmp: Whether to use fast hmp code. This requires the model to be strictly serial
         (left-to-right). However, skipped states for some series are still possible (i.e., group
@@ -1683,6 +1687,7 @@ class HSMMFamily(GSMMFamily):
     :raises ValueError: if either ``T`` or ``pi`` have a value other than None but not both.
     :raises ValueError: if ``starts_with_first is False`` and the model is HMP-like (i.e.,
         ``event_template is not None``).
+    :raises ValueError: if ``tvdtpi is True`` and ``event_template is not None``).
     """
 
     def __init__(
@@ -1758,7 +1763,7 @@ class HSMMFamily(GSMMFamily):
         self.n_cores_llk = n_cores_llk
         if n_cores_llk is None:
             self.n_cores_llk = n_cores
-        self._ar_template = None
+        self._ar_norm_ratio = 1.0
         self.T_index = T_index
         self.pi_index = pi_index
 
@@ -1786,6 +1791,11 @@ class HSMMFamily(GSMMFamily):
                 ("hmp like models are not supported with ``starts_with_first==False``!")
             )
 
+        if tvdtpi and self.is_hmp:
+            raise ValueError(
+                ("hmp like models are not supported with ``tvdtpi==True``!")
+            )
+
         for state_obs in obs_fams:
             if isinstance(state_obs[0], MultiGauss):
                 self.extra_coef += state_obs[0].extra_coef
@@ -1800,7 +1810,8 @@ class HSMMFamily(GSMMFamily):
         if self.is_hmp and self.hmp_location is None:
             event_width = len(event_template)
             self.hmp_location = np.zeros((n_S - 1) // 2 + 1, dtype=int) + event_width
-            self.hmp_location[[0, -1]] = event_width // 2
+            self.hmp_location[0] = event_width // 2
+            self.hmp_location[-1] = (event_width - 1) // 2
 
         # Check for time-varying duration, state transition, initial state models
         self.tvdtpi = tvdtpi
@@ -1850,25 +1861,33 @@ class HSMMFamily(GSMMFamily):
             if tid is None:
                 tid = sid
 
+            # Sum of squares of pattern before adjusting for ar1 model
+            pattern_norm = np.sum(normed_template**2)
+
             if Lrhoi is not None:
                 rho = np.sqrt(-1 * (np.power(1 / Lrhoi[1, 1], 2) - 1))
 
                 d0 = 1 / np.sqrt(1 - np.power(rho, 2))  # weight current mean
                 d1 = -rho / np.sqrt(1 - np.power(rho, 2))  # weight previous mean
 
-                # Adjust pattern for ar1 model
-                ar_template = np.zeros(normed_template.shape[0] + 1)
+                # Adjust pattern for ar1 model. Leading zero ensures that cross_cor[t] belongs to
+                # event peak at t for odd widths as well
+                ar_template = np.zeros(normed_template.shape[0] + 2)
 
                 for pidx in range(normed_template.shape[0]):
                     if pidx > 0:
-                        ar_template[pidx] = (
+                        ar_template[pidx + 1] = (
                             d0 * normed_template[pidx] + d1 * normed_template[pidx - 1]
                         )
                     else:
-                        ar_template[pidx] = d0 * normed_template[pidx]
+                        ar_template[pidx + 1] = d0 * normed_template[pidx]
 
                 ar_template[-1] = d1 * normed_template[-1]
                 normed_template = ar_template
+
+            # Scaling of gains depends on sum of squares of pattern. Need to correct for ar1 model
+            # so that scale continues to imply the same residual variance
+            self._ar_norm_ratio = np.sum(normed_template**2) / pattern_norm
 
             # Normalize template
             normed_template /= np.sum(normed_template**2)
@@ -2613,14 +2632,15 @@ class HSMMFamily(GSMMFamily):
             t = 0
             while t < n_T:
 
-                if dur < 0:
-                    # Sample next state and dur
+                if dur <= 0:
+                    # Sample next state and dur. For time-varying models T belongs to last
+                    # time-point of previous state (when transition happened)
                     if is_hmp and state == (n_S - 1):
                         dur += 1  # Simply keep extending last state's duration
                     else:
                         state = np_gen.choice(
                             state_vals,
-                            p=Ts[state, :, t] if tvdtpi else Ts[state, :],
+                            p=Ts[state, :, t - 1] if tvdtpi else Ts[state, :],
                         )
 
                         dur = np_gen.choice(
@@ -2638,8 +2658,9 @@ class HSMMFamily(GSMMFamily):
                             ),
                         )
 
-                # Collect emission and state predictions
-                emission_samples[t, :, sample] = emissions[t, state, :, sample]
+                # Collect emission and state predictions - must add to catch bleed over from
+                # previous bump
+                emission_samples[t, :, sample] += emissions[t, state, :, sample]
                 state_samples[t, sample] = state
 
                 # Add hmp bumps
@@ -2647,7 +2668,7 @@ class HSMMFamily(GSMMFamily):
                     for m in range(M):
 
                         # Expected bump for every time-point given dur d in bump
-                        d = (event_width - 1) - dur
+                        d = event_width - dur
 
                         Ebump = event_template[d] * mus[t, m, state]
 
@@ -3274,6 +3295,7 @@ class HSMMFamily(GSMMFamily):
             n_events = (n_S - 1) // 2
             n_flats = n_events + 1
             gains = np.zeros((n_T, n_events), dtype=np.float64)
+            gain_scale = scale * self._ar_norm_ratio
 
             for i in range(cross_corr.shape[1]):
                 # computes the gains, i.e. the log of the likelihood ratio between
@@ -3281,11 +3303,11 @@ class HSMMFamily(GSMMFamily):
                 gains = (
                     gains
                     + cross_corr[:, [i]] * mus[:, i, :]
-                    - mus[:, i, :] ** 2 / scale
+                    - mus[:, i, :] ** 2 / gain_scale
                 )
             gains = np.exp(gains)
 
-            # pmf for each stage, shifted by it's location to prevent overlap between events
+            # pmf for each stage, shifted by its location to prevent overlap between events
             pmf = np.zeros([n_T, n_flats], dtype=np.float64)
 
             # Figure out which transitions are actually happening on this trial.
@@ -4124,6 +4146,7 @@ class HSMMFamily(GSMMFamily):
             n_events = (n_S - 1) // 2
             n_flats = n_events + 1
             gains = np.zeros((n_T, n_events), dtype=np.float64)
+            gain_scale = scale * self._ar_norm_ratio
 
             for i in range(cross_corr.shape[1]):
                 # computes the gains, i.e. the log of the likelihood ratio between
@@ -4131,7 +4154,7 @@ class HSMMFamily(GSMMFamily):
                 gains = (
                     gains
                     + cross_corr[:, [i]] * mus[:, i, :]
-                    - mus[:, i, :] ** 2 / scale
+                    - mus[:, i, :] ** 2 / gain_scale
                 )
             gains = np.exp(gains)
 
@@ -5356,16 +5379,19 @@ class HSMMFamily(GSMMFamily):
             n_events = (n_S - 1) // 2
             n_flats = n_events + 1
             gains = np.zeros((n_T, n_events), dtype=np.float64)
+            gain_scale = scale * self._ar_norm_ratio
 
             # Derivatives of gains with respect to coef
             for m in range(cross_corr.shape[1]):
                 # computes the gains, i.e. the log of the likelihood ratio between
                 # event present and absent.
-                m_gain = cross_corr[:, [m]] * mus[:, m, :] - mus[:, m, :] ** 2 / scale
+                m_gain = (
+                    cross_corr[:, [m]] * mus[:, m, :] - mus[:, m, :] ** 2 / gain_scale
+                )
                 gains += m_gain
 
                 # deriv of m_gain with respect to mus shape: (n_T, n_events)
-                dgdmu = cross_corr[:, [m]] - 2 * mus[:, m, :] / scale
+                dgdmu = cross_corr[:, [m]] - 2 * mus[:, m, :] / gain_scale
 
                 # Index coefficients associated with channel m
                 gidx = m_idx_grad == m
