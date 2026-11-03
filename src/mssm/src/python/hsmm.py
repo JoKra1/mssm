@@ -1531,7 +1531,7 @@ def _compute_dur_res_series(
         t += 1
 
     # Catch dur from last state
-    dj_idx = j if (starts_with_first is True) else j + n_S
+    dj_idx = j if (transitions == 0 or starts_with_first is True) else j + n_S
 
     if mus_d[dj_idx] is None:
         res[j] = None
