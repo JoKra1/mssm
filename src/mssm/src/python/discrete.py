@@ -7,6 +7,7 @@ from collections.abc import Callable
 from .smooths import TP_basis_calc
 from .matrix_solvers import map_csc_to_eigen
 import discrete
+import uuid
 
 TDiscreteMatrix = TypeVar("TDiscreteMatrix", bound="DiscreteModelMatrix")
 
@@ -123,6 +124,30 @@ def _is_symmetric(W: scp.sparse.sparray | scp.sparse.spmatrix | np.ndarray) -> b
         return True
 
     return False
+
+
+def _eval_discrete_slice(
+    res: np.ndarray | scp.sparse.sparray | scp.sparse.spmatrix | float,
+    return_sparse: bool,
+) -> np.ndarray | scp.sparse.sparray | float:
+    """Casts an explicitly evaluated DiscreteModelMatrix slice to a scipy sparse csc_array
+    (coo_array if res is a vector) if ``return_sparse is True``. Otherwise returns directly.
+
+    Note, that floats are always returned directly.
+
+    :param res: The explicitly evaluated result
+    :type res: np.ndarray | scp.sparse.sparray | scp.sparse.spmatrix | float
+    :return: ``res``, converted to a sparse array if ``self.return_sparse``
+    :rtype: np.ndarray | scp.sparse.sparray | float
+    """
+    if np.ndim(res) == 0 or not return_sparse:
+        return res
+
+    if res.ndim == 1:
+        if isinstance(res, scp.sparse.coo_array):
+            return res
+        return scp.sparse.coo_array(res)
+    return scp.sparse.csc_array(res)
 
 
 def _nonzeroXjTWXk(
@@ -422,9 +447,9 @@ class DiscreteModelMatrix:
     :param dTerms: List of term matrices that make up this model matrix.
     :type dTerms: list[DiscreteTerm]
     :ivar scp.sparse.csc_array | np.ndarray | None preM: Any matrix by which to pre-multiply self
-        when evaluating the matrix. Initialized with ``None``.
+        when evaluating the matrix. Read-only. Initialized with ``None``.
     :ivar scp.sparse.csc_array | np.ndarray | None postM: Any matrix by which to post-multiply self
-        when evaluating the matrix. Initialized with ``None``.
+        when evaluating the matrix. Read-only. Initialized with ``None``.
     :ivar max_slize_size int: Maximum number of columns at which a slice/product is evaluated
         explicitly. Initialized with 10.
     :ivar id int: An identifier used internally to decide whether a cross-product involves two
@@ -437,8 +462,9 @@ class DiscreteModelMatrix:
 
     def __init__(self, dTerms: list[DiscreteTerm]):
         self.terms: list[DiscreteTerm] = dTerms
-        self.preM: scp.sparse.csc_array | np.ndarray | None = None
-        self.postM: scp.sparse.csc_array | np.ndarray | None = None
+        self._preM: scp.sparse.csc_array | np.ndarray | None = None
+        self._postM: scp.sparse.csc_array | np.ndarray | None = None
+        self._prepost_id = uuid.uuid1()
         self.max_slize_size: int = 10
         self.id: int = id(self)
         self.return_sparse: bool = False
@@ -453,6 +479,34 @@ class DiscreteModelMatrix:
 
         # Initial computation of nonzero rows
         self.__update_term_nonzeros()
+
+    # Getters for preM and postM
+    @property
+    def preM(self) -> scp.sparse.csc_array | np.ndarray | None:
+        return self._preM
+
+    @property
+    def postM(self) -> scp.sparse.csc_array | np.ndarray | None:
+        return self._postM
+
+    def update_prepostM(
+        self,
+        preM: scp.sparse.csc_array | np.ndarray | None,
+        postM: scp.sparse.csc_array | np.ndarray | None,
+    ) -> None:
+        """Updates the matrices stored in self._preM and self.postM.
+
+        Note, that this method always sets both matrices, so leaving one (or both)
+        at the default None will set the corresponding matrices (or matric) to None.
+
+        :param preM: Matrix by which to pre-multiply ``self`` or None
+        :type preM: scp.sparse.csc_array | np.ndarray | None
+        :param postM: Matrix by which to post-multiply ``self`` or None
+        :type postM: scp.sparse.csc_array | np.ndarray | None
+        """
+        self._preM = preM
+        self._postM = postM
+        self._prepost_id = uuid.uuid1()
 
     def __update_term_nonzeros(self) -> None:
         """Computes for each term which rows of the term matrix can be nonzero.
@@ -480,22 +534,20 @@ class DiscreteModelMatrix:
             # Only thing left is to get indices of nonzero rows
             term.nonzero_rows = np.nonzero(~exp_zeros)
 
-    def __prepareW(
+    def __combineW(
         self, otherpreM: scp.sparse.csc_array | np.ndarray | None
-    ) -> tuple[list | np.ndarray, bool, bool]:
-        """Internal function to compute any diagonal matrix W involved in a cross-product
+    ) -> scp.sparse.csc_array | scp.sparse.spmatrix | np.ndarray | None:
+        """Combines any matrix by which self is to be post-multiplied with matrix ``otherpreM`` by
+        which another DicreteModelMatrix is post-multiplied.
 
-        :param otherpreM: Matrix to be pre-multiplied with ``other`` (another instance of
-            :class:`DiscreteModelMatrix`) or None.
+        :param otherpreM: Optional matrix by which another DiscreteModelMatrix rather than self is
+            pre-multiplied by.
         :type otherpreM: scp.sparse.csc_array | np.ndarray | None
-        :return: Inner matrix ``W`` (if it exists else None) either as single dense matrix or a
-            list obtained from calling :func:`map_csc_to_eigen` on a sparse matrix ``W``.
-            Additionally a bool saying whether ``W`` exists at all and another one indicating
-            whether it is sparse.
-        :rtype: tuple[list | np.ndarray, bool, bool]
+        :return: The combined product or None
+        :rtype: scp.sparse.csc_array | scp.sparse.spmatrix | np.ndarray | None
         """
-        # Check for W
-        W: scp.sparse.csc_array | np.ndarray | None = None
+        # Collect everything into W
+        W: scp.sparse.csc_array | scp.sparse.spmatrix | np.ndarray | None = None
         if self.postM is not None:
             W = self.postM
         if otherpreM is not None:
@@ -504,16 +556,36 @@ class DiscreteModelMatrix:
             else:
                 W = otherpreM
 
+        return W
+
+    def __prepareW(
+        self, W: scp.sparse.csc_array | scp.sparse.spmatrix | np.ndarray | None
+    ) -> tuple[list, bool, bool]:
+        """Internal function to compute any diagonal matrix W involved in a cross-product
+
+        :param W: Matrix involved in a cross-product between two matrices or None.
+        :type W: scp.sparse.csc_array | np.ndarray | None
+        :return: Inner matrix ``W`` (if it exists else None) either as a list including a single
+            dense matrix or as a list obtained from calling :func:`map_csc_to_eigen` on a sparse
+            matrix ``W``. Additionally a bool saying whether ``W`` exists at all and another one
+            indicating whether it is sparse.
+        :rtype: tuple[list, bool, bool]
+        """
+
+        # Check if W exists
+        hasW: bool = W is not None
+
+        if W is None:
+            W = np.array([])
+
         # Check if W is sparse
         W_is_sparse = False
-        if isinstance(W, scp.sparse.sparray) or isinstance(W, scp.sparse.spmatrix):
+        if hasW and (
+            isinstance(W, scp.sparse.sparray) or isinstance(W, scp.sparse.spmatrix)
+        ):
             W = W.tocsc()
             W = map_csc_to_eigen(W)
             W_is_sparse = True
-
-        hasW: bool = W is not None
-        if W is None:
-            W = np.array([])
 
         if not W_is_sparse:
             if W is not None and not W.flags.f_contiguous:
@@ -524,7 +596,11 @@ class DiscreteModelMatrix:
 
         return W, hasW, W_is_sparse
 
-    def __XTWZ(self, other: TDiscreteMatrix) -> np.ndarray:
+    def __XTWZ(
+        self,
+        other: TDiscreteMatrix,
+        W: scp.sparse.csc_array | scp.sparse.spmatrix | np.ndarray | None,
+    ) -> np.ndarray:
         """Compute cross-product between two different instances of :class:`DiscreteModelMatrix`.
 
         Relies on a slightly modified version of the cross-product algorithm by Wood, Shaddick &
@@ -538,11 +614,15 @@ class DiscreteModelMatrix:
 
         :param other: Another :class:`DiscreteModelMatrix`
         :type other: DiscreteModelMatrix
+        :param W: An optional matrix ``W`` involved in the cross-product
+        :type W: scp.sparse.csc_array | scp.sparse.spmatrix | np.ndarray | None
         :return: The cross-product as a 2D numpy array
         :rtype: np.ndarray
         """
-        # Check for W
-        W, hasW, W_is_sparse = self.__prepareW(other.preM)
+        # Determine blocks to compute
+        blocks_j, blocks_k = _nonzeroXjTWXk(self.terms, other.terms, W)
+        # Now get W into correct list format
+        W, hasW, W_is_sparse = self.__prepareW(W)
 
         alg = discrete.XTWXS if W_is_sparse else discrete.XTWXD
 
@@ -563,29 +643,32 @@ class DiscreteModelMatrix:
 
             n_col += dt.end_idx - dt.start_idx
 
-        rows = np.arange(n_row)
-        cols = np.arange(n_col)
+        # Fill cross-product - evaluate only non-zero blocks
+        XTWZ = DiscreteCrossProduct(
+            (n_row, n_col), self.return_sparse and other.return_sparse
+        )
 
-        XTWZ = np.zeros((n_row, n_col))
+        for dtji, dtki in zip(blocks_j, blocks_k):
+            dtj = self.terms[dtji]
+            dtk = other.terms[dtki]
 
-        for dtji, dtj in enumerate(self.terms):
+            if (dtj.end_idx <= dtj.start_idx) or (dtk.end_idx <= dtk.start_idx):
+                continue
 
-            for dtki, dtk in enumerate(other.terms):
+            block = _XjTWXk(dtj, dtk, hasW, W, alg)
+            XTWZ.insert_block(dtj.start_idx, dtk.start_idx, block)
 
-                if (dtj.end_idx <= dtj.start_idx) or (dtk.end_idx <= dtk.start_idx):
-                    continue
-
-                XTWZ[
-                    np.ix_(
-                        rows[dtj.start_idx : dtj.end_idx],  # noqa: E203
-                        cols[dtk.start_idx : dtk.end_idx],  # noqa: E203
-                    )
-                ] = _XjTWXk(dtj, dtk, hasW, W, alg)
+        # Now evaluate cross-product and return
+        XTWZ = XTWZ.eval()
 
         return XTWZ
 
-    def __XTWX(self, otherpreM: scp.sparse.csc_array | np.ndarray | None) -> np.ndarray:
-        """Compute cross-product between the same (up to differen ``preM`` and ``postM``) instance
+    def __XTWX(
+        self,
+        W: scp.sparse.csc_array | scp.sparse.spmatrix | np.ndarray | None,
+        is_symmetric: bool,
+    ) -> np.ndarray:
+        """Compute cross-product between the same (up to different ``preM`` and ``postM``) instance
         of :class:`DiscreteModelMatrix`.
 
         Relies on the cross-product algorithm by Wood, Shaddick & Augustin (2017).
@@ -596,17 +679,25 @@ class DiscreteModelMatrix:
             American Statistical Association, 112(519), 1199–1210.\
             https://doi.org/10.1080/01621459.2016.1195744
 
-        :param otherpreM: Matrix to be pre-multiplied with ``other`` (same instance of
-            :class:`DiscreteModelMatrix`) or None
-        :type otherpreM: scp.sparse.csc_array | np.ndarray | None
+        :param W: An optional matrix ``W`` involved in the cross-product
+        :type W: scp.sparse.csc_array | scp.sparse.spmatrix | np.ndarray | None
+        :param is_symmetric: Whether ``W`` is symmetric or not
+        :type is_symmetric: bool
         :return: The cross-product as a 2D numpy array
         :rtype: np.ndarray
         """
-
-        # Check for W
-        W, hasW, W_is_sparse = self.__prepareW(otherpreM)
+        # Determine blocks to compute
+        blocks_j, blocks_k = _nonzeroXjTWXk(self.terms, self.terms, W)
+        # Now get W into correct list format
+        W, hasW, W_is_sparse = self.__prepareW(W)
 
         alg = discrete.XTWXS if W_is_sparse else discrete.XTWXD
+
+        if is_symmetric:
+            # Blocks below the diagonal can be obtained by transposing those above.
+            upper = blocks_j <= blocks_k
+            blocks_j = blocks_j[upper]
+            blocks_k = blocks_k[upper]
 
         # Check dimensions:
         n_col = 0
@@ -616,36 +707,23 @@ class DiscreteModelMatrix:
                 continue
 
             n_col += dt.end_idx - dt.start_idx
-        cols = np.arange(n_col)
 
-        XTWX = np.zeros((n_col, n_col))
-        for dtji, dtj in enumerate(self.terms):
+        XTWX = DiscreteCrossProduct((n_col, n_col), self.return_sparse)
+        for dtji, dtki in zip(blocks_j, blocks_k):
+            dtj = self.terms[dtji]
+            dtk = self.terms[dtki]
 
-            for dtki in range(dtji, len(self.terms)):
-                dtk = self.terms[dtki]
+            if (dtj.end_idx <= dtj.start_idx) or (dtk.end_idx <= dtk.start_idx):
+                continue
 
-                if (dtj.end_idx <= dtj.start_idx) or (dtk.end_idx <= dtk.start_idx):
-                    continue
+            block = _XjTWXk(dtj, dtk, hasW, W, alg)
+            XTWX.insert_block(dtj.start_idx, dtk.start_idx, block)
 
-                XTWX[
-                    np.ix_(
-                        cols[dtj.start_idx : dtj.end_idx],  # noqa: E203
-                        cols[dtk.start_idx : dtk.end_idx],  # noqa: E203
-                    )
-                ] = _XjTWXk(dtj, dtk, hasW, W, alg)
+            if is_symmetric and dtji != dtki:
+                XTWX.insert_block(dtk.start_idx, dtj.start_idx, block.T)
 
-                if dtji != dtki:
-                    XTWX[
-                        np.ix_(
-                            cols[dtk.start_idx : dtk.end_idx],  # noqa: E203
-                            cols[dtj.start_idx : dtj.end_idx],  # noqa: E203
-                        )
-                    ] = XTWX[
-                        np.ix_(
-                            cols[dtj.start_idx : dtj.end_idx],  # noqa: E203
-                            cols[dtk.start_idx : dtk.end_idx],  # noqa: E203
-                        )
-                    ].T
+        # Now evaluate cross-product and return
+        XTWX = XTWX.eval()
 
         return XTWX
 
