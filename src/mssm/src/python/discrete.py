@@ -37,8 +37,8 @@ class DiscreteTerm:
     :ivar int total_columns: Total columns of this term **after absorbing any constraints**.
         Initialized with 1.
     :ivar int n_marginals: Number of marginals this term has. Initialized with 1.
-    :ivar np.ndarray | None nonzero_rows: Flattened array with indices of nonzero rows of this term.
-        Initialized with ``None``.
+    :ivar np.ndarray | None nonzero_rows: Flattened array with indices of rows of this term that can
+        be nonzero or ``None`` (all rows are non-zero). Initialized with ``None``.
     """
 
     unique_matrices: list[np.ndarray] | None = None
@@ -75,10 +75,10 @@ def _convert_index(
         # +size maps back to largest index + 1 so already needs to go
         if idx < -size or idx >= size:
             raise IndexError(f"Index {idx} is not within size {size}.")
-        # Now safe to wrap negatives
+        # Now safe to wrap negatives. Return int to trigger dimension drops
         if idx < 0:
-            return size + idx
-        return idx
+            return int(size + idx)
+        return int(idx)
 
     if isinstance(idx, slice):
         # Handle : slices here, any other slice
@@ -117,7 +117,8 @@ def _is_symmetric(W: scp.sparse.sparray | scp.sparse.spmatrix | np.ndarray) -> b
         # Take scipy's check
         return scp.linalg.issymmetric(W, rtol=rtol)
 
-    # For sparse we need to do it manually
+    # For sparse we need to do it manually (need csc to extract data later)
+    W = W.tocsc()
     diff = W - W.T
 
     if diff.nnz == 0 or np.abs(diff.data).max() <= rtol * np.abs(W.data).max():
@@ -137,9 +138,12 @@ def _eval_discrete_slice(
 
     Note, that floats are always returned directly.
 
-    :param res: The explicitly evaluated result
-    :type res: np.ndarray | scp.sparse.sparray | scp.sparse.spmatrix | float
-    :return: ``res``, converted to a sparse array if ``self.return_sparse``
+    :param res: The result (implicit or explicit of correct type)
+    :type res: TDiscreteMatrix | np.ndarray | scp.sparse.sparray | scp.sparse.spmatrix | float
+    :param return_sparse: Whether result should be treated as (implicit)/is (explicit) a sparse
+        array
+    :type return_sparse: bool
+    :return: ``res``, converted to a sparse array if ``return_sparse``
     :rtype: TDiscreteMatrix | np.ndarray | scp.sparse.sparray | float
     """
 
@@ -169,9 +173,9 @@ def _nonzeroXjTWXk(
      - Davis, T. A. (2006). Direct Methods for Sparse Linear Systems.
 
     :param dtjs: List of term matrices included in ``X_j``
-    :type dtks: DiscreteTerm
-    :param dtk: List of term matrices included in ``X_k``
-    :type dtk: DiscreteTerm
+    :type dtjs: list[DiscreteTerm]
+    :param dtks: List of term matrices included in ``X_k``
+    :type dtks: list[DiscreteTerm]
     :param W: Inner matrix ``W``, either as sparse array/matrix or numpy array
     :type W: scp.sparse.sparray | scp.sparse.spmatrix | np.ndarray | None
     :return: Pairs of indices for which cross-product needs to be computed in separate arrays for
@@ -186,8 +190,9 @@ def _nonzeroXjTWXk(
     # Only cross-products between partial terms j and k can potentially be zero and also only if W
     # is not fully dense.
 
-    # Number of rows for both sets of terms has to be the same
-    N = dtjs[0].indices[0].shape[0]
+    # Number of rows can differ between both sets of terms if W is not square
+    N_j = dtjs[0].indices[0].shape[0]
+    N_k = dtks[0].indices[0].shape[0]
 
     # Get full and partial j term sorting
     full_j = []
@@ -201,6 +206,10 @@ def _nonzeroXjTWXk(
             partial_j.append(j)
             n_partial_j += 1
 
+    # Cast to np array
+    full_j = np.array(full_j, dtype=int)
+    partial_j = np.array(partial_j, dtype=int)
+
     # Same for k
     full_k = []
     partial_k = []
@@ -212,6 +221,10 @@ def _nonzeroXjTWXk(
         else:
             partial_k.append(k)
             n_partial_k += 1
+
+    # Cast to np array
+    full_k = np.array(full_k, dtype=int)
+    partial_k = np.array(partial_k, dtype=int)
 
     # We definitely need the cross-products between full j terms and all k terms
     # as well as the cross-products between partial j terms and full k terms.
@@ -252,13 +265,12 @@ def _nonzeroXjTWXk(
         Sk_idx = [dtks[k].nonzero_rows for k in partial_k]
 
         Sjks = []
-        for idx in [Sj_idx, Sk_idx]:
+        for idx, N in zip([Sj_idx, Sk_idx], [N_j, N_k]):
 
             # From scipy docs for sparse csc_array: "row indices for column i are stored in
             # indices[indptr[i]:indptr[i+1]]...". So indptr is cumsum over len of arrays in
             # idx arrays starting from zero
             ptr = np.concatenate(([0], np.cumsum([len(r) for r in idx])))
-            print(idx, ptr.shape, np.concatenate(idx).shape)
 
             # Now can create structure indicator as sparse matrix. Again from scipy docs:
             # "...and their corresponding values are stored in data[indptr[i]:indptr[i+1]]", so
@@ -279,8 +291,8 @@ def _nonzeroXjTWXk(
 
     # Now need to get things in order for each j for each k...
     # Can use lexsort but need to remember LAST index is primary sort dim!
-    nonzero_j = np.array(nonzero_j)
-    nonzero_k = np.array(nonzero_k)
+    nonzero_j = np.array(nonzero_j, dtype=int)
+    nonzero_k = np.array(nonzero_k, dtype=int)
     order = np.lexsort((nonzero_k, nonzero_j))
     return nonzero_j[order], nonzero_k[order]
 
@@ -325,12 +337,14 @@ def _XjTWXk(
     psk = np.array([mat.shape[1] for mat in dtk.unique_matrices], dtype=np.int64)
     qk = np.prod(psk)
     cidxj = np.arange(dtj.total_columns, dtype=np.int64)
-    cidxj = cidxj[~np.isin(cidxj, dtj.exclude_columns)]
+    if dtj.exclude_columns is not None:
+        cidxj = cidxj[~np.isin(cidxj, dtj.exclude_columns)]
     cidxk = np.arange(dtk.total_columns, dtype=np.int64)
-    cidxk = cidxk[~np.isin(cidxk, dtk.exclude_columns)]
+    if dtk.exclude_columns is not None:
+        cidxk = cidxk[~np.isin(cidxk, dtk.exclude_columns)]
 
     # Compute XjTWXk
-    return alg(
+    XjTWXk = alg(
         dtj.unique_matrices,
         dtk.unique_matrices,
         dtj.indices,
@@ -354,6 +368,15 @@ def _XjTWXk(
         *W,
     )
 
+    # Handle zero cols after c++ side
+    if dtj.zero_columns is not None:
+        XjTWXk[dtj.zero_columns, :] = 0
+
+    if dtk.zero_columns is not None:
+        XjTWXk[:, dtk.zero_columns] = 0
+
+    return XjTWXk
+
 
 class DiscreteCrossProduct:
     """A wrapper class to accumulate the (sparse) cross-product of two :class:`DiscreteModelMatrix`.
@@ -371,9 +394,9 @@ class DiscreteCrossProduct:
 
         # Can now prepare data storage
         if self.sparse:
-            self.rows: list[int] = []
-            self.cols: list[int] = []
-            self.data: list[int] = []
+            self.rows: list[np.ndarray] = []
+            self.cols: list[np.ndarray] = []
+            self.data: list[np.ndarray] = []
         else:
             self.data = np.zeros(shape)
 
@@ -396,9 +419,9 @@ class DiscreteCrossProduct:
                 # Block is completely empty
                 return
 
-            self.rows.extend(nonzero[0] + srow)
-            self.cols.extend(nonzero[1] + scol)
-            self.data.extend(block[nonzero])
+            self.rows.append(nonzero[0] + srow)
+            self.cols.append(nonzero[1] + scol)
+            self.data.append(block[nonzero])
 
         else:
             # Simply write to data for dense case
@@ -414,11 +437,15 @@ class DiscreteCrossProduct:
         """
 
         if self.sparse:
+            # All blocks empty
+            if len(self.data) == 0:
+                return scp.sparse.csc_array(self.shape)
+
             # Build sparse matrix from data, rows, and cols
             return scp.sparse.csc_array(
                 (
-                    self.data,
-                    (self.rows, self.cols),
+                    np.concatenate(self.data),
+                    (np.concatenate(self.rows), np.concatenate(self.cols)),
                 ),
                 shape=self.shape,
             )
@@ -434,19 +461,38 @@ class DiscreteModelMatrix:
     implement many matrix (vector) products and slicing/indexing operations. Specifically,
     the :class:`DiscreteModelMatrix` class implements ``X.T@Y``, ``Y@X.T``, ``X@B``, ``B@X``,
     and ``X.T@W@Z`` where ``Y``, ``B``, and ``W`` can be sparse or dense matrices or vectors and
-    ``X`` and ``Z`` are instances of :class:`DiscreteModelMatrix`. The final kind of cross-product
-    as well as operations involving sufficiently small matrices ``Y`` and ``B`` are evaluated
-    explicitly.
+    ``X`` and ``Z`` are instances of :class:`DiscreteModelMatrix` and can also be transposed.
 
-    Specifically, if the resulting matrix has fewer than ``self.max_slice_size`` columns
-    or fewer (or equal) rows than ``X`` has columns the matrix is returned as a numpy array or
-    scipy sparse csc_array (depending on ``self.return_sparse``). Otherwise, the product is
-    represented implcitily (i.e., these operations return a modified version of ``X`` as an instance
-    of :class:`DiscreteModelMatrix`) and only evaluated if a future operation meets these conditions
-    or when calling ``X.eval()`` (or the ``toarray()`` method directly).
+    Products/Slices are returned either explicitly or implicitly. Explicit results are returned as
+    a numpy array or as a scipy sparse array (csc_array for matrices, coo_array for vectors),
+    depending on ``self.return_sparse``.
 
-    The same rules apply when indexing/slicing ``X``: Slices that are too big are again returned as
-    a modified version of ``X`` as an instance of :class:`DiscreteModelMatrix`.
+    Implicit results are a modified version of ``self`` (i.e., another instance of
+    :class:`DiscreteModelMatrix`) and only evaluated explicitly if a future slice/product operation
+    meets explicit return conditions. Alternatively, ``X.eval()`` or the ``toarray()`` method can be
+    called directly to evaluate an implicit result.
+
+    **Note**: Rather than copying, implicit results share data for arrays stored by the terms of
+    ``X`` and matrices ``Y`` and ``B``. Modifying any of these in place will thus change the
+    implicit result as well. Use ``X.copy()`` to obtain a copy that can safely be manipulated.
+
+    The following rules outline whether results are evaluated explicitly/implicitly:
+     - Cross-products ``X.T@W@Z`` are always returned explicitly
+     - Products ``X@B`` are returned explicitly if the result has at most ``self.max_slice_size``
+       columns. If ``X`` is transposed, the product ``X.T@Y`` is returned explicitly if it is at
+       most as big as the cross-product ``X.T@X``
+     - Products ``B@X`` are computed as ``(X.T@B.T).T`` and their return type thus follows from the
+       2nd rule
+     - Slices (i.e., indexing) of ``X`` or ``X.T`` without pre- or post-multiplied matrices are
+       returned explicitly if at most ``self.max_slice_size`` columns need to be extracted from
+       ``X``, or no more rows than ``X`` has columns (so that the returned array is at most as big
+       as the cross-product ``X.T@X``)
+     - Slices of products ``C@X``, ``X@D``, and ``C@X@D`` are formed from slices of ``C``, ``X``,
+       and ``D``: ``(C@X)[r, c] = C[r, :] @ X[:, c]``, ``(X@D)[r, c] = X[r, :] @ D[:, c]``, and
+       ``(C@X@D)[r, c] = (C[r, :] @ X) @ D[:, c]`` (``C[r, :] @ (X.T @ D[:, c])`` if ``X`` is
+       transposed). Their return type is determined by the rules 2-4
+     - Integer slices (e.g., ``X[0, :]``) or two paired index array slices (e.g.,
+       ``X[[0, 1], [2, 3]]``) are always returned explicitly
 
     References:
      - Wood, S. N., Li, Z., Shaddick, G., & Augustin, N. H. (2017). Generalized Additive Models\
@@ -460,12 +506,12 @@ class DiscreteModelMatrix:
         when evaluating the matrix. Read-only. Initialized with ``None``.
     :ivar scp.sparse.csc_array | np.ndarray | None postM: Any matrix by which to post-multiply self
         when evaluating the matrix. Read-only. Initialized with ``None``.
-    :ivar max_slice_size int: Maximum number of columns at which a slice/product is evaluated
+    :ivar int max_slice_size: Maximum number of columns at which a slice/product is evaluated
         explicitly. Initialized with 10.
-    :ivar id int: An identifier used internally to decide whether a cross-product involves two
-        of the same matrices. Do not change this unless you know what you're doing.
-        Initialized with ``id(self)``.
-    :ivar return_sparse bool: Whether to return a sparse array or a dense one. Initialized with
+    :ivar uuid.UUID id: An identifier used internally to decide whether a cross-product involves
+        two of the same matrices. Do not change this unless you know what you're doing.
+        Initialized with a new ``uuid``.
+    :ivar bool return_sparse: Whether to return a sparse array or a dense one. Initialized with
         False.
     :ivar tuple[int, int] shape: The shape of self. Initialized based on ``dTerms``.
     """
@@ -476,7 +522,7 @@ class DiscreteModelMatrix:
         self._postM: scp.sparse.csc_array | np.ndarray | None = None
         self._prepost_id = uuid.uuid1()
         self.max_slice_size: int = 10
-        self.id: int = id(self)
+        self.id: uuid.UUID = uuid.uuid1()
         self.return_sparse: bool = False
 
         # Compute shape
@@ -518,11 +564,24 @@ class DiscreteModelMatrix:
         self._postM = postM
         self._prepost_id = uuid.uuid1()
 
+    def __shallow_copy(self) -> TDiscreteMatrix:
+        """Returns shallow copy of ``self``, with shallow copies of ``self.terms``.
+
+        **Note**: Attributes of the copied terms can be re-assigned safely but arrays remain shared
+        and must not be modified in place.
+
+        :return: Shallow copy of ``self`` with shallow copies of ``self.terms``
+        :rtype: TDiscreteMatrix
+        """
+        newS = copy.copy(self)
+        newS.terms = [copy.copy(dt) for dt in self.terms]
+        return newS
+
     def __update_term_nonzeros(self) -> None:
         """Computes for each term which rows of the term matrix can be nonzero.
 
         **Note**: For terms with multiple marginals (e.g., tensor terms) what counts as a zero rows
-        are rows that are zero in all marginals (e.g., anything with a by-keyword).
+        are rows that are zero in **any** of those marginal rows.
         """
 
         for term in self.terms:
@@ -537,18 +596,18 @@ class DiscreteModelMatrix:
                 continue
 
             # Have zero rows in unique matrices, now expand to full matrices
-            exp_zeros = np.ones(term.indices[0].shape[0], dtype=bool)
+            exp_zeros = np.zeros(term.indices[0].shape[0], dtype=bool)
             for umati in range(term.n_marginals):
-                exp_zeros &= zeros[umati][term.indices[umati]]
+                exp_zeros |= zeros[umati][term.indices[umati]]
 
             # Only thing left is to get indices of nonzero rows
-            term.nonzero_rows = np.nonzero(~exp_zeros)
+            term.nonzero_rows = np.flatnonzero(~exp_zeros)
 
     def __combineW(
         self, otherpreM: scp.sparse.csc_array | np.ndarray | None
     ) -> scp.sparse.csc_array | scp.sparse.spmatrix | np.ndarray | None:
         """Combines any matrix by which self is to be post-multiplied with matrix ``otherpreM`` by
-        which another DicreteModelMatrix is post-multiplied.
+        which another DiscreteModelMatrix is pre-multiplied.
 
         :param otherpreM: Optional matrix by which another DiscreteModelMatrix rather than self is
             pre-multiplied by.
@@ -571,7 +630,7 @@ class DiscreteModelMatrix:
     def __prepareW(
         self, W: scp.sparse.csc_array | scp.sparse.spmatrix | np.ndarray | None
     ) -> tuple[list, bool, bool]:
-        """Internal function to compute any diagonal matrix W involved in a cross-product
+        """Internal function to prepare any matrix W involved in a cross-product for the c++ side.
 
         :param W: Matrix involved in a cross-product between two matrices or None.
         :type W: scp.sparse.csc_array | np.ndarray | None
@@ -594,6 +653,11 @@ class DiscreteModelMatrix:
             isinstance(W, scp.sparse.sparray) or isinstance(W, scp.sparse.spmatrix)
         ):
             W = W.tocsc()
+
+            # map_csc_to_eigen needs sorted indices
+            if not W.has_sorted_indices:
+                W = W.sorted_indices()
+
             W = map_csc_to_eigen(W)
             W_is_sparse = True
 
@@ -610,7 +674,7 @@ class DiscreteModelMatrix:
         self,
         other: TDiscreteMatrix,
         W: scp.sparse.csc_array | scp.sparse.spmatrix | np.ndarray | None,
-    ) -> np.ndarray:
+    ) -> np.ndarray | scp.sparse.csc_array:
         """Compute cross-product between two different instances of :class:`DiscreteModelMatrix`.
 
         Relies on a slightly modified version of the cross-product algorithm by Wood, Shaddick &
@@ -626,8 +690,8 @@ class DiscreteModelMatrix:
         :type other: DiscreteModelMatrix
         :param W: An optional matrix ``W`` involved in the cross-product
         :type W: scp.sparse.csc_array | scp.sparse.spmatrix | np.ndarray | None
-        :return: The cross-product as a 2D numpy array
-        :rtype: np.ndarray
+        :return: The cross-product as a 2D numpy array or sparse csc_array
+        :rtype: np.ndarray | scp.sparse.csc_array
         """
         # Determine blocks to compute
         blocks_j, blocks_k = _nonzeroXjTWXk(self.terms, other.terms, W)
@@ -677,7 +741,7 @@ class DiscreteModelMatrix:
         self,
         W: scp.sparse.csc_array | scp.sparse.spmatrix | np.ndarray | None,
         is_symmetric: bool,
-    ) -> np.ndarray:
+    ) -> np.ndarray | scp.sparse.csc_array:
         """Compute cross-product between the same (up to different ``preM`` and ``postM``) instance
         of :class:`DiscreteModelMatrix`.
 
@@ -693,8 +757,8 @@ class DiscreteModelMatrix:
         :type W: scp.sparse.csc_array | scp.sparse.spmatrix | np.ndarray | None
         :param is_symmetric: Whether ``W`` is symmetric or not
         :type is_symmetric: bool
-        :return: The cross-product as a 2D numpy array
-        :rtype: np.ndarray
+        :return: The cross-product as a 2D numpy array or sparse csc_array
+        :rtype: np.ndarray | scp.sparse.csc_array
         """
         # Determine blocks to compute
         blocks_j, blocks_k = _nonzeroXjTWXk(self.terms, self.terms, W)
@@ -762,11 +826,9 @@ class DiscreteModelMatrix:
                 cidx = np.arange(dt.unique_matrices[0].shape[1])
                 cidx = cidx[~np.isin(cidx, dt.exclude_columns)]
 
-                res.append(
-                    discrete.A3(
-                        dt.unique_matrices[0], y.flatten(), dt.indices[0], cidx
-                    ).reshape(-1, 1)
-                )
+                v = discrete.A3(
+                    dt.unique_matrices[0], y.flatten(), dt.indices[0], cidx
+                ).reshape(-1, 1)
             else:
                 # Algorithm A4 from Wood et al., 2017
                 n_k = dt.total_columns
@@ -789,7 +851,11 @@ class DiscreteModelMatrix:
                     dt.Q if dt.Q is not None else np.array([], dtype=np.float64),
                 ).reshape(-1, 1)
 
-                res.append(v)
+            # Handle zero cols after c++ side
+            if dt.zero_columns is not None:
+                v[dt.zero_columns] = 0
+
+            res.append(v)
 
         return np.concatenate(res, axis=0)
 
@@ -818,6 +884,12 @@ class DiscreteModelMatrix:
 
             # Get rows in b associated with dt
             bt = b[dt.start_idx : dt.end_idx, 0]  # noqa: E203
+
+            # Handle zero cols after c++ side
+            if dt.zero_columns is not None:
+                bt = bt.copy()  # get copy to prevent overwrite by next line
+                bt[dt.zero_columns] = 0
+
             if len(dt.unique_matrices) == 1:
                 # Algorithm A5 from Wood et al., 2017
                 cidx = np.arange(dt.unique_matrices[0].shape[1])
@@ -1084,8 +1156,8 @@ class DiscreteModelMatrix:
 
         else:
             # Return implicit slice
-            newS = copy.deepcopy(self)
-            newS.id = id(newS)  # Update id
+            newS = self.__shallow_copy()
+            newS.id = uuid.uuid1()  # Update id
 
             # Columns can only be dropped so remaining ones are sorted and unique
             ucols, cinv = np.unique(xc, return_inverse=True)
@@ -1111,7 +1183,7 @@ class DiscreteModelMatrix:
                     newS.__update_prepostM(preM=None, postM=S)
 
             # (Re-ordered/repeated) rows can be selected directly from the index vectors
-            if xrows is not None:
+            if xrows is not None and not np.array_equal(xr, np.arange(c_shape[0])):
                 for dt in newS.terms:
                     dt.indices = [idx[xr] for idx in dt.indices]
 
@@ -1377,7 +1449,8 @@ class DiscreteModelMatrix:
                 # Extract W
                 W = self.__combineW(other.preM)
                 # If self is the transpose of other W = other.preM.T @ other.preM is symmetric
-                is_symmetric = self._prepost_id == other._prepost_id
+                # X.T@X (i.e., W is None) is symmetric as well
+                is_symmetric = self._prepost_id == other._prepost_id or W is None
                 if not is_symmetric:
                     # Otherwise need to check numerically
                     is_symmetric = _is_symmetric(W)
@@ -1414,8 +1487,9 @@ class DiscreteModelMatrix:
                 return XTWZ
 
             elif isinstance(other, DiscreteModelMatrix) is False:
-                # Store matrix in postM and update shape and return type
-                newS = copy.deepcopy(self)
+                # Store matrix in postM and update shape and return type. This doesn't change the
+                # terms so shallow copy is ok
+                newS = copy.copy(self)
                 newS.return_sparse = (
                     isinstance(other, scp.sparse.sparray)
                     or isinstance(other, scp.sparse.spmatrix)
@@ -1516,10 +1590,13 @@ class DiscreteModelMatrix:
             or isinstance(other, int)
             or isinstance(other, np.integer)
         ):
-            newS = copy.deepcopy(self)
-            newS.id = id(newS)  # Update id, since values differ from self now
-            for dti, dt in enumerate(newS.terms):
-                dt.unique_matrices[0] *= other
+            newS = self.__shallow_copy()
+            newS.id = uuid.uuid1()  # Update id, since values differ from self now
+            for dt in newS.terms:
+                dt.unique_matrices = [
+                    dt.unique_matrices[0] * other,
+                    *dt.unique_matrices[1:],
+                ]
             return newS
         elif isinstance(other, np.ndarray):
             # Have to evaluate.. Not very efficient.
@@ -1569,10 +1646,8 @@ class DiscreteModelMatrix:
         :return: View of transpose of self
         :rtype: TDiscreteMatrix
         """
-        newS = DiscreteModelMatrix(self.terms)
-        newS.return_sparse = self.return_sparse
-        newS.max_slice_size = self.max_slice_size
-        newS.id = self.id
+        # Shallow copy again to prevent re-compute of non-zero rows
+        newS = copy.copy(self)
         newS.__update_prepostM(
             preM=None if self.postM is None else self.postM.T,
             postM=None if self.preM is None else self.preM.T,
@@ -1592,7 +1667,12 @@ class DiscreteModelMatrix:
         :return: Copy of self
         :rtype: TDiscreteMatrix
         """
-        return copy.deepcopy(self)
+        newS = copy.deepcopy(self)
+
+        # preM and postM can still be modified in place, so they cannot be treated as the
+        # same before and after copy
+        newS.__update_prepostM(newS.preM, newS.postM)
+        return newS
 
     def toarray(self) -> np.ndarray:
         """Return self as a numpy array.

@@ -51,8 +51,8 @@ def map_csc_to_eigen(
         cols,
         X.nnz,
         X.data,
-        X.indptr.astype(np.int64),
-        X.indices.astype(np.int64),
+        X.indptr.astype(np.int64),  # ToDo: Could probably avoid copy here
+        X.indices.astype(np.int64),  # ToDo: Could probably avoid copy here
     )
 
 
