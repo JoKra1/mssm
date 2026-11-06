@@ -10,7 +10,8 @@ import sys
 
 
 def sort_penalties(penalties: list[LambdaTerm]) -> list[LambdaTerm]:
-    """Sorts penalties by ``start_index`` in ascending order.
+    """Stable sort of penalties by ``start_index`` in ascending order so that relative order of
+    penalties with same ``start_index`` is maintained.
 
     :param penalties: A list of term-specific penalties.
     :type penalties: list[LambdaTerm]
@@ -19,7 +20,10 @@ def sort_penalties(penalties: list[LambdaTerm]) -> list[LambdaTerm]:
     """
 
     idx = [pen.start_index for pen in penalties]
-    sort_idx = np.argsort(idx)
+    # Sort needs to be stable to maintain relative order. Stable keyword was only added later,
+    # so pass via kind.
+    # see: https://numpy.org/doc/stable/reference/generated/numpy.argsort.html
+    sort_idx = np.argsort(idx, kind="stable")
     return [penalties[sidx] for sidx in sort_idx]
 
 
@@ -43,10 +47,53 @@ def create_id_dict(penalties: list[LambdaTerm]) -> dict | None:
             else:
                 id_dict[pen.id] = [peni]
 
-    if len(id_dict) > 0 and max([len(v) for v in id_dict.values()]) > 1:
+    # Make sure to only collect ids which occur at least 2 times
+    id_dict = {
+        pen_id: pen_idx for pen_id, pen_idx in id_dict.items() if len(pen_idx) > 1
+    }
+
+    if len(id_dict) > 0:
         return id_dict
 
     return None
+
+
+def get_pinv_single_blocks(penalties: list[LambdaTerm]) -> list[int]:
+    """Identifies single-penalty blocks for which the (pseudo-) inverse is needed to compute the
+    derivative of :math:`log(|\\mathbf{S}_\\lambda|_+)`.
+
+    Needed when a single-penalty block shares an id with a penalty in a multi-penalty block, then
+    we need the (pseudo-) inverse for both.
+
+    :param penalties: A list of penalty matrices in which merged penalties have been split into
+        individual penalties, some of which might have a ``id`` flag.
+    :type penalties: list[LambdaTerm]
+    :return: List with start indices of single-penalty blocks which require a (pseudo-) inverse.
+    :rtype: list[int]
+    """
+    # 1) Get number of penalties sharing a starting index
+    n_pen_block = {}
+    for pen in penalties:
+        if pen.start_index not in n_pen_block:
+            n_pen_block[pen.start_index] = 1
+        else:
+            n_pen_block[pen.start_index] += 1
+
+    # 2) extract ids of penalties that are part of a multi-block
+    multi_ids = [
+        pen.id
+        for pen in penalties
+        if pen.id is not None and n_pen_block[pen.start_index] > 1
+    ]
+
+    # 3) now extract start_indices of single penalties that share a multi_id
+    pinv_idx = [
+        pen.start_index
+        for pen in penalties
+        if n_pen_block[pen.start_index] == 1 and pen.id in multi_ids
+    ]
+
+    return pinv_idx
 
 
 def combine_shared_penalties(penalties: list[LambdaTerm]) -> list[LambdaTerm]:
@@ -74,11 +121,18 @@ def combine_shared_penalties(penalties: list[LambdaTerm]) -> list[LambdaTerm]:
         for id in id_dict.keys():
             m_pens = [pen for pen in penalties if pen.id == id]
             S_J_emb = m_pens[0].S_J_emb
-            D_J_emb = m_pens[0].D_J_emb
 
             for peni in range(1, len(m_pens)):
                 S_J_emb += m_pens[peni].S_J_emb
-                D_J_emb += m_pens[peni].D_J_emb
+
+            # Summing the roots does not work if two penalties are in same block. Currently this
+            # can only happen with extra penalties but we can just stack roots to have this
+            # handle the general overlapping case by default.
+            D_J_emb = scp.sparse.hstack([pen.D_J_emb for pen in m_pens]).tocsc()
+            # From scipy: "row indices for column i are stored in indices[indptr[i]:indptr[i+1]]"
+            # so indptr[i]==indptr[i+1] means an implicit zero column, can use that to drop the
+            # latter from the root to save memory.
+            D_J_emb = D_J_emb[:, np.diff(D_J_emb.indptr) > 0]
 
             m_pen = LambdaTerm(
                 S_J=S_J_emb[

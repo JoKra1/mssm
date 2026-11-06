@@ -12,6 +12,7 @@ from .penalties import (
     embed_in_S_sparse,
     split_shared_penalties,
     combine_shared_penalties,
+    get_pinv_single_blocks,
 )
 from .custom_types import LambdaTerm
 from .discrete import DiscreteModelMatrix
@@ -281,6 +282,12 @@ def reparam(
         # Reparameterize S_\\lambda for safe REML evaluation - based on section 6.2.7 in Wood (2017)
         # and Appendix B of Wood (2011). S needs to be list holding penalties.
 
+        # Reparam makes no sense without any penalties and would return wrong null-space dim.
+        if len(S) == 0:
+            raise ValueError(
+                "`reparam` with `option==4` requires at least one penalty in S!"
+            )
+
         # Reparam is best performed based on term-specific penalties rather than lambda-specific
         # penalties
         S = split_shared_penalties(S)
@@ -288,7 +295,7 @@ def reparam(
         # We first sort S into term-specific groups of penalties
         SJs = []  # SJs groups per term
         ljs = []  # Lambda groups per term
-        SJ_reps = []  # How often should SJ be stacked
+        rep_SJs = []  # How often should SJ be stacked
         SJ_term_idx = []  # Penalty index of every SJ
         SJ_idx = []  # start index of every SJ
         SJ_coef = []  # Number of coef in the term penalized by a (sum of) SJ
@@ -296,7 +303,7 @@ def reparam(
             0  # Max starting index - used to decide whether a new SJ should be added.
         )
         SJ_idx_len = 0  # Number of separate SJ blocks.
-        n_coef = S[0].S_J_emb.shape[1] if len(S) > 0 else 0
+        n_coef = S[0].S_J_emb.shape[1]
 
         # Build S_emb and collect every block for pinv(S_emb)
         for lti, lTerm in enumerate(S):
@@ -307,7 +314,7 @@ def reparam(
                 SJs.append([lTerm.S_J])
                 ljs.append([lTerm.lam])
                 SJ_term_idx.append([lti])
-                SJ_reps.append(lTerm.rep_sj)
+                rep_SJs.append(lTerm.rep_sj)
                 SJ_coef.append(lTerm.S_J.shape[1])
                 SJ_idx.append(lTerm.start_index)
                 SJ_idx_max = lTerm.start_index
@@ -329,7 +336,7 @@ def reparam(
                 ljs[idx_match[0]].append(lTerm.lam)
                 SJ_term_idx[idx_match[0]].append(lti)
 
-                if SJ_reps[idx_match[0]] != lTerm.rep_sj:
+                if rep_SJs[idx_match[0]] != lTerm.rep_sj:
                     raise ValueError(
                         "Repeat Number for penalty does not match previous penalties repeat number."
                     )
@@ -358,8 +365,8 @@ def reparam(
         eps = sys.float_info.epsilon**0.7
 
         # Number of un-penalized dimensions (Kernel space dimension of total S_\\lambda; Wood, 2011)
-        Mp = Sj_reps[0].start_index
-        for grp_idx, SJgroup, LJgroup in zip(SJ_term_idx, SJs, ljs):
+        Mp = n_coef
+        for grp_idx, SJgroup, LJgroup, rep_sj in zip(SJ_term_idx, SJs, ljs, rep_SJs):
 
             for rpidx in range(len(SJgroup)):
                 Sj_reps[grp_idx[rpidx]].rp_idx = len(S_reps)
@@ -379,7 +386,7 @@ def reparam(
 
             Ur = U[:, D > max(D) * eps]
             r = Ur.shape[1]  # Range dimension
-            Mp += normed_S.shape[1] - r
+            Mp -= rep_sj * r  # Adjust null-space dim
 
             # Initial re-parameterization as discussed by Wood (2011)
             if r < normed_S.shape[1]:
@@ -592,8 +599,16 @@ def reparam(
                 Sj_reps[grp_idx[j]].S_J = scp.sparse.csc_array(S_Jrep[j])
 
             if S_rep is None:  # Fix r==Q in first iteration
+                # Sk alone is full rank, need to add all penalties in group to S_rep
                 S_rep = SJbar[0] * LJgroup[0]
-                Q_rep = scp.sparse.eye(r, format="csc")
+                for j in range(1, len(SJbar)):
+                    S_rep += SJbar[j] * LJgroup[j]
+
+                # Q_rep needs different dimensions if Q_rep0 exists, in which case it
+                # holds the entire transformation already.
+                Q_rep = scp.sparse.eye(
+                    r if Q_rep0 is None else Q_rep0.shape[1], format="csc"
+                )
 
             S_reps.append(scp.sparse.csc_array(S_rep))
 
@@ -609,9 +624,13 @@ def reparam(
         S_inv_rp = None  # Inverse of overall penalty
         S_root_rp = None  # root of overall penalty
 
+        # Get single penalties that need an inverse
+        pinv_single_idx = get_pinv_single_blocks(S)
+
         for Si, (Q_rep, S_rep, grp_idx, S_coef) in enumerate(
             zip(Q_reps, S_reps, SJ_term_idx, SJ_coef)
         ):
+            invert_grp = len(grp_idx) > 1 or SJ_idx[Si] in pinv_single_idx
 
             for j in range(len(grp_idx)):
                 S_J = Sj_reps[grp_idx[j]].S_J
@@ -623,7 +642,7 @@ def reparam(
                 Q_J_emb, c_idx_j = embed_in_S_sparse(
                     *translate_sparse(Q_rep), None, n_coef, S_coef, SJ_idx[Si]
                 )
-                for _ in range(1, SJ_reps[Si]):
+                for _ in range(1, rep_SJs[Si]):
                     S_J_emb_rp, _ = embed_in_S_sparse(
                         *translate_sparse(S_J), S_J_emb_rp, n_coef, S_coef, c_idx_j
                     )
@@ -648,11 +667,7 @@ def reparam(
             # Update total penalty and optionally root and inverse
 
             # Compute inverse of S_rep
-            if (
-                ((form_inverse == 1) and (len(grp_idx) > 1))
-                or form_root
-                or form_inverse == 2
-            ):
+            if ((form_inverse == 1) and invert_grp) or form_root or form_inverse == 2:
                 L, code = cpp_chol(S_rep)
                 if code != 0:
                     raise ValueError(
@@ -663,8 +678,8 @@ def reparam(
                     *translate_sparse(L), S_root_rp, n_coef, S_coef, SJ_idx[Si]
                 )
 
-            # Form inverse - only if this is not a single penalty term
-            if ((form_inverse == 1) and (len(grp_idx) > 1)) or form_inverse == 2:
+            # Form inverse
+            if ((form_inverse == 1) and invert_grp) or form_inverse == 2:
                 Linv = compute_Linv(L, n_c)
                 S_inv = (Linv.T @ Linv).tocsc()
 
@@ -677,9 +692,9 @@ def reparam(
                 *translate_sparse(S_rep), S_emb_rp, n_coef, S_coef, SJ_idx[Si]
             )
 
-            for _ in range(1, SJ_reps[Si]):
+            for _ in range(1, rep_SJs[Si]):
                 if (
-                    ((form_inverse == 1) and (len(grp_idx) > 1))
+                    ((form_inverse == 1) and invert_grp)
                     or form_root
                     or form_inverse == 2
                 ):
@@ -687,7 +702,7 @@ def reparam(
                         *translate_sparse(L), S_root_rp, n_coef, S_coef, c_idx
                     )
 
-                if ((form_inverse == 1) and (len(grp_idx) > 1)) or form_inverse == 2:
+                if ((form_inverse == 1) and invert_grp) or form_inverse == 2:
                     S_inv_rp, _ = embed_in_S_sparse(
                         *translate_sparse(S_inv), S_inv_rp, n_coef, S_coef, c_idx
                     )

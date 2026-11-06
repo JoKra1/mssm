@@ -72,7 +72,8 @@ class LambdaTerm:
         with this lambda term. Note, this matrix contains ``rep_sj`` diagonal sub-blocks each
         filled with ``S_J``. Initialized with ``None``.
     :ivar scp.sparse.csc_array D_J_emb: Root of ``S_J_emb``, so that ``D_J_emb@D_J_emb.T=S_J_emb``.
-        Initialized with ``None``.
+        Note, that the root will not necessarily be square for merged penalties (that share a
+        smoothing parameter via id). Initialized with ``None``.
     :ivar int rep_sj: How many sequential sub-blocks of ``S_J_emb`` need to be filled with ``S_J``.
         Useful if all levels of a categorical variable for which a separate smooth is to be
         estimated are assumed to share the same lambda value. Initialized with 1.
@@ -160,7 +161,16 @@ class Fit_info:
         (i.e., GAMM, GAMMLSS, GSMM). Initialized with ``None``.
     :ivar np.typing.NDArray[np.int_] dropped: The final set of coefficients dropped during
         GAMMLSS/GSMM estimation when using ``method in ["QR/Chol","LU/Chol","Direct/Chol"]`` or
-        ``None`` in which case no coefficients were dropped. Initialized with None.
+        ``None`` in which case no coefficients were dropped. **Note**, if ``Q_emb`` is not ``None``
+        these indices refer to the re-parameterized model. Initialized with None.
+    :ivar scp.sparse.csc_array Q_emb: Optionally the transformation matrix of the
+        re-parameterization used in the final GAMMLSS/GSMM iteration (i.e., ``Q_emb.T@S_emb@Q_emb``
+        is the total penalty matrix after re-parameterization). Only set when coefficients were
+        dropped in the final fitting iteration. Initialized with None.
+    :ivar list[scp.sparse.csc_array] Qs: Optional list of transformation matrices ``Qd``
+        corresponding to ``Q_emb`` (i.e., ``Xd@Qd`` is the model matrix for d-th linear predictor
+        under repara). **Note**, only contains transformation matrices up to (and including) the
+        last linear predictor that includes at least a single penalty. Initialized with None.
     """
 
     lambda_updates: int = 0
@@ -169,6 +179,8 @@ class Fit_info:
     eps: float = 0
     K2: float | None = None
     dropped: np.typing.NDArray[np.int_] | None = None
+    Q_emb: scp.sparse.csc_array | None = None
+    Qs: list[scp.sparse.csc_array] | None = None
 
 
 @dataclass

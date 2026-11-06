@@ -165,7 +165,7 @@ class Test_BIG_GAMM_Discretize:
     model.fit(**default_gamm_test_kwargs)
 
     def test_GAMedf(self):
-        assert round(self.model.edf, ndigits=0) == 2433.0
+        assert round(self.model.edf, ndigits=0) == 2432.0
 
     def test_GAMsigma(self):
         _, sigma = self.model.get_pars()
@@ -173,7 +173,7 @@ class Test_BIG_GAMM_Discretize:
 
     def test_GAMreml(self):
         reml = self.model.get_reml()
-        assert round(reml, ndigits=2) == -84063.0
+        assert round(reml, ndigits=2) == -84029.66
 
     def test_GAMllk(self):
         llk = self.model.get_llk(False)
@@ -270,7 +270,7 @@ class Test_BIG_GAMM_Discretize2:
         assert round(self.model.scale, ndigits=3) == 10.962
 
     def test_GAMreml(self):
-        assert round(self.model.get_reml(), ndigits=2) == -84062.96
+        assert round(self.model.get_reml(), ndigits=2) == -84029.62
 
     def test_GAMllk(self):
         assert round(self.model.get_llk(False), ndigits=0) == -75225.0
@@ -1260,7 +1260,7 @@ class Test_drop:
     def test_GAMreml(self):
         reml = self.model.get_reml()
         np.testing.assert_allclose(
-            reml, -10643.879807223055, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
+            reml, -10644.798745756285, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
         )
 
     def test_GAMllk(self):
@@ -1477,18 +1477,18 @@ class Test_drop:
                         0.37034317,
                         0.32443744,
                         0.53423691,
-                        0.50741044,
+                        0.50740986,
                         0.85755008,
                         1.72581553,
-                        -0.16159212,
+                        -0.1615918,
                         0.94273488,
-                        -0.13667816,
+                        -0.1366788,
                         -0.4537871,
                     ],
                     [
                         -0.90706986,
                         -0.41853814,
-                        0.08967159,
+                        0.08967137,
                         -0.6928048,
                         -1.10320734,
                         1.27638547,
@@ -1658,25 +1658,25 @@ class Test_drop_no_pen_order:
     def test_GAMllk1(self):
         llk = self.model1.get_llk(False)
         np.testing.assert_allclose(
-            llk, -2209.29436493949, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
+            llk, -2209.420766917531, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
         )
 
     def test_GAMllk2(self):
         llk = self.model2.get_llk(False)
         np.testing.assert_allclose(
-            llk, -2209.29436493949, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
+            llk, -2209.420766917531, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
         )
 
     def test_scale1(self):
         scale = self.model1.scale
         np.testing.assert_allclose(
-            scale, 1.9825008568078437, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
+            scale, 1.9768203385934946, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
         )
 
     def test_scale2(self):
         scale = self.model2.scale
         np.testing.assert_allclose(
-            scale, 1.9825008568078437, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
+            scale, 1.9768203385934946, atol=min(max_atol, 0), rtol=min(max_rtol, 0.01)
         )
 
 

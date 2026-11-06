@@ -479,6 +479,9 @@ class GAMLSSGSMMFamily(GSMMFamily):
 
         if isinstance(gammlss_family, Family):
             # Fall back to finite differencing for now...
+            # ToDo: This should be handled with the analytic hessian, since otherwise
+            # drop code might not find unidentifiable coefficients due to noise in the
+            # FD approximations
             return super().hessian(coef, coef_split_idx, ys, Xs)
 
         split_coef = np.split(coef, coef_split_idx)
@@ -876,6 +879,114 @@ def print_parametric_terms(model, par: int = 0) -> None:
         print("\nNote: p < 0.001: ***, p < 0.01: **, p < 0.05: *, p < 0.1: .")
 
 
+def get_term_edfs(model, par: int = 0, edf1: bool = False) -> dict:
+    """Computes the estimated degrees of freedom (edf) for all terms in the linear predictor
+    associated with parameter ``par``.
+
+    Returns a dictionary with term indices for keys and lists for values. Lists include the edf
+    associated with a term. **Note**, that if a random or (impulse response) smooth term has a
+    ``by`` keyword specified (and no ``id``) then the list contains separate edf values per level of
+    the by-factor. For unpenalized terms (e.g., linear terms without an extra penalty) the number of
+    coefficients associated with that term is used for the edf and the latter are generally capped
+    so that they do not exceed the number of coefficients.
+
+    **Note**, this function assumes that terms do not have overlapping penalties - an extra penalty
+    that covers the intercept and a linear term for example will result in incorrect edf estimates.
+
+    :param model: GSMM, GAMMLSS, or GAMM model
+    :type model: mssm.models.GSMM | mssm.models.GAMMLSS | mssm.models.GAMM
+    :param par: Parameter of the likelihood/family for which to compute edf. Ignored when ``model``
+        is a GAMM. Defaults to 0
+    :type par: int, optional
+    :param edf1: Whether or not the estimated degrees of freedom should be corrected for smoothness
+        bias. Doing so results in more accurate p-values but can be expensive for large models for
+        which the difference is anyway likely to be marginal. Defaults to False
+    :type edf1: bool, optional
+    :return: Dictionary containing the edf per term
+    :rtype: dict
+    """
+
+    if isinstance(model.family, Family):  # GAMM case
+        par = 0
+
+    form = model.formulas[par]
+    ltx = form.get_linear_term_idx()
+    irstx = form.get_ir_smooth_term_idx()
+    stx = form.get_smooth_term_idx()
+    rtx = form.get_random_term_idx()
+    atx = [*ltx, *irstx, *stx, *rtx]
+    offset = 0 if par == 0 else model.coef_split_idx[par - 1]
+    block_edfs = model.term_edf1 if edf1 else model.term_edf
+    drop = model.info.dropped
+    factor_levels = form.get_factor_levels()
+
+    # Populate return dict in ascending order so that when printed it matches term order of formula
+    term_edfs = {}
+    for ti in sorted(atx):
+        term_edfs[ti] = []
+
+    # Coefficient range of every penalty block, in the order returned by calculate_term_edf
+    b_ranges = []
+    for pen in split_shared_penalties(model.overall_penalties):
+        if len(b_ranges) == 0 or pen.start_index > b_ranges[-1][0]:
+            b_ranges.append(
+                (pen.start_index, pen.start_index + pen.rep_sj * pen.S_J.shape[1])
+            )
+
+    # Coefficient range of every entry - levels of by terms are placed after each other
+    t_ranges = {}
+    for ti in atx:
+        term = form.terms[ti]
+        t_ranges[ti] = []
+
+        # Check by keywords for qualifying terms
+        n_levels = 1
+        if ti in [*stx, *irstx]:
+            if term.by is not None and term.id is None:
+                n_levels = len(factor_levels[term.by])
+        elif isinstance(term, rs) and term.by is not None:
+            n_levels = len(factor_levels[term.by])
+
+        # Get start and stop coef indices corrected for offset
+        n_level_coef = int(form.coef_per_term[ti] / n_levels)
+        start = offset + form.coef_idx_per_term[ti][0]
+        for _ in range(n_levels):
+            t_ranges[ti].append((start, start + n_level_coef))
+            start += n_level_coef
+
+    for ti in atx:
+
+        # Loop over levels (might just be one) for term ti
+        for t_start, t_end in t_ranges[ti]:
+
+            # Get coef indices and n_coef
+            idx = np.arange(t_start, t_end)
+            n_drop = 0 if drop is None else np.sum(np.isin(idx, drop))
+            n_coef = len(idx) - n_drop
+
+            # Now edf: sum block_edfs over all penalty blocks starting in t_ranges[ti]
+            t_edf = 0
+            for bi, (b_start, b_end) in enumerate(b_ranges):
+                if t_start <= b_start and b_start < t_end:
+                    t_edf += block_edfs[bi]
+
+                # drop covered coefs to later have only unpenalized ones that can be checked against
+                # drop
+                idx = idx[(idx < b_start) | (idx >= b_end)]
+
+            # Unpenalized coefs contribute one edf when not dropped
+            n_upen = len(idx)
+            if drop is not None:
+                n_upen = np.sum(np.isin(idx, drop) == False)  # noqa: E712
+            t_edf += n_upen
+
+            # Cap at n_coef
+            t_edf = min(t_edf, n_coef)
+            term_edfs[ti].append(t_edf)
+
+    return term_edfs
+
+
 def print_smooth_terms(
     model,
     par: int = 0,
@@ -921,37 +1032,14 @@ def print_smooth_terms(
         raise ValueError("``ps`` and ``Trs`` must have the same length but do not.")
 
     if isinstance(model.family, Family):  # GAMM case
-        form = model.formulas[0]
+        par = 0
 
-        if model.coef is None:
-            term_edf = None
-        else:
-            term_edf = model.term_edf
-    else:
-        # GAMMLSS or GSMM case
-        form = model.formulas[par]
+    form = model.formulas[par]
 
-        # Get term edf for par
-        if model.coef is None:
-            term_edf = None
-        else:
-            term_edf = []
-            prev_start_idx = -1
-            prev_edf_idx = 0
-            # edf are best computed on term-pecific penalties
-            penalties = split_shared_penalties(model.overall_penalties)
-            for pen in penalties:
-
-                if pen.dist_param > par:
-                    break
-
-                if pen.start_index > prev_start_idx:
-                    if pen.dist_param == par:
-                        term_edf.append(model.term_edf[prev_edf_idx])
-
-                    # Keep track of start idx (coef idx) and edf idx.
-                    prev_start_idx = pen.start_index
-                    prev_edf_idx += 1
+    # Get edf of every term in formula
+    term_edf = None
+    if model.coef is not None:
+        term_edf = get_term_edfs(model, par)
 
     term_names = np.array(form.get_term_names())
     smooth_names = [
@@ -966,26 +1054,17 @@ def print_smooth_terms(
         terms = form.terms
         coding_factors = form.get_coding_factors()
         name_idx = 0
-        edf_idx = 0
         p_idx = 0
         pen_out = 0
         for sti in form.get_smooth_term_idx():
             sterm = terms[sti]
 
-            # Base-case for un-penalized smooth terms
-            t_edf = form.coef_per_term[sti]
             if sterm.by is not None and sterm.id is None:
                 n_levels = len(form.get_factor_levels()[sterm.by])
 
-                # Ajust base-case edf for by levles
-                t_edf = int(t_edf / n_levels)
-
                 # Now loop over by levels
                 for li in range(n_levels):
-
-                    # Optionally extract correct edf for penalized terms.
-                    if sterm.is_penalized:
-                        t_edf = round(term_edf[edf_idx], ndigits=3)
+                    t_edf = round(term_edf[sti][li], ndigits=3)
 
                     e_str = (
                         smooth_names[name_idx]
@@ -1019,12 +1098,8 @@ def print_smooth_terms(
 
                     print(e_str)
 
-                    # advance edf vector index only if term was penalized
-                    if sterm.is_penalized:
-                        edf_idx += 1
             else:
-                if sterm.is_penalized:
-                    t_edf = round(term_edf[edf_idx], ndigits=3)
+                t_edf = round(term_edf[sti][0], ndigits=3)
                 e_str = smooth_names[name_idx] + f"; edf: {t_edf}"
                 if t_edf < pen_cutoff:
                     # Term has effectively been removed from the model
@@ -1054,34 +1129,22 @@ def print_smooth_terms(
 
                 print(e_str)
 
-                if sterm.is_penalized:
-                    edf_idx += 1
-
             name_idx += 1
 
         for rti in form.get_random_term_idx():
             rterm = terms[rti]
-            if isinstance(rterm, rs):
-                if rterm.by is not None:
-                    for li in range(len(form.get_factor_levels()[rterm.by])):
-                        print(
-                            smooth_names[name_idx]
-                            + f":{coding_factors[rterm.by][li]}; edf: "
-                            + f"{round(term_edf[edf_idx], ndigits=3)}"
-                        )
-                        edf_idx += 1
-                else:
+            if isinstance(rterm, rs) and rterm.by is not None:
+                for li in range(len(form.get_factor_levels()[rterm.by])):
                     print(
                         smooth_names[name_idx]
-                        + f"; edf: {round(term_edf[edf_idx], ndigits=3)}"
+                        + f":{coding_factors[rterm.by][li]}; edf: "
+                        + f"{round(term_edf[rti][li], ndigits=3)}"
                     )
-                    edf_idx += 1
             else:
                 print(
                     smooth_names[name_idx]
-                    + f"; edf: {round(term_edf[edf_idx], ndigits=3)}"
+                    + f"; edf: {round(term_edf[rti][0], ndigits=3)}"
                 )
-                edf_idx += 1
             name_idx += 1
 
         if ps is not None:
@@ -1129,6 +1192,8 @@ def compute_bias_corrected_edf(model, overwrite: bool = False) -> None:
     if model.edf1 is None or overwrite:
         term_edf1 = []
         edf1 = 0
+        drop = model.info.dropped
+        n_drop = len(drop) if drop is not None else 0
 
         if isinstance(model.family, Family):  # GAMM case
             scale = model.scale
@@ -1137,17 +1202,16 @@ def compute_bias_corrected_edf(model, overwrite: bool = False) -> None:
             nH = -1 * model.hessian
             F = model.lvi.T @ model.lvi @ (nH * scale)
 
-            edf1 += model.formulas[0].unpenalized_coef
-
         else:
 
             # Start with forming F matrix
             nH = -1 * model.hessian
             F = model.lvi.T @ model.lvi @ nH
 
-            edf1 += np.sum([form.unpenalized_coef for form in model.formulas])
-
         F_diag = F.diagonal()
+
+        # Keep track of all coef not covered by any penalty.
+        n_unpen = F.shape[1]
 
         prev_start_idx = -1
 
@@ -1173,9 +1237,18 @@ def compute_bias_corrected_edf(model, overwrite: bool = False) -> None:
                 t_edf1 = 2 * np.sum(Fjd) - Fjtrace
                 term_edf1.append(t_edf1)
                 edf1 += t_edf1
+                n_unpen -= S_len
+
+                if drop is not None:
+                    # Keep track of dropped coefficients associated with this penalized term
+                    # Need to subtract them from n_drop since they are accounted for already
+                    n_drop -= np.sum((drop >= S_start) & (drop < S_end))
 
                 # Update current start index
                 prev_start_idx = pen.start_index
+
+        # n_unpen still needs to be corrected for remaining drops in n_drop
+        edf1 += n_unpen - n_drop
 
         model.edf1 = edf1
         model.term_edf1 = term_edf1
@@ -1268,12 +1341,12 @@ def approx_smooth_p_values(
         compute_bias_corrected_edf(model)
 
     if isinstance(model.family, Family):  # GAMM case
+        par = 0
         form = model.formulas[0]
         X = model.get_mmat()
         coef = model.coef.flatten()
         lvi = model.lvi
         scale = model.scale
-        term_edf = model.term_edf1 if edf1 else model.term_edf
         rs_df = X.shape[0] - model.edf
 
     else:
@@ -1289,40 +1362,10 @@ def approx_smooth_p_values(
         coef = np.ndarray.flatten(split_coef[par])
         lvi = model.lvi[:, split_idx]
         scale = 1
-        term_edf = []
         rs_df = None
 
-        prev_start_idx = -1
-        prev_edf_idx = 0
-
-        # edf are best computed on term-pecific penalties
-        penalties = split_shared_penalties(model.overall_penalties)
-
-        for pen in penalties:
-            if pen.start_index > prev_start_idx:
-
-                if pen.dist_param > par:
-                    break
-
-                if pen.dist_param == par:  # Collect only those belonging to this par
-                    if edf1:
-                        term_edf.append(
-                            min(
-                                model.term_edf1[prev_edf_idx],
-                                pen.rep_sj * pen.S_J.shape[1],
-                            )
-                        )
-                    else:
-                        term_edf.append(
-                            min(
-                                model.term_edf[prev_edf_idx],
-                                pen.rep_sj * pen.S_J.shape[1],
-                            )
-                        )
-
-                # Keep track of start idx (coef idx) and edf idx.
-                prev_start_idx = pen.start_index
-                prev_edf_idx += 1
+    # Get edf of every term in formula
+    term_edf = get_term_edfs(model, par, edf1)
 
     terms = form.get_terms()
 
@@ -1334,10 +1377,9 @@ def approx_smooth_p_values(
     Trs = []
 
     # Loop over smooth terms
-    edf_idx = 0
     for sti in st_idx:
         sterm = terms[sti]
-        if isinstance(sterm, fs) is False:
+        if isinstance(sterm, fs) is False:  # Random smooth terms are fully penalized
 
             n_s_coef = form.coef_per_term[sti]
             enumerator = range(1)
@@ -1346,13 +1388,10 @@ def approx_smooth_p_values(
                 enumerator = range(n_levels)
                 n_s_coef = int(n_s_coef / n_levels)
 
-            # Define base-case for edf of un-penalized smooth terms
-            r = n_s_coef
-
             # Get start coef idx from formula since lvi is formula-specific block.
             # This also catches un-penalized terms
             start_coef = form.coef_idx_per_term[sti][0]
-            for _ in enumerator:
+            for lvli in enumerator:
                 # Extract coefficients corresponding to smooth
                 end_coef = start_coef + n_s_coef
                 s_coef = coef[start_coef:end_coef].reshape(-1, 1)
@@ -1386,9 +1425,8 @@ def approx_smooth_p_values(
                 s = np.flip(s)  # Eigenvalues are in decreasing order now
                 U = np.flip(U, axis=1)
 
-                # Optionally get edf for this term and (re) compute r,k,v, and p from Wood (2017)
-                if sterm.is_penalized:
-                    r = term_edf[edf_idx]
+                # Get min(edf,n_coef) for this term and (re) compute r,k,v, and p from Wood (2017)
+                r = term_edf[sti][lvli]
                 k = int(r)
                 if k > 0:
                     v = r - k
@@ -1619,14 +1657,8 @@ def approx_smooth_p_values(
                 ps.append(p)
                 Trs.append(Tr)
 
-                # Prepare for next term
-                if sterm.is_penalized:
-                    edf_idx += 1
-                # By-level smooths need start_coef updated
+                # Prepare for next term. By-level smooths need start_coef updated
                 start_coef += n_s_coef
-
-        else:  # Random smooth terms are fully penalized
-            edf_idx += 1
 
     return ps, Trs
 
@@ -1802,6 +1834,11 @@ def compute_reml_candidate_GAMM(
     prev_theta = None
     if isinstance(family, ExtendedFamily) and family.est_theta:
         prev_theta = copy.deepcopy(family.theta)
+
+    # Values returned if the candidate cannot be evaluated before these are computed (see except)
+    coef = np.zeros((X.shape[1], 1))
+    scale = 1
+    edf = X.shape[1]
 
     try:
         if isinstance(family, Gaussian) and isinstance(family.link, Identity):
@@ -2041,6 +2078,8 @@ def compute_REML_candidate_GSMM(
         tuple[np.typing.NDArray[np.int_], np.typing.NDArray[np.int_]] | None
     ) = None,
     sparse: bool = True,
+    Q_emb: scp.sparse.csc_array | None = None,
+    Qs: list[scp.sparse.csc_array] | None = None,
 ) -> tuple[float, scp.sparse.csc_array, scp.sparse.csc_array, np.ndarray, float, float]:
     """Allows to evaluate REML criterion (e.g., Wood, 2011; Wood, 2016) efficiently for a set of
     \\lambda values for a GSMM or GAMMLSS.
@@ -2081,6 +2120,14 @@ def compute_REML_candidate_GSMM(
     :type keep_drop: tuple[np.typing.NDArray[np.int_],np.typing.NDArray[np.int_]] | None
     :param sparse: Whether the Hessian is sparse for GAMMLSS models, defaults to True
     :type sparse: bool, optional
+    :param Q_emb: Optional matric that re-parameterized the final model (see ``Fit_info.Q_emb``).
+        Indices in ``keep_drop`` were determined for that reparameterization. REML and model fit
+        happen in this reparameterization but the latter is reverted before returning so that all
+        objects match no reparameterization applied. Defaults to None
+    :type Q_emb: scp.sparse.csc_array | None, optional
+    :param Qs: List of reparameterization matrices for all linear predictors (see ``Fit_info.Qs``).
+        Needed if ``Q_emb`` is not None, defaults to None
+    :type Qs: list[scp.sparse.csc_array] | None, optional
     :return: reml criterion,conditional covariance matrix of coefficients for this lambda,
         un-pivoted inverse of the pivoted Cholesky of the negative hessian of the penalized llk,
         coefficients, total edf, llk
@@ -2103,6 +2150,20 @@ def compute_REML_candidate_GSMM(
             )
 
         S_norm /= scp.sparse.linalg.norm(S_norm, ord=None)
+
+    # Coefficients dropped from a re-parameterized model need to be dropped again so have
+    # to transform using the final repara from fit
+    coef_rp = coef
+    Xs_rp = Xs
+    S_emb_rp = S_emb
+    if Q_emb is not None:
+        coef_rp = Q_emb.T @ coef
+        S_emb_rp = (Q_emb.T @ S_emb @ Q_emb).tocsc()
+        S_emb_rp.sort_indices()
+
+        Xs_rp = copy.copy(Xs)
+        for qi, Q in enumerate(Qs):
+            Xs_rp[qi] = Xs[qi] @ Q
 
     try:
         if isinstance(family, GSMMFamily):  # GSMM
@@ -2131,10 +2192,10 @@ def compute_REML_candidate_GSMM(
             coef, H, L, LV, c_llk, _, _, keep, drop = update_coef_gen_smooth(
                 family,
                 y,
-                Xs,
-                coef,
+                Xs_rp,
+                coef_rp,
                 coef_split_idx,
-                S_emb,
+                S_emb_rp,
                 S_norm,
                 None,
                 None,
@@ -2172,9 +2233,6 @@ def compute_REML_candidate_GSMM(
                 LVp0 = compute_Linv(Lp, n_c)
                 LV = apply_eigen_perm(Pr, LVp0)
 
-            V = LV.T @ LV  # inverse of hessian of penalized likelihood
-            nH = -1 * H  # negative hessian of likelihood
-
         else:  # GAMMLSS
             split_coef = np.split(coef, coef_split_idx)
 
@@ -2190,11 +2248,11 @@ def compute_REML_candidate_GSMM(
                     family,
                     mus,
                     y,
-                    Xs,
-                    coef,
+                    Xs_rp,
+                    coef_rp,
                     coef_split_idx,
-                    S_emb,
-                    None,
+                    S_emb_rp,
+                    S_norm,
                     None,
                     None,
                     None,
@@ -2211,13 +2269,19 @@ def compute_REML_candidate_GSMM(
                 )
             )
 
-            V = LV.T @ LV
-            nH = -1 * H
-
         # Remaining computations are shared for GAMMLSS and GSMM
 
+        # Undo repara
+        if Q_emb is not None:
+            coef = Q_emb @ coef
+            H = Q_emb @ H @ Q_emb.T
+            LV = LV @ Q_emb.T
+
+        V = LV.T @ LV  # inverse of hessian of penalized likelihood
+        nH = -1 * H  # negative hessian of likelihood
+
         # Compute reml
-        reml = REML(c_llk, nH, coef, 1, penalties, keep)[0, 0]
+        reml = REML(c_llk, nH, coef, 1, penalties, keep, Q_emb)[0, 0]
 
         # Compute edf
         lgdetDs = []
@@ -2233,7 +2297,15 @@ def compute_REML_candidate_GSMM(
             lgdetDs.append(lgdetD)
 
         total_edf, _, _ = calculate_edf(
-            None, None, LV, penalties, lgdetDs, n_coef, n_c, None, S_emb
+            None,
+            None,
+            LV,
+            penalties,
+            lgdetDs,
+            n_coef - (len(drop) if drop is not None else 0),
+            n_c,
+            None,
+            S_emb,
         )
 
         if origNH is not None:
@@ -2260,6 +2332,7 @@ def REML(
     scale: float,
     penalties: list[LambdaTerm],
     keep: np.typing.NDArray[np.int_] | None = None,
+    Q_emb: scp.sparse.csc_array | None = None,
 ) -> float | np.ndarray:
     """
     Based on Wood (2011). Exact REML for Gaussian GAM, Laplace approximate (Wood, 2016) for
@@ -2291,17 +2364,26 @@ def REML(
         log-likelihood. Can also be set to ``None`` (default) in which case all coefficients are
         treated as identifiable.
     :type keep: np.typing.NDArray[np.int_]|None, optional
+    :param Q_emb: Optional matric that re-parameterized the final model (see ``Fit_info.Q_emb``).
+        Indices in ``keep`` were determined for that reparameterization. Defaults to None
+    :type Q_emb: scp.sparse.csc_array | None, optional
     :return: (Approximate) REML score
     :rtype: float|np.ndarray
     """
+    n_coef = coef.shape[0]
 
     # Compute S_\\lambda before any re-parameterization
-    S_emb, _, _, _ = compute_S_emb_pinv_det(len(coef), penalties, "svd")
+    if len(penalties) > 0:
+        S_emb, _, _, _ = compute_S_emb_pinv_det(n_coef, penalties, "svd")
 
-    # Re-parameterize as shown in Wood (2011) to enable stable computation of log(|S_\\lambda|+)
-    Sj_reps, _, _, _, S_reps, SJ_term_idx, S_idx, S_coefs, Q_reps, Mp = reparam(
-        None, penalties, None, option=4
-    )
+        # Re-parameterize as shown in Wood (2011) to enable stable computation of log(|S_\\lambda|+)
+        Sj_reps, _, _, _, S_reps, SJ_term_idx, S_idx, S_coefs, Q_reps, Mp = reparam(
+            None, penalties, None, option=4
+        )
+    else:
+        S_emb = scp.sparse.csc_array(([], ([], [])), shape=(n_coef, n_coef))
+        S_reps = []
+        Mp = n_coef
 
     # if not X is None:
     # S_emb = None
@@ -2362,10 +2444,19 @@ def REML(
     # fitting (based on S_\\lambda before re-parameterization).
     H_pen = nH + S_emb / scale
 
-    # Drop unidentifiable parameters
+    # Indices in keep might refer to model under repara
+    if Q_emb is not None:
+        H_pen = Q_emb.T @ H_pen @ Q_emb
+
+        if isinstance(H_pen, np.ndarray) is False:
+            H_pen = H_pen.tocsc()
+            H_pen.sort_indices()
+
+    # Drop unidentifiable parameters. **Note**: these also lower dimension of penalty Kernel (Mp)
     if keep is not None:
         H_pen = H_pen[:, keep]
         H_pen = H_pen[keep, :]
+        Mp -= n_coef - len(keep)
 
     Sdiag = np.power(np.abs(H_pen.diagonal()), 0.5)
     PI = scp.sparse.diags(1 / Sdiag, format="csc")
@@ -2546,7 +2637,8 @@ def estimateVp(
         obtained from the QR. This takes substantially longer. If this is set to ``'qEFS'``, then
         the coefficients are estimated via quasi netwon and the smoothing penalties are estimated
         from the quasi newton approximation to the hessian. This only requieres first derviative
-        information. Defaults to "Chol".
+        information. Defaults to "Chol" but might be replaced with "QR" for GAMMs if any
+        coefficients were dropped during model fitting.
     :type method: str,optional
     :param Vp_fidiff: Whether to rely on a finite difference approximation to compute
         :math:`\\mathbf{V}^{\\boldsymbol{\\rho}}` or on a PQL approximation. The latter is exact for
@@ -2611,6 +2703,11 @@ def estimateVp(
         orig_scale = family.scale
         if family.twopar:
             _, orig_scale = model.get_pars()
+
+        if model.info.dropped is not None and method == "Chol":
+            # GAMMs must check unidentifiable coefficients at every fit if there
+            # were dropped coefficients.
+            method = "QR"
     else:
         if isinstance(family, GAMLSSFamily):
             y = model.get_ys()
@@ -2669,6 +2766,8 @@ def estimateVp(
                         bfgs_options=bfgs_options,
                         keep_drop=keep_drop,
                         sparse=model._uses_sparse_matrices,
+                        Q_emb=model.info.Q_emb,
+                        Qs=model.info.Qs,
                     )
 
                 return -reml
@@ -2921,6 +3020,8 @@ def estimateVp(
                     repeat(origNH),
                     repeat(keep_drop),
                     repeat(model._uses_sparse_matrices),
+                    repeat(model.info.Q_emb),
+                    repeat(model.info.Qs),
                 )
                 with mp.Pool(processes=n_c) as pool:
                     (
@@ -2982,6 +3083,8 @@ def estimateVp(
                         bfgs_options=bfgs_options,
                         keep_drop=keep_drop,
                         sparse=model._uses_sparse_matrices,
+                        Q_emb=model.info.Q_emb,
+                        Qs=model.info.Qs,
                     )
                 except:  # noqa: E722
                     warnings.warn(
@@ -3301,6 +3404,14 @@ def compute_Vp_WPS(
 
     Vp = np.zeros((len(penalties), len(penalties)))
 
+    # Collect start indices. **Note**: shared penalties can cover several!
+    # Collect in sets to allow for easy union comparison to determine if two penalties
+    # overlap
+    pen_blocks = [
+        set(pen.start_indices) if isinstance(pen.S_Js, list) else {pen.start_index}
+        for pen in penalties
+    ]
+
     # Now can accumulate hessian of reml with respect to log(lambda)
     for peni in range(len(penalties)):
 
@@ -3335,15 +3446,18 @@ def compute_Vp_WPS(
                     @ coef
                 )
 
-            # Now derivative of the log-determinant of S_emb. Only defined if peni==penj or
-            # both are in the same group
+            # Now derivative of the log-determinant of S_emb. Only applicable if peni==penj or
+            # both penalties are in same block. **Note** for shared penalties start indices alone
+            # cannot be compared since there might be gaps between shared penalties and peni might
+            # only overlap with a later block.
             t3 = 0
-            if gamma or (penalties[peni].start_index == penalties[penj].start_index):
+            # Union check to see if peni and penj share at least one start idx
+            if gamma or len(pen_blocks[peni] & pen_blocks[penj]) > 0:
+                # S_inv_rp and S_J_emb already contain all rep_sj repetitions of a penalty
                 t3 = (
                     -1
                     * penalties[peni].lam
                     * penalties[penj].lam
-                    * penalties[peni].rep_sj
                     * (
                         S_inv_rp
                         @ Sj_reps[penj].S_J_emb
@@ -3354,9 +3468,7 @@ def compute_Vp_WPS(
 
                 if gamma:
                     t3 += (
-                        penalties[peni].lam
-                        * penalties[peni].rep_sj
-                        * (S_inv_rp @ Sj_reps[peni].S_J_emb).trace()
+                        penalties[peni].lam * (S_inv_rp @ Sj_reps[peni].S_J_emb).trace()
                     )
 
                 t3 = 0.5 * t3
@@ -3431,6 +3543,7 @@ def compute_Vb_corr_WPS(
     coef: np.ndarray,
     scale: float = 1,
     drop: np.typing.NDArray[np.int_] | None = None,
+    Q_emb: scp.sparse.csc_array | None = None,
 ) -> tuple[np.ndarray, np.ndarray | float]:
     """Computes both correction terms for ``Vb`` or :math:`\\mathbf{V}_{\\boldsymbol{\\beta}}`,
     which is the co-variance matrix for the conditional posterior of :math:`\\boldsymbol{\\beta}`
@@ -3471,17 +3584,37 @@ def compute_Vb_corr_WPS(
         Coefficients in this list (i.e., not identifiable) are dropped from the negative hessian of
         the penalized log-likelihood. Can also be set to ``None`` (default) in which case all
         coefficients are treated as identifiable.
+    :type drop: np.typing.NDArray[np.int_] | None, optional
+    :param Q_emb: Optional matric that re-parameterized the final model (see ``Fit_info.Q_emb``).
+        Indices in ``keep_drop`` were determined for that reparameterization. ``Vcc`` is computed
+        in this reparameterization but the latter is reverted before returning. Defaults to None
+    :type Q_emb: scp.sparse.csc_array | None, optional
     :raises ArithmeticError: Will throw an error when the negative Hessian of the penalized
         likelihood is ill-scaled so that a Cholesky decomposition fails.
     :return: A tuple containing: ``Vc`` and ``Vcc``. ``Vbr.T@Vbr*scale`` + ``Vc`` + ``Vcc`` is
         then approximately the correction devised by WPS (2016). ``Vcc`` can simply be zero if
-        the negative penalized Hessian is not positive definite when coefficients have been dropped
+        the negative penalized Hessian (excluding dropped coefficients) is not positive
+        definite.
     :rtype: tuple[np.ndarray, np.ndarray | float]
     """
 
     # Get (unscaled) negative Hessian of the penalized likelihood.
     # For a GAMM, this will thus be X.T@W@X + S_emb - since H = (X.T@W@X)\\phi
     nH = (-1 * H) * scale + S_emb
+
+    # Indices in drop might refer to model under repara
+    if Q_emb is not None:
+        nH = Q_emb.T @ nH @ Q_emb
+
+        if isinstance(nH, np.ndarray) is False:
+            nH = nH.tocsc()
+            nH.sort_indices()
+
+    # Dropped coefficients are fixed at zero so we have to compute Vcc on reduced model space
+    keep = list(range(nH.shape[1]))
+    if drop is not None:
+        keep = [cidx for cidx in range(nH.shape[1]) if cidx not in drop]
+        nH = nH[keep, :][:, keep]
 
     # We need un-pivoted transpose of cholesky of this, but can pre-condition
     Sdiag = np.power(np.abs(nH.diagonal()), 0.5)
@@ -3496,9 +3629,9 @@ def compute_Vb_corr_WPS(
 
     # Vbr.T@Vbr = nH^{-1} - Vbr is in principle available in model.lvi or model.lvi after fitting,
     # but we need Rinv anyway so we can form it from Rinv. The exception is if we have
-    # parameters dropped. Then we need to use Vbr which is padded with zeroes!
+    # parameters dropped. Then we need to use Vbr which had columns/rows zeroed (under repara)
     if drop is not None:
-        V = Vbr.T @ Vbr * scale
+        V = Vbr.T @ Vbr
 
         # Still need Rinv - if negative penalized hessian is sufficiently conditioned.
         if code == 0:
@@ -3520,8 +3653,7 @@ def compute_Vb_corr_WPS(
     Vcr = Vr @ dBetadRhos.T
     Vc = Vcr.T @ Vcr
 
-    # If penalized hessian is not invertible we have to return here, for example in case of
-    # dropped coef.
+    # If penalized hessian is not invertible we have to return here.
     if code != 0:
         return Vc, 0.0
 
@@ -3532,8 +3664,12 @@ def compute_Vb_corr_WPS(
     dRdRhos = []
 
     for pen in penalties:
+        # Must check keep here as well
+        S_J_emb = pen.S_J_emb
+        if Q_emb is not None:
+            S_J_emb = (Q_emb.T @ S_J_emb @ Q_emb).tocsc()
 
-        A = pen.lam * pen.S_J_emb.toarray()
+        A = pen.lam * S_J_emb[keep, :][:, keep].toarray()
         dRdRho = dChol.dChol(R, A)
 
         # Now inverse computations (see sup. materials D in WPS, 2016)
@@ -3552,7 +3688,17 @@ def compute_Vb_corr_WPS(
         )  # Must make sure this is Fortran array order, as expected by dChol.computeV2
 
     # Now final sum
-    Vcc = dChol.computeV2(Vpr, dRdRhos, Vc.shape[1])
+    Vcc = dChol.computeV2(Vpr, dRdRhos, nH.shape[1])
+
+    # Pad new Vcc in case of drop again:
+    if drop is not None:
+        VccE = np.zeros((len(coef), len(coef)))
+        VccE[np.ix_(keep, keep)] = Vcc
+        Vcc = VccE
+
+    # And undo repara
+    if Q_emb is not None:
+        Vcc = Q_emb @ Vcc @ Q_emb.T
 
     # Done, don't forget to scale Vcc since nH was unscaled!
     return Vc, scale * Vcc
@@ -3911,7 +4057,8 @@ def correct_VB(
         obtained from the QR. This takes substantially longer. If this is set to ``'qEFS'``, then
         the coefficients are estimated via quasi netwon and the smoothing penalties are estimated
         from the quasi newton approximation to the hessian. This only requieres first derviative
-        information. Defaults to "Chol".
+        information. Defaults to "Chol" but might be replaced with "QR" for GAMMs if any
+        coefficients were dropped during model fitting.
     :type method: str,optional
     :param only_expected_edf: Whether to compute edf. by explicitly forming covariance matrix
         (``only_expected_edf=False``) or not. The latter is much more efficient for sparse models at
@@ -4007,6 +4154,11 @@ def correct_VB(
         orig_scale = family.scale
         if family.twopar:
             _, orig_scale = model.get_pars()
+
+        if model.info.dropped is not None and method == "Chol":
+            # GAMMs must check unidentifiable coefficients at every fit if there
+            # were dropped coefficients.
+            method = "QR"
     else:
         if isinstance(family, GAMLSSFamily):
             y = model.get_ys()
@@ -4089,6 +4241,7 @@ def correct_VB(
                         model.overall_penalties,
                         model.coef,
                         drop=model.info.dropped,
+                        Q_emb=model.info.Q_emb,
                     )
             else:
                 # Only compute first correction term
@@ -4305,6 +4458,8 @@ def correct_VB(
                         repeat(origNH),
                         repeat(keep_drop),
                         repeat(model._uses_sparse_matrices),
+                        repeat(model.info.Q_emb),
+                        repeat(model.info.Qs),
                     )
                     with mp.Pool(processes=n_c) as pool:
                         (
@@ -4383,6 +4538,8 @@ def correct_VB(
                             bfgs_options=bfgs_options,
                             keep_drop=keep_drop,
                             sparse=model._uses_sparse_matrices,
+                            Q_emb=model.info.Q_emb,
+                            Qs=model.info.Qs,
                         )
                     except:  # noqa: E722
                         warnings.warn(
@@ -4750,7 +4907,12 @@ def correct_VB(
                 ]
             )
 
-            Vdrop = V[keep, :]
+            # Indices in keep might refer model in repara
+            Vdrop = V
+            if model.info.Q_emb is not None:
+                Vdrop = model.info.Q_emb.T @ V @ model.info.Q_emb
+
+            Vdrop = Vdrop[keep, :]
             Vdrop = Vdrop[:, keep]
 
             LVdrop, code2 = cpp_chol(Vdrop)
@@ -4777,6 +4939,10 @@ def correct_VB(
                     LV = scp.sparse.csc_array(
                         (LVdat, (LVrow, LVcol)), shape=model.hessian.shape
                     )
+
+                # And undo repara
+                if model.info.Q_emb is not None:
+                    LV = model.info.Q_emb @ LV
 
         # V is definitely not PD..
         if code2 != 0:

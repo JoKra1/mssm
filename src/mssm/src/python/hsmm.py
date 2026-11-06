@@ -452,6 +452,7 @@ def _compute_series_probs(
     hmp_fast: bool = False,
     hmp_d_offset: bool = False,
     flats: list[int] | None = None,
+    hmp_location: np.ndarray | None = None,
 ) -> tuple[
     np.ndarray,
     np.ndarray,
@@ -542,9 +543,17 @@ def _compute_series_probs(
         hsmm algorithms (False) or for use with the fast hmp code for estimation (True). Only
         has an effect when ``is_hmp is True``. Defaults to False
     :type hmp_fast: bool, optional
+    :param hmp_d_offset: Whether to compute stage durations based on event peak to peak time
+        (minus the ``location`` as in HMP) or as the time between the offset of the previous event
+        and the onset of the next event (``hmp_d_offset=False``). Only has an effect when
+        ``is_hmp is True`` and ``hmp_fast is False``. Defaults to False
+    :type hmp_d_offset: bool, optional
     :param flats: For a hmp model a list with the indices of flats present for this trial.
         Defaults to None
     :type flats: list[int], optional
+    :param hmp_location: Array holding locations (one per stage, in samples) of a hmp model, used
+        to compute the stage durations if ``hmp_d_offset is True``. Defaults to None
+    :type hmp_location: np.ndarray, optional
     :raises ValueError: _description_
     :return: Returns ``y_mat`` (a (n_T,M) array holding the observations from all signals),
         ``mus`` (a (n_T,M,n_S) array holding the state-specific expected value of each observation
@@ -959,16 +968,14 @@ def _compute_series_probs(
                     lpd.append(lpdd)
             else:
                 if hmp_d_offset and is_hmp:
-                    shift = (
-                        event_width // 2
-                        if (f_idx in [flats[0], flats[-1]])
-                        else event_width
+                    d_shift = d_val + _hmp_d_shift(
+                        f_idx, flats, event_width, hmp_location
                     )
-                    d_shift = d_val + shift
                     lpd = jdFam.lp(d_shift, *musdj)
+                    # Stage durations shorter than location are not possible
+                    lpd[d_shift < 0] = -np.inf
                 else:
-                    d_shift = d_val
-                lpd = jdFam.lp(d_shift, *musdj)
+                    lpd = jdFam.lp(d_val, *musdj)
 
             mus_d.append(musdj)
 
@@ -997,8 +1004,10 @@ def _compute_series_probs(
         else:
             ds[:, j] = np.exp(lpd.flatten())
 
-            # Fix nans/infs before normalizing
-            if hmp_fast and np.any(np.isnan(ds[:, j]) | np.isinf(ds[:, j])):
+            # Fix nans/infs before normalizing.
+            if (hmp_fast or (hmp_d_offset and is_hmp)) and np.any(
+                np.isnan(ds[:, j]) | np.isinf(ds[:, j])
+            ):
                 # print("problem with ds",j)
                 ds[(np.isnan(ds[:, j]) | np.isinf(ds[:, j])), j] = 0
 
@@ -1338,6 +1347,122 @@ def _sample_series_emissions(
     return emissions
 
 
+def _hmp_stage_locations(stages: list[int], hmp_location: np.ndarray) -> list[int]:
+    """Internal function to extract the HMP location of every stage present (determined by what is
+    passed in ``stages``) for a particular series.
+
+    :param stages: Indices of the stages (not flats as for the "slow" HMP code) present for the
+        series.
+    :type stages: list[int]
+    :param hmp_location: Array holding locations (one per stage) for a HMP-like model
+    :type hmp_location: np.ndarray
+    :return: The location of every stage in ``stages``.
+    :rtype: list[int]
+    """
+    locations = [int(hmp_location[stage]) for stage in stages]
+    locations[0] = int(hmp_location[0])
+    locations[-1] = int(hmp_location[-1])
+
+    return locations
+
+
+def _hmp_d_shift(
+    f_idx: int,
+    flats: list[int],
+    event_width: int,
+    hmp_location: np.ndarray,
+) -> int:
+    """Internal function to match duration distribution of a ``flat`` state of a HMP-like model
+    to the ``stage`` duration distributions defined by HMP.
+
+    :param f_idx: Index of the **flat** state (among all ``n_S`` states defined by the
+        transition matrix of a "slow" HMP model).
+    :type f_idx: int
+    :param flats: List with indices of flats present for this series
+    :type flats: list[int]
+    :param event_width: HMP pattern width (in samples)
+    :type event_width: int
+    :param hmp_location: Array holding locations (one per stage) for a HMP-like model.
+    :type hmp_location: np.ndarray
+    :return: A shift that needs to be added to the durations of the flat states to achieve the
+        desired match.
+    :rtype: int
+    """
+    if f_idx == flats[0]:
+        # E.g., first flat lasts d samples -> stage lasts d + event_width // 2 - location to
+        # account for shift of pmf. Difference is shift
+        shift = event_width // 2 - int(hmp_location[0])
+    elif f_idx == flats[-1]:
+        shift = (event_width - 1) // 2 - int(hmp_location[-1])
+    else:
+        shift = event_width - int(hmp_location[f_idx // 2])
+
+    return shift
+
+
+def _shift_hmp_pmf(
+    ds: np.ndarray,
+    location: int,
+    n_T: int,
+    d_grad: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """Internal function to shift the duration pmf of a stage for fast_hmp models and
+    a time-series with ``n_T`` observations.
+
+    Optionally returns gradient of the shifted pmf with respect to the coefficients involved in
+    the model of the former.
+
+    :param ds: Array of shape ``(D - 1,)`` holding the pmf (not shifted) of a stage duration
+        distribution.
+    :type ds: np.ndarray
+    :param location: Location of the stage (in samples).
+    :type location: int
+    :param n_T: Time-points/number of observations in the series
+    :type n_T: int
+    :param d_grad: Optional array of shape ``(D - 1, n_coef)``, holding the gradient of ``ds``
+        with respect to the coefficients involved in the model of the former. Defaults to None
+    :type d_grad: np.ndarray | None, optional
+    :return: Array (of shape ``(n_T,)``) holding shifted pmf and optionally its gradient
+        (another array of shape  ``(n_T, n_coef)`` or None).
+    :rtype: tuple[np.ndarray, np.ndarray | None]
+    """
+
+    location = int(location)
+    pmf = np.zeros(n_T, dtype=np.float64)
+    pmf_grad = (
+        None if d_grad is None else np.zeros((n_T, d_grad.shape[1]), dtype=np.float64)
+    )
+
+    # Support of stage duration variable after correcting for location (stage has duration
+    # loc + x where x has pmf ds)
+    n_x = ds.shape[0] - location
+    # Number of durations that end up in shifted pmf. Does not have to match n_T-location because
+    # the maximum state duration can be lower than that.
+    n_ret = min(n_T - location, n_x)
+
+    if n_x <= 0 or n_ret <= 0:
+        return pmf, pmf_grad
+
+    norm = np.sum(ds[:n_x])
+
+    # Leave the pmf at zero if all ds included would be zero
+    if not np.isfinite(norm) or norm <= 0:
+        return pmf, pmf_grad
+
+    # Shift and normalize against sum over full duration support
+    # even when taking fewer values (because series is shorter)
+    pmf[location : location + n_ret] = ds[:n_ret] / norm  # noqa: E203
+
+    if d_grad is not None:
+        # Grad of shifted pmf (computed as for ``ds`` in series_grad)
+        normed_sum = np.sum(d_grad[:n_x, :], axis=0)
+        pmf_grad[location : location + n_ret, :] = (  # noqa: E203
+            d_grad[:n_ret, :] * norm - ds[:n_ret, None] * normed_sum[None, :]
+        ) / np.power(norm, 2)
+
+    return pmf, pmf_grad
+
+
 def _compute_dur_res_series(
     states: np.ndarray,
     n_S: int,
@@ -1345,6 +1470,7 @@ def _compute_dur_res_series(
     d_fams: list[GAMLSSFamily | None],
     starts_with_first: bool,
     tvdtpi: bool,
+    d_shift: list[int] | None = None,
 ) -> list[list[float] | float]:
     """Computes residual of a state duration agains the model for the stage duration.
 
@@ -1364,10 +1490,17 @@ def _compute_dur_res_series(
     :param tvdtpi: Whether the hsmm has time-varying models for the state duration,
         state transition, and initial state distributions. Defaults to False
     :type tvdtpi: bool, optional
+    :param d_shift: Optional list holding per-state shifts that need to be added to the durations of
+        the states to get correct stage durations of a HMP-like model when ``hmp_d_offset=True``,
+        see :func:`_hmp_d_shift`). Defaults to None
+    :type d_shift: list[int] | None, optional
     :return: A list with the residuals of the durations per state. If a state has no duration model,
         then a ``np.nan`` is included at that index.
     :rtype: list[list[float]|np.nan]
     """
+    if d_shift is None:
+        d_shift = [0 for _ in range(n_S)]
+
     res = [[] for _ in range(n_S)]
     d = 0
     j = states[0]
@@ -1381,13 +1514,14 @@ def _compute_dur_res_series(
             # Identify correct duration distribution
             dj_idx = j if (transitions == 0 or starts_with_first is True) else j + n_S
 
-            # Now compute residual of duration under model
+            # Now compute residual of duration under model. With time-varying models, as in llk,
+            # need. to index t-d to match state onset
             if mus_d[dj_idx] is None:
                 res[j] = None
             else:
                 d_res = d_fams[(dj_idx)].get_resid(
-                    np.array([d]).reshape(-1, 1), *mus_d[dj_idx]
-                )[t if tvdtpi else 0, 0]
+                    np.array([d + d_shift[j]]).reshape(-1, 1), *mus_d[dj_idx]
+                )[t - d if tvdtpi else 0, 0]
 
                 # And collect
                 res[j].append(d_res)
@@ -1397,14 +1531,14 @@ def _compute_dur_res_series(
         t += 1
 
     # Catch dur from last state
-    dj_idx = j if (starts_with_first is True) else j + n_S
+    dj_idx = j if (transitions == 0 or starts_with_first is True) else j + n_S
 
     if mus_d[dj_idx] is None:
         res[j] = None
     else:
         d_res = d_fams[(dj_idx)].get_resid(
-            np.array([d]).reshape(-1, 1), *mus_d[dj_idx]
-        )[t - 1 if tvdtpi else 0, 0]
+            np.array([d + d_shift[j]]).reshape(-1, 1), *mus_d[dj_idx]
+        )[t - d if tvdtpi else 0, 0]
 
         res[j].append(d_res)
 
@@ -1461,7 +1595,8 @@ class HSMMFamily(GSMMFamily):
         specific versions. If this is set to ``None``, it will be set to ``sid`` automatically.
         ``sid``.
     :type tid: np.ndarray | None
-    :param D: Max duration a state can take on (**in samples**)
+    :param D: Max duration a state can take on (**in samples**). To match HMP (with
+        ``fast_hmp=True``) set this to the number of samples in the longest series plus one.
     :type D: int
     :param M: Number of signals recorded if the HSMM is multivariate.
     :type M: int
@@ -1523,25 +1658,36 @@ class HSMMFamily(GSMMFamily):
     :param tvdtpi: Whether the latent process model should be time-varying or not. If set to True,
         then formulas for the state transition probabilities, initial state transition probabilities
         , and state durations must be specified for data having the same number of rows as the data
-        used by the formulas of the observation models. Defaults to False
+        used by the formulas of the observation models. Not supported for HMP-like models. Defaults
+        to False
     :type tvdtpi: bool, optional
-    :param hmp_location: Sample location array for a HMP-like model. Typically extracted from
-        the HMP toolbox by Weindel et al. Defaults to None
+    :param hmp_location: Array holding locations (one per stage, **in samples**) for a HMP-like
+        model. The location of a stage puts a hard minimum on the time between two events: a stage
+        with location ``l`` lasts ``l + x`` samples, where ``x`` follows the duration distribution
+        of the stage. The locations are used by the fast hmp code and, if ``hmp_d_offset is True``,
+        to compute the stage durations for HMP models with ``fast_hmp = False``. **Note**, models
+        of the HMP toolbox by Weindel et al. work with locations in ms, so these have to
+        be converted first. Defaults to None, in which case the location of all stages between two
+        events is set to the width ``w`` of the event pattern. The first stage gets ``w // 2`` and
+        the last stage ``(w - 1) // 2`` (the number of samples of the before and after the pattern
+        peaks), so that patterns remain within a series.
     :type hmp_location: np.ndarray, optional
     :param fast_hmp: Whether to use fast hmp code. This requires the model to be strictly serial
         (left-to-right). However, skipped states for some series are still possible (i.e., group
         models). Defaults to False
     :type fast_hmp: bool, optional
     :param hmp_d_offset: Whether to compute stage durations based on event peak to peak time
-        (as in HMP) or as the time between the offset of the previous event and the onset of the
-        next event (``hmp_d_offset=False``). Setting this to None means it is set to True if
-        ``fast_hmp is True`` (because then the non fitting related functions produce the correct
-        output despite the difference in fitting algorithms used) and otherwise to False. Defaults
-        to None.
+        (minus the ``location`` as in HMP) or as the time between the offset of the previous event
+        and the onset of the next event (``hmp_d_offset=False``). With the default locations
+        (see ``hmp_location``) ``hmp_d_offset=True`` and ``hmp_d_offset=False`` give the same
+        duration distributions. With the default locations of HMP (zero for the first and last
+        stage) the durations of the first and last stage differ between both options. Setting this
+        to None means it is set to True if ``fast_hmp is True``. Defaults to None.
     :type hmp_d_offset: bool | None, optional
     :raises ValueError: if either ``T`` or ``pi`` have a value other than None but not both.
     :raises ValueError: if ``starts_with_first is False`` and the model is HMP-like (i.e.,
         ``event_template is not None``).
+    :raises ValueError: if ``tvdtpi is True`` and ``event_template is not None``).
     """
 
     def __init__(
@@ -1617,7 +1763,7 @@ class HSMMFamily(GSMMFamily):
         self.n_cores_llk = n_cores_llk
         if n_cores_llk is None:
             self.n_cores_llk = n_cores
-        self._ar_template = None
+        self._ar_norm_ratio = 1.0
         self.T_index = T_index
         self.pi_index = pi_index
 
@@ -1645,6 +1791,11 @@ class HSMMFamily(GSMMFamily):
                 ("hmp like models are not supported with ``starts_with_first==False``!")
             )
 
+        if tvdtpi and self.is_hmp:
+            raise ValueError(
+                ("hmp like models are not supported with ``tvdtpi==True``!")
+            )
+
         for state_obs in obs_fams:
             if isinstance(state_obs[0], MultiGauss):
                 self.extra_coef += state_obs[0].extra_coef
@@ -1654,6 +1805,13 @@ class HSMMFamily(GSMMFamily):
                 self.hmp_d_offset = True
             else:
                 self.hmp_d_offset = False
+
+        # Default locations for a hmp model
+        if self.is_hmp and self.hmp_location is None:
+            event_width = len(event_template)
+            self.hmp_location = np.zeros((n_S - 1) // 2 + 1, dtype=int) + event_width
+            self.hmp_location[0] = event_width // 2
+            self.hmp_location[-1] = (event_width - 1) // 2
 
         # Check for time-varying duration, state transition, initial state models
         self.tvdtpi = tvdtpi
@@ -1703,25 +1861,33 @@ class HSMMFamily(GSMMFamily):
             if tid is None:
                 tid = sid
 
+            # Sum of squares of pattern before adjusting for ar1 model
+            pattern_norm = np.sum(normed_template**2)
+
             if Lrhoi is not None:
                 rho = np.sqrt(-1 * (np.power(1 / Lrhoi[1, 1], 2) - 1))
 
                 d0 = 1 / np.sqrt(1 - np.power(rho, 2))  # weight current mean
                 d1 = -rho / np.sqrt(1 - np.power(rho, 2))  # weight previous mean
 
-                # Adjust pattern for ar1 model
-                ar_template = np.zeros(normed_template.shape[0] + 1)
+                # Adjust pattern for ar1 model. Leading zero ensures that cross_cor[t] belongs to
+                # event peak at t for odd widths as well
+                ar_template = np.zeros(normed_template.shape[0] + 2)
 
                 for pidx in range(normed_template.shape[0]):
                     if pidx > 0:
-                        ar_template[pidx] = (
+                        ar_template[pidx + 1] = (
                             d0 * normed_template[pidx] + d1 * normed_template[pidx - 1]
                         )
                     else:
-                        ar_template[pidx] = d0 * normed_template[pidx]
+                        ar_template[pidx + 1] = d0 * normed_template[pidx]
 
                 ar_template[-1] = d1 * normed_template[-1]
                 normed_template = ar_template
+
+            # Scaling of gains depends on sum of squares of pattern. Need to correct for ar1 model
+            # so that scale continues to imply the same residual variance
+            self._ar_norm_ratio = np.sum(normed_template**2) / pattern_norm
 
             # Normalize template
             normed_template /= np.sum(normed_template**2)
@@ -1930,6 +2096,7 @@ class HSMMFamily(GSMMFamily):
             False,
             self.hmp_d_offset,
             flats,
+            self.hmp_location,
         )
         bs[(np.isnan(bs) | np.isinf(bs))] = -np.inf if log else 0
         ds[(np.isnan(ds) | np.isinf(ds))] = -np.inf if log else 0
@@ -2428,6 +2595,7 @@ class HSMMFamily(GSMMFamily):
             False,
             self.hmp_d_offset,
             flats,
+            self.hmp_location,
         )
 
         if fix_T_pi:
@@ -2464,14 +2632,15 @@ class HSMMFamily(GSMMFamily):
             t = 0
             while t < n_T:
 
-                if dur < 0:
-                    # Sample next state and dur
+                if dur <= 0:
+                    # Sample next state and dur. For time-varying models T belongs to last
+                    # time-point of previous state (when transition happened)
                     if is_hmp and state == (n_S - 1):
                         dur += 1  # Simply keep extending last state's duration
                     else:
                         state = np_gen.choice(
                             state_vals,
-                            p=Ts[state, :, t] if tvdtpi else Ts[state, :],
+                            p=Ts[state, :, t - 1] if tvdtpi else Ts[state, :],
                         )
 
                         dur = np_gen.choice(
@@ -2489,8 +2658,9 @@ class HSMMFamily(GSMMFamily):
                             ),
                         )
 
-                # Collect emission and state predictions
-                emission_samples[t, :, sample] = emissions[t, state, :, sample]
+                # Collect emission and state predictions - must add to catch bleed over from
+                # previous bump
+                emission_samples[t, :, sample] += emissions[t, state, :, sample]
                 state_samples[t, sample] = state
 
                 # Add hmp bumps
@@ -2498,7 +2668,7 @@ class HSMMFamily(GSMMFamily):
                     for m in range(M):
 
                         # Expected bump for every time-point given dur d in bump
-                        d = (event_width - 1) - dur
+                        d = event_width - dur
 
                         Ebump = event_template[d] * mus[t, m, state]
 
@@ -2808,6 +2978,7 @@ class HSMMFamily(GSMMFamily):
             False,
             self.hmp_d_offset,
             flats,
+            self.hmp_location,
         )
 
         if fix_T_pi:
@@ -3095,6 +3266,7 @@ class HSMMFamily(GSMMFamily):
             self.fast_hmp,
             False if self.fast_hmp else self.hmp_d_offset,
             flats,
+            self.hmp_location,
         )
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
@@ -3123,6 +3295,7 @@ class HSMMFamily(GSMMFamily):
             n_events = (n_S - 1) // 2
             n_flats = n_events + 1
             gains = np.zeros((n_T, n_events), dtype=np.float64)
+            gain_scale = scale * self._ar_norm_ratio
 
             for i in range(cross_corr.shape[1]):
                 # computes the gains, i.e. the log of the likelihood ratio between
@@ -3130,31 +3303,30 @@ class HSMMFamily(GSMMFamily):
                 gains = (
                     gains
                     + cross_corr[:, [i]] * mus[:, i, :]
-                    - mus[:, i, :] ** 2 / scale
+                    - mus[:, i, :] ** 2 / gain_scale
                 )
             gains = np.exp(gains)
 
-            # pmf for each flat with appropriate zeroing to prevent overlap between events
+            # pmf for each stage, shifted by its location to prevent overlap between events
             pmf = np.zeros([n_T, n_flats], dtype=np.float64)
-            end = min(n_T, D - 1)
 
             # Figure out which transitions are actually happening on this trial.
             # Needs translation from bump/flat world to event/stage world.
             n_events, events, stages, bumps, flats = self._group_hmp_events(series)
 
-            # Handle first stage here, rest in loop over transitions below
-            pmf[:end, stages[0]] = ds[:end, stages[0]]
-            # Min duration must account for bleed over pattern and 1 sample of flat
+            locations = _hmp_stage_locations(stages, self.hmp_location)
+            for stage, location in zip(stages, locations):
+                pmf[:, stage], _ = _shift_hmp_pmf(ds[:, stage], location, n_T)
+
+            # Sampled state sequences must also be valid for the explicit event states, so min
+            # duration must account for bleed over pattern and 1 sample of flat. Event peaks
+            # event_width // 2 samples after onset, so:
             pmf[: (event_width // 2 + 1), stages[0]] = 0
 
-            # Loop over transitions
-            for sti, stage in enumerate(stages[1:]):
-                pmf[:end, stage] = ds[:end, stage]
+            for stage in stages[1:-1]:
+                pmf[: (event_width + 1), stage] = 0
 
-                if sti < (n_events - 1):
-                    pmf[: (event_width + 1), stage] = 0
-                else:
-                    pmf[: (event_width // 2 + 1), stage] = 0
+            pmf[: ((event_width - 1) // 2 + 1), stages[-1]] = 0
 
             # Now modified forward pass
             forward = np.zeros((n_T, n_events), dtype=np.float64)
@@ -3209,27 +3381,16 @@ class HSMMFamily(GSMMFamily):
                         t[:peak_censor], size=None, p=event_props
                     )
 
-                # Now fill state vector
+                # Now fill state vector - each event lasts event_width samples and each stage
+                # a minimum of 1 sample
                 sidx = 0
                 for evidx in range(n_events):
-                    states[sidx : event_peaks[evidx], sample] = flats[  # noqa: E203
+                    onset = event_peaks[evidx] - event_width // 2
+                    states[sidx:onset, sample] = flats[evidx]
+                    states[onset : onset + event_width, sample] = bumps[  # noqa: E203
                         evidx
                     ]
-                    states[
-                        (
-                            event_peaks[evidx] - event_width // 2
-                        ) : event_peaks[  # noqa: E203
-                            evidx
-                        ],
-                        sample,
-                    ] = bumps[evidx]
-                    states[
-                        event_peaks[evidx] : (  # noqa: E203
-                            event_peaks[evidx] + event_width // 2 + 1
-                        ),
-                        sample,
-                    ] = bumps[evidx]
-                    sidx = event_peaks[evidx] + event_width // 2 + 1
+                    sidx = onset + event_width
 
                 # Handle last flat
                 states[sidx:, sample] = flats[-1]
@@ -3521,6 +3682,7 @@ class HSMMFamily(GSMMFamily):
             False,
             self.hmp_d_offset,
             flats,
+            self.hmp_location,
         )
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
@@ -3540,6 +3702,18 @@ class HSMMFamily(GSMMFamily):
             hmp_code = 2 if hmp_fam == "Gaussian" else 1
         else:
             hmp_code = 0
+
+        # Duration residuals of hmp models with offset need stage not flat durations
+        d_shift = None
+        if is_hmp and self.hmp_d_offset:
+            d_shift = [
+                (
+                    _hmp_d_shift(j, flats, event_width, self.hmp_location)
+                    if j % 2 == 0
+                    else 0
+                )
+                for j in range(n_S)
+            ]
 
         # Now compute residual vector #
         if resid_type == "forward":
@@ -3599,7 +3773,7 @@ class HSMMFamily(GSMMFamily):
             )
 
             res_sep = _compute_dur_res_series(
-                viterbi[1], n_S, mus_d, d_fams, starts_with_first, tvdtpi
+                viterbi[1], n_S, mus_d, d_fams, starts_with_first, tvdtpi, d_shift
             )
 
             # Compute residual of duration MAP under model for stage durations
@@ -3637,6 +3811,7 @@ class HSMMFamily(GSMMFamily):
                     d_fams,
                     starts_with_first,
                     tvdtpi,
+                    d_shift,
                 )
 
                 # Compute residual of durations under model for stage durations
@@ -3938,6 +4113,7 @@ class HSMMFamily(GSMMFamily):
             self.fast_hmp,
             False if self.fast_hmp else self.hmp_d_offset,
             flats,
+            self.hmp_location,
         )
         if fix_T_pi:
             if isinstance(T, list) and isinstance(pi, list):
@@ -3970,6 +4146,7 @@ class HSMMFamily(GSMMFamily):
             n_events = (n_S - 1) // 2
             n_flats = n_events + 1
             gains = np.zeros((n_T, n_events), dtype=np.float64)
+            gain_scale = scale * self._ar_norm_ratio
 
             for i in range(cross_corr.shape[1]):
                 # computes the gains, i.e. the log of the likelihood ratio between
@@ -3977,26 +4154,21 @@ class HSMMFamily(GSMMFamily):
                 gains = (
                     gains
                     + cross_corr[:, [i]] * mus[:, i, :]
-                    - mus[:, i, :] ** 2 / scale
+                    - mus[:, i, :] ** 2 / gain_scale
                 )
             gains = np.exp(gains)
 
-            # pmf for each flat with appropriate zeroing to prevent overlap between events
+            # pmf for each stage, shifted by the location of the stage to prevent overlap between
+            # events
             pmf = np.zeros([n_T, n_flats], dtype=np.float64)
-            end = min(n_T, D - 1)
 
             # Figure out which transitions are actually happening on this trial.
             # Needs translation from bump/flat world to event/stage world.
             n_events, events, stages, _, _ = self._group_hmp_events(series)
 
-            # Handle first stage here, rest in loop over transitions below
-            pmf[:end, stages[0]] = ds[:end, stages[0]]
-            pmf[: self.hmp_location[stages[0]], stages[0]] = 0
-
-            # Loop over transitions
-            for stage in stages[1:]:
-                pmf[:end, stage] = ds[:end, stage]
-                pmf[: self.hmp_location[stage], stage] = 0
+            locations = _hmp_stage_locations(stages, self.hmp_location)
+            for stage, location in zip(stages, locations):
+                pmf[:, stage], _ = _shift_hmp_pmf(ds[:, stage], location, n_T)
 
             # Now modified forward pass
             forward = np.zeros((n_T, n_events), dtype=np.float64)
@@ -4765,15 +4937,14 @@ class HSMMFamily(GSMMFamily):
                         lpd.append(lpdd)
                 else:
                     if is_hmp and (self.fast_hmp is False) and self.hmp_d_offset:
-                        shift = (
-                            event_width // 2
-                            if (f_idx in [flats[0], flats[-1]])
-                            else event_width
+                        d_shift = d_val + _hmp_d_shift(
+                            f_idx, flats, event_width, self.hmp_location
                         )
-                        d_shift = d_val + shift
                     else:
                         d_shift = d_val
                     lpd = jdFam.lp(d_shift, *musdj)
+                    # Stage durations shorter than location are not possible
+                    lpd[d_shift < 0] = -np.inf
                 # lpd[np.isnan(lpd) | np.isinf(lpd)] = -np.inf
                 # print(lpd[1])
                 # print(jdFam.lp(d_val[1],musdj[0][0],musdj[1][0]))
@@ -4791,15 +4962,6 @@ class HSMMFamily(GSMMFamily):
                             )
                             d1eta.append(d1etad)
                     else:
-                        if is_hmp and (self.fast_hmp is False) and self.hmp_d_offset:
-                            shift = (
-                                event_width // 2
-                                if (f_idx in [flats[0], flats[-1]])
-                                else event_width
-                            )
-                            d_shift = d_val + shift
-                        else:
-                            d_shift = d_val
                         d1eta, _, _ = deriv_transform_mu_eta(d_shift, musdj, jdFam)
                 else:
                     if tvdtpi:
@@ -4816,15 +4978,6 @@ class HSMMFamily(GSMMFamily):
                             ]
                             d1eta.append(d1etad)
                     else:
-                        if is_hmp and (self.fast_hmp is False) and self.hmp_d_offset:
-                            shift = (
-                                event_width // 2
-                                if (f_idx in [flats[0], flats[-1]])
-                                else event_width
-                            )
-                            d_shift = d_val + shift
-                        else:
-                            d_shift = d_val
                         d1eta = [
                             jdFam.dpars(
                                 d_shift,
@@ -5226,16 +5379,19 @@ class HSMMFamily(GSMMFamily):
             n_events = (n_S - 1) // 2
             n_flats = n_events + 1
             gains = np.zeros((n_T, n_events), dtype=np.float64)
+            gain_scale = scale * self._ar_norm_ratio
 
             # Derivatives of gains with respect to coef
             for m in range(cross_corr.shape[1]):
                 # computes the gains, i.e. the log of the likelihood ratio between
                 # event present and absent.
-                m_gain = cross_corr[:, [m]] * mus[:, m, :] - mus[:, m, :] ** 2 / scale
+                m_gain = (
+                    cross_corr[:, [m]] * mus[:, m, :] - mus[:, m, :] ** 2 / gain_scale
+                )
                 gains += m_gain
 
                 # deriv of m_gain with respect to mus shape: (n_T, n_events)
-                dgdmu = cross_corr[:, [m]] - 2 * mus[:, m, :] / scale
+                dgdmu = cross_corr[:, [m]] - 2 * mus[:, m, :] / gain_scale
 
                 # Index coefficients associated with channel m
                 gidx = m_idx_grad == m
@@ -5254,38 +5410,27 @@ class HSMMFamily(GSMMFamily):
 
             # Done with emissions part
 
-            # pmf for each flat with appropriate zeroing to prevent overlap between events
-            end = min(n_T, D - 1)
-            if n_T > d_grad.shape[0]:
-                d_grad = np.concatenate(
-                    (d_grad, np.zeros((n_T - d_grad.shape[0], d_grad.shape[1]))), axis=0
-                )
-                ds = np.concatenate(
-                    (ds, np.zeros((n_T - ds.shape[0], ds.shape[1]))), axis=0
-                )
-            elif d_grad.shape[0] > end:
-                d_grad = d_grad[:end, :]
-                ds = ds[:end, :]
-
             # Figure out which transitions are actually happening on this trial.
             # Needs translation from bump/flat world to event/stage world.
             n_events, events, stages, _, _ = self._group_hmp_events(series)
 
-            # Handle first stage here, rest in loop over transitions below
-            # Get coefficients associated with pmf of stage
-            gidx = (j_idx_grad == stages[0])[b_grad.shape[1] :]  # noqa: E203
-            ds[: self.hmp_location[stages[0]], stages[0]] = 0
-            # Zero grads accordingly as well
-            d_grad[: self.hmp_location[stages[0]], gidx] = 0
+            # Shifted pmf for each stage + gradient with respect to the coef. Derivatives
+            # have to be evaluated at d - l and are zero for d < l!
+            pmf = np.zeros((n_T, n_flats), dtype=np.float64)
+            pmf_grad = np.zeros((n_T, d_grad.shape[1]), dtype=np.float64)
 
-            # Loop over transitions
-            for stage in stages[1:]:
+            locations = _hmp_stage_locations(stages, self.hmp_location)
+            for stage, location in zip(stages, locations):
 
                 # Get coefficients associated with pmf of stage
                 gidx = (j_idx_grad == stage)[b_grad.shape[1] :]  # noqa: E203
 
-                ds[: self.hmp_location[stage], stage] = 0
-                d_grad[: self.hmp_location[stage], gidx] = 0
+                pmf[:, stage], pmf_grad[:, gidx] = _shift_hmp_pmf(
+                    ds[:, stage], location, n_T, d_grad[:, gidx]
+                )
+
+            ds = pmf
+            d_grad = pmf_grad
 
             # Done with durations part
 

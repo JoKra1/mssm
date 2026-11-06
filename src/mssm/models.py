@@ -216,9 +216,9 @@ class GSMM:
     :ivar float edf1: The model estimated degrees of freedom as a float corrected for smoothness
         bias. Set by the :func:`approx_smooth_p_values` function, the first time it is called.
         Initialized with ``None``.
-    :ivar [float] term_edf: The estimated degrees of freedom per smooth term. Initialized with
+    :ivar [float] term_edf: The estimated degrees of freedom per penalty block. Initialized with
         ``None``.
-    :ivar [float] term_edf1: The estimated degrees of freedom per smooth term corrected for
+    :ivar [float] term_edf1: The estimated degrees of freedom per penalty block corrected for
         smoothness bias. Set by the :func:`approx_smooth_p_values` function, the first time it is
         called. Initialized with ``None``.
     :ivar float penalty: The total penalty applied to the model deviance after fitting as a float.
@@ -596,9 +596,15 @@ class GSMM:
                 ]
             )
 
-        # fmt: off
-        reml = REML(llk, -1 * self.hessian, self.coef, 1, self.overall_penalties, keep)[0, 0]
-        # fmt: on
+        reml = REML(
+            llk,
+            -1 * self.hessian,
+            self.coef,
+            1,
+            self.overall_penalties,
+            keep,
+            self.info.Q_emb,
+        )[0, 0]
         return reml
 
     def get_resid(self, drop_NA: bool = True, **kwargs) -> np.ndarray:
@@ -860,7 +866,11 @@ class GSMM:
         :param should_keep_drop: Only used when ``method in ["QR/Chol","LU/Chol","Direct/Chol"]``.
             If set to True, any coefficients that are dropped during fitting - are permanently
             excluded from all subsequent iterations. If set to False, this is determined anew at
-            every iteration - **costly**! Defaults to True.
+            every iteration - **costly**! **Note**, set to False if
+            ``repara=True`` because drops are then determined for the re-parameterized problem,
+            which differs for every smoothing parameter step. Indices in ``self.info.dropped``
+            then refer to the model under the re-parameterization stored in ``self.info.Q_emb``.
+            Defaults to True
         :type should_keep_drop: bool,optional
         :param gamma: Setting this to a value larger than 1 promotes more complex (less smooth)
             models. Setting this to a value smaller than 1 (but must be > 0) promotes smoother
@@ -881,10 +891,11 @@ class GSMM:
             iteration. Defaults to True
         :type repara: bool,optional
         :param extra_penalties: **Experimental**. An optional list of extra penalties to be placed
-            on the coefficients. **Important:** mssm does not (currently) support partially
-            overlapping penalties. Thus, if you do provide your own penalties they should either
-            only affect coefficients not penalized already or match (in terms of ``start_index``
-            and dimensions of ``S_J``) an existing penalty matrix. Currently, is not supported
+            on the coefficients. **Important:** mssm does not (currently) support (partially)
+            overlapping penalties. Thus, if you do provide your own penalties they need to cover
+            only the coefficients associated with an individual term in any of the formulas passed
+            to the constructor. If you need a shared penalty for multiple terms set the ``id``
+            keyword of the extra penalties. Currently, ``extra_penalties`` are not supported
             together with ``repara``, so if this argument is not None we set ``repara=False``.
             Defaults to None.
         :type extra_penalties: list[LambdaTerm] | None, optional
@@ -991,6 +1002,15 @@ class GSMM:
                 (
                     "Ignoring argument ``repara``, which is currently not supported in the "
                     "presence of ``extra_penalties``."
+                )
+            )
+            repara = False
+
+        if repara and build_mat is not None:
+            warnings.warn(
+                (
+                    "Ignoring argument ``repara``, which is currently not supported when "
+                    "``build_mat`` is used to indicate which matrices to build."
                 )
             )
             repara = False
@@ -1258,7 +1278,9 @@ class GSMM:
                     "log-likelihood is invertible."
                 )
             )
-            self.hessian -= fit_info.eps * scp.sparse.identity(H.shape[1], format="csc")
+            self.hessian -= fit_info.eps * scp.sparse.eye_array(
+                H.shape[1], format="csc"
+            )
         self.info = fit_info
 
         # Assign predictions and parameter estimates
@@ -1730,9 +1752,9 @@ class GAMMLSS(GSMM):
     :ivar float edf1: The model estimated degrees of freedom as a float corrected for smoothness
         bias. Set by the :func:`approx_smooth_p_values` function, the first time it is called.
         Initialized with ``None``.
-    :ivar [float] term_edf: The estimated degrees of freedom per smooth term. Initialized with
+    :ivar [float] term_edf: The estimated degrees of freedom per penalty block. Initialized with
         ``None``.
-    :ivar [float] term_edf1: The estimated degrees of freedom per smooth term corrected for
+    :ivar [float] term_edf1: The estimated degrees of freedom per penalty block corrected for
         smoothness bias. Set by the :func:`approx_smooth_p_values` function, the first time it
         is called. Initialized with ``None``.
     :ivar float penalty: The total penalty applied to the model deviance after fitting as a float.
@@ -1879,9 +1901,16 @@ class GAMMLSS(GSMM):
                     if cidx not in self.info.dropped
                 ]
             )
-        # fmt: off
-        reml = REML(llk, -1 * self.hessian, self.coef, 1, self.overall_penalties, keep)[0, 0]
-        # fmt: on
+
+        reml = REML(
+            llk,
+            -1 * self.hessian,
+            self.coef,
+            1,
+            self.overall_penalties,
+            keep,
+            self.info.Q_emb,
+        )[0, 0]
         return reml
 
     def get_resid(self, **kwargs) -> np.ndarray:
@@ -2036,7 +2065,11 @@ class GAMMLSS(GSMM):
         :param should_keep_drop: Only used when ``method in ["QR/Chol","LU/Chol","Direct/Chol"]``.
             If set to True, any coefficients that are dropped during fitting - are permanently
             excluded from all subsequent iterations. If set to False, this is determined anew
-            at every iteration - **costly**! Defaults to True.
+            at every iteration - **costly**! **Note**, set to False if
+            ``repara=True`` because drops are then determined for the re-parameterized problem,
+            which differs for every smoothing parameter step. Indices in ``self.info.dropped``
+            then refer to the model under the re-parameterization stored in ``self.info.Q_emb``.
+            Defaults to True
         :type should_keep_drop: bool,optional
         :param prefit_grad: Whether to rely on Gradient Descent to improve the initial starting
             estimate for coefficients. Defaults to True.
@@ -2216,7 +2249,9 @@ class GAMMLSS(GSMM):
                     "log-likelihood is invertible."
                 )
             )
-            self.hessian -= fit_info.eps * scp.sparse.identity(H.shape[1], format="csc")
+            self.hessian -= fit_info.eps * scp.sparse.eye_array(
+                H.shape[1], format="csc"
+            )
         self.info = fit_info
 
     ################################### Prediction ###################################  # noqa: E266
@@ -2668,9 +2703,9 @@ class GAMM(GAMMLSS):
     :ivar float edf1: The model estimated degrees of freedom as a float corrected for smoothness
         bias. Set by the :func:`approx_smooth_p_values` function, the first time it is called.
         Initialized with ``None``.
-    :ivar [float] term_edf: The estimated degrees of freedom per smooth term.
+    :ivar [float] term_edf: The estimated degrees of freedom per penalty block.
         Initialized with ``None``.
-    :ivar [float] term_edf1: The estimated degrees of freedom per smooth term corrected for
+    :ivar [float] term_edf1: The estimated degrees of freedom per penalty block corrected for
         smoothness bias. Set by the :func:`approx_smooth_p_values` function, the first time it
         is called. Initialized with ``None``.
     :ivar float penalty: The total penalty applied to the model deviance after fitting as a float.

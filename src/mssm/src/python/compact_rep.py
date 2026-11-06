@@ -338,8 +338,8 @@ def computeSH(
         first set ``m`` of update vectors from Byrd, Nocdeal & Schnabel (1992), modified to account
         for structured update.
     :type sks: np.ndarray
-    :param nHfd: Finite difference approximation matrix which is symmetric sparse matrix with
-        ``fcols`` rows and columns set to finite difference approximation of columns of negative
+    :param nHfd: (Finite difference approximation) symmetric (sparse) matrix with
+        ``fcols`` rows and columns set to (finite difference approximation of) columns of negative
         Hessian of llk
     :type nHfd: scp.sparse.csc_array | np.ndarray
     :param IonHBB: The inverse of the top left block of ``nHfd`` after ordering so that column
@@ -348,8 +348,8 @@ def computeSH(
     :param fcols: Array holding indices of columns of negative Hessian approximated via finite
         differencing.
     :type fcols: np.ndarray
-    :param acols: Array holding indices of columns of negative Hessian not approximated via FD (
-        to be approximated via quasi Newton)
+    :param acols: Array holding indices of columns of negative Hessian to be approximated via
+        quasi Newton
     :type acols: np.ndarray
     :param sample_hessian: Whether the update vectors ``yks`` and ``sks`` have been sampled or
         obtained from the sequential quasi Newton routine used to update the coefficients, defaults
@@ -405,9 +405,10 @@ def computeSH(
     onHBB = onHfd[np.ix_(np.arange(nF), np.arange(nF))]
     onHBb = onHfd[np.ix_(np.arange(nF), np.arange(nF, nT))]
 
-    # Now quasi Newton part. First, retain only rows related to b and drop those related to B
-    yks = yks[:, acols]
-    sks = sks[:, acols]
+    # Now quasi Newton part. First, retain only rows related to b and drop those related to B.
+    # Re-cast to contiguous array, since indexing otherwise slows computeHSR1 noticeably
+    yks = np.ascontiguousarray(yks[:, acols])
+    sks = np.ascontiguousarray(sks[:, acols])
 
     # Finally, recompute rho.
     rhos = 1 / np.einsum("ij,ij->i", sks, yks)
