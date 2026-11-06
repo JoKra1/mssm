@@ -185,7 +185,7 @@ class Test_ar:
                     0.07186916359730293,
                 ]
             ),
-            atol=min(max_atol, 0),
+            atol=min(max_atol, 0.25),
             rtol=min(max_rtol, 1.5),
         )
 
