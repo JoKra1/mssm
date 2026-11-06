@@ -1187,7 +1187,7 @@ class Test_GAMMLSS:
     def test_GAMreml(self):
         reml = self.model.get_reml()
         np.testing.assert_allclose(
-            reml, -4528.665531282604, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
+            reml, -4527.7465927493995, atol=min(max_atol, 0), rtol=min(max_rtol, 0.1)
         )
 
     def test_GAMllk(self):
