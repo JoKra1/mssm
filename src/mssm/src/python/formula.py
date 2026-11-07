@@ -438,7 +438,28 @@ class Formula:
             if isinstance(term, f):
                 self.smooth_terms.append(ti)
 
+                if (
+                    discretize
+                    and term.te
+                    and term.is_identifiable
+                    and term._const_type != ConstType.QR
+                ):
+                    raise NotImplementedError(
+                        (
+                            f"Tensor smooth term {ti} only support QR constraints when "
+                            "``discretize is True``."
+                        )
+                    )
+
             if isinstance(term, irf):
+                if discretize:
+                    raise NotImplementedError(
+                        (
+                            "Impulse response smooth terms are not supported when "
+                            "``discretize is True``."
+                        )
+                    )
+
                 self.ir_smooth_terms.append(ti)
                 self.n_irf += 1
 
@@ -1136,11 +1157,10 @@ class Formula:
 
                         self.cov_bins[c] = c_bins
 
-                    cov_bin_idxs[c] = (
-                        np.digitize(
-                            c_raw if prediction else c_raw[NAs_flat], self.cov_bins[c]
-                        )
-                        - 1
+                    # Assign every value to the nearest bin
+                    cov_bin_idxs[c] = np.digitize(
+                        c_raw if prediction else c_raw[NAs_flat],
+                        self.cov_bins[c][:-1] + 0.5 * np.diff(self.cov_bins[c]),
                     )
                     if discretize:
                         if prediction:

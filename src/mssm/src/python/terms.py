@@ -1387,16 +1387,18 @@ class f(GammTerm):
                     dt_by.end_idx = dt_end
                     dt_by.exclude_columns = []
 
-                    # Update unique matrix rows and indices
+                    # Update unique matrix rows and indices. c++ expects column-major so keep that
                     for midx in range(len(dt_by.unique_matrices)):
-                        dt_by.unique_matrices[midx] = np.concatenate(
-                            (
-                                dt_by.unique_matrices[midx],
-                                np.zeros(dt_by.unique_matrices[midx].shape[1]).reshape(
-                                    1, -1
+                        dt_by.unique_matrices[midx] = np.asfortranarray(
+                            np.concatenate(
+                                (
+                                    dt_by.unique_matrices[midx],
+                                    np.zeros(
+                                        dt_by.unique_matrices[midx].shape[1]
+                                    ).reshape(1, -1),
                                 ),
-                            ),
-                            axis=0,
+                                axis=0,
+                            )
                         )
                         dt_by.indices[midx][~by_cidx] = (
                             dt_by.unique_matrices[midx].shape[0] - 1
@@ -1430,14 +1432,18 @@ class f(GammTerm):
                 dt.start_idx = dt_start
                 dt.end_idx = dt_end
 
-                # Update unique matrix rows and indices
+                # Update unique matrix rows and indices. c++ expects column-major so keep that
                 for midx in range(len(dt.unique_matrices)):
-                    dt.unique_matrices[midx] = np.concatenate(
-                        (
-                            dt.unique_matrices[midx],
-                            np.zeros(dt.unique_matrices[midx].shape[1]).reshape(1, -1),
-                        ),
-                        axis=0,
+                    dt.unique_matrices[midx] = np.asfortranarray(
+                        np.concatenate(
+                            (
+                                dt.unique_matrices[midx],
+                                np.zeros(dt.unique_matrices[midx].shape[1]).reshape(
+                                    1, -1
+                                ),
+                            ),
+                            axis=0,
+                        )
                     )
                     # Need to make copy so as to not mess up original array
                     dt.indices[midx] = copy.deepcopy(dt.indices[midx])
@@ -3187,18 +3193,22 @@ class rs(GammTerm):
                 dt_by = copy.deepcopy(dt)
                 dt_by.start_idx = dt_start
                 dt_by.end_idx = dt_end
-                dt_by.zero_columns = []
 
-                # Update unique matrix rows and indices
+                if use_only is not None and ti not in use_only:
+                    dt_by.zero_columns = list(range(dt_n_coef))
+
+                # Update unique matrix rows and indices. c++ expects column-major so keep that
                 for midx in range(len(dt_by.unique_matrices)):
-                    dt_by.unique_matrices[midx] = np.concatenate(
-                        (
-                            dt_by.unique_matrices[midx],
-                            np.zeros(dt_by.unique_matrices[midx].shape[1]).reshape(
-                                1, -1
+                    dt_by.unique_matrices[midx] = np.asfortranarray(
+                        np.concatenate(
+                            (
+                                dt_by.unique_matrices[midx],
+                                np.zeros(dt_by.unique_matrices[midx].shape[1]).reshape(
+                                    1, -1
+                                ),
                             ),
-                        ),
-                        axis=0,
+                            axis=0,
+                        )
                     )
                     dt_by.indices[midx][~fl_idx] = (
                         dt_by.unique_matrices[midx].shape[0] - 1
