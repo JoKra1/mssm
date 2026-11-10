@@ -3626,6 +3626,41 @@ class GSMMFamily(ABC):
         """
         pass
 
+    def postfit_setup(
+        self,
+        ys: list[np.ndarray | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
+        preds: list[np.ndarray] | None,
+        mus: list[np.ndarray] | None,
+    ):
+        """Setup function called after a model is fit. Arguments are the response
+        variables, a list of model matrices used during fit, optionally the linear predictors
+        evaluated after fit, and optionally the mean parameters evaluated after fit (i.e., the
+        linear predictors pushed through the link function).
+
+        The latter arguments are ``None`` if a GSMM is called with ``build_mat is not None``.
+
+        Provides families access to the response variables and model matrices used for fitting
+        after completing the fitting iteration. Families can use this to pre-compute
+        quantities needed for secondary tasks after fitting.
+
+        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
+            ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the
+            actual observed data is passed along via the first formula (so it is stored in
+            ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula,
+            then ``ys`` contains ``None`` at their indices to save memory.
+        :type ys: list[np.ndarray | None]
+        :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None``
+            at indices for matrices which were flagged as "do not build" via the ``build_mat``
+            argument of the :func:`mssm.models.GSMM.fit` method.
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
+        :param preds: List of linear predictors or None.
+        :type preds: list[np.ndarray] | None
+        :param mus: List of mean parameters or None.
+        :type mus: list[np.ndarray] | None
+        """
+        pass
+
     @abstractmethod
     def llk(
         self,

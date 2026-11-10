@@ -1291,6 +1291,9 @@ class GSMM:
                 link.fi(pred) for link, pred in zip(self.family.links, self.preds)
             ]
 
+        # Can call postfit setup
+        self.family.postfit_setup(ys, Xs, self.preds, self.mus)
+
     ################################### Prediction ###################################  # noqa: E266
 
     def sample_post(

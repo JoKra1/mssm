@@ -1463,6 +1463,60 @@ def _shift_hmp_pmf(
     return pmf, pmf_grad
 
 
+def _hmp_penalty(
+    ds: np.ndarray,
+    location: int,
+    soft_min_location: int,
+    d_grad: np.ndarray | None = None,
+) -> tuple[float, np.ndarray | None]:
+    """Internal function to compute the penalty on the duration distribution of a stage for
+    fast_hmp models.
+
+    The penalty is ``log(P(x >= l))``, where ``x`` is a random vector with the shifted pmf returned
+    by :func:`_shift_hmp_pmf` and ``l = max(location, soft_min_location)``. Optionally
+    returns gradient of the penalty with respect to the coefficients involved in the model of the
+    corresponding shifted pmf.
+
+    :param ds: Array of shape ``(D - 1,)`` holding the pmf (not shifted) of a stage duration
+        distribution.
+    :type ds: np.ndarray
+    :param location: Location of the stage (in samples).
+    :type location: int
+    :param soft_min_location: Minimum location used by the penalty (in samples).
+    :type soft_min_location: int
+    :param d_grad: Optional array of shape ``(D - 1, n_coef)``, holding the gradient of ``ds``
+        with respect to the coefficients involved in the model of ``ds``. Defaults to None
+    :type d_grad: np.ndarray | None, optional
+    :return: The penalty and optionally its gradient (another array of shape ``(n_coef,)`` or
+        None).
+    :rtype: tuple[float, np.ndarray | None]
+    """
+
+    location = int(location)
+    pen_location = max(location, int(soft_min_location))
+    pen_grad = None if d_grad is None else np.zeros(d_grad.shape[1], dtype=np.float64)
+
+    # Same support and normalization as for the shifted pmf
+    n_x = ds.shape[0] - location
+    norm = np.sum(ds[:n_x])
+    # P(x >= l) = tail/norm, with tail:
+    tail = np.sum(ds[pen_location:n_x])
+
+    if not np.isfinite(norm) or norm <= 0 or tail <= 0:
+        return -np.inf, pen_grad
+
+    pen = np.log(tail) - np.log(norm)
+
+    if d_grad is not None:
+        # d log(tail / norm) = d tail / tail - d norm / norm
+        pen_grad = (
+            np.sum(d_grad[pen_location:n_x, :], axis=0) / tail
+            - np.sum(d_grad[:n_x, :], axis=0) / norm
+        )
+
+    return pen, pen_grad
+
+
 def _compute_dur_res_series(
     states: np.ndarray,
     n_S: int,
@@ -1684,10 +1738,22 @@ class HSMMFamily(GSMMFamily):
         stage) the durations of the first and last stage differ between both options. Setting this
         to None means it is set to True if ``fast_hmp is True``. Defaults to None.
     :type hmp_d_offset: bool | None, optional
+    :param hmp_rho: Weight for the penalty on stage duration distributions of a HMP-like
+        model (currently only used if ``fast_hmp is True``). Every series adds
+        ``hmp_rho * log(P(x >= l))`` per stage to the log-likelihood, where ``x`` follows the
+        duration distribution of the stage and ``l = max(location, hmp_soft_min_location)``. Note,
+        that setting this to 0 after model fitting gives the log-likelihood without penalty.
+        Defaults to 1.
+    :type hmp_rho: float, optional
+    :param hmp_soft_min_location: Minimum location (**in samples**) used by the penalty (see
+        ``hmp_rho``). Defaults to None, in which case it is set to ``w // 2``, with ``w`` the width
+        of the event pattern.
+    :type hmp_soft_min_location: int | None, optional
     :raises ValueError: if either ``T`` or ``pi`` have a value other than None but not both.
     :raises ValueError: if ``starts_with_first is False`` and the model is HMP-like (i.e.,
         ``event_template is not None``).
     :raises ValueError: if ``tvdtpi is True`` and ``event_template is not None``).
+    :raises ValueError: if ``hmp_rho < 0``.
     """
 
     def __init__(
@@ -1722,6 +1788,8 @@ class HSMMFamily(GSMMFamily):
         hmp_location: np.ndarray | None = None,
         fast_hmp: bool = False,
         hmp_d_offset: bool | None = None,
+        hmp_rho: float = 1.0,
+        hmp_soft_min_location: int | None = None,
     ) -> None:
 
         super().__init__(
@@ -1760,6 +1828,8 @@ class HSMMFamily(GSMMFamily):
         self.cross_cor = None
         self.shared_j = shared_j
         self.hmp_d_offset = hmp_d_offset
+        self.hmp_rho = hmp_rho
+        self.hmp_soft_min_location = hmp_soft_min_location
         self.n_cores_llk = n_cores_llk
         if n_cores_llk is None:
             self.n_cores_llk = n_cores
@@ -1796,6 +1866,9 @@ class HSMMFamily(GSMMFamily):
                 ("hmp like models are not supported with ``tvdtpi==True``!")
             )
 
+        if hmp_rho < 0:
+            raise ValueError("``hmp_rho`` must be >= 0!")
+
         for state_obs in obs_fams:
             if isinstance(state_obs[0], MultiGauss):
                 self.extra_coef += state_obs[0].extra_coef
@@ -1812,6 +1885,10 @@ class HSMMFamily(GSMMFamily):
             self.hmp_location = np.zeros((n_S - 1) // 2 + 1, dtype=int) + event_width
             self.hmp_location[0] = event_width // 2
             self.hmp_location[-1] = (event_width - 1) // 2
+
+        # Default minimum location used by the penalty of a hmp model
+        if self.is_hmp and self.hmp_soft_min_location is None:
+            self.hmp_soft_min_location = len(event_template) // 2
 
         # Check for time-varying duration, state transition, initial state models
         self.tvdtpi = tvdtpi
@@ -4167,8 +4244,15 @@ class HSMMFamily(GSMMFamily):
             n_events, events, stages, _, _ = self._group_hmp_events(series)
 
             locations = _hmp_stage_locations(stages, self.hmp_location)
+            penalty = 0
             for stage, location in zip(stages, locations):
                 pmf[:, stage], _ = _shift_hmp_pmf(ds[:, stage], location, n_T)
+
+                # Penalty on the shifted pmf (see ``hmp_rho``)
+                if self.hmp_rho > 0:
+                    penalty += _hmp_penalty(
+                        ds[:, stage], location, self.hmp_soft_min_location
+                    )[0]
 
             # Now modified forward pass
             forward = np.zeros((n_T, n_events), dtype=np.float64)
@@ -4184,9 +4268,9 @@ class HSMMFamily(GSMMFamily):
             # Account for final distribution
             forward[:, -1] *= np.flip(pmf[:, stages[-1]])
 
-            # Compute trial llk.
+            # Compute trial llk (+ penalty).
             forward = np.clip(forward, 0, None)
-            llk = np.log(forward[:, -1].sum())
+            llk = np.log(forward[:, -1].sum()) + self.hmp_rho * penalty
 
         else:
             if is_hmp:
@@ -5420,6 +5504,7 @@ class HSMMFamily(GSMMFamily):
             pmf_grad = np.zeros((n_T, d_grad.shape[1]), dtype=np.float64)
 
             locations = _hmp_stage_locations(stages, self.hmp_location)
+            pen_grad = np.zeros(d_grad.shape[1], dtype=np.float64)
             for stage, location in zip(stages, locations):
 
                 # Get coefficients associated with pmf of stage
@@ -5428,6 +5513,15 @@ class HSMMFamily(GSMMFamily):
                 pmf[:, stage], pmf_grad[:, gidx] = _shift_hmp_pmf(
                     ds[:, stage], location, n_T, d_grad[:, gidx]
                 )
+
+                # Gradient of the penalty on the shifted pmf
+                if self.hmp_rho > 0:
+                    _, pen_grad[gidx] = _hmp_penalty(
+                        ds[:, stage],
+                        location,
+                        self.hmp_soft_min_location,
+                        d_grad[:, gidx],
+                    )
 
             ds = pmf
             d_grad = pmf_grad
@@ -5519,6 +5613,9 @@ class HSMMFamily(GSMMFamily):
             # Get grad
             tgrad = np.sum(tgrad, axis=0)
             grad = tgrad / np.sum(forward)
+
+            # Add gradient of penalty
+            grad[b_grad.shape[1] :] += self.hmp_rho * pen_grad  # noqa: E203
 
         else:
             # Still not done for hmp
