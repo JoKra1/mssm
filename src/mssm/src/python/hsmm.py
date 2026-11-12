@@ -1701,7 +1701,11 @@ class HSMMFamily(GSMMFamily):
         scaling) matrix of an ar1 model of the residuals of a HMP-like HSMM, defaults to None
     :type Lrhoi: scp.sparse.csc_array | None, optional
     :param scale: Scale parameter to use for the the observation probabilities under a hmp model
-        (can be set to None for regular hsmms). Defaults to None
+        (can be set to None for regular hsmms). If this is left at ``None`` for HMP-like models (the
+        default), then it is initialized to the sum of squares of  ``event_template`` if
+        ``hmp_fam == 'Gaussian'`` and to twice that if ``hmp_fam == 'Exponential'`` to maintain
+        consistency with the HMP toolbox by Weindel et al. (Note, that consistency only applies
+        without an ar1 model). Defaults to None
     :type scale: float | None, optional
     :param event_template: Array holding HMP event pattern (or ``None`` if a standard hsmm
         is to be estimated). Defaults to None
@@ -1833,7 +1837,8 @@ class HSMMFamily(GSMMFamily):
         self.n_cores_llk = n_cores_llk
         if n_cores_llk is None:
             self.n_cores_llk = n_cores
-        self._ar_norm_ratio = 1.0
+        self._gain_weight = 1.0
+        self._no_event_llk = 0.0
         self.T_index = T_index
         self.pi_index = pi_index
 
@@ -1879,6 +1884,13 @@ class HSMMFamily(GSMMFamily):
             else:
                 self.hmp_d_offset = False
 
+        # Default scale for a hmp model - set to maintain consistency with the hmp toolbox
+        if self.is_hmp and scale is None:
+            scale = np.sum(event_template**2)
+            if hmp_fam != "Gaussian":
+                scale *= 2
+            self.llkargs[17] = scale
+
         # Default locations for a hmp model
         if self.is_hmp and self.hmp_location is None:
             event_width = len(event_template)
@@ -1905,7 +1917,10 @@ class HSMMFamily(GSMMFamily):
         """Pre-fit setup for a HSMM.
 
         Sets up the cross correlation data for HMP-like models if ``self.fast_hmp is True``.
-        Cross-correlation is computed as outlined by Weindel, van Maanen, and Borst (2024).
+        Cross-correlation is computed as outlined by Weindel, van Maanen, and Borst (2024). Also
+        computes the weight of the gains implied by ``scale`` and, if an ar(1) model is assumed, the
+        log-probability without any event, so that the fast_hmp's log-likelihood matches the one
+        obtained with ``self.fast_hmp is False``.
 
         References:
          - Weindel, G., van Maanen, L., & Borst, J. P. (2024). Trial-by-trial detection of\
@@ -1924,6 +1939,7 @@ class HSMMFamily(GSMMFamily):
         """
         if self.fast_hmp:
             self.cross_cor = []
+            self._no_event_llk = 0
             normed_template = self.llkargs[-2].copy()
             # print(normed_template)
 
@@ -1934,12 +1950,11 @@ class HSMMFamily(GSMMFamily):
             shared_pars = self.llkargs[12]
             shared_m = self.llkargs[13]
             Lrhoi = self.llkargs[16]
+            scale = self.llkargs[17]
+            hmp_fam = self.llkargs[19]
 
             if tid is None:
                 tid = sid
-
-            # Sum of squares of pattern before adjusting for ar1 model
-            pattern_norm = np.sum(normed_template**2)
 
             if Lrhoi is not None:
                 rho = np.sqrt(-1 * (np.power(1 / Lrhoi[1, 1], 2) - 1))
@@ -1962,9 +1977,18 @@ class HSMMFamily(GSMMFamily):
                 ar_template[-1] = d1 * normed_template[-1]
                 normed_template = ar_template
 
-            # Scaling of gains depends on sum of squares of pattern. Need to correct for ar1 model
-            # so that scale continues to imply the same residual variance
-            self._ar_norm_ratio = np.sum(normed_template**2) / pattern_norm
+            # Scaling of gains depends on sum of squares of pattern (after adjusting for ar1 model)
+            # and on scale. We have for each component, gain = (cross_cor * mu - mu^2 / 2) which
+            # we can consider the (un-normalized) log of the likelihood ratio. Assuming a gaussian
+            # density with variance ``scale`` for the EEG emissions, we have:
+            # np.sum(normed_template**2) / scale * gain
+            # for the (normalized) log of the likelihood ratio between event present and absent. The
+            # normalizing factor is twice that if the squared residuals are exponential with mean
+            # scale.
+            self._gain_weight = np.sum(normed_template**2) / scale
+
+            if hmp_fam != "Gaussian":
+                self._gain_weight *= 2
 
             # Normalize template
             normed_template /= np.sum(normed_template**2)
@@ -2026,6 +2050,40 @@ class HSMMFamily(GSMMFamily):
                     # Duration variables
                     self.cross_cor.append(ys[idx])
                 idx += 1
+
+            # Gains only hold change in log-likelihood due to the events. Also would need the
+            # log-probability of every series without any event to end up with the same
+            # log-likelihood as the regular/slow hmp code. Technically, this is not needed to
+            # maintain consistency with the HMP toolbox, since their likelihood currently omits
+            # that part as well. However, for the ar(1) model we must include this factor since
+            # the density of the log-probability without any event also changes as a function of
+            # the rho parameter of the ar(1) model. So if we don't include this we cannot select
+            # rho based on llk/reml.
+            # ToDo: verify the current heuristic below against any further changes to HMP:
+            # For now we compute the log-probability without any event only if if
+            # ``Lrhoi is not None`` to maintain consistency with the HMP likelihood in the absence
+            # of an ar(1) model, but to still have the full likelihood with one, so that we can
+            # select rho.
+
+            if Lrhoi is not None:
+                n_shared = len(shared_pars) * (1 if shared_m else M)
+                # Can pre-compute the log-probability without any event part since this does
+                # not depend on coefficients.
+                for m in range(M):
+                    yM = ys[n_shared + m] if ys[n_shared + m] is not None else ys[0]
+
+                    # if Lrhoi is not None:
+                    yM = Lrhoi.T @ yM
+
+                    # Same densities as used by the regular hmp code for flats
+                    if hmp_fam == "Gaussian":
+                        lpM = scp.stats.norm.logpdf(
+                            yM, loc=0, scale=np.power(scale, 0.5)
+                        )
+                    else:
+                        lpM = scp.stats.expon.logpdf(np.power(yM, 2), scale=scale)
+
+                    self._no_event_llk += np.sum(lpM)
 
     def _group_hmp_events(
         self,
@@ -3372,15 +3430,12 @@ class HSMMFamily(GSMMFamily):
             n_events = (n_S - 1) // 2
             n_flats = n_events + 1
             gains = np.zeros((n_T, n_events), dtype=np.float64)
-            gain_scale = scale * self._ar_norm_ratio
 
             for i in range(cross_corr.shape[1]):
                 # computes the gains, i.e. the log of the likelihood ratio between
                 # event present and absent.
-                gains = (
-                    gains
-                    + cross_corr[:, [i]] * mus[:, i, :]
-                    - mus[:, i, :] ** 2 / gain_scale
+                gains = gains + self._gain_weight * (
+                    cross_corr[:, [i]] * mus[:, i, :] - mus[:, i, :] ** 2 / 2
                 )
             gains = np.exp(gains)
 
@@ -4223,15 +4278,12 @@ class HSMMFamily(GSMMFamily):
             n_events = (n_S - 1) // 2
             n_flats = n_events + 1
             gains = np.zeros((n_T, n_events), dtype=np.float64)
-            gain_scale = scale * self._ar_norm_ratio
 
             for i in range(cross_corr.shape[1]):
                 # computes the gains, i.e. the log of the likelihood ratio between
                 # event present and absent.
-                gains = (
-                    gains
-                    + cross_corr[:, [i]] * mus[:, i, :]
-                    - mus[:, i, :] ** 2 / gain_scale
+                gains = gains + self._gain_weight * (
+                    cross_corr[:, [i]] * mus[:, i, :] - mus[:, i, :] ** 2 / 2
                 )
             gains = np.exp(gains)
 
@@ -4437,6 +4489,8 @@ class HSMMFamily(GSMMFamily):
         # Correct for potential ar1 model (remember ar1 model is applied
         # to each of M signals)
         llk += M * llc
+        # Need log-likelihood without an event part to be added to llk (only for fast hmp code)
+        llk += self._no_event_llk
 
         return llk
 
@@ -5463,19 +5517,18 @@ class HSMMFamily(GSMMFamily):
             n_events = (n_S - 1) // 2
             n_flats = n_events + 1
             gains = np.zeros((n_T, n_events), dtype=np.float64)
-            gain_scale = scale * self._ar_norm_ratio
 
             # Derivatives of gains with respect to coef
             for m in range(cross_corr.shape[1]):
                 # computes the gains, i.e. the log of the likelihood ratio between
                 # event present and absent.
-                m_gain = (
-                    cross_corr[:, [m]] * mus[:, m, :] - mus[:, m, :] ** 2 / gain_scale
+                m_gain = self._gain_weight * (
+                    cross_corr[:, [m]] * mus[:, m, :] - mus[:, m, :] ** 2 / 2
                 )
                 gains += m_gain
 
                 # deriv of m_gain with respect to mus shape: (n_T, n_events)
-                dgdmu = cross_corr[:, [m]] - 2 * mus[:, m, :] / gain_scale
+                dgdmu = self._gain_weight * (cross_corr[:, [m]] - mus[:, m, :])
 
                 # Index coefficients associated with channel m
                 gidx = m_idx_grad == m
