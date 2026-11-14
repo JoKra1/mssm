@@ -10,6 +10,10 @@ from abc import ABC, abstractmethod
 import hazard
 import multiprocessing as mp
 from .discrete import DiscreteModelMatrix
+from .custom_types import _HAS_JAX
+
+if _HAS_JAX:
+    from .custom_types import jax, jnp, CacheAD, ModeAD
 
 
 class Link(ABC):
@@ -3552,6 +3556,20 @@ class GAMMALS(GAMLSSFamily):
         return coef
 
 
+def __InstanceOverwrites(instance: ABC, method: str) -> bool:
+    """Internal function used to check if an instance of GSMM family implements a certain
+    ``method`` differently than the :class:`GSMMFamily` base-class.
+
+    :param instance: Instance of a :class:`GSMMFamily` sub-class.
+    :type instance: ABC
+    :param method: Method to check for overwrite.
+    :type method: str
+    :return: Bool indicating whether method is overwritten or not.
+    :rtype: bool
+    """
+    return getattr(type(instance), method) is not getattr(GSMMFamily, method)
+
+
 class GSMMFamily(ABC):
     """Base-class for General Smooth "families" as discussed by Wood, Pya, & Säfken (2016).
     For estimation of :class:`mssm.models.GSMM` models via ``L-qEFS`` (Krause et al., submitted) it
@@ -3600,6 +3618,16 @@ class GSMMFamily(ABC):
         self.links: list[Link] = links
         self.extra_coef: int | None = None
         self.return_sparse: bool = True
+        self.try_ad: bool = _HAS_JAX and __InstanceOverwrites(self, "llk_pars")
+
+        if (not __InstanceOverwrites(self, "llk_pars")) and (
+            not __InstanceOverwrites(self, "llk")
+        ):
+            # Can no longer make llk an @abstractmethod, so need to explicitly raise if neither
+            # option is implemented
+            raise TypeError(
+                "Sub-classes of `GSMMFamily` must implement at least one of `llk_pars` or `ll`."
+            )
 
     def prefit_setup(
         self,
@@ -3626,7 +3654,33 @@ class GSMMFamily(ABC):
         """
         pass
 
-    @abstractmethod
+    def llk_pars(
+        self,
+        pars,
+        extra,
+        ys,
+    ) -> float:
+        """log-probability of data under given model but model here is treated as the paramters
+        of the log-likelihood not the coefficients.
+
+        ``pars`` should be the model-matrix coef vector products pushed through the inverse of
+        their respective link function. ``extra`` are any extra coefficients of the log-likelihood.
+
+        Note, that ``ys``, ``pars``, and ``extra`` are passed as jax.numpy types if the class sets
+        the `try_ad` attribute to True and jax is installed. Otherwise, they are passed as standard
+        numpy arrays.
+
+        :param ys: _description_
+        :type ys: _type_
+        :param pars: _description_
+        :type pars: _type_
+        :param extra: _description_
+        :type extra: _type_
+        :return: _description_
+        :rtype: float
+        """
+        pass
+
     def llk(
         self,
         coef: np.ndarray,
