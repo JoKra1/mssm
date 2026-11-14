@@ -11,6 +11,7 @@ import hazard
 import multiprocessing as mp
 from .discrete import DiscreteModelMatrix
 from .custom_types import _HAS_JAX
+from .deriv_transform import deriv_transform_mu_eta, deriv_transform_eta_beta
 
 if _HAS_JAX:
     from .custom_types import jax, jnp, CacheAD, ModeAD
@@ -3556,7 +3557,7 @@ class GAMMALS(GAMLSSFamily):
         return coef
 
 
-def __InstanceOverwrites(instance: ABC, method: str) -> bool:
+def _InstanceOverwrites(instance: ABC, method: str) -> bool:
     """Internal function used to check if an instance of GSMM family implements a certain
     ``method`` differently than the :class:`GSMMFamily` base-class.
 
@@ -3618,16 +3619,20 @@ class GSMMFamily(ABC):
         self.links: list[Link] = links
         self.extra_coef: int | None = None
         self.return_sparse: bool = True
-        self.try_ad: bool = _HAS_JAX and __InstanceOverwrites(self, "llk_pars")
+        self.try_ad: bool = _HAS_JAX and _InstanceOverwrites(self, "llk_pars")
 
-        if (not __InstanceOverwrites(self, "llk_pars")) and (
-            not __InstanceOverwrites(self, "llk")
+        if (not _InstanceOverwrites(self, "llk_pars")) and (
+            not _InstanceOverwrites(self, "llk")
         ):
             # Can no longer make llk an @abstractmethod, so need to explicitly raise if neither
             # option is implemented
             raise TypeError(
                 "Sub-classes of `GSMMFamily` must implement at least one of `llk_pars` or `ll`."
             )
+
+        if self.try_ad:
+            # Initialize AD cache
+            self.ad_cache = CacheAD(self.llk_pars)
 
     def prefit_setup(
         self,
@@ -3654,6 +3659,49 @@ class GSMMFamily(ABC):
         """
         pass
 
+    def _get_pars(
+        self,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
+    ) -> tuple[list[np.ndarray], np.ndarray | None, list[np.ndarray]]:
+        """Returns the parameter vectors of the log-likelihood implied by ``Xs`` and ``coef``, any
+        extra coefficients of the log-likelihood, and a "fixed" version of ys that does not contain
+        None.
+
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
+        :type coef: np.ndarray
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each paramter of the llk.
+        :type coef_split_idx: [int]
+        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
+            ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the
+            actual observed data is passed along via the first formula (so it is stored in
+            ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula,
+            then ``ys`` contains ``None`` at their indices to save memory.
+        :type ys: list[np.ndarray | None]
+        :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None``
+            at indices for matrices which were flagged as "do not build" via the ``build_mat``
+            argument of the :func:`mssm.models.GSMM.fit` method.
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
+        :return: The parameter vectors, optionally the extra coefficients (or None), and a list
+            with ys where ys[0] has been inserted for None.
+        :rtype: tuple[list[np.ndarray],np.ndarray|None,list[np.ndarray]]
+        """
+        split_coef = np.split(coef, coef_split_idx)
+        extra = None
+        if self.extra_coef is not None:
+            extra = split_coef[-1]
+            split_coef = split_coef[:-1]
+        pars = [link.fi(X @ c) for link, X, c in zip(self.links, Xs, split_coef)]
+
+        # Fix ys for missing vectors
+        yfix = [y if y is not None else ys[0] for y in ys]
+
+        return pars, extra, yfix
+
     def llk_pars(
         self,
         pars,
@@ -3679,7 +3727,9 @@ class GSMMFamily(ABC):
         :return: _description_
         :rtype: float
         """
-        pass
+        raise NotImplementedError(
+            "Families must either overwrite the llk method or implement llk_pars!"
+        )
 
     def llk(
         self,
@@ -3718,7 +3768,28 @@ class GSMMFamily(ABC):
         :return: The log-likelihood evaluated at ``coef``.
         :rtype: float
         """
-        pass
+        llk = None
+
+        # Get pars and extra, then try AD
+        pars, extra, yfix = self._get_pars(coef, coef_split_idx, ys, Xs)
+
+        if self.try_ad and self.ad_cache.mode != ModeAD.fd:
+
+            # Try jnp likelihood
+            llk = self.ad_cache.call(
+                0,
+                [jnp.asarray(p) for p in pars],
+                jnp.asarray(extra) if extra is not None else None,
+                [jnp.asarray(y) for y in yfix],
+            )
+
+        # If llk call failed or when not to try AD, call with numpy arrays directly
+        if llk is None:
+            llk = self.llk_pars(pars, extra, ys)
+
+        # Cast to float explicitly
+        llk = float(llk)
+        return -np.inf if np.isnan(llk) else llk
 
     def gradient(
         self,
@@ -3762,11 +3833,48 @@ class GSMMFamily(ABC):
             shape (-1,1).
         :rtype: np.ndarray
         """
+        grad = None
+        if self.try_ad and self.ad_cache.mode != ModeAD.fd:
+            # Get pars and extra, then try AD
+            pars, extra, yfix = self._get_pars(coef, coef_split_idx, ys, Xs)
 
-        def llk_wrap(x: np.ndarray) -> float:
-            return self.llk(x.reshape(-1, 1), coef_split_idx, ys, Xs)
+            # Try jnp gradient
+            grad_jax = self.ad_cache.call(
+                1,
+                [jnp.asarray(p) for p in pars],
+                jnp.asarray(extra) if extra is not None else None,
+                [jnp.asarray(y) for y in yfix],
+            )
 
-        grad = scp.optimize.approx_fprime(coef.flatten(), llk_wrap)
+            # grad_jax is with respect to pars (and optionally extra) so need
+            # standard transform discussed by WPS (2016)
+            if grad_jax is not None:
+                d1_pars, d1_extra = grad_jax
+                ld1 = [self.links[mui].dy1(pars[mui]) for mui in range(self.n_par)]
+                d1_eta, _, _ = deriv_transform_mu_eta(
+                    d1=[np.asarray(dpar) for dpar in d1_pars],
+                    d2=None,
+                    d2m=None,
+                    ld1=ld1,
+                    ld2=None,
+                    order=DerivOrder.d1,
+                )
+                grad, _ = deriv_transform_eta_beta(
+                    d1eta=d1_eta, d2eta=None, d2meta=None, Xs=Xs, only_grad=True
+                )
+
+                # Optionally deal with extra coefficients
+                if extra is not None:
+                    grad = np.concatenate(
+                        grad, np.array(d1_extra).reshape(-1, 1), axis=0
+                    )
+
+        if grad is None:
+
+            def llk_wrap(x: np.ndarray) -> float:
+                return self.llk(x.reshape(-1, 1), coef_split_idx, ys, Xs)
+
+            grad = scp.optimize.approx_fprime(coef.flatten(), llk_wrap)
         return grad.reshape(-1, 1)
 
     def jcolhessian(
@@ -3804,23 +3912,93 @@ class GSMMFamily(ABC):
             array of shape (-1,1)
         :rtype: np.ndarray
         """
+        Hj = None
+        if self.try_ad and self.ad_cache.mode != ModeAD.fd:
+            # Get pars and extra, then try AD
+            pars, extra, yfix = self._get_pars(coef, coef_split_idx, ys, Xs)
 
-        def __d2llkj(r):
-            # Function to evaluate Hessian column via finite difference approximation
-            n_coef = copy.deepcopy(coef)
-            n_coef[j] = r
+            # Now Perlmutter's trick to get cheap hessian vector product where vector is basis
+            # vector (i.e., zero everywhere but in j) to get col j of hessian. Problem is, here
+            # we want to evaluate hessian vector product in space of [pars, extra] so we first
+            # need basis vectors mapped to that space
+            v_etas = [np.zeros_like(p) for p in pars]
+            v_extra = None if extra is None else np.zeros_like(extra)
+            # Figure out which linear predictor/extra coef j belongs to
+            if j >= coef.shape[0]:
+                # j is part of extra coef, no further mapping needed
+                v_extra[j - coef.shape[0]] = 1
+            else:
+                # j is part of linear predictor - just need to figure out which one
+                cidx = np.arange(coef.shape[0])
+                cidx[j] = 1
+                cidx_split = np.split(cidx, coef_split_idx)
+                k = np.argmax([np.sum(spidx) for spidx in cidx_split])
+                # basis vector in coef space
+                e = np.zeros((Xs[k].shape[1], 1))
+                e[cidx_split[k] == 1] = 1
+                # basis vector in eta space
+                v_etas[k] = Xs[k] @ e
 
-            n_grad = self.gradient(n_coef, coef_split_idx, ys, Xs)
+            # Now basis vector in pars space, simple inverse of transformation computed by
+            # deriv_transform_mu_eta. See also WPS (2016)
+            ld1 = [self.links[mui].dy1(pars[mui]) for mui in range(self.n_par)]
+            v_pars = [v_etas[k] / ld1[k] for k in range(self.n_par)]
 
-            return n_grad.flatten()
+            # Now can try jnp HVP
+            hvp = self.ad_cache.call(
+                2,
+                [jnp.asarray(p) for p in pars],
+                jnp.asarray(extra) if extra is not None else None,
+                [jnp.asarray(y) for y in yfix],
+                v_pars,
+                v_extra,
+            )
 
-        def vectorized_d2(r):
-            return np.apply_along_axis(__d2llkj, axis=0, arr=r)
+            if hvp is not None:
+                (d1_pars, _), (hv_pars, hv_extra) = hvp
 
-        # Column j of the hessian
-        Hsk = scp.differentiate.jacobian(vectorized_d2, coef[j], order=2)
+                # Ok, now piece things together via final transformation back from pars to coef
+                Hj = []
+                # Technically d1 is already partially transformed to eta..
+                d1_mus = [v_etas[k] * np.asarray(d1_pars[k]) for k in range(self.n_par)]
+                d2_mus = [np.asarray(d2par) for d2par in hv_pars]
+                ld2 = [self.links[mui].dy2(pars[mui]) for mui in range(self.n_par)]
+                _, d2_etas, _ = deriv_transform_mu_eta(
+                    d1=d1_mus,
+                    d2=d2_mus,
+                    d2m=None,
+                    ld1=ld1,
+                    ld2=ld2,
+                    order=DerivOrder.d2,
+                )
 
-        return Hsk.df
+                for k in range(self.n_par):
+                    Hj.append((d2_etas[k].T @ Xs[k]).T)
+
+                if extra is not None:
+                    Hj.append(np.array(hv_extra).reshape(-1, 1))
+
+                Hj = np.concatenate(Hj, axis=0)
+
+        if Hj is None:
+
+            def __d2llkj(r):
+                # Function to evaluate Hessian column via finite difference approximation
+                n_coef = copy.deepcopy(coef)
+                n_coef[j] = r
+
+                n_grad = self.gradient(n_coef, coef_split_idx, ys, Xs)
+
+                return n_grad.flatten()
+
+            def vectorized_d2(r):
+                return np.apply_along_axis(__d2llkj, axis=0, arr=r)
+
+            # Column j of the hessian
+            Hsk = scp.differentiate.jacobian(vectorized_d2, coef[j], order=2)
+            Hj = Hsk.df
+
+        return Hj
 
     def jhessian(
         self,
@@ -3874,7 +4052,7 @@ class GSMMFamily(ABC):
 
         Ha = None if self.return_sparse else np.zeros((Hdim, Hdim))
 
-        if n_c > 1:
+        if n_c > 1 and self.try_ad is False:
             # Compute columns in parallel
             args = zip(
                 jcols,
@@ -3889,7 +4067,7 @@ class GSMMFamily(ABC):
 
         for ji, j in enumerate(jcols):
 
-            if n_c > 1:
+            if n_c > 1 and self.try_ad is False:
                 # Simply extract
                 Hj = Hjs[ji].flatten()
             else:

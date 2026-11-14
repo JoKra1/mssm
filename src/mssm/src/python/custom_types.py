@@ -114,10 +114,12 @@ class CacheAD:
         self.eager: list[callable] | None = None
         self.mode = mode
 
+        # Catch errors that indicate something fundamentally opposing jax evalutation
+        # see https://docs.jax.dev/en/latest/101/errors.html#errors
         self._bad_errors = (
-            jax.TracerArrayConversionError,
-            jax.TracerBoolConversionError,
-            jax.NonConcreteBooleanIndexError,
+            jax.errors.TracerArrayConversionError,
+            jax.errors.TracerBoolConversionError,
+            jax.errors.NonConcreteBooleanIndexError,
         )
 
         # Get gradient of llk with respect to pars and extra
@@ -125,7 +127,7 @@ class CacheAD:
 
         # Also need hessian vector product to get column of hessian
         def hvp(pars, extra, ys, v_pars, v_extra):
-            # Forward-over-reverse: returns (gradient, Hessian @ (v_pars, v_extra)) where
+            # Forward-over-reverse: returns (gradient, Hessian @ [v_pars, v_extra]) where
             # the latter are basis vectors mapped to space of pars and extra
             return jax.jvp(lambda p, e: g(p, e, ys), (pars, extra), (v_pars, v_extra))
 
