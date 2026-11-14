@@ -1284,6 +1284,12 @@ def update_scale_edf(
     else:
         scale = family.scale
 
+    if dropped > 0:
+        # Can now transform wres to correct dimension
+        wres_full = np.zeros_like(eta)
+        wres_full[inval == False] = wres.flatten()  # noqa: E712
+        wres = wres_full
+
     return wres, InvCholXXS, total_edf, term_edfs, Bs, scale
 
 
@@ -3223,9 +3229,8 @@ def solve_gamm_sparse(
         inval_check = np.any(inval)
 
         wres2 = None
-        if (
-            Lrhoi is not None
-        ):  # Need to return ar-corrected and "normal" working residuals
+        # Need to return ar-corrected and "normal" working residuals
+        if Lrhoi is not None:
             wres2 = Wr @ (
                 z[inval == False] - eta[inval == False]  # noqa: E712
             ).reshape(-1, 1)
@@ -3238,11 +3243,7 @@ def solve_gamm_sparse(
             # Re-compute weight matrix
             Wr = scp.sparse.spdiags([np.sqrt(np.ndarray.flatten(w))], [0])
 
-            # Adjust working residuals
-            wres_full = np.zeros_like(eta)
-            wres_full[inval == False] = wres.flatten()  # noqa: E712
-            wres = wres_full
-
+            # Optionally adjust "normal working residuals"
             if Lrhoi is not None:
                 wres_full2 = np.zeros_like(eta)
                 wres_full2[inval == False] = wres2.flatten()  # noqa: E712
