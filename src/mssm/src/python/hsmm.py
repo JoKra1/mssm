@@ -1,6 +1,6 @@
 import numpy as np
 import scipy as scp
-from mssm.src.python.gamm_solvers import deriv_transform_mu_eta, cpp_backsolve_tr
+from mssm.src.python.gamm_solvers import compute_deriv_mu, cpp_backsolve_tr
 import warnings
 import hsmm
 from .exp_fam import (
@@ -14,6 +14,7 @@ from .exp_fam import (
 import multiprocessing as mp
 from itertools import repeat
 from .discrete import DiscreteModelMatrix
+from .deriv_transform import deriv_transform_mu_eta
 
 
 def _check_shared(
@@ -4690,7 +4691,12 @@ class HSMMFamily(GSMMFamily):
 
                         # 1) Get partial first derivatives with respect to eta
                         if jmbFam.d_eta is False:
-                            d1eta, _, _ = deriv_transform_mu_eta(yJM, musbjm, jmbFam)
+                            d1mu, _, _, ld1, _ = compute_deriv_mu(
+                                yJM, musbjm, jmbFam, order=DerivOrder.d1
+                            )
+                            d1eta, _, _ = deriv_transform_mu_eta(
+                                d1mu, None, None, ld1, None, order=DerivOrder.d1
+                            )
                         else:
                             d1eta = [
                                 jmbFam.dpars(
@@ -4957,12 +4963,20 @@ class HSMMFamily(GSMMFamily):
                     if tvdtpi:
                         d1eta = []
                         for d in d_val:
+                            d1mu, _, _, ld1, _ = compute_deriv_mu(
+                                d.reshape(-1, 1), musdj, jdFam, order=DerivOrder.d1
+                            )
                             d1etad, _, _ = deriv_transform_mu_eta(
-                                d.reshape(-1, 1), musdj, jdFam
+                                d1mu, None, None, ld1, None, order=DerivOrder.d1
                             )
                             d1eta.append(d1etad)
                     else:
-                        d1eta, _, _ = deriv_transform_mu_eta(d_shift, musdj, jdFam)
+                        d1mu, _, _, ld1, _ = compute_deriv_mu(
+                            d_shift, musdj, jdFam, order=DerivOrder.d1
+                        )
+                        d1eta, _, _ = deriv_transform_mu_eta(
+                            d1mu, None, None, ld1, None, order=DerivOrder.d1
+                        )
                 else:
                     if tvdtpi:
                         d1eta = []
