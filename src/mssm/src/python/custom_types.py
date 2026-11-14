@@ -59,6 +59,31 @@ class DerivOrder(Enum):
 
 
 @dataclass
+class CacheAD:
+    """Storage term for jax jitted likelihood, gradient, and hessian column functions or their
+    eager counterparts if jit failed.
+
+    ``GSMMFamily`` tries jit, but falls back to eager execution if that fails (e.g., due to
+    python/numpy code that conflicts with jit, such as while loops). If both fail, `use_ad` is set
+    to True and ``GSMMFamily`` falls back to finite difference approximations.
+
+    see: https://docs.jax.dev/en/latest/201/control-flow.html for differences for when jit can fail.
+
+    :ivar list[callable] | None jitted: A list with three jitted functions for log-likelihood,
+        gradient, and column j of the hessian. Set to None in case jit fails.
+    :ivar list[callable] | None eager: A list with three jax functions for log-likelihood,
+        gradient, and column j of the hessian obtained via AD but requiring eager evaluation.
+        Set to None in case eager execution fails.
+    :ivar bool use_ad: Whether AD was successful or not, in which case ``GSMMFamily`` should fall
+        back to finite differencing.
+    """
+
+    jitted: list[callable] | None = None
+    eager: list[callable] | None = None
+    use_ad: bool = True
+
+
+@dataclass
 class LambdaTerm:
     """:math:`\\lambda` storage term.
 
