@@ -3573,11 +3573,23 @@ def _InstanceOverwrites(instance: ABC, method: str) -> bool:
 
 class GSMMFamily(ABC):
     """Base-class for General Smooth "families" as discussed by Wood, Pya, & Säfken (2016).
-    For estimation of :class:`mssm.models.GSMM` models via ``L-qEFS`` (Krause et al., submitted) it
-    is sufficient to implement :func:`llk`. :func:`gradient` and :func:`hessian` can then simply
-    return ``None``. For exact estimation via Newton's method, the latter two functions need to be
-    implemented and have to return the gradient and hessian at the current coefficient estimate
-    respectively.
+
+    For estimation of :class:`mssm.models.GSMM` models it is sufficient to implement :func:`llk`
+    (or :func:`llk_pars` see the note below). :func:`gradient` and :func:`hessian` will then simply
+    fall back to the super methods of this base-class which determines them from :func:`llk` or
+    :func:`llk_pars`.
+
+    **Note**, if Jax is installed, any implementation of the base-class `GSMMFamily` should leave
+    the :func:`llk` method alone and instead implement only :func:`llk_pars` (and optionally
+    :func:`hessian`). If the implementation relies on Jax types and data structures, the gradient
+    and any column of the hessian are then automatically determined via automatic differentiation.
+    jit is tried first, followed by eager evaluation, and finite differencing if the latter also
+    fails. Known sparse Hessians (or fully dense ones) will benefit from a custom implementation
+    of :func:`hessian`.
+
+    If Jax is not installed, it is recommended to also implement :func:`hessian` if Newton's method
+    is to be used to estimate the coefficients. If the `qEFS` method of the `GSMM` class' fit method
+    is used, it is typically sufficient to implement :func:`gradient`.
 
     Additional parameters needed for likelihood, gradient, or hessian evaluation can be passed
     along via the ``init`` of a specific implementation.
@@ -3589,6 +3601,8 @@ class GSMMFamily(ABC):
      - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient \
         Estimation and Selection of Large Multi-Level Statistical Models. \
         https://doi.org/10.48550/arXiv.2506.13132
+     - see also the Jax documentation for jit AD: \
+        https://docs.jax.dev/en/latest/201/jit.html#just-in-time-compilation
 
     :param pars: Number of parameters of the likelihood for which an additive (mixed) model is
         specified. **Note**, that extra parameters that are constant (and thus do not need an
@@ -3612,6 +3626,12 @@ class GSMMFamily(ABC):
         model before calling the fitting routine. In contrast, if ``self.return_sparse`` is
         set to ``False`` before fitting it is never overwritten (Useful if the Hessian is
         generally dense).
+    :ivar bool try_ad: Whether to try to rely on automatic differentiation to obtain gradients
+        and the hessian. Set to True if Jax is installed and a family implements/overwrites
+        :func:`llk_pars`, else False.
+    :ivar CacheAD ad_cache: An instance of :class:`CacheAD` holding everything needed for
+        automatic differentiation of the log-likelihood. Only set if ``try_ad is True``. The cache
+        is automatically dropped and re-built when pickling.
     """
 
     def __init__(self, pars: int, links: list[Link]) -> None:
@@ -3632,6 +3652,27 @@ class GSMMFamily(ABC):
 
         if self.try_ad:
             # Initialize AD cache
+            self.ad_cache = CacheAD(self.llk_pars)
+
+    def __getstate__(self):
+        # Pickle calls object.__getstate__ before pickling and uses the returned dict as state.
+        # see: https://docs.python.org/3/library/pickle.html#object.__getstate__
+        # So we can drop ad_cache if it exists from a copy of the state and then return that
+        # for pickling.
+        state = self.__dict__.copy()
+
+        # Pop ad cache and return
+        state.pop("ad_cache", None)
+        return state
+
+    def __setstate__(self, state):
+        # Reverse of __getstate__. Pickle calls this method when loading a pickled object.
+        # see: https://docs.python.org/3/library/pickle.html#object.__setstate__
+        # So we can set the state of the instance to the pickled one via dict.update() and then
+        # re-build the ad_cache if self.try_ad
+        self.__dict__.update(state)
+
+        if self.try_ad and _HAS_JAX:
             self.ad_cache = CacheAD(self.llk_pars)
 
     def prefit_setup(
