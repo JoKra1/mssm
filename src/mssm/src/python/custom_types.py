@@ -7,7 +7,7 @@ import warnings
 try:
     # See if jax is installed to have AD support
     import jax
-    import jax.numpy as jnp
+    import jax.numpy as jnp  # noqa: F401
 
     # Set jax to use 64 bit on import
     jax.config.update("jax_enable_x64", True)
@@ -118,7 +118,8 @@ class CacheAD:
         # see https://docs.jax.dev/en/latest/101/errors.html#errors
         self._bad_errors = (
             jax.errors.TracerArrayConversionError,
-            jax.errors.TracerBoolConversionError,
+            jax.errors.TracerIntegerConversionError,
+            jax.errors.ConcretizationTypeError,
             jax.errors.NonConcreteBooleanIndexError,
         )
 

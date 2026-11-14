@@ -14,7 +14,7 @@ from .custom_types import _HAS_JAX
 from .deriv_transform import deriv_transform_mu_eta, deriv_transform_eta_beta
 
 if _HAS_JAX:
-    from .custom_types import jax, jnp, CacheAD, ModeAD
+    from .custom_types import jnp, CacheAD, ModeAD
 
 
 class Link(ABC):
@@ -3785,7 +3785,7 @@ class GSMMFamily(ABC):
 
         # If llk call failed or when not to try AD, call with numpy arrays directly
         if llk is None:
-            llk = self.llk_pars(pars, extra, ys)
+            llk = self.llk_pars(pars, extra, yfix)
 
         # Cast to float explicitly
         llk = float(llk)
@@ -3866,7 +3866,7 @@ class GSMMFamily(ABC):
                 # Optionally deal with extra coefficients
                 if extra is not None:
                     grad = np.concatenate(
-                        grad, np.array(d1_extra).reshape(-1, 1), axis=0
+                        (grad, np.array(d1_extra).reshape(-1, 1)), axis=0
                     )
 
         if grad is None:
@@ -3922,27 +3922,29 @@ class GSMMFamily(ABC):
             # we want to evaluate hessian vector product in space of [pars, extra] so we first
             # need basis vectors mapped to that space
             v_etas = [np.zeros_like(p) for p in pars]
+            v_pars = v_etas
+            ld1 = [self.links[mui].dy1(pars[mui]) for mui in range(self.n_par)]
+
             v_extra = None if extra is None else np.zeros_like(extra)
             # Figure out which linear predictor/extra coef j belongs to
-            if j >= coef.shape[0]:
+            k = np.searchsorted(coef_split_idx, j, side="right")
+            j_start = 0 if k == 0 else coef_split_idx[k - 1]
+            j_is_eta = False
+            if k == self.n_par:
                 # j is part of extra coef, no further mapping needed
-                v_extra[j - coef.shape[0]] = 1
+                v_extra[j - j_start] = 1
             else:
-                # j is part of linear predictor - just need to figure out which one
-                cidx = np.arange(coef.shape[0])
-                cidx[j] = 1
-                cidx_split = np.split(cidx, coef_split_idx)
-                k = np.argmax([np.sum(spidx) for spidx in cidx_split])
-                # basis vector in coef space
+                # j is part of linear predictor, first need basis vector in coef space
+                j_is_eta = True
                 e = np.zeros((Xs[k].shape[1], 1))
-                e[cidx_split[k] == 1] = 1
+                e[j - j_start] = 1
+
                 # basis vector in eta space
                 v_etas[k] = Xs[k] @ e
 
-            # Now basis vector in pars space, simple inverse of transformation computed by
-            # deriv_transform_mu_eta. See also WPS (2016)
-            ld1 = [self.links[mui].dy1(pars[mui]) for mui in range(self.n_par)]
-            v_pars = [v_etas[k] / ld1[k] for k in range(self.n_par)]
+                # Now basis vector in pars space, simple inverse of transformation computed by
+                # deriv_transform_mu_eta. See also WPS (2016)
+                v_pars = [v_etas[k] / ld1[k] for k in range(self.n_par)]
 
             # Now can try jnp HVP
             hvp = self.ad_cache.call(
@@ -3959,18 +3961,34 @@ class GSMMFamily(ABC):
 
                 # Ok, now piece things together via final transformation back from pars to coef
                 Hj = []
-                # Technically d1 is already partially transformed to eta..
-                d1_mus = [v_etas[k] * np.asarray(d1_pars[k]) for k in range(self.n_par)]
-                d2_mus = [np.asarray(d2par) for d2par in hv_pars]
-                ld2 = [self.links[mui].dy2(pars[mui]) for mui in range(self.n_par)]
-                _, d2_etas, _ = deriv_transform_mu_eta(
-                    d1=d1_mus,
-                    d2=d2_mus,
-                    d2m=None,
-                    ld1=ld1,
-                    ld2=ld2,
-                    order=DerivOrder.d2,
-                )
+                if j_is_eta:
+                    # Technically d1 is already partially transformed to eta..
+                    d1_mus = [
+                        v_etas[k] * np.asarray(d1_pars[k]) for k in range(self.n_par)
+                    ]
+                    # v_pars already includes 1/ld1, so pre-multiply by ld1 to only divide once
+                    d2_mus = [
+                        np.asarray(hv_pars[k]) * ld1[k] for k in range(self.n_par)
+                    ]
+                    ld2 = [self.links[mui].dy2(pars[mui]) for mui in range(self.n_par)]
+                    _, d2_etas, _ = deriv_transform_mu_eta(
+                        d1=d1_mus,
+                        d2=d2_mus,
+                        d2m=None,
+                        ld1=ld1,
+                        ld2=ld2,
+                        order=DerivOrder.d2,
+                    )
+                else:
+                    # v_etas is zero, so only hv_pars/ld1 remains (first order transform)
+                    d2_etas, _, _ = deriv_transform_mu_eta(
+                        d1=[np.asarray(hv) for hv in hv_pars],
+                        d2=None,
+                        d2m=None,
+                        ld1=ld1,
+                        ld2=None,
+                        order=DerivOrder.d1,
+                    )
 
                 for k in range(self.n_par):
                     Hj.append((d2_etas[k].T @ Xs[k]).T)
