@@ -5,6 +5,7 @@ import warnings
 import copy
 from itertools import repeat
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 from .custom_types import DerivOrder
 from abc import ABC, abstractmethod
 import hazard
@@ -15,6 +16,10 @@ from .deriv_transform import deriv_transform_mu_eta, deriv_transform_eta_beta
 
 if _HAS_JAX:
     from .custom_types import jnp, CacheAD, ModeAD
+
+if TYPE_CHECKING:
+    # Only needed for type hints
+    import jax
 
 
 class Link(ABC):
@@ -3745,10 +3750,10 @@ class GSMMFamily(ABC):
 
     def llk_pars(
         self,
-        pars,
-        extra,
-        ys,
-    ) -> float:
+        pars: "list[jax.Array] | list[np.ndarray]",
+        extra: "jax.Array | np.ndarray | None",
+        ys: "list[jax.Array] | list[np.ndarray]",
+    ) -> "float | jax.Array":
         """log-probability of data under given model but model here is treated as the paramters
         of the log-likelihood not the coefficients.
 
@@ -3759,14 +3764,18 @@ class GSMMFamily(ABC):
         the `try_ad` attribute to True and jax is installed. Otherwise, they are passed as standard
         numpy arrays.
 
-        :param ys: _description_
-        :type ys: _type_
-        :param pars: _description_
-        :type pars: _type_
-        :param extra: _description_
-        :type extra: _type_
-        :return: _description_
-        :rtype: float
+        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
+            ``lhs.variable`` to the formulas. Nones have been replaced with ``ys[0]``.
+        :type ys: list[jax.Array] | list[np.ndarray]
+        :param pars: List containing the vectors of parameters of the log-likelihood (each of shape
+            (-1,1)). That is, the matrix coef vector products pushed through the inverse link
+            functions.
+        :type pars: list[jax.Array] | list[np.ndarray]
+        :param extra: Any extra coefficients of the log-likelihood as an array of shape (-1,1) or
+            None.
+        :type extra: jax.Array | np.ndarray | None
+        :return: The log-likelihood given ``pars`` and ``extra``.
+        :rtype: float | jax.Array
         """
         raise NotImplementedError(
             "Families must either overwrite the llk method or implement llk_pars!"
