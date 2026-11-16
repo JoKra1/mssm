@@ -62,6 +62,34 @@ class GSMMGAUMLS(GSMMFamily):
 
 class GSMMGAUMLS2(GSMMFamily):
     # Implementation of the ``GSMMFamily`` class to estimate a Gaussian GAMLSS via the general
+    # smooth code. Relies on automatic differentiation to estimate gradients and hessian.
+    # Modified to cause eager execution
+
+    # We set up the constructor and then just call the constructor of the `GSMMFamily` class we
+    # inherit from
+    def __init__(self, links: list[Link]) -> None:
+        super().__init__(2, links)
+
+    def llk_pars(self, pars, extra, ys):
+
+        y = ys[0]
+        mu = pars[0]
+        scale = pars[1]
+        if jnp.any(scale <= 0):
+            # Control flow incompatible with jit
+            return -jnp.inf
+        llk = jnp.sum(jscp.stats.norm.logpdf(y, loc=mu, scale=scale))
+        return llk
+
+    # Theoretically we also need to implement the ``get_resid`` method, but
+    # it is not needed for fitting and thus for this example we simply overwrite it
+    # with super, which will just ``pass``.
+    def get_resid(self, coef, coef_split_idx, ys, Xs):
+        return super().get_resid(coef, coef_split_idx, ys, Xs)
+
+
+class GSMMGAUMLS3(GSMMFamily):
+    # Implementation of the ``GSMMFamily`` class to estimate a Gaussian GAMLSS via the general
     # smooth code. Triggers fallback to fd.
 
     # We set up the constructor and then just call the constructor of the `GSMMFamily` class we
@@ -112,13 +140,24 @@ class Test_jit:
     model = GSMM([sim_formula, sim_formula_sd], fam)
     model.fit(**default_gsmm_test_kwargs)
 
-    # Test fallback to fd
+    # Test fallback to eager
     fam2 = GSMMGAUMLS2([Identity(), LOGb(-0.0001)])
     model2 = GSMM([sim_formula, sim_formula_sd], fam2)
     model2.fit(max_outer=1, max_inner=1)
 
-    def assert_fd_fallback(self):
-        assert self.model2.family.ad_cache.mode == ModeAD.fd
+    # Test fallback to fd
+    fam3 = GSMMGAUMLS3([Identity(), LOGb(-0.0001)])
+    model3 = GSMM([sim_formula, sim_formula_sd], fam3)
+    model3.fit(max_outer=1, max_inner=1)
+
+    def test_assert_jit(self):
+        assert self.model.family.ad_cache.mode == ModeAD.jit
+
+    def test_assert_eager_fallback(self):
+        assert self.model2.family.ad_cache.mode == ModeAD.eager
+
+    def test_assert_fd_fallback(self):
+        assert self.model3.family.ad_cache.mode == ModeAD.fd
 
     def test_GAMedf(self):
         np.testing.assert_allclose(
