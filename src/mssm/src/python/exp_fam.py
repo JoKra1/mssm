@@ -5,11 +5,21 @@ import warnings
 import copy
 from itertools import repeat
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 from .custom_types import DerivOrder
 from abc import ABC, abstractmethod
 import hazard
 import multiprocessing as mp
 from .discrete import DiscreteModelMatrix
+from .custom_types import _HAS_JAX
+from .deriv_transform import deriv_transform_mu_eta, deriv_transform_eta_beta
+
+if _HAS_JAX:
+    from .custom_types import jnp, CacheAD, ModeAD
+
+if TYPE_CHECKING:
+    # Only needed for type hints
+    import jax
 
 
 class Link(ABC):
@@ -3552,13 +3562,40 @@ class GAMMALS(GAMLSSFamily):
         return coef
 
 
+def _InstanceOverwrites(instance: ABC, method: str) -> bool:
+    """Internal function used to check if an instance of GSMM family implements a certain
+    ``method`` differently than the :class:`GSMMFamily` base-class.
+
+    :param instance: Instance of a :class:`GSMMFamily` sub-class.
+    :type instance: ABC
+    :param method: Method to check for overwrite.
+    :type method: str
+    :return: Bool indicating whether method is overwritten or not.
+    :rtype: bool
+    """
+    return getattr(type(instance), method) is not getattr(GSMMFamily, method)
+
+
 class GSMMFamily(ABC):
     """Base-class for General Smooth "families" as discussed by Wood, Pya, & Säfken (2016).
-    For estimation of :class:`mssm.models.GSMM` models via ``L-qEFS`` (Krause et al., submitted) it
-    is sufficient to implement :func:`llk`. :func:`gradient` and :func:`hessian` can then simply
-    return ``None``. For exact estimation via Newton's method, the latter two functions need to be
-    implemented and have to return the gradient and hessian at the current coefficient estimate
-    respectively.
+
+    For estimation of :class:`mssm.models.GSMM` models it is sufficient to implement :func:`llk`
+    (or :func:`llk_pars` see the note below). :func:`gradient` and :func:`hessian` will then simply
+    fall back to the super methods of this base-class which determines them from :func:`llk` or
+    :func:`llk_pars`.
+
+    **Note**, if Jax is installed, any implementation of the base-class `GSMMFamily` should leave
+    the :func:`llk` method alone and instead implement only :func:`llk_pars` (and optionally
+    :func:`hessian`). If the implementation relies on Jax types and data structures, the gradient
+    and any column of the hessian are then automatically determined via automatic differentiation.
+    jit is tried first, followed by eager evaluation, and finite differencing if the latter also
+    fails. The AD cache holding the jit compiled functions is rebuilt automatically when
+    ``GSMM.fit()`` is called. Note, that known sparse Hessians (or fully dense ones) will benefit
+    from a custom implementation of :func:`hessian`.
+
+    If Jax is not installed, it is recommended to also implement :func:`hessian` if Newton's method
+    is to be used to estimate the coefficients. If the `qEFS` method of the `GSMM` class' fit method
+    is used, it is typically sufficient to implement :func:`gradient`.
 
     Additional parameters needed for likelihood, gradient, or hessian evaluation can be passed
     along via the ``init`` of a specific implementation.
@@ -3570,6 +3607,8 @@ class GSMMFamily(ABC):
      - Krause et al. (submitted). The Mixed-Sparse-Smooth-Model Toolbox (MSSM): Efficient \
         Estimation and Selection of Large Multi-Level Statistical Models. \
         https://doi.org/10.48550/arXiv.2506.13132
+     - see also the Jax documentation for jit AD: \
+        https://docs.jax.dev/en/latest/201/jit.html#just-in-time-compilation
 
     :param pars: Number of parameters of the likelihood for which an additive (mixed) model is
         specified. **Note**, that extra parameters that are constant (and thus do not need an
@@ -3593,6 +3632,12 @@ class GSMMFamily(ABC):
         model before calling the fitting routine. In contrast, if ``self.return_sparse`` is
         set to ``False`` before fitting it is never overwritten (Useful if the Hessian is
         generally dense).
+    :ivar bool try_ad: Whether to try to rely on automatic differentiation to obtain gradients
+        and the hessian. Set to True if Jax is installed and a family implements/overwrites
+        :func:`llk_pars`, else False.
+    :ivar CacheAD ad_cache: An instance of :class:`CacheAD` holding everything needed for
+        automatic differentiation of the log-likelihood. Only set if ``try_ad is True``. The cache
+        is automatically dropped and re-built when pickling.
     """
 
     def __init__(self, pars: int, links: list[Link]) -> None:
@@ -3600,6 +3645,44 @@ class GSMMFamily(ABC):
         self.links: list[Link] = links
         self.extra_coef: int | None = None
         self.return_sparse: bool = True
+        self.try_ad: bool = _HAS_JAX and _InstanceOverwrites(self, "llk_pars")
+
+        if (not _InstanceOverwrites(self, "llk_pars")) and (
+            not _InstanceOverwrites(self, "llk")
+        ):
+            # Can no longer make llk an @abstractmethod, so need to explicitly raise if neither
+            # option is implemented
+            raise TypeError(
+                "Sub-classes of `GSMMFamily` must implement at least one of `llk_pars` or `llk`."
+            )
+
+        if self.try_ad:
+            # Initialize AD cache
+            self.ad_cache = CacheAD(self.llk_pars)
+
+    def __getstate__(self):
+        # Pickle calls object.__getstate__ before pickling and uses the returned dict as state.
+        # see: https://docs.python.org/3/library/pickle.html#object.__getstate__
+        # So we can drop ad_cache if it exists from a copy of the state and then return that
+        # for pickling.
+        state = self.__dict__.copy()
+
+        # Pop ad cache and return
+        state.pop("ad_cache", None)
+        return state
+
+    def __setstate__(self, state):
+        # Reverse of __getstate__. Pickle calls this method when loading a pickled object.
+        # see: https://docs.python.org/3/library/pickle.html#object.__setstate__
+        # So we can set the state of the instance to the pickled one via dict.update() and then
+        # re-build the ad_cache if self.try_ad
+        self.__dict__.update(state)
+
+        # Check for Jax install before considering setting cache
+        self.try_ad = self.try_ad and _HAS_JAX
+
+        if self.try_ad:
+            self.ad_cache = CacheAD(self.llk_pars)
 
     def prefit_setup(
         self,
@@ -3626,7 +3709,86 @@ class GSMMFamily(ABC):
         """
         pass
 
-    @abstractmethod
+    def _get_pars(
+        self,
+        coef: np.ndarray,
+        coef_split_idx: list[int],
+        ys: list[np.ndarray | None],
+        Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
+    ) -> tuple[list[np.ndarray], np.ndarray | None, list[np.ndarray]]:
+        """Returns the parameter vectors of the log-likelihood implied by ``Xs`` and ``coef``, any
+        extra coefficients of the log-likelihood, and a "fixed" version of ys that does not contain
+        None.
+
+        :param coef: The current coefficient estimate (as np.array of shape (-1,1) - so it must not
+            be flattened!).
+        :type coef: np.ndarray
+        :param coef_split_idx: A list used to split (via :func:`np.split`) the ``coef`` into the
+            sub-sets associated with each paramter of the llk.
+        :type coef_split_idx: [int]
+        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
+            ``lhs.variable`` to the formulas. **Note**: by convention ``mssm`` expectes that the
+            actual observed data is passed along via the first formula (so it is stored in
+            ``ys[0]``). If multiple formulas have the same ``lhs.variable`` as this first formula,
+            then ``ys`` contains ``None`` at their indices to save memory.
+        :type ys: list[np.ndarray | None]
+        :param Xs: A list of sparse model matrices per likelihood parameter. Might contain ``None``
+            at indices for matrices which were flagged as "do not build" via the ``build_mat``
+            argument of the :func:`mssm.models.GSMM.fit` method.
+        :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
+        :return: The parameter vectors, optionally the extra coefficients (or None), and a list
+            with ys where ys[0] has been inserted for None.
+        :rtype: tuple[list[np.ndarray],np.ndarray|None,list[np.ndarray]]
+        """
+        split_coef = np.split(coef, coef_split_idx)
+        extra = None
+        if self.extra_coef is not None:
+            extra = split_coef[-1]
+            split_coef = split_coef[:-1]
+        pars = [link.fi(X @ c) for link, X, c in zip(self.links, Xs, split_coef)]
+
+        # Fix ys for missing vectors
+        yfix = [y if y is not None else ys[0] for y in ys]
+
+        return pars, extra, yfix
+
+    def llk_pars(
+        self,
+        pars: "list[jax.Array] | list[np.ndarray]",
+        extra: "jax.Array | np.ndarray | None",
+        ys: "list[jax.Array] | list[np.ndarray]",
+    ) -> "float | jax.Array":
+        """log-probability of data under given model but model here is treated as the parameters
+        of the log-likelihood not the coefficients.
+
+        ``pars`` should be the model-matrix coef vector products pushed through the inverse of
+        their respective link function. ``extra`` are any extra coefficients of the log-likelihood.
+
+        Note, that the function receives ``ys``, ``pars`` as lists including jax.numpy arrays and
+        ``extra`` as a jax numpy array (or None if the family has no extra coefficients) if the
+        class implements this function and Jax is installed. If automatic differentiation fails
+        (see :class:`CacheAD`) or Jax is not installed, the inputs are (lists including) numpy
+        arrays.
+
+        :param pars: List containing the vectors of parameters of the log-likelihood (each of shape
+            (-1,1)). That is, the matrix coef vector products pushed through the inverse link
+            functions.
+        :type pars: list[jax.Array] | list[np.ndarray]
+        :param extra: Any extra coefficients of the log-likelihood as an array of shape (-1,1) or
+            None.
+        :type extra: jax.Array | np.ndarray | None
+        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
+            ``lhs.variable`` to the formulas. Nones have been replaced with ``ys[0]``.
+        :type ys: list[jax.Array] | list[np.ndarray]
+        :return: The log-likelihood given ``pars`` and ``extra``. Note, that if the return
+            type is a jax array, then it needs to be a scalar, that is an array of shape ``()``
+            **not** ``(1,1)`` or ``(1,)``.
+        :rtype: float | jax.Array
+        """
+        raise NotImplementedError(
+            "Families must either overwrite the llk method or implement llk_pars!"
+        )
+
     def llk(
         self,
         coef: np.ndarray,
@@ -3635,6 +3797,8 @@ class GSMMFamily(ABC):
         Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     ) -> float:
         """log-probability of data under given model.
+
+        By default this calls the ``llk_pars`` method.
 
         References:
          - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
@@ -3664,7 +3828,28 @@ class GSMMFamily(ABC):
         :return: The log-likelihood evaluated at ``coef``.
         :rtype: float
         """
-        pass
+        llk = None
+
+        # Get pars and extra, then try AD
+        pars, extra, yfix = self._get_pars(coef, coef_split_idx, ys, Xs)
+
+        if self.try_ad and self.ad_cache.mode != ModeAD.fd:
+
+            # Try jnp likelihood
+            llk = self.ad_cache.call(
+                0,
+                [jnp.asarray(p) for p in pars],
+                jnp.asarray(extra) if extra is not None else None,
+                [jnp.asarray(y) for y in yfix],
+            )
+
+        # If llk call failed or when not to try AD, call with numpy arrays directly
+        if llk is None:
+            llk = self.llk_pars(pars, extra, yfix)
+
+        # Cast to float explicitly
+        llk = float(llk)
+        return -np.inf if np.isnan(llk) else llk
 
     def gradient(
         self,
@@ -3675,9 +3860,11 @@ class GSMMFamily(ABC):
     ) -> np.ndarray:
         """Function to evaluate the gradient of the llk at current coefficient estimate ``coef``.
 
-        By default relies on numerical differentiation as implemented in scipy to approximate the
-        Gradient from the implemented log-likelihood function. See the link in the references for
-        more details.
+        By default this method tries automatic differentiation of ``llk_pars`` if
+        ``self.try_ad is True``. If that fails or ``self.try_ad is False`` the default
+        implementation falls back to numerical differentiation as implemented in scipy to
+        approximate the Gradient from the implemented log-likelihood (``llk``) function.
+        See the link in the references for more details.
 
         References:
            - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
@@ -3708,11 +3895,48 @@ class GSMMFamily(ABC):
             shape (-1,1).
         :rtype: np.ndarray
         """
+        grad = None
+        if self.try_ad and self.ad_cache.mode != ModeAD.fd:
+            # Get pars and extra, then try AD
+            pars, extra, yfix = self._get_pars(coef, coef_split_idx, ys, Xs)
 
-        def llk_wrap(x: np.ndarray) -> float:
-            return self.llk(x.reshape(-1, 1), coef_split_idx, ys, Xs)
+            # Try jnp gradient
+            grad_jax = self.ad_cache.call(
+                1,
+                [jnp.asarray(p) for p in pars],
+                jnp.asarray(extra) if extra is not None else None,
+                [jnp.asarray(y) for y in yfix],
+            )
 
-        grad = scp.optimize.approx_fprime(coef.flatten(), llk_wrap)
+            # grad_jax is with respect to pars (and optionally extra) so need
+            # standard transform discussed by WPS (2016)
+            if grad_jax is not None:
+                d1_pars, d1_extra = grad_jax
+                ld1 = [self.links[mui].dy1(pars[mui]) for mui in range(self.n_par)]
+                d1_eta, _, _ = deriv_transform_mu_eta(
+                    d1=[np.asarray(dpar) for dpar in d1_pars],
+                    d2=None,
+                    d2m=None,
+                    ld1=ld1,
+                    ld2=None,
+                    order=DerivOrder.d1,
+                )
+                grad, _ = deriv_transform_eta_beta(
+                    d1eta=d1_eta, d2eta=None, d2meta=None, Xs=Xs, only_grad=True
+                )
+
+                # Optionally deal with extra coefficients
+                if extra is not None:
+                    grad = np.concatenate(
+                        (grad, np.array(d1_extra).reshape(-1, 1)), axis=0
+                    )
+
+        if grad is None:
+
+            def llk_wrap(x: np.ndarray) -> float:
+                return self.llk(x.reshape(-1, 1), coef_split_idx, ys, Xs)
+
+            grad = scp.optimize.approx_fprime(coef.flatten(), llk_wrap)
         return grad.reshape(-1, 1)
 
     def jcolhessian(
@@ -3725,7 +3949,9 @@ class GSMMFamily(ABC):
     ) -> np.ndarray:
         """(Optional) method to compute only column ``j`` of the Hessian of the log-likelihood.
 
-        By default the method relies on a finite difference approximation to evaluate the
+        By default this method tries automatic differentiation of ``llk_pars`` if
+        ``self.try_ad is True``. If that fails or ``self.try_ad is False`` the default
+        implementation falls back to a finite difference approximation to evaluate the
         column of the Hessian of the llk. Result is returned as a np.array.
 
         :param j: Index of the column to approximate.
@@ -3746,27 +3972,114 @@ class GSMMFamily(ABC):
             at indices for matrices which were flagged as "do not build" via the ``build_mat``
             argument of the :func:`mssm.models.GSMM.fit` method.
         :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
-        :return: Finite difference approximation of column ``j`` of the Hessian of the llk as an
-            array of shape (-1,1)
+        :return: Column ``j`` of the Hessian of the llk as an array of shape (-1,1)
         :rtype: np.ndarray
         """
+        Hj = None
+        if self.try_ad and self.ad_cache.mode != ModeAD.fd:
+            # Get pars and extra, then try AD
+            pars, extra, yfix = self._get_pars(coef, coef_split_idx, ys, Xs)
 
-        def __d2llkj(r):
-            # Function to evaluate Hessian column via finite difference approximation
-            n_coef = copy.deepcopy(coef)
-            n_coef[j] = r
+            # Now Perlmutter's trick to get cheap hessian vector product where vector is basis
+            # vector (i.e., zero everywhere but in j) to get col j of hessian. Problem is, here
+            # we want to evaluate hessian vector product in space of [pars, extra] so we first
+            # need basis vectors mapped to that space
+            v_etas = [np.zeros_like(p) for p in pars]
+            v_pars = v_etas
+            ld1 = [self.links[mui].dy1(pars[mui]) for mui in range(self.n_par)]
 
-            n_grad = self.gradient(n_coef, coef_split_idx, ys, Xs)
+            v_extra = None if extra is None else np.zeros_like(extra)
+            # Figure out which linear predictor/extra coef j belongs to
+            k = np.searchsorted(coef_split_idx, j, side="right")
+            j_start = 0 if k == 0 else coef_split_idx[k - 1]
+            j_is_eta = False
+            if k == self.n_par:
+                # j is part of extra coef, no further mapping needed
+                v_extra[j - j_start] = 1
+            else:
+                # j is part of linear predictor, first need basis vector in coef space
+                j_is_eta = True
+                e = np.zeros((Xs[k].shape[1], 1))
+                e[j - j_start] = 1
 
-            return n_grad.flatten()
+                # basis vector in eta space
+                v_etas[k] = Xs[k] @ e
 
-        def vectorized_d2(r):
-            return np.apply_along_axis(__d2llkj, axis=0, arr=r)
+                # Now basis vector in pars space, simple inverse of transformation computed by
+                # deriv_transform_mu_eta. See also WPS (2016)
+                v_pars = [v_etas[k] / ld1[k] for k in range(self.n_par)]
 
-        # Column j of the hessian
-        Hsk = scp.differentiate.jacobian(vectorized_d2, coef[j], order=2)
+            # Now can try jnp HVP
+            hvp = self.ad_cache.call(
+                2,
+                [jnp.asarray(p) for p in pars],
+                jnp.asarray(extra) if extra is not None else None,
+                [jnp.asarray(y) for y in yfix],
+                v_pars,
+                v_extra,
+            )
 
-        return Hsk.df
+            if hvp is not None:
+                (d1_pars, _), (hv_pars, hv_extra) = hvp
+
+                # Ok, now piece things together via final transformation back from pars to coef
+                Hj = []
+                if j_is_eta:
+                    # Technically d1 is already partially transformed to eta..
+                    d1_mus = [
+                        v_etas[k] * np.asarray(d1_pars[k]) for k in range(self.n_par)
+                    ]
+                    # v_pars already includes 1/ld1, so pre-multiply by ld1 to only divide once
+                    d2_mus = [
+                        np.asarray(hv_pars[k]) * ld1[k] for k in range(self.n_par)
+                    ]
+                    ld2 = [self.links[mui].dy2(pars[mui]) for mui in range(self.n_par)]
+                    _, d2_etas, _ = deriv_transform_mu_eta(
+                        d1=d1_mus,
+                        d2=d2_mus,
+                        d2m=None,
+                        ld1=ld1,
+                        ld2=ld2,
+                        order=DerivOrder.d2,
+                    )
+                else:
+                    # v_etas is zero, so only hv_pars/ld1 remains (first order transform)
+                    d2_etas, _, _ = deriv_transform_mu_eta(
+                        d1=[np.asarray(hv) for hv in hv_pars],
+                        d2=None,
+                        d2m=None,
+                        ld1=ld1,
+                        ld2=None,
+                        order=DerivOrder.d1,
+                    )
+
+                for k in range(self.n_par):
+                    Hj.append((d2_etas[k].T @ Xs[k]).T)
+
+                if extra is not None:
+                    Hj.append(np.array(hv_extra).reshape(-1, 1))
+
+                Hj = np.concatenate(Hj, axis=0)
+
+        if Hj is None:
+
+            def __d2llkj(r):
+                # Function to evaluate Hessian column via finite difference approximation
+                n_coef = copy.deepcopy(coef)
+                n_coef[j] = r
+
+                n_grad = self.gradient(n_coef, coef_split_idx, ys, Xs)
+
+                return n_grad.flatten()
+
+            def vectorized_d2(r):
+                return np.apply_along_axis(__d2llkj, axis=0, arr=r)
+
+            # Column j of the hessian
+            Hsk = scp.differentiate.jacobian(vectorized_d2, coef[j], order=2)
+            Hj = Hsk.df
+
+        return Hj
 
     def jhessian(
         self,
@@ -3780,8 +4093,10 @@ class GSMMFamily(ABC):
         """(Optional) method to compute a sparse approximation to the Hessian of the llk, containing
         only the ``j`` columns and rows of the Hessian indexed by ``jcols``.
 
-        By default the method relies on a finite difference approximation to evaluate the ``j``
-        columns of the Hessian of the llk. Result is returned as symmetric sparse matrix.
+        By default this method tries automatic differentiation of ``llk_pars`` if
+        ``self.try_ad is True``. If that fails or ``self.try_ad is False`` a finite difference
+        approximation is used to evaluate the ``j`` columns of the Hessian of the llk. Result is
+        returned as symmetric sparse matrix.
 
         :param jcols: Array holding indices of columns to approximate.
         :type jcols: np.ndarray
@@ -3802,11 +4117,10 @@ class GSMMFamily(ABC):
             argument of the :func:`mssm.models.GSMM.fit` method.
         :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :param n_c: Number of cores to use to parallelize computation over ``j`` cols, defaults to
-            1.
+            1 and ignored if ``self.try_ad is True``.
         :type n_c: int, optional
-        :return: Finite difference approximation matrix which is symmetric sparse matrix with
-            ``jcols`` rows and columns set to finite difference approximation of columns of
-            Hessian of llk
+        :return: Matrix which is symmetric sparse matrix with ``jcols`` rows and columns set to
+            columns of Hessian of llk
         :rtype: scp.sparse.csc_array | np.ndarray
         """
 
@@ -3820,7 +4134,7 @@ class GSMMFamily(ABC):
 
         Ha = None if self.return_sparse else np.zeros((Hdim, Hdim))
 
-        if n_c > 1:
+        if n_c > 1 and self.try_ad is False:
             # Compute columns in parallel
             args = zip(
                 jcols,
@@ -3835,7 +4149,7 @@ class GSMMFamily(ABC):
 
         for ji, j in enumerate(jcols):
 
-            if n_c > 1:
+            if n_c > 1 and self.try_ad is False:
                 # Simply extract
                 Hj = Hjs[ji].flatten()
             else:
@@ -3883,9 +4197,10 @@ class GSMMFamily(ABC):
     ) -> scp.sparse.csc_array | np.ndarray:
         """Function to evaluate the hessian of the llk at current coefficient estimate ``coef``.
 
-        Only has to be implemented if full Newton is to be used to estimate coefficients. If the
-        L-qEFS update by Krause et al. (in preparation) is to be used instead, this method does not
-        have to be implemented.
+        Only has to be implemented if full Newton is to be used to estimate coefficients and
+        Jax is mot installed or ``self.try_ad is False``. Note, that models with a very sparse
+        Hessian will still benefit from a custom implementation even if Jax is installed and AD is
+        used (see the docstring of :class:`GSMMFamily`).
 
         References:
            - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \

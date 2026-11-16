@@ -30,7 +30,11 @@ from .src.python.exp_fam import (  # noqa: F401
     PropHaz,
     Poisson,
     MultiGauss,
+    _HAS_JAX,
 )
+
+if _HAS_JAX:
+    from .src.python.exp_fam import CacheAD
 
 from .src.python.hsmm import HSMMFamily  # noqa: F401
 
@@ -1218,6 +1222,10 @@ class GSMM:
 
         # Can call pre-fit setup of family now
         self.family.prefit_setup(ys, Xs)
+
+        if self.family.try_ad and _HAS_JAX:
+            # Rebuild AD cache before every fit in case other attributes of family changed.
+            self.family.ad_cache = CacheAD(self.family.llk_pars)
 
         # Now fit model
         coef, H, LV, LV_linop, total_edf, term_edfs, penalty, smooth_pen, fit_info = (

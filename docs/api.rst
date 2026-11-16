@@ -33,6 +33,14 @@ mssm.src.python.custom_types module
    :undoc-members:
    :show-inheritance:
 
+mssm.src.python.deriv\_transform module
+----------------------------------
+
+.. automodule:: mssm.src.python.deriv_transform
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 mssm.src.python.discrete module
 ----------------------------------
 

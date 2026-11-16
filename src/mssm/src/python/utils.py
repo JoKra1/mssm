@@ -24,8 +24,7 @@ from ..python.gamm_solvers import (
     compute_eigen_perm,
     computeHSR1,
     update_coef,
-    deriv_transform_mu_eta,
-    deriv_transform_eta_beta,
+    compute_deriv_mu,
     translate_sparse,
     map_csc_to_eigen,
     updateTheta,
@@ -48,6 +47,7 @@ from ..python.exp_fam import (
 from ..python.formula import Formula, LambdaTerm
 from ..python.penalties import split_shared_penalties, combine_shared_penalties
 from .discrete import DiscreteModelMatrix
+from .deriv_transform import deriv_transform_mu_eta, deriv_transform_eta_beta
 import davies
 import dChol
 from collections.abc import Callable
@@ -423,7 +423,12 @@ class GAMLSSGSMMFamily(GSMMFamily):
 
             if gammlss_family.d_eta is False:
 
-                d1eta, d2eta, d2meta = deriv_transform_mu_eta(y, mus, gammlss_family)
+                d1, _, _, ld1, _ = compute_deriv_mu(
+                    y, mus, gammlss_family, order=DerivOrder.d1
+                )
+                d1eta, d2eta, d2meta = deriv_transform_mu_eta(
+                    d1, None, None, ld1, None, order=DerivOrder.d1
+                )
             else:
                 d1eta = [
                     gammlss_family.dpars(y, *mus, index=d1i, order=DerivOrder.d1)
@@ -490,7 +495,8 @@ class GAMLSSGSMMFamily(GSMMFamily):
 
         if gammlss_family.d_eta is False:
 
-            d1eta, d2eta, d2meta = deriv_transform_mu_eta(y, mus, gammlss_family)
+            d1, d2, d2m, ld1, ld2 = compute_deriv_mu(y, mus, gammlss_family)
+            d1eta, d2eta, d2meta = deriv_transform_mu_eta(d1, d2, d2m, ld1, ld2)
         else:
             d1eta = [
                 gammlss_family.dpars(y, *mus, index=d1i, order=DerivOrder.d1)
@@ -4705,7 +4711,10 @@ def correct_VB(
 
                     # Get derivatives with respect to eta
                     if family.d_eta is False:
-                        d1eta, d2eta, d2meta = deriv_transform_mu_eta(y, mus, family)
+                        d1, d2, d2m, ld1, ld2 = compute_deriv_mu(y, mus, family)
+                        d1eta, d2eta, d2meta = deriv_transform_mu_eta(
+                            d1, d2, d2m, ld1, ld2
+                        )
                     else:
                         d1eta = [
                             family.dpars(y, *mus, index=d1i, order=DerivOrder.d1)
