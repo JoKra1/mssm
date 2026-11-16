@@ -3,6 +3,7 @@ from enum import Enum
 import scipy as scp
 import numpy as np
 import warnings
+from collections.abc import Callable
 
 try:
     # See if jax is installed to have AD support
@@ -67,9 +68,6 @@ class DerivOrder(Enum):
     d2m = 3
 
 
-####################################### Data-classes ####################################### # noqa
-
-
 class ModeAD(Enum):
     """Custom data type indicating which AD mode to try. 1 is jit, 2 is eager, and 3 is finite
     differencing (not really AD).
@@ -80,41 +78,44 @@ class ModeAD(Enum):
     fd = 3
 
 
+####################################### Data-classes ####################################### # noqa
+
+
 class CacheAD:
     """Storage term for jax jitted likelihood, gradient, and hessian column functions or their
     eager counterparts if jit failed.
 
     ``GSMMFamily`` tries jit, but falls back to eager execution if that fails (e.g., due to
-    python/numpy code that conflicts with jit, such as while loops). If both fail, `use_ad` is set
-    to True and ``GSMMFamily`` falls back to finite difference approximations.
+    python/numpy code that conflicts with jit, such as while loops). If both fail, ``mode`` is set
+    to ``ModeAD.fd`` and ``GSMMFamily`` falls back to finite difference approximations.
 
     see: https://docs.jax.dev/en/latest/201/control-flow.html for differences for when jit can fail.
 
     :param f: A function to evaluate the log-likelihood with signature ``f(pars, extra, ys)`` where
-        ``ys`` are the reponse variables, ``pars`` are the vectors holding the parameters of the
+        ``ys`` are the response variables, ``pars`` are the vectors holding the parameters of the
         log-likelihood (i.e., the model matrix by coef vector products pushed through the inverse
         of the corresponding link function), and ``extra`` are any extra coefficients of the log
         likelihood.
-    :type f: callable
+    :type f: Callable
     :param mode: Indicates which mode :func:`CacheAD.call` should rely on.
     :type mode: ModeAD
-    :ivar list[callable] | None jitted: A list with three jitted functions for log-likelihood,
-        gradient, and hessian vector product needed to get column j of hessian. Set to None in case
-        jit fails or ``mode != ModeAd.jit``
-    :ivar list[callable] | None eager: A list with three jax functions for log-likelihood,
+    :ivar list[Callable] | None jitted: A list with three jitted functions for log-likelihood,
+        gradient, and hessian vector product needed to get column j of hessian. Only set if
+        ``mode == ModeAD.jit``.
+    :ivar list[Callable] | None eager: A list with three jax functions for log-likelihood,
         gradient, and hessian vector product needed to get column j of hessian via AD but for eager
-        evaluation. Set to None in case eager execution fails or ``mode == ModeAd.fd``
+        evaluation. Only set if ``mode != ModeAD.fd``.
     :ivar ModeAD mode: A :class:`ModeAD` instance indicating which mode :func:`CacheAD.call` should
         rely on. Set to ``mode`` but modified in case jit/eager fail.
     """
 
-    def __init__(self, f: callable, mode: ModeAD = ModeAD.jit):
+    def __init__(self, f: Callable, mode: ModeAD = ModeAD.jit):
 
-        self.jitted: list[callable] | None = None
-        self.eager: list[callable] | None = None
+        self.jitted: list[Callable] | None = None
+        self.eager: list[Callable] | None = None
         self.mode = mode
 
-        # Catch errors that indicate something fundamentally opposing jax evalutation
+        # Catch errors that indicate something fundamentally opposing jax evaluation
         # see https://docs.jax.dev/en/latest/101/errors.html#errors
         self._bad_errors = (
             jax.errors.TracerArrayConversionError,

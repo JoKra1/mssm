@@ -3589,8 +3589,9 @@ class GSMMFamily(ABC):
     :func:`hessian`). If the implementation relies on Jax types and data structures, the gradient
     and any column of the hessian are then automatically determined via automatic differentiation.
     jit is tried first, followed by eager evaluation, and finite differencing if the latter also
-    fails. Known sparse Hessians (or fully dense ones) will benefit from a custom implementation
-    of :func:`hessian`.
+    fails. The AD cache holding the jit compiled functions is rebuilt automatically when
+    ``GSMM.fit()`` is called. Note, that known sparse Hessians (or fully dense ones) will benefit
+    from a custom implementation of :func:`hessian`.
 
     If Jax is not installed, it is recommended to also implement :func:`hessian` if Newton's method
     is to be used to estimate the coefficients. If the `qEFS` method of the `GSMM` class' fit method
@@ -3652,7 +3653,7 @@ class GSMMFamily(ABC):
             # Can no longer make llk an @abstractmethod, so need to explicitly raise if neither
             # option is implemented
             raise TypeError(
-                "Sub-classes of `GSMMFamily` must implement at least one of `llk_pars` or `ll`."
+                "Sub-classes of `GSMMFamily` must implement at least one of `llk_pars` or `llk`."
             )
 
         if self.try_ad:
@@ -3677,7 +3678,10 @@ class GSMMFamily(ABC):
         # re-build the ad_cache if self.try_ad
         self.__dict__.update(state)
 
-        if self.try_ad and _HAS_JAX:
+        # Check for Jax install before considering setting cache
+        self.try_ad = self.try_ad and _HAS_JAX
+
+        if self.try_ad:
             self.ad_cache = CacheAD(self.llk_pars)
 
     def prefit_setup(
@@ -3754,19 +3758,18 @@ class GSMMFamily(ABC):
         extra: "jax.Array | np.ndarray | None",
         ys: "list[jax.Array] | list[np.ndarray]",
     ) -> "float | jax.Array":
-        """log-probability of data under given model but model here is treated as the paramters
+        """log-probability of data under given model but model here is treated as the parameters
         of the log-likelihood not the coefficients.
 
         ``pars`` should be the model-matrix coef vector products pushed through the inverse of
         their respective link function. ``extra`` are any extra coefficients of the log-likelihood.
 
-        Note, that ``ys``, ``pars``, and ``extra`` are passed as jax.numpy types if the class sets
-        the `try_ad` attribute to True and jax is installed. Otherwise, they are passed as standard
-        numpy arrays.
+        Note, that the function receives ``ys``, ``pars`` as lists including jax.numpy arrays and
+        ``extra`` as a jax numpy array (or None if the family has no extra coefficients) if the
+        class implements this function and Jax is installed. If automatic differentiation fails
+        (see :class:`CacheAD`) or Jax is not installed, the inputs are (lists including) numpy
+        arrays.
 
-        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
-            ``lhs.variable`` to the formulas. Nones have been replaced with ``ys[0]``.
-        :type ys: list[jax.Array] | list[np.ndarray]
         :param pars: List containing the vectors of parameters of the log-likelihood (each of shape
             (-1,1)). That is, the matrix coef vector products pushed through the inverse link
             functions.
@@ -3774,7 +3777,12 @@ class GSMMFamily(ABC):
         :param extra: Any extra coefficients of the log-likelihood as an array of shape (-1,1) or
             None.
         :type extra: jax.Array | np.ndarray | None
-        :return: The log-likelihood given ``pars`` and ``extra``.
+        :param ys: List containing the vectors of observations (each of shape (-1,1)) passed as
+            ``lhs.variable`` to the formulas. Nones have been replaced with ``ys[0]``.
+        :type ys: list[jax.Array] | list[np.ndarray]
+        :return: The log-likelihood given ``pars`` and ``extra``. Note, that if the return
+            type is a jax array, then it needs to be a scalar, that is an array of shape ``()``
+            **not** ``(1,1)`` or ``(1,)``.
         :rtype: float | jax.Array
         """
         raise NotImplementedError(
@@ -3789,6 +3797,8 @@ class GSMMFamily(ABC):
         Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None],
     ) -> float:
         """log-probability of data under given model.
+
+        By default this calls the ``llk_pars`` method.
 
         References:
          - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
@@ -3850,9 +3860,11 @@ class GSMMFamily(ABC):
     ) -> np.ndarray:
         """Function to evaluate the gradient of the llk at current coefficient estimate ``coef``.
 
-        By default relies on numerical differentiation as implemented in scipy to approximate the
-        Gradient from the implemented log-likelihood function. See the link in the references for
-        more details.
+        By default this method tries automatic differentiation of ``llk_pars`` if
+        ``self.try_ad is True``. If that fails or ``self.try_ad is False`` the default
+        implementation falls back to numerical differentiation as implemented in scipy to
+        approximate the Gradient from the implemented log-likelihood (``llk``) function.
+        See the link in the references for more details.
 
         References:
            - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
@@ -3937,7 +3949,9 @@ class GSMMFamily(ABC):
     ) -> np.ndarray:
         """(Optional) method to compute only column ``j`` of the Hessian of the log-likelihood.
 
-        By default the method relies on a finite difference approximation to evaluate the
+        By default this method tries automatic differentiation of ``llk_pars`` if
+        ``self.try_ad is True``. If that fails or ``self.try_ad is False`` the default
+        implementation falls back to a finite difference approximation to evaluate the
         column of the Hessian of the llk. Result is returned as a np.array.
 
         :param j: Index of the column to approximate.
@@ -3958,8 +3972,7 @@ class GSMMFamily(ABC):
             at indices for matrices which were flagged as "do not build" via the ``build_mat``
             argument of the :func:`mssm.models.GSMM.fit` method.
         :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
-        :return: Finite difference approximation of column ``j`` of the Hessian of the llk as an
-            array of shape (-1,1)
+        :return: Column ``j`` of the Hessian of the llk as an array of shape (-1,1)
         :rtype: np.ndarray
         """
         Hj = None
@@ -4080,8 +4093,10 @@ class GSMMFamily(ABC):
         """(Optional) method to compute a sparse approximation to the Hessian of the llk, containing
         only the ``j`` columns and rows of the Hessian indexed by ``jcols``.
 
-        By default the method relies on a finite difference approximation to evaluate the ``j``
-        columns of the Hessian of the llk. Result is returned as symmetric sparse matrix.
+        By default this method tries automatic differentiation of ``llk_pars`` if
+        ``self.try_ad is True``. If that fails or ``self.try_ad is False`` a finite difference
+        approximation is used to evaluate the ``j`` columns of the Hessian of the llk. Result is
+        returned as symmetric sparse matrix.
 
         :param jcols: Array holding indices of columns to approximate.
         :type jcols: np.ndarray
@@ -4102,11 +4117,10 @@ class GSMMFamily(ABC):
             argument of the :func:`mssm.models.GSMM.fit` method.
         :type Xs: list[scp.sparse.csc_array | np.ndarray | DiscreteModelMatrix | None]
         :param n_c: Number of cores to use to parallelize computation over ``j`` cols, defaults to
-            1.
+            1 and ignored if ``self.try_ad is True``.
         :type n_c: int, optional
-        :return: Finite difference approximation matrix which is symmetric sparse matrix with
-            ``jcols`` rows and columns set to finite difference approximation of columns of
-            Hessian of llk
+        :return: Matrix which is symmetric sparse matrix with ``jcols`` rows and columns set to
+            columns of Hessian of llk
         :rtype: scp.sparse.csc_array | np.ndarray
         """
 
@@ -4183,9 +4197,10 @@ class GSMMFamily(ABC):
     ) -> scp.sparse.csc_array | np.ndarray:
         """Function to evaluate the hessian of the llk at current coefficient estimate ``coef``.
 
-        Only has to be implemented if full Newton is to be used to estimate coefficients. If the
-        L-qEFS update by Krause et al. (in preparation) is to be used instead, this method does not
-        have to be implemented.
+        Only has to be implemented if full Newton is to be used to estimate coefficients and
+        Jax is mot installed or ``self.try_ad is False``. Note, that models with a very sparse
+        Hessian will still benefit from a custom implementation even if Jax is installed and AD is
+        used (see the docstring of :class:`GSMMFamily`).
 
         References:
            - Wood, Pya, & Säfken (2016). Smoothing Parameter and Model Selection for General \
